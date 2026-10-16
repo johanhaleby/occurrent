@@ -30,7 +30,7 @@ public enum RedeliveryDetection {
      * than reacted to, so the feed that dropped the metadata announces itself instead of quietly costing the saga its
      * redelivery protection. Where the feed offers the message again the saga refuses
      * it again, until the listener is fixed or this attribute is set to {@link #BEST_EFFORT}. Whether it is offered
-     * again is the listener's call on a feed the application drives, and on a broker bridge
+     * again is the listener's call on a feed the application drives, and on a broker source
      * {@code DeliveryFailurePolicy} is where the choice is configured.
      */
     REQUIRED,

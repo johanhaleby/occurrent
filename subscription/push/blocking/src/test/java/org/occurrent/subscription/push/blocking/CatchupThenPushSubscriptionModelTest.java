@@ -603,10 +603,10 @@ class CatchupThenPushSubscriptionModelTest {
     /**
      * The broker-path counterpart to the test above, and the regression guard for a Copilot review finding: a
      * refusal decided before any dispatch was attempted must report {@link RoutingOutcome#REFUSED}, never
-     * {@link RoutingOutcome#DELIVERED}, so a bridge stops instead of acknowledging a message nothing consumed. A
+     * {@link RoutingOutcome#DELIVERED}, so a source stops instead of acknowledging a message nothing consumed. A
      * failed catch-up never clears, which is what makes the refusal permanent and the outcome REFUSED rather than
      * {@link RoutingOutcome#NOT_DELIVERABLE}. The broker path returns it rather than throwing, since it is the whole
-     * answer a bridge needs.
+     * answer a source needs.
      */
     @Test
     void a_catch_up_failure_reports_refused_rather_than_delivered_on_the_broker_path() {
@@ -701,7 +701,7 @@ class CatchupThenPushSubscriptionModelTest {
      * A handler that reaches into a second catch-up-then-live model whose own catch-up has failed lets that
      * model's refusal out through this one. This handler genuinely ran, so its own outcome is DELIVERED, and the
      * refusal propagates as any other handler failure would. Reporting it as this registration's own refusal is
-     * what #893 item 5 describes, and it would tell a broker bridge to stop for a failure that is not its own.
+     * what #893 item 5 describes, and it would tell a broker source to stop for a failure that is not its own.
      */
     @Test
     void a_refusal_from_a_handover_the_handler_reached_into_reports_delivered_for_this_registration() throws Exception {
@@ -1676,8 +1676,8 @@ class CatchupThenPushSubscriptionModelTest {
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
     }
 
-    // --- isReadyForLiveDelivery(String), the accessor a CloudEvent-level broker bridge can optionally pace its own
-    // consumption on (RabbitMqCloudEventBridge and KafkaCloudEventBridge's readinessSource), skipping a fetch it
+    // --- isReadyForLiveDelivery(String), the accessor a CloudEvent-level broker source can optionally pace its own
+    // consumption on (RabbitMqCloudEventSource and KafkaCloudEventSource's readinessSource), skipping a fetch it
     // can predict would only come back DEFERRED. acceptRedeliverable(...) already refuses rather than buffers, so
     // acknowledgement safety never depends on this. It only cuts down on refuse-and-redeliver round trips. ---
 
@@ -1705,7 +1705,7 @@ class CatchupThenPushSubscriptionModelTest {
         });
         assertThat(replayReached.await(10, TimeUnit.SECONDS)).isTrue();
 
-        // Not yet. The replay is still applying its history, and a bridge pacing itself on this answer skips a
+        // Not yet. The replay is still applying its history, and a source pacing itself on this answer skips a
         // fetch here rather than pulling a message off the broker only to have acceptRedeliverable(...) refuse it.
         assertThat(model.isReadyForLiveDelivery("proj")).isFalse();
 

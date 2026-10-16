@@ -31,14 +31,14 @@ import java.util.Optional;
 /**
  * Configuration for the Kafka broker auto-configuration, every default copied from the builder default it
  * configures rather than invented here. {@code group.id} is deliberately absent: ADR 90 requires one consumer
- * group per consumer, so it is supplied per call to the bridge factory, never as a blanket property, the same
+ * group per consumer, so it is supplied per call to the source factory, never as a blanket property, the same
  * reason {@code queue} is not a top-level RabbitMQ property either.
  */
 @ConfigurationProperties(prefix = "occurrent.broker.kafka")
 public class KafkaBrokerProperties {
 
     /**
-     * Kafka's {@code bootstrap.servers}. Required for the sink and bridge factory beans to activate. Accepts
+     * Kafka's {@code bootstrap.servers}. Required for the sink and source factory beans to activate. Accepts
      * either a comma-separated string ({@code host1:9092,host2:9092}) or a YAML list, both bind to this the same
      * way, see {@link KafkaBootstrapServersConfiguredCondition}, which is what this auto-configuration's own
      * activation check is written against instead of a plain property-presence check.
@@ -56,7 +56,7 @@ public class KafkaBrokerProperties {
     private final Producer producer = new Producer();
     private final Consumer consumer = new Consumer();
     private final Sink sink = new Sink();
-    private final Bridge bridge = new Bridge();
+    private final Source source = new Source();
 
     public List<String> getBootstrapServers() {
         return bootstrapServers;
@@ -86,8 +86,8 @@ public class KafkaBrokerProperties {
         return sink;
     }
 
-    public Bridge getBridge() {
-        return bridge;
+    public Source getSource() {
+        return source;
     }
 
     public static class Producer {
@@ -117,8 +117,8 @@ public class KafkaBrokerProperties {
          * Passthrough Kafka consumer configuration beyond {@code bootstrap.servers} and {@code group.id}, for
          * anything this starter does not otherwise expose. {@code enable.auto.commit} defaults to {@code false}
          * here, and setting it to anything else makes {@code build()} refuse, the same refusal the underlying
-         * bridge builders already make for a caller constructing one directly. {@code group.id} set here is
-         * ignored, since the bridge factory's own {@code groupId} argument always wins, see
+         * source builders already make for a caller constructing one directly. {@code group.id} set here is
+         * ignored, since the source factory's own {@code groupId} argument always wins, see
          * {@link KafkaClientConfigs}.
          */
         private Map<String, String> additionalProperties = new LinkedHashMap<>();
@@ -155,25 +155,25 @@ public class KafkaBrokerProperties {
         }
     }
 
-    public static class Bridge {
+    public static class Source {
 
         /**
-         * {@code KafkaCloudEventBridge.Builder#pollTimeout(Duration)} and
-         * {@code KafkaDomainEventBridge.Builder#pollTimeout(Duration)}. One second by default, matching those
+         * {@code KafkaCloudEventSource.Builder#pollTimeout(Duration)} and
+         * {@code KafkaDomainEventSource.Builder#pollTimeout(Duration)}. One second by default, matching those
          * builders' own default.
          */
         private Duration pollTimeout = Duration.ofSeconds(1);
 
         /**
-         * {@code KafkaCloudEventBridge.Builder#closeTimeout(Duration)} and
-         * {@code KafkaDomainEventBridge.Builder#closeTimeout(Duration)}. Thirty seconds by default, matching those
+         * {@code KafkaCloudEventSource.Builder#closeTimeout(Duration)} and
+         * {@code KafkaDomainEventSource.Builder#closeTimeout(Duration)}. Thirty seconds by default, matching those
          * builders' own default.
          */
         private Duration closeTimeout = Duration.ofSeconds(30);
 
         /**
-         * {@code KafkaCloudEventBridge.Builder#onDeliveryFailure(DeliveryFailurePolicy)} and
-         * {@code KafkaDomainEventBridge.Builder#onDeliveryFailure(DeliveryFailurePolicy)}.
+         * {@code KafkaCloudEventSource.Builder#onDeliveryFailure(DeliveryFailurePolicy)} and
+         * {@code KafkaDomainEventSource.Builder#onDeliveryFailure(DeliveryFailurePolicy)}.
          * {@link DeliveryFailurePolicy#REDELIVER} by default, matching those builders' own default.
          */
         private DeliveryFailurePolicy onDeliveryFailure = DeliveryFailurePolicy.REDELIVER;
@@ -216,7 +216,7 @@ public class KafkaBrokerProperties {
 
     /**
      * The destination {@code DeliveryFailurePolicy#PARK} publishes a failed delivery to. Required only when
-     * {@link Bridge#getOnDeliveryFailure()} is {@code PARK}. Read the same "accepted but unused outside PARK" way
+     * {@link Source#getOnDeliveryFailure()} is {@code PARK}. Read the same "accepted but unused outside PARK" way
      * the underlying builder documents for a value given without {@code PARK} when this is blank.
      */
     public static class ParkingDestination {
@@ -232,7 +232,7 @@ public class KafkaBrokerProperties {
         }
 
         /**
-         * The configured destination, or empty when {@link #topic} is null or blank. A bridge factory calls this
+         * The configured destination, or empty when {@link #topic} is null or blank. A source factory calls this
          * rather than checking the field itself, so a blank value from an unset placeholder in a property file is
          * treated the same as an absent one instead of reaching {@code parkingDestination(...)} as a topic Kafka
          * would only reject once the first failed delivery is parked.

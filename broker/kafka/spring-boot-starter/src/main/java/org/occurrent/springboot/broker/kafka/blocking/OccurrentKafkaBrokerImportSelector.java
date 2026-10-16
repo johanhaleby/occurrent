@@ -58,7 +58,7 @@ class OccurrentKafkaBrokerImportSelector implements DeferredImportSelector, Envi
     public String[] selectImports(AnnotationMetadata importingClassMetadata) {
         if (environment != null && !bootstrapServersConfigured(environment)) {
             log.warn("@EnableOccurrentKafkaBroker is active but \"{}\" is not configured. " +
-                    "OccurrentKafkaAutoConfiguration registers nothing without it, no CloudEventSink, no bridge " +
+                    "OccurrentKafkaAutoConfiguration registers nothing without it, no CloudEventSink, no source " +
                     "factory, silently. Set it to your cluster's bootstrap servers.",
                     KafkaBootstrapServersConfiguredCondition.PROPERTY);
         }

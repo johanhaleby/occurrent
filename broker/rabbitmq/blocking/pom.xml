@@ -45,7 +45,7 @@
             <version>${project.version}</version>
         </dependency>
         <!-- SubscriptionFilter appears in this module's own public API through the destinationsFor overload every
-             resolver here inherits from DestinationResolver, and RabbitMqCloudEventBridge takes one on
+             resolver here inherits from DestinationResolver, and RabbitMqCloudEventSource takes one on
              bindingFilter, so it's declared rather than left to arrive transitively through
              occurrent-broker-api-blocking. -->
         <dependency>
@@ -73,14 +73,14 @@
             <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- RabbitMqCloudEventBridge holds a PushSubscriptionModel and reads the RoutingOutcome its PushObserver
+        <!-- RabbitMqCloudEventSource holds a PushSubscriptionModel and reads the RoutingOutcome its PushObserver
              reports, per ADR 133 decision 1. -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-push-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- RabbitMqDomainEventBridge holds a DomainEventFeed and calls its acceptCloudEvent(...), per ADR 133
+        <!-- RabbitMqDomainEventSource holds a DomainEventFeed and calls its acceptCloudEvent(...), per ADR 133
              decision 5. -->
         <dependency>
             <groupId>org.occurrent</groupId>
@@ -91,7 +91,7 @@
             <groupId>com.rabbitmq</groupId>
             <artifactId>amqp-client</artifactId>
         </dependency>
-        <!-- The bridges log a delivery failure action and a failed topology reconciliation. Declared directly
+        <!-- The sources log a delivery failure action and a failed topology reconciliation. Declared directly
              rather than relied on as a transitive of occurrent-subscription-push-blocking. -->
         <dependency>
             <groupId>org.slf4j</groupId>
@@ -157,13 +157,13 @@
             <artifactId>mockito-core</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- The bridge tests wait on asynchronous consumer delivery and the coarse lifecycle poll. -->
+        <!-- The source tests wait on asynchronous consumer delivery and the coarse lifecycle poll. -->
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- A trivial PositionOrderedReader for the domain bridge tests' DomainEventFeed, which never actually
+        <!-- A trivial PositionOrderedReader for the domain source tests' DomainEventFeed, which never actually
              replays in these tests (they only feed acceptCloudEvent(...)), so an in-memory store is enough. -->
         <dependency>
             <groupId>org.occurrent</groupId>

@@ -32,7 +32,7 @@ import org.occurrent.dsl.projection.Projection;
  * to arrive before {@code OrderPlaced} does, not only after it. Neither handler ever returns {@code null}.
  * A {@link org.occurrent.dsl.view.ViewStateRepository} does not accept a {@code null} state, so a handler that
  * answered {@code null} for an event it wanted to ignore would fail the save instead, which redelivers the same
- * event forever and, at the bridge's default prefetch of one, blocks every later delivery behind it. {@code
+ * event forever and, at the source's default prefetch of one, blocks every later delivery behind it. {@code
  * OrderShipped} with no view yet therefore records the shipment as its own view, {@code product} left {@code null}
  * until {@code OrderPlaced} fills it in, rather than declining to answer. {@code OrderPlaced} always writes its own
  * fields, including the metadata, but never regresses a status the view already reached. Redelivering either
@@ -43,9 +43,9 @@ import org.occurrent.dsl.projection.Projection;
  * same {@link org.occurrent.cloudevents.EventMetadata} a catch-up replay would have handed it. {@code OrderShipped}
  * is folded through it too, for the same reason on the one path where it reaches the view first. Neither handler
  * assumes that metadata is actually there: ADR 133 decision 7 says an event published through {@code publish(E)}
- * carries no stream identity at all, and a consume bridge has no guarantee the source it is fed from is even an
- * Occurrent application. Both handlers read the stream id and version defensively rather than unconditionally, so
- * such an event still folds a view instead of throwing and, at the bridge's default {@code REDELIVER} policy and
+ * carries no stream identity at all, and a source has no guarantee that whatever publishes to its queue is
+ * even an Occurrent application. Both handlers read the stream id and version defensively rather than unconditionally, so
+ * such an event still folds a view instead of throwing and, at the source's default {@code REDELIVER} policy and
  * prefetch of one, redelivering forever and blocking every later delivery behind it.
  */
 public final class OrderStatusProjection {
@@ -69,7 +69,7 @@ public final class OrderStatusProjection {
     // metadata.getStreamId()/getStreamVersion() throw when the stream extension is absent, which ADR 133 decision 7
     // says a publish(E) event, one arriving with no stream identity at all, legitimately does. Read nullable here
     // instead of unconditionally, so an event shaped that way folds a view with no stream identity recorded rather
-    // than failing the save, which would redeliver the same event forever and, at the bridge's default prefetch of
+    // than failing the save, which would redeliver the same event forever and, at the source's default prefetch of
     // one, block every later delivery behind it, the exact failure mode this class's own javadoc argues against.
     private static @Nullable String streamId(EventMetadata metadata) {
         return metadata.get(OccurrentCloudEventExtension.STREAM_ID);
@@ -85,7 +85,7 @@ public final class OrderStatusProjection {
     /**
      * The materialized read model, holding an order, its current status, and the
      * {@link org.occurrent.cloudevents.EventMetadata} {@code OrderPlaced} arrived with, so a test can assert the
-     * round trip directly off the view instead of reaching into the bridge. {@code OrderShipped} never overwrites
+     * round trip directly off the view instead of reaching into the source. {@code OrderShipped} never overwrites
      * it once {@code OrderPlaced} has folded, {@code withStatus} only changes {@code status}, so this is
      * {@code OrderPlaced}'s metadata even when {@code OrderShipped} folds after it. The one exception is a view an
      * out-of-order {@code OrderShipped} created with nothing placed yet. Until {@code OrderPlaced} arrives and

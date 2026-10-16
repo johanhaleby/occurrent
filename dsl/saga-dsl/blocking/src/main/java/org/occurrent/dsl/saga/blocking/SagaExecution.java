@@ -243,7 +243,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         Instant now = clock.get();
         UnroutableDelivery existing = unroutableDeliveries.putIfAbsent(redeliveryKey, new UnroutableDelivery(now, now));
         if (existing == null) {
-            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so it refused the event rather than acknowledging it, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it. Where the subscription offers the event again, it is applied in the order it was written once the converter or the id extractor can read it. What it holds up until then is decided by whatever feeds this subscription. Whether it is offered again is up to the subscription model, and DeliveryFailurePolicy is where a broker bridge's choice is configured.",
+            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so it refused the event rather than acknowledging it, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it. Where the subscription offers the event again, it is applied in the order it was written once the converter or the id extractor can read it. What it holds up until then is decided by whatever feeds this subscription. Whether it is offered again is up to the subscription model, and DeliveryFailurePolicy is where a broker source's choice is configured.",
                     subscriptionId, redeliveryKey, failure);
             return;
         }
@@ -263,7 +263,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * this ERROR on that budget alone would leave a saga without one warning once and then silent for good, even while
      * the model keeps offering the event. That is every saga under the default configuration, and every saga on a
      * subscription model {@code SagaRunner} switches quarantine off for, such as a push feed, including one a broker
-     * bridge feeds. A model that does not offer a refused delivery again gets only the first WARN either way. Using
+     * source feeds. A model that does not offer a refused delivery again gets only the first WARN either way. Using
      * the configured budget when there is one keeps one number for an operator to reason about, and
      * {@link #UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE} otherwise gives every other saga the same five-minute
      * cadence rather than inventing a second tunable for it.
@@ -539,7 +539,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // one, so this means a feed that dropped the extensions on the way in, which it does for every event, not just this
     // one. Under REQUIRED that is refused rather than reacted to, so the throw reaches the subscription model.
     // Whether the event comes back until somebody looks is the model's own business. On a push feed the listener
-    // decides, and on a broker bridge the choice is set with DeliveryFailurePolicy. Under BEST_EFFORT the duplication
+    // decides, and on a broker source the choice is set with DeliveryFailurePolicy. Under BEST_EFFORT the duplication
     // is accepted knowingly, so the warning says so once per runner rather than once per event.
     private void refuseOrWarnIfRedeliveryCannotBeDetected(EventMeta meta) {
         if (meta.carriesRedeliveryKey()) {

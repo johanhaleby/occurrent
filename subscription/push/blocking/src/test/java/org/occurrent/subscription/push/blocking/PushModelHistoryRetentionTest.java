@@ -60,7 +60,7 @@ class PushModelHistoryRetentionTest {
     /**
      * The two halves of one wiring. An event this application wrote is in the store the model replays from, so it can
      * be obtained again and quarantining it loses nothing. An event that arrived over the feed and was never written
-     * here cannot, which is what a bridge consuming another service's events delivers. Both reach the same saga
+     * here cannot, which is what a source consuming another service's events delivers. Both reach the same saga
      * through the same model, so the answer belongs to the event and not to the model or to how it was configured.
      */
     @Test

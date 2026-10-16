@@ -35,18 +35,18 @@ import java.util.concurrent.atomic.AtomicLong;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The one thread a consume-side bridge handles its deliveries on. Shared between {@link RabbitMqCloudEventBridge} and
- * {@code RabbitMqDomainEventBridge} rather than written twice.
+ * The one thread a broker source handles its deliveries on. Shared between {@link RabbitMqCloudEventSource} and
+ * {@code RabbitMqDomainEventSource} rather than written twice.
  * <p>
  * The RabbitMQ client calls every consumer on a connection from one shared pool, sized by the number of available
- * processors unless the {@code ConnectionFactory} was given an executor of its own. A bridge that handled a delivery
+ * processors unless the {@code ConnectionFactory} was given an executor of its own. A source that handled a delivery
  * on that pool's thread would keep it for as long as the handler ran, so a handler waiting on an unavailable database
- * would stop every other bridge on the same connection from receiving anything once the pool ran out of threads. A
- * bridge hands each delivery to one of these instead and returns at once, so the client's thread is free again
+ * would stop every other source on the same connection from receiving anything once the pool ran out of threads. A
+ * source hands each delivery to one of these instead and returns at once, so the client's thread is free again
  * whatever the handler does.
  * <p>
- * One thread per bridge keeps deliveries handled one at a time, in the order the broker sent them. The broker sends
- * no more than the bridge's {@code prefetchCount} unacknowledged deliveries to one consumer, the bridge starts a new
+ * One thread per source keeps deliveries handled one at a time, in the order the broker sent them. The broker sends
+ * no more than the source's {@code prefetchCount} unacknowledged deliveries to one consumer, the source starts a new
  * consumer only once {@link #isIdle()}, and once an automatic connection recovery starts,
  * {@link #discardOnRecovery(Channel)} makes sure no delivery from the channel that died is started. So the queue in
  * front of the thread holds about {@code prefetchCount} deliveries from the current channel, however many pauses or
@@ -55,7 +55,7 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * A delivery this worker never starts, because {@link #stopAcceptingWork()} or {@link #stop(Duration)} ran first or a
  * recovery dropped it, is left unacknowledged. RabbitMQ puts every unacknowledged delivery on a closed channel back on
- * the queue, and the bridge closes its channel right after either call, so nothing is lost.
+ * the queue, and the source closes its channel right after either call, so nothing is lost.
  */
 public final class RabbitMqDeliveryWorker {
 
@@ -68,9 +68,9 @@ public final class RabbitMqDeliveryWorker {
     private volatile boolean stopped;
 
     /**
-     * @param threadName The name of the worker thread, so a thread dump shows which bridge a stuck handler belongs to.
-     * @param queue      The queue the bridge consumes from, only used in log messages.
-     * @param log        The bridge's own logger.
+     * @param threadName The name of the worker thread, so a thread dump shows which source a stuck handler belongs to.
+     * @param queue      The queue the source consumes from, only used in log messages.
+     * @param log        The source's own logger.
      */
     public RabbitMqDeliveryWorker(String threadName, String queue, Logger log) {
         requireNonNull(threadName, "threadName cannot be null");
@@ -89,10 +89,10 @@ public final class RabbitMqDeliveryWorker {
      * consumer callback.
      *
      * A delivery from a channel a recovery has already replaced is dropped here rather than queued, and so is one
-     * arriving after {@link #stopAcceptingWork()}. Both stay unacknowledged, and the channel the bridge closes next
+     * arriving after {@link #stopAcceptingWork()}. Both stay unacknowledged, and the channel the source closes next
      * puts them back on the queue.
      * <p>
-     * That drop is covered by {@code RabbitMqDomainEventBridgeRecoveryDiscardTest}. The recheck after the queueing is
+     * That drop is covered by {@code RabbitMqDomainEventSourceRecoveryDiscardTest}. The recheck after the queueing is
      * not, and that test passes without it. It covers only a recovery starting between the two, which would otherwise
      * hold one delivery here until the handler ahead of it finishes. Nothing is acknowledged wrongly either way.
      *
@@ -115,7 +115,7 @@ public final class RabbitMqDeliveryWorker {
         } catch (RejectedExecutionException e) {
             unfinishedDeliveries.decrementAndGet();
             // Throwing back into the client would make its exception handler close the channel.
-            log.debug("Delivery tag {} on queue \"{}\" arrived after the bridge stopped. It stays unacknowledged, " +
+            log.debug("Delivery tag {} on queue \"{}\" arrived after the source stopped. It stays unacknowledged, " +
                     "and closing the channel puts it back on the queue.", deliveryTag, queue);
             return;
         }
@@ -134,7 +134,7 @@ public final class RabbitMqDeliveryWorker {
      * recovered channel delivers each of them again. Without this a handler blocked across several recoveries would
      * find a copy of the same message waiting for it from every one of them.
      * <p>
-     * The client calls this after it has created the replacement channel and before it registers the bridge's
+     * The client calls this after it has created the replacement channel and before it registers the source's
      * consumer on it again. The replacement numbers its deliveries after every tag the dead channel issued, and that
      * last tag is read off the replacement here, so a callback from the dead channel that only reaches this worker
      * later is dropped too, while nothing from the replacement ever is. A channel that is not the client's own
@@ -183,7 +183,7 @@ public final class RabbitMqDeliveryWorker {
 
     /**
      * Whether every delivery submitted so far has finished or been dropped. RabbitMQ applies {@code prefetchCount} to
-     * each consumer separately, so a bridge starts a new consumer only once this is true. Otherwise a consumer started
+     * each consumer separately, so a source starts a new consumer only once this is true. Otherwise a consumer started
      * after a pause would add a second window of deliveries behind a handler that is still blocked.
      * <p>
      * This counts what has been submitted. A delivery the client has taken off the socket but not yet handed over is
@@ -202,7 +202,7 @@ public final class RabbitMqDeliveryWorker {
 
     /**
      * Lets a delivery already running finish, starts no queued one, and returns without waiting. Safe to call from
-     * the worker thread itself, which is where a bridge that stops for good calls it from.
+     * the worker thread itself, which is where a source that stops for good calls it from.
      */
     public void stopAcceptingWork() {
         stopped = true;
@@ -212,10 +212,10 @@ public final class RabbitMqDeliveryWorker {
     /**
      * Starts no queued delivery and waits up to {@code timeout} for the one already running to finish.
      * <p>
-     * Waits in nanoseconds rather than milliseconds, because the bridge computes {@code timeout} from its close
+     * Waits in nanoseconds rather than milliseconds, because the source computes {@code timeout} from its close
      * deadline and fences acknowledgements on that same deadline. Rounding the wait down to whole milliseconds ended
      * it up to a millisecond early, which was long enough for an interrupted handler to acknowledge or park while the
-     * deadline the bridge checks had not passed yet.
+     * deadline the source checks had not passed yet.
      *
      * @return {@code false} when a delivery was still running after {@code timeout}, {@code true} otherwise. Always
      * {@code true} when called from the worker thread, which returns at once since waiting there would wait for the
@@ -236,12 +236,12 @@ public final class RabbitMqDeliveryWorker {
 
     /**
      * Interrupts a delivery still running after {@link #stop(Duration)} gave up waiting for it, and logs it at
-     * {@code warn}. The bridge fences the acknowledgement on its close deadline, so nothing the handler starts after
+     * {@code warn}. The source fences the acknowledgement on its close deadline, so nothing the handler starts after
      * it acknowledges or parks the delivery, and unless one of those was already under way the channel close puts the
      * delivery back on the queue.
      */
     public void interruptRunningWork(Duration timeout) {
-        log.warn("A handler on queue \"{}\" was still running when the bridge stopped waiting for it, at most {} after " +
+        log.warn("A handler on queue \"{}\" was still running when the source stopped waiting for it, at most {} after " +
                 "close() began. Closing anyway. Nothing it starts from here acknowledges or parks its delivery, so " +
                 "unless one of those was already under way, RabbitMQ delivers that message again.", queue, timeout);
         executor.shutdownNow();

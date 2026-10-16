@@ -27,7 +27,7 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.CloudEventForwarder;
-import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSource;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
 import org.occurrent.dsl.projection.blocking.ProjectionRunner;
@@ -57,7 +57,7 @@ import java.util.concurrent.Executors;
 
 /**
  * A runnable, hand-wired bootstrap for the CloudEvent-level half of this broker example. It builds an event store,
- * a {@code CloudEventForwarder} publishing to RabbitMQ, a {@code RabbitMqCloudEventBridge} bridging the queue back
+ * a {@code CloudEventForwarder} publishing to RabbitMQ, a {@code RabbitMqCloudEventSource} bridging the queue back
  * into a {@code PushSubscriptionModel}, and an {@link OrderStatusProjection} fed live through
  * {@link ProjectionRunner}, entirely by constructing each piece itself. There is no Spring Boot
  * auto-configuration and no {@code application.yaml} RabbitMQ configuration here. That arrives with the broker
@@ -74,7 +74,7 @@ import java.util.concurrent.Executors;
  * give the Mongo container a couple of seconds to accept connections before the {@code rs.initiate()} call, then
  * run this class. It places and ships one order, waits for the read model to reach {@code SHIPPED}, and logs the
  * result, so the console shows the event travel the whole loop, from the store through the forwarder and the
- * broker to the bridge and the projection.
+ * broker to the source and the projection.
  * <p>
  * {@code rs.initiate()} with no member list advertises the container's own hostname as the replica set member
  * address, not {@code localhost}, and a driver doing ordinary replica set discovery switches to that unreachable
@@ -90,7 +90,7 @@ import java.util.concurrent.Executors;
  * {@code guest} account. Verified on macOS with Colima, where the docker command above accepts that account over the
  * published port with no extra step, which is what {@link #main(String[])} was actually run against. RabbitMQ
  * restricts {@code guest} to connections it can recognise as loopback, and on native Linux Docker a host
- * connection through a published port can arrive at the container from the Docker bridge address rather than one
+ * connection through a published port can arrive at the container from the Docker source address rather than one
  * RabbitMQ recognises as loopback, which fails the login with {@code ACCESS_REFUSED}. This was not verified on
  * that platform. If it bites, start the container with {@code -e RABBITMQ_DEFAULT_USER=broker-example -e
  * RABBITMQ_DEFAULT_PASS=broker-example} instead, a named user is never subject to the loopback restriction, and
@@ -126,20 +126,20 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
     private final RabbitMqCloudEventSink sink;
     private final PushSubscriptionModel pushModel;
     private final CatchupThenPushSubscriptionModel catchupThenPush;
-    private final RabbitMqCloudEventBridge bridge;
+    private final RabbitMqCloudEventSource source;
     private final Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews;
 
     private RabbitMqCloudEventLevelBootstrap(MongoEventStore eventStore, CloudEventConverter<OrderEvent> converter,
                                               DurableSubscriptionModel forwarderSubscription, RabbitMqCloudEventSink sink,
                                               PushSubscriptionModel pushModel, CatchupThenPushSubscriptionModel catchupThenPush,
-                                              RabbitMqCloudEventBridge bridge, Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews) {
+                                              RabbitMqCloudEventSource source, Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews) {
         this.eventStore = eventStore;
         this.converter = converter;
         this.forwarderSubscription = forwarderSubscription;
         this.sink = sink;
         this.pushModel = pushModel;
         this.catchupThenPush = catchupThenPush;
-        this.bridge = bridge;
+        this.source = source;
         this.orderStatusViews = orderStatusViews;
     }
 
@@ -157,18 +157,18 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
                 .build();
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(EXCHANGE, typeMapper);
 
-        // Neither the sink nor the bridge declares the exchange itself, only queues and bindings against one that
+        // Neither the sink nor the source declares the exchange itself, only queues and bindings against one that
         // already exists, so the application declares it, on its own short-lived channel.
         declareExchange(rabbitConnection);
 
-        // From here on, forwarder.forward(...) and the bridge builder each start a background subscription the
+        // From here on, forwarder.forward(...) and the source builder each start a background subscription the
         // instant they succeed, before this method has anywhere to return a handle to. A later step throwing
-        // (the bridge, the projection's catch-up) would otherwise leak whatever already started. The catch below
+        // (the source, the projection's catch-up) would otherwise leak whatever already started. The catch below
         // closes exactly that, in reverse order, before the failure reaches the caller.
         DurableSubscriptionModel forwarderSubscription = null;
         RabbitMqCloudEventSink sink = null;
         CatchupThenPushSubscriptionModel catchupThenPush = null;
-        RabbitMqCloudEventBridge bridge = null;
+        RabbitMqCloudEventSource source = null;
         try {
             NativeMongoSubscriptionModel forwarderSubscriptionModel = new NativeMongoSubscriptionModel(
                     mongoClient.getDatabase(DATABASE_NAME), EVENTS_COLLECTION, TimeRepresentation.RFC_3339_STRING, Executors.newVirtualThreadPerTaskExecutor());
@@ -188,9 +188,9 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
             // reassigned above (from the null this try/catch needs for cleanup), so it cannot be captured directly.
             final CatchupThenPushSubscriptionModel catchupThenPushForReadiness = catchupThenPush;
 
-            bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, QUEUE)
+            source = RabbitMqCloudEventSource.builder(rabbitConnection, pushModel, QUEUE)
                     .resolver(resolver)
-                    // Pacing only: RoutingOutcome.DEFERRED already keeps the bridge from acking a message
+                    // Pacing only: RoutingOutcome.DEFERRED already keeps the source from acking a message
                     // catchupThenPush's replay has only buffered, not folded. This just cuts down on how often
                     // that refuse-and-redeliver round trip happens while the replay is still running or draining.
                     .readinessSource(catchupThenPushForReadiness::isReadyForLiveDelivery)
@@ -200,9 +200,9 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
             ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(orderStatusViews::get, orderStatusViews::put);
             ProjectionRunner.stream(catchupThenPush, converter).project(SUBSCRIPTION_ID, OrderStatusProjection.orderStatusProjection(), repository);
 
-            return new RabbitMqCloudEventLevelBootstrap(eventStore, converter, forwarderSubscription, sink, pushModel, catchupThenPush, bridge, orderStatusViews);
+            return new RabbitMqCloudEventLevelBootstrap(eventStore, converter, forwarderSubscription, sink, pushModel, catchupThenPush, source, orderStatusViews);
         } catch (RuntimeException e) {
-            closeQuietly(bridge, e);
+            closeQuietly(source, e);
             closeQuietly(catchupThenPush, e);
             closeQuietly(forwarderSubscription, e);
             closeQuietly(sink, e);
@@ -280,11 +280,11 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
     }
 
     /**
-     * Closes the bridge first, so nothing is consuming, then the catch-up-then-live model {@code catchupThenPush}
+     * Closes the source first, so nothing is consuming, then the catch-up-then-live model {@code catchupThenPush}
      * wraps (which shuts {@link #pushModel} down too, cascading), then the forwarder and the sink. A
-     * {@link RabbitMqCloudEventBridge} deliberately never shuts its {@link PushSubscriptionModel} down itself,
-     * since a bridge only ever holds the model, it does not own its lifecycle, so shutting it down here is this
-     * bootstrap's own job to do, not something closing the bridge already covers.
+     * {@link RabbitMqCloudEventSource} deliberately never shuts its {@link PushSubscriptionModel} down itself,
+     * since a source only ever holds the model, it does not own its lifecycle, so shutting it down here is this
+     * bootstrap's own job to do, not something closing the source already covers.
      * <p>
      * Each of the four is closed in its own try, so one throwing does not skip the rest. The first failure is
      * rethrown with every later one attached as a suppressed exception, which is what an {@link AutoCloseable}
@@ -295,7 +295,7 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
     public void close() {
         RuntimeException failure = null;
         try {
-            bridge.close();
+            source.close();
         } catch (Exception e) {
             failure = collectFailure(failure, e);
         }
@@ -346,7 +346,7 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
              Connection rabbitConnection = newRabbitConnection(rabbitUri);
              RabbitMqCloudEventLevelBootstrap app = RabbitMqCloudEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
             OrderStatusProjection.OrderStatusView view = app.placeAndShipOneOrder(Duration.ofSeconds(30));
-            log.info("Order placed, forwarded to RabbitMQ, bridged back, and projected: {}", view);
+            log.info("Order placed, forwarded to RabbitMQ, consumed back, and projected: {}", view);
         }
     }
 

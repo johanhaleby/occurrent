@@ -41,17 +41,17 @@ public enum SagaStatus {
      * an instance that is failing and not quarantined, and for an event the saga could not route to any instance. Whatever
      * feeds the saga's subscription decides what else waits for that event, which can be every other instance of the
      * saga, some of them, or none. A push feed hands an event pushed to it live to the saga on the thread that pushed
-     * it, so what waits for a live event that fails is up to the listener that pushed it, and a broker bridge is such a
+     * it, so what waits for a live event that fails is up to the listener that pushed it, and a broker source is such a
      * listener. For a record the saga fails on with a {@link RuntimeException} or an {@link AssertionError}, the Kafka
-     * bridge holds back at most that record's partition, and none once the record is parked. The RabbitMQ bridge holds
+     * source holds back at most that record's partition, and none once the record is parked. The RabbitMQ source holds
      * nothing back itself once it has requeued or parked the message, so what the broker sends it next is the broker's
-     * choice. Anything else the saga rethrows stops either bridge, which is any other {@link Error} and a checked
+     * choice. Anything else the saga rethrows stops either source, which is any other {@link Error} and a checked
      * exception, since a saga written in Kotlin can throw one.
      * <p>
-     * A failure during a catch-up can stop a bridge too. When the saga runs on a
-     * {@code CatchupThenPushSubscriptionModel} over either bridge and the replay throws anything at all, whether the
+     * A failure during a catch-up can stop a source too. When the saga runs on a
+     * {@code CatchupThenPushSubscriptionModel} over either source and the replay throws anything at all, whether the
      * saga threw it or reading the history from the event store did, the model refuses the subscription's live events
-     * from then on, and either bridge stops for good on a record the model refuses.
+     * from then on, and either source stops for good on a record the model refuses.
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
      * which input the instance stopped on, when it started failing, and what the saga threw.

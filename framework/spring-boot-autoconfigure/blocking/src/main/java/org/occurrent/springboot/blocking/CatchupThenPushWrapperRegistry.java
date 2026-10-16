@@ -28,15 +28,15 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Maps a live {@link PushSubscriptionModel} instance to the {@link CatchupThenPushSubscriptionModel} wrapping it,
  * published as a single shared bean under {@link #BEAN_NAME} rather than one per registration, so a CloudEvent-level
- * broker bridge wired in a separate starter module that never depends on this one (per ADR 133 decision 1) can
- * correlate a bridge's own {@code model} argument to its wrapper by identity. That correlation is what a wrapper's
+ * broker source wired in a separate starter module that never depends on this one (per ADR 133 decision 1) can
+ * correlate a source's own {@code model} argument to its wrapper by identity. That correlation is what a wrapper's
  * per-id bean name ({@link CatchupThenPushSubscriptionModelPublisher#beanName(String)}) alone cannot give it: ADR
- * 102 allows two wrapper instances to share a subscription id, and a bridge asking "is my model's own wrapper
+ * 102 allows two wrapper instances to share a subscription id, and a source asking "is my model's own wrapper
  * ready" needs the one wrapping the exact {@link PushSubscriptionModel} it was built with, not whichever bean the
  * id happens to name first.
  * <p>
  * {@link PushSubscriptionModel} carries no {@code equals}/{@code hashCode} override, so a plain
- * {@link ConcurrentHashMap} keyed on it is already identity-keyed, exactly the correlation a bridge needs.
+ * {@link ConcurrentHashMap} keyed on it is already identity-keyed, exactly the correlation a source needs.
  * <p>
  * Looked up by a fixed bean name rather than by type, mirroring
  * {@link CatchupThenPushSubscriptionModelPublisher#beanName(String)}'s own convention, since the starter modules
@@ -59,7 +59,7 @@ final class CatchupThenPushWrapperRegistry {
      * time this is called for {@code applicationContext}. A no-op, rather than a failure, when
      * {@code applicationContext} is not a {@link ConfigurableApplicationContext}, matching
      * {@link CatchupThenPushSubscriptionModelPublisher#publish}'s own fallback for the same exotic-harness case:
-     * the catch-up itself keeps running fine either way, only a healthy sibling bridge's readiness lookup loses the
+     * the catch-up itself keeps running fine either way, only a healthy sibling source's readiness lookup loses the
      * benefit of this correlation and falls back to always-ready.
      */
     static void register(ApplicationContext applicationContext, PushSubscriptionModel liveFeed, CatchupThenPushSubscriptionModel wrapper) {

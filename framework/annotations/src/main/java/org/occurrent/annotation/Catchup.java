@@ -33,7 +33,7 @@ public enum Catchup {
      * delivers what the store already holds. An event another service published is in the store only if something
      * here appended it too, and a feed that mixes the two is not misconfigured. What it means is that an event
      * nothing here persisted exists only on the broker until it has been applied, and the catch-up readiness gate is
-     * what stops a bridge acknowledging it before that happens.
+     * what stops a source acknowledging it before that happens.
      */
     FROM_EVENT_STORE,
     /**

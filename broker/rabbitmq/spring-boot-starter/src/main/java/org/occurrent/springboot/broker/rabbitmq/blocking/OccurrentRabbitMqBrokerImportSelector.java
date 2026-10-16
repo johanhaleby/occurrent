@@ -59,7 +59,7 @@ class OccurrentRabbitMqBrokerImportSelector implements DeferredImportSelector, B
         if (beanFactory != null && beanFactory.getBeanNamesForType(Connection.class, true, false).length == 0) {
             log.warn("@EnableOccurrentRabbitMqBroker is active but no com.rabbitmq.client.Connection bean was " +
                     "found. OccurrentRabbitMqAutoConfiguration registers nothing without one, no CloudEventSink, " +
-                    "no bridge factory, silently. spring-boot-starter-amqp, if present on the classpath, supplies " +
+                    "no source factory, silently. spring-boot-starter-amqp, if present on the classpath, supplies " +
                     "a Spring AMQP ConnectionFactory, which does not satisfy this. Declare your own " +
                     "@Bean Connection; see EnableOccurrentRabbitMqBroker's javadoc for the snippet.");
         }

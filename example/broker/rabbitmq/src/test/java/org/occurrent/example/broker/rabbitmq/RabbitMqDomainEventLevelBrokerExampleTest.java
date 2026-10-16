@@ -27,7 +27,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.CloudEventForwarder;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
-import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridge;
+import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSource;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.view.ViewStateRepository;
@@ -56,11 +56,11 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * The domain-level half of the broker example. {@code CloudEventForwarder} publishes to RabbitMQ,
- * {@code RabbitMqDomainEventBridge} bridges the queue into a {@code DomainEventFeed}, and a
+ * {@code RabbitMqDomainEventSource} feeds the queue into a {@code DomainEventFeed}, and a
  * {@code @Projection(source = PUSH)} keeps a read model up to date directly from domain events, never decoding a
  * {@code CloudEvent} on the fold's own side.
  * <p>
- * Proves the two things ADR 133 changed here specifically. The domain bridge consumes nothing while a catch-up
+ * Proves the two things ADR 133 changed here specifically. The domain source consumes nothing while a catch-up
  * replay is running, so an event forwarded before the projection is registered waits on the queue itself rather
  * than in an in-memory buffer, and once the replay hands over, the same event arrives a second time over the
  * broker and is folded exactly once. And {@link EventMetadata} (the stream id, the stream version, the global
@@ -80,11 +80,11 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
         CheckpointStorage domainCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "domain-catchup-checkpoints");
         DomainEventFeed<OrderEvent> feed = new DomainEventFeed<>(eventStore, converter, OrderEvent::eventId, domainCatchupMarker);
 
-        RabbitMqDomainEventBridge<OrderEvent> bridge = RabbitMqDomainEventBridge.builder(rabbitConnection, feed, queue)
+        RabbitMqDomainEventSource<OrderEvent> source = RabbitMqDomainEventSource.builder(rabbitConnection, feed, queue)
                 .resolver(resolver)
                 .pollInterval(Duration.ofMillis(50))
                 .build();
-        // Not a try-with-resources, since bridge is reassigned partway through to a fresh instance on the same queue,
+        // Not a try-with-resources, since source is reassigned partway through to a fresh instance on the same queue,
         // which try-with-resources cannot express, so this closes whatever it currently refers to instead.
         // close() is idempotent, so also closing it explicitly below to make an assertion meaningful costs nothing.
         try {
@@ -97,7 +97,7 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                 CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
                 forwarder.forward("forward-orders-domain");
 
-                // Forwarded before anything is registered on the feed. RabbitMqDomainEventBridge.reconcileConsumption
+                // Forwarded before anything is registered on the feed. RabbitMqDomainEventSource.reconcileConsumption
                 // gates on feed.isReadyForLiveDelivery(), which is false until a catch-up reaches live, so these two
                 // messages queue up on the broker rather than being pulled off and buffered in memory.
                 String orderBeforeCatchup = "order-" + UUID.randomUUID();
@@ -141,23 +141,23 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                     context.refresh();
 
                     // The default startup mode replays synchronously, so by the time refresh() returns the catch-up
-                    // has already folded both events straight from the store, before the bridge ever touched them.
+                    // has already folded both events straight from the store, before the source ever touched them.
                     assertThat(store.get(orderBeforeCatchup)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
                     // 1, not 2. A catch-up replay coalesces its reads and writes per key rather than paying one
                     // save per event (see Projections.materializedView's own javadoc), so both of this order's
                     // events fold into a single save here.
                     assertThat(foldsForOrderBeforeCatchup).hasValue(1);
 
-                    // The bridge's coarse poll now notices the feed is ready for live delivery and starts consuming
+                    // The source's coarse poll now notices the feed is ready for live delivery and starts consuming
                     // the backlog it left untouched. Both messages arrive a second time, are recognised as already
                     // delivered and are not folded again (the view above is unaffected), but are still acknowledged.
                     // A queue's ready count excludes a delivery still outstanding on a consumer, so a bare zero
-                    // here would not tell an ack apart from the bridge simply holding the message unacknowledged.
-                    // Closing this bridge first requeues anything it never acknowledged, which turns "zero" back
-                    // into a real proof, then a fresh bridge on the same queue takes over for the live order below.
+                    // here would not tell an ack apart from the source simply holding the message unacknowledged.
+                    // Closing this source first requeues anything it never acknowledged, which turns "zero" back
+                    // into a real proof, then a fresh source on the same queue takes over for the live order below.
                     await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                             assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
-                    bridge.close();
+                    source.close();
                     // basicNack is fire-and-forget (no server reply) and close-ok is not ordered against the
                     // broker actually re-enqueuing the channel's unacked deliveries, so a bare assertion straight
                     // after close() can read zero while the requeue this proof depends on is still in flight.
@@ -170,7 +170,7 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                     // recognised the redelivery as already delivered and did not fold it again, not the
                     // acknowledgement alone.
                     assertThat(foldsForOrderBeforeCatchup).hasValue(1);
-                    bridge = RabbitMqDomainEventBridge.builder(rabbitConnection, feed, queue)
+                    source = RabbitMqDomainEventSource.builder(rabbitConnection, feed, queue)
                             .resolver(resolver)
                             .pollInterval(Duration.ofMillis(50))
                             .build();
@@ -186,10 +186,10 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                             assertThat(store.get(orderAfterCatchup)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
 
                     // Same closed-then-checked shape as above, now proving the live order's delivery was itself
-                    // acknowledged rather than merely folded while still sitting unacknowledged on the bridge.
+                    // acknowledged rather than merely folded while still sitting unacknowledged on the source.
                     // Awaited rather than asserted once, same reasoning as above: the requeue this proof depends on
                     // is not ordered against close()'s own return.
-                    bridge.close();
+                    source.close();
                     await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                             assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
 
@@ -211,7 +211,7 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                 }
             }
         } finally {
-            bridge.close();
+            source.close();
         }
     }
 

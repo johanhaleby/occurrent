@@ -28,13 +28,13 @@ import java.util.stream.Collectors;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The topic-derivation rule both bridge builders apply, per ADR 133 decision 5. Explicit {@code topics} if given,
+ * The topic-derivation rule both source builders apply, per ADR 133 decision 5. Explicit {@code topics} if given,
  * otherwise {@link DestinationResolver#destinationsFor(SubscriptionFilter)} for {@code bindingFilter} if given,
  * falling back to {@link DestinationResolver#catchAllDestination()} whenever the resolver cannot narrow it, or
- * {@code bindingFilter} was never given at all. Shared rather than written once per bridge, the same reasoning
- * {@code RabbitMqTopology} gives for itself. Public because the domain bridge lives in a sub-package of this one.
+ * {@code bindingFilter} was never given at all. Shared rather than written once per source, the same reasoning
+ * {@code RabbitMqTopology} gives for itself. Public because the domain source lives in a sub-package of this one.
  * <p>
- * Unlike {@code RabbitMqTopology}, this does not declare anything on a broker, since a Kafka bridge never creates a
+ * Unlike {@code RabbitMqTopology}, this does not declare anything on a broker, since a Kafka source never creates a
  * topic. It only decides what to subscribe to. {@link #subscribe(Consumer, Set)} is the other half. It reads
  * {@link KafkaDestination#topicIsPattern()} across the resolved set to decide between
  * {@code Consumer.subscribe(Collection)} and {@code Consumer.subscribe(Pattern)}, the discriminator PR 862 deferred
@@ -52,7 +52,7 @@ public final class KafkaTopology {
             if (topics.isEmpty()) {
                 throw new IllegalStateException("An explicit bindings(Set.of()) would subscribe to zero topics. " +
                         "Kafka's consumer.subscribe(Set.of()) is an unsubscribe, not \"bind everything,\" so this " +
-                        "is refused instead, rather than building a bridge that stops consuming while still " +
+                        "is refused instead, rather than building a source that stops consuming while still " +
                         "reporting healthy. Pass a non-empty bindings(...) set, or omit bindings() so a resolver " +
                         "or the catch-all destination applies.");
             }

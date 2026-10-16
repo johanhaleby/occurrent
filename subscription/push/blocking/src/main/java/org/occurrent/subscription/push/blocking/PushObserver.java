@@ -49,14 +49,14 @@ import org.occurrent.subscription.RoutingOutcome;
  * dispatch decision is made from, so the two can never disagree, and no lifecycle transition landing between the
  * evaluation and this call can change which outcome is reported.
  * <p>
- * <strong>A broker bridge feeding this model from outside the process, rather than the in-memory event store's
+ * <strong>A broker source feeding this model from outside the process, rather than the in-memory event store's
  * write path that {@code accept(..)} serves, should call
  * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} instead.</strong> When this model is wrapped in a
  * {@link CatchupThenPushSubscriptionModel} that has not reached live yet,
  * {@code acceptRedeliverable(...)} refuses such an event outright rather than buffering it, reported
  * {@link RoutingOutcome#DEFERRED}, safe to redeliver and never a reason to acknowledge. It also returns the outcome
- * it reports here, so a broker listener needs no observer to decide. {@code RabbitMqCloudEventBridge}
- * and {@code KafkaCloudEventBridge} do exactly this, and are correct with no further configuration:
+ * it reports here, so a broker listener needs no observer to decide. {@code RabbitMqCloudEventSource}
+ * and {@code KafkaCloudEventSource} do exactly this, and are correct with no further configuration:
  * {@link CatchupThenPushSubscriptionModel#isReadyForLiveDelivery(String)} and their own {@code readinessSource}
  * remain available, but only as an optional pacing hint that cuts down on how often that refuse-and-redeliver round
  * trip happens, not as a correctness requirement.

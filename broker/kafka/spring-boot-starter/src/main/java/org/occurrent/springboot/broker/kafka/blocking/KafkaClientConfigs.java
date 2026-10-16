@@ -27,7 +27,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Builds the base {@code Map<String, Object>} {@code KafkaCloudEventSink.builder(...)} and the bridge builders
+ * Builds the base {@code Map<String, Object>} {@code KafkaCloudEventSink.builder(...)} and the source builders
  * take, from {@link KafkaBrokerProperties}. {@code additional-properties} fills in anything else a caller wants
  * and can override a seeded default such as {@link #consumerConfig}'s {@code enable.auto.commit}, since a caller
  * deliberately setting that back should still reach the underlying builder's own refusal. It can never override
@@ -35,7 +35,7 @@ import java.util.Map;
  * ADR 90 requires one consumer group per consumer, so letting a stray {@code additional-properties} entry collapse
  * two different {@link #consumerConfig} calls onto the same group would be a correctness bug, not a convenience.
  * <p>
- * Public rather than package-private because the domain-level bridge factory in the sibling {@code .domain}
+ * Public rather than package-private because the domain-level source factory in the sibling {@code .domain}
  * package needs it too. Java visibility has no notion of "package family", and duplicating this map-building logic
  * there instead would risk the two drifting apart.
  */
@@ -51,7 +51,7 @@ public final class KafkaClientConfigs {
     }
 
     /**
-     * {@code enable.auto.commit} is seeded {@code false} here, matching what every bridge requires anyway, so an
+     * {@code enable.auto.commit} is seeded {@code false} here, matching what every source requires anyway, so an
      * application configuring nothing beyond {@code bootstrap-servers} and a group id gets a working consumer
      * rather than a build-time refusal. {@code additional-properties} is applied after that seed, so a caller that
      * deliberately sets {@code enable.auto.commit} back to {@code true} still gets the same refusal the underlying
@@ -68,8 +68,8 @@ public final class KafkaClientConfigs {
     }
 
     /**
-     * The same {@code RetriableException}-only predicate {@code KafkaCloudEventBridge.Builder}'s and
-     * {@code KafkaDomainEventBridge.Builder}'s own default commit retry strategy uses. Calling
+     * The same {@code RetriableException}-only predicate {@code KafkaCloudEventSource.Builder}'s and
+     * {@code KafkaDomainEventSource.Builder}'s own default commit retry strategy uses. Calling
      * {@code commitRetryStrategy(...)} replaces that default entirely, so applying the property-driven timing
      * without this predicate would retry a permanent commit failure forever instead of surfacing it.
      */

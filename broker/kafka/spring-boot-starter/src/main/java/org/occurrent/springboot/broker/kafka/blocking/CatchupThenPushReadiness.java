@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 
 /**
- * The zero-config {@code readinessSource} {@link DefaultKafkaCloudEventBridgeFactory} pre-seeds every bridge with:
+ * The zero-config {@code readinessSource} {@link DefaultKafkaCloudEventSourceFactory} pre-seeds every source with:
  * {@code true} for a {@link PushSubscriptionModel} no {@link CatchupThenPushSubscriptionModel} wraps, and that
  * wrapper's own {@link CatchupThenPushSubscriptionModel#isReadyForLiveDelivery(String)} for one that does.
  * <p>
@@ -34,9 +34,9 @@ import java.util.function.Predicate;
  * It looks the wrapper up in the shared {@code occurrentCatchupThenPushSubscriptionModelsByLiveFeed} bean a
  * framework {@code @Projection(source = PUSH)} or {@code @Saga(source = PUSH)} registration publishes (see that
  * module's {@code CatchupThenPushWrapperRegistry}), keyed on the exact {@link PushSubscriptionModel} instance the
- * bridge was built with. ADR 102 allows two independent {@code CatchupThenPushSubscriptionModel} instances to
- * subscribe under the same id, so an id-only lookup across every such bean in the context would answer for a bridge
- * with an unrelated model's wrapper, permanently starving a healthy bridge if that unrelated wrapper's own catch-up
+ * source was built with. ADR 102 allows two independent {@code CatchupThenPushSubscriptionModel} instances to
+ * subscribe under the same id, so an id-only lookup across every such bean in the context would answer for a source
+ * with an unrelated model's wrapper, permanently starving a healthy source if that unrelated wrapper's own catch-up
  * has failed or is merely slow. Nothing here falls back to that kind of lookup. A {@link PushSubscriptionModel} the
  * registry bean does not (yet) know about, or no registry bean published at all, both answer {@code true}, the same
  * "ready" answer a model no wrapper ever touches gets. See {@code RoutingOutcome.DEFERRED} below for why a
@@ -44,12 +44,12 @@ import java.util.function.Predicate;
  * <p>
  * Looked up by a fixed bean name rather than a shared type, since this starter has no compile-time dependency on the
  * framework autoconfigure module that publishes it, per ADR 133 decision 1's deliberate decoupling. Resolved lazily,
- * on first use, and memoized once found, never eagerly at bridge-build time, so a wrapper the framework module
- * publishes after this bridge is already built (bean initialization order is not guaranteed) is still picked up the
+ * on first use, and memoized once found, never eagerly at source-build time, so a wrapper the framework module
+ * publishes after this source is already built (bean initialization order is not guaranteed) is still picked up the
  * first time a live event actually asks.
  * <p>
  * {@code readinessSource} is a pacing hint only, never a correctness dependency: {@code RoutingOutcome.DEFERRED}
- * is what a bridge falls back to for an event that arrives before catch-up is actually done, whatever this method
+ * is what a source falls back to for an event that arrives before catch-up is actually done, whatever this method
  * answered. A wrapper bean not yet published this early in startup, or no catch-up wrapper involved at all, both
  * default to {@code true} here and stay correct either way, just possibly noisier until the answer catches up.
  */
@@ -79,11 +79,11 @@ final class CatchupThenPushReadiness {
     // no bean in hand yet (the registry bean does not exist at all) or no entry for liveFeed specifically (not
     // published yet, since bean initialization order is not guaranteed, or genuinely never wrapped) is never
     // cached, deliberately: a "not found" answer taken while the registry has not caught up yet, and cached
-    // forever, would starve a bridge of ever seeing the real wrapper once it does appear. Re-resolved fresh, from
+    // forever, would starve a source of ever seeing the real wrapper once it does appear. Re-resolved fresh, from
     // the map, on every call instead, cheap enough (one HashMap lookup) that this costs nothing meaningful even
     // polled forever. A registry bean absent altogether, a hand-built wrapper with no framework registrar in play,
     // answers null (ready) rather than guessing by subscription id, since an id-only match could land on a wrapper
-    // for a different PushSubscriptionModel entirely (ADR 102 permits two wrappers sharing an id), pausing a bridge
+    // for a different PushSubscriptionModel entirely (ADR 102 permits two wrappers sharing an id), pausing a source
     // that has nothing to do with it.
     private static @Nullable CatchupThenPushSubscriptionModel wrapperFor(ApplicationContext applicationContext, PushSubscriptionModel liveFeed,
                                                                           AtomicReference<@Nullable CatchupThenPushSubscriptionModel> identityMatch) {

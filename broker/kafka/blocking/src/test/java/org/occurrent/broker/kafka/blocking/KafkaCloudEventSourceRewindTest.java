@@ -1,0 +1,433 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.broker.kafka.blocking;
+
+import io.cloudevents.CloudEvent;
+import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.WakeupException;
+import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.apache.kafka.common.record.TimestampType;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.slf4j.LoggerFactory;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Predicate;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * Regression coverage for {@link KafkaCloudEventSource}'s poll loop with no other in-repo test, since the source
+ * holds its {@code Consumer} privately and none of these failures (a seek call itself throwing mid-batch, a commit
+ * that exhausts its retry, {@code close()}'s {@code wakeup()} landing mid-commit, a poison record on one partition
+ * outpacing a healthy one on another) is something a real broker or Testcontainers can force on demand. Exercised
+ * by constructing the source through its private constructor with a mocked {@link KafkaConsumer}, the same
+ * reflective technique {@code KafkaCloudEventSinkRetryTest} already proved for the sink, and invoking its private
+ * {@code processBatch(ConsumerRecords)} directly rather than driving a real poll loop thread.
+ * {@code KafkaDomainEventSource} shares this exact shape for every path covered here, so it is not duplicated.
+ */
+class KafkaCloudEventSourceRewindTest {
+
+    private static final TopicPartition PARTITION_0 = new TopicPartition("test-topic", 0);
+    private static final TopicPartition PARTITION_1 = new TopicPartition("test-topic", 1);
+    private static final TopicPartition PARTITION_2 = new TopicPartition("test-topic", 2);
+
+    /**
+     * The bug: an exception escaping the per-record loop, a failing {@code seek} most often, must rewind every
+     * partition this batch touched, not only the one that failed. {@code poll()} already advanced every partition's
+     * read position regardless of whether the loop ever reached it, so a partition never rewound here is silently
+     * skipped rather than redelivered. The model delivers partition 1's record, so partition 1 never seeks in the
+     * ordinary path and its one seek back to offset 7 can only come from the catch-all rewind, whichever partition
+     * the loop visits first.
+     */
+    @Test
+    void an_exception_escaping_the_per_record_loop_rewinds_every_partition_this_batch_touched() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        // The seek back for partition 0's held record throws, as a rebalance taking the partition away mid-batch would
+        doThrow(new RuntimeException("simulated rebalance")).when(consumer).seek(eq(PARTITION_0), eq(5L));
+
+        PushSubscriptionModel model = mock(PushSubscriptionModel.class);
+        when(model.acceptRedeliverable(any(CloudEvent.class))).thenAnswer(invocation ->
+                "id-1".equals(invocation.<CloudEvent>getArgument(0).getId()) ? RoutingOutcome.UNAVAILABLE : RoutingOutcome.DELIVERED);
+        KafkaCloudEventSource source = sourceForTesting(consumer, model);
+
+        Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
+        batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-1")));
+        batch.put(PARTITION_1, List.of(record(PARTITION_1, 7L, "id-2")));
+        ConsumerRecords<String, byte[]> records = new ConsumerRecords<>(batch);
+
+        assertThatThrownBy(() -> invokeProcessBatch(source, records))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("simulated rebalance");
+
+        verify(consumer).seek(PARTITION_1, 7L);
+    }
+
+    /**
+     * The other half of the same design: a commit failure after the batch already resolved must never rewind
+     * anything. Every partition's position is already exactly where it should be, past the last record this batch
+     * actually handled, so a rewind here would redeliver the whole batch again on every poll for as long as the
+     * commit keeps failing, forever under a persistent failure. {@code KafkaException} is not a
+     * {@code RetriableException}, so the default {@code commitRetryStrategy} gives up after the first attempt.
+     */
+    @Test
+    void a_commit_failure_after_the_batch_resolved_does_not_rewind_any_partition() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        doThrow(new KafkaException("simulated non-retriable commit failure")).when(consumer).commitSync(anyMapArg());
+
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        model.subscribe("sub", cloudEvent -> {
+        });
+        KafkaCloudEventSource source = sourceForTesting(consumer, model);
+
+        Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
+        batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-1")));
+        ConsumerRecords<String, byte[]> records = new ConsumerRecords<>(batch);
+
+        invokeProcessBatch(source, records);
+
+        verify(consumer, never()).seek(any(TopicPartition.class), anyLong());
+    }
+
+    /**
+     * {@code close()} calling {@code wakeup()} while this thread is between blocking calls can raise a
+     * {@code WakeupException} out of the very {@code commitSync} call for a batch that already fully resolved.
+     * Losing that commit to a signal that was never actually about the commit itself would replay the whole batch
+     * on the next start for no reason, so the loop retries the same commit once more instead of treating the
+     * {@code WakeupException} as a failure. That retry uses the bounded {@code commitSync(Map, Duration)} overload
+     * rather than the bare one, aligned to whatever close budget remains, so an unreachable broker cannot block
+     * this retry past {@link KafkaCloudEventSource.Builder#closeTimeout(Duration)} the way the bare overload's own
+     * {@code default.api.timeout.ms} fallback could.
+     */
+    @Test
+    void a_wakeup_during_commit_retries_the_same_commit_once_more_bounded_by_the_remaining_close_budget() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        doThrow(new WakeupException()).when(consumer).commitSync(anyMapArg());
+
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        model.subscribe("sub", cloudEvent -> {
+        });
+        Duration closeTimeout = Duration.ofSeconds(5);
+        KafkaCloudEventSource source = sourceForTesting(consumer, model, closeTimeout);
+        // Mirrors what close() itself does immediately before calling wakeup(), so the bounded retry below gets a
+        // real, positive budget to work with rather than the unset Long.MAX_VALUE default.
+        source.close();
+
+        Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
+        batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-1")));
+        ConsumerRecords<String, byte[]> records = new ConsumerRecords<>(batch);
+
+        invokeProcessBatch(source, records);
+
+        verify(consumer, times(1)).commitSync(anyMapArg());
+        ArgumentCaptor<Duration> timeoutCaptor = ArgumentCaptor.forClass(Duration.class);
+        verify(consumer).commitSync(anyMapArg(), timeoutCaptor.capture());
+        assertThat(timeoutCaptor.getValue())
+                .as("the retry's own timeout must stay within the close budget rather than falling back to " +
+                        "the client's much larger default.api.timeout.ms")
+                .isLessThanOrEqualTo(closeTimeout);
+        verify(consumer, never()).seek(any(TopicPartition.class), anyLong());
+    }
+
+    /**
+     * A poison record on one partition must throttle only that partition, not the whole loop, or a healthy
+     * partition committing offsets in the same poll gets slowed to the failing one's pace for no reason. The
+     * seeked-back partition is paused here, immediately, rather than left for the next lifecycle-gate recheck to
+     * notice, so the very next {@code poll()} already excludes it.
+     */
+    @Test
+    void a_poison_record_pauses_only_its_own_partition_not_a_healthy_one_resolving_in_the_same_batch() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        model.subscribe("sub", cloudEvent -> {
+            if ("id-2".equals(cloudEvent.getId())) {
+                throw new RuntimeException("simulated permanently failing handler");
+            }
+        });
+        KafkaCloudEventSource source = sourceForTesting(consumer, model);
+
+        Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
+        batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-1")));
+        batch.put(PARTITION_1, List.of(record(PARTITION_1, 7L, "id-2")));
+        ConsumerRecords<String, byte[]> records = new ConsumerRecords<>(batch);
+
+        invokeProcessBatch(source, records);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Collection<TopicPartition>> pausedCaptor = ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(consumer).pause(pausedCaptor.capture());
+        assertThat(pausedCaptor.getValue())
+                .as("only the partition whose record kept failing should be paused")
+                .containsExactly(PARTITION_1);
+    }
+
+    /**
+     * The bug behind #948: once a record's outcome decides a permanent stop, {@code REFUSED} here, the rest of
+     * this poll must never be offered to a model that has already given up, on this partition or any other.
+     * The {@code LinkedHashMap} below fixes the loop's order to partitions 0, 1, 2. Partition 0 resolves before
+     * partition 1's record decides the stop, so it stays committed. Partition 2 comes after the stop, so
+     * {@code id-2} is never offered to the model and partition 2 is rewound instead of left at whatever position
+     * {@code poll()} already advanced it to.
+     */
+    @Test
+    void a_permanent_stop_mid_batch_rewinds_every_partition_it_had_not_yet_reached() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+
+        PushSubscriptionModel model = mock(PushSubscriptionModel.class);
+        List<String> offered = new ArrayList<>();
+        doAnswer(invocation -> {
+            CloudEvent cloudEvent = invocation.getArgument(0);
+            offered.add(cloudEvent.getId());
+            return "id-1".equals(cloudEvent.getId()) ? RoutingOutcome.REFUSED : RoutingOutcome.DELIVERED;
+        }).when(model).acceptRedeliverable(any(CloudEvent.class));
+        KafkaCloudEventSource source = sourceForTesting(consumer, model);
+
+        Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
+        batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-0")));
+        batch.put(PARTITION_1, List.of(record(PARTITION_1, 10L, "id-1")));
+        batch.put(PARTITION_2, List.of(record(PARTITION_2, 20L, "id-2")));
+        ConsumerRecords<String, byte[]> records = new ConsumerRecords<>(batch);
+
+        invokeProcessBatch(source, records);
+
+        assertThat(offered)
+                .as("id-2 must never be offered to a model that has already given up for good")
+                .containsExactly("id-0", "id-1");
+        verify(consumer).seek(PARTITION_1, 10L);
+        verify(consumer).seek(PARTITION_2, 20L);
+        verify(consumer, never()).seek(eq(PARTITION_0), anyLong());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<TopicPartition, OffsetAndMetadata>> commitCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(consumer).commitSync(commitCaptor.capture());
+        assertThat(commitCaptor.getValue())
+                .as("id-0 resolved before the stop and must still commit")
+                .containsOnlyKeys(PARTITION_0);
+    }
+
+    /**
+     * The source decides from the returned outcome alone. DEFERRED is held, seeked back without an offset staged,
+     * and never reaches the failure policy, since nothing is broken yet.
+     */
+    @Test
+    void a_deferred_outcome_seeks_back_without_committing_or_calling_the_failure_policy() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        KafkaDeliveryFailureAction failureAction = mock(KafkaDeliveryFailureAction.class);
+        KafkaCloudEventSource source = sourceForTesting(consumer, modelReturning(RoutingOutcome.DEFERRED), failureAction);
+
+        invokeProcessBatch(source, singleRecordBatch());
+
+        verify(consumer).seek(PARTITION_0, 5L);
+        verify(consumer, never()).commitSync(anyMapArg());
+        verify(failureAction, never()).apply(any());
+    }
+
+    /**
+     * NOT_DELIVERABLE is a refusal that was not promised to be permanent, so the configured failure policy decides.
+     * A policy that resolves the record gets its offset committed, and nothing is seeked back.
+     */
+    @Test
+    void a_not_deliverable_outcome_goes_to_the_failure_policy() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        KafkaDeliveryFailureAction failureAction = mock(KafkaDeliveryFailureAction.class);
+        when(failureAction.apply(any())).thenReturn(KafkaDeliveryFailureAction.Outcome.RESOLVED);
+        KafkaCloudEventSource source = sourceForTesting(consumer, modelReturning(RoutingOutcome.NOT_DELIVERABLE), failureAction);
+
+        invokeProcessBatch(source, singleRecordBatch());
+
+        verify(failureAction).apply(any());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<TopicPartition, OffsetAndMetadata>> commitCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(consumer).commitSync(commitCaptor.capture());
+        assertThat(commitCaptor.getValue()).containsEntry(PARTITION_0, new OffsetAndMetadata(6L));
+        verify(consumer, never()).seek(any(TopicPartition.class), anyLong());
+    }
+
+    /**
+     * REFUSED means stop. The record is neither committed nor handed to the failure policy, since offering it again
+     * only gets the same refusal.
+     */
+    @Test
+    void a_refused_outcome_stops_the_source_without_calling_the_failure_policy() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        KafkaDeliveryFailureAction failureAction = mock(KafkaDeliveryFailureAction.class);
+        KafkaCloudEventSource source = sourceForTesting(consumer, modelReturning(RoutingOutcome.REFUSED), failureAction);
+
+        invokeProcessBatch(source, singleRecordBatch());
+
+        verify(consumer).seek(PARTITION_0, 5L);
+        verify(consumer, never()).commitSync(anyMapArg());
+        verify(failureAction, never()).apply(any());
+        assertThat(permanentlyStopped(source)).isTrue();
+    }
+
+    /**
+     * Only a filter or a handler failure throws out of acceptRedeliverable(..), and that goes to the failure policy.
+     */
+    @Test
+    void an_exception_from_the_model_goes_to_the_failure_policy() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        KafkaDeliveryFailureAction failureAction = mock(KafkaDeliveryFailureAction.class);
+        when(failureAction.apply(any())).thenReturn(KafkaDeliveryFailureAction.Outcome.REDELIVER);
+        PushSubscriptionModel model = mock(PushSubscriptionModel.class);
+        when(model.acceptRedeliverable(any(CloudEvent.class))).thenThrow(new IllegalStateException("handler failed"));
+        KafkaCloudEventSource source = sourceForTesting(consumer, model, failureAction);
+
+        invokeProcessBatch(source, singleRecordBatch());
+
+        verify(failureAction).apply(any());
+        verify(consumer).seek(PARTITION_0, 5L);
+        verify(consumer, never()).commitSync(anyMapArg());
+        assertThat(permanentlyStopped(source)).isFalse();
+    }
+
+    private static PushSubscriptionModel modelReturning(RoutingOutcome outcome) {
+        PushSubscriptionModel model = mock(PushSubscriptionModel.class);
+        when(model.acceptRedeliverable(any(CloudEvent.class))).thenReturn(outcome);
+        return model;
+    }
+
+    private static ConsumerRecords<String, byte[]> singleRecordBatch() {
+        Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
+        batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-1")));
+        return new ConsumerRecords<>(batch);
+    }
+
+    private static Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> anyMapArg() {
+        return any();
+    }
+
+    private static ConsumerRecord<String, byte[]> record(TopicPartition partition, long offset, String id) {
+        RecordHeaders headers = new RecordHeaders();
+        headers.add("ce_specversion", "1.0".getBytes(StandardCharsets.UTF_8));
+        headers.add("ce_id", id.getBytes(StandardCharsets.UTF_8));
+        headers.add("ce_source", "urn:test".getBytes(StandardCharsets.UTF_8));
+        headers.add("ce_type", "com.acme.OrderPlaced".getBytes(StandardCharsets.UTF_8));
+        byte[] value = "{}".getBytes(StandardCharsets.UTF_8);
+        return new ConsumerRecord<>(partition.topic(), partition.partition(), offset, ConsumerRecord.NO_TIMESTAMP,
+                TimestampType.CREATE_TIME, ConsumerRecord.NULL_SIZE, value.length, "stream-1", value, headers, Optional.empty());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static KafkaConsumer<String, byte[]> mockConsumer() {
+        KafkaConsumer<String, byte[]> consumer = mock(KafkaConsumer.class);
+        // A warn log on the failure paths under test names the consumer group, so a bare mock's default null
+        // answer for groupMetadata() would NPE before the assertion this test actually cares about ever runs.
+        when(consumer.groupMetadata()).thenReturn(new ConsumerGroupMetadata("test-group"));
+        return consumer;
+    }
+
+    private static KafkaCloudEventSource sourceForTesting(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model) {
+        return sourceForTesting(consumer, model, Duration.ofSeconds(5));
+    }
+
+    private static KafkaCloudEventSource sourceForTesting(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model,
+                                                            Duration closeTimeout) {
+        KafkaDeliveryFailureAction failureAction = KafkaDeliveryFailureAction.create(
+                Map.of(), DeliveryFailurePolicy.REDELIVER, null, LoggerFactory.getLogger(KafkaCloudEventSourceRewindTest.class));
+        return sourceForTesting(consumer, model, closeTimeout, failureAction);
+    }
+
+    private static KafkaCloudEventSource sourceForTesting(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model,
+                                                            KafkaDeliveryFailureAction failureAction) {
+        return sourceForTesting(consumer, model, Duration.ofSeconds(5), failureAction);
+    }
+
+    private static KafkaCloudEventSource sourceForTesting(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model,
+                                                            Duration closeTimeout, KafkaDeliveryFailureAction failureAction) {
+        try {
+            Constructor<KafkaCloudEventSource> constructor = KafkaCloudEventSource.class.getDeclaredConstructor(
+                    KafkaConsumer.class, PushSubscriptionModel.class, Duration.class,
+                    Duration.class, RetryStrategy.class, KafkaDeliveryFailureAction.class, String.class, Predicate.class);
+            constructor.setAccessible(true);
+            // readinessSource fixed at "always ready" here: none of this class's cases are about the catch-up
+            // readiness gate, which KafkaCloudEventSourceReadinessTest covers on its own, through the public
+            // builder rather than reflection.
+            Predicate<String> alwaysReady = subscriptionId -> true;
+            return constructor.newInstance(consumer, model, Duration.ofSeconds(1), closeTimeout,
+                    defaultCommitRetryStrategyForTesting(), failureAction, "test-group", alwaysReady);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Could not construct " + KafkaCloudEventSource.class.getSimpleName() + " for testing", unwrap(e));
+        }
+    }
+
+    private static RetryStrategy defaultCommitRetryStrategyForTesting() {
+        try {
+            Method method = KafkaCloudEventSource.class.getDeclaredMethod("defaultCommitRetryStrategy");
+            method.setAccessible(true);
+            return (RetryStrategy) method.invoke(null);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Could not read the default commit retry strategy for testing", unwrap(e));
+        }
+    }
+
+    private static void invokeProcessBatch(KafkaCloudEventSource source, ConsumerRecords<String, byte[]> records) throws Exception {
+        try {
+            Method method = KafkaCloudEventSource.class.getDeclaredMethod("processBatch", ConsumerRecords.class);
+            method.setAccessible(true);
+            method.invoke(source, records);
+        } catch (InvocationTargetException e) {
+            if (e.getTargetException() instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw e;
+        }
+    }
+
+    private static boolean permanentlyStopped(KafkaCloudEventSource source) throws ReflectiveOperationException {
+        Field field = KafkaCloudEventSource.class.getDeclaredField("permanentlyStopped");
+        field.setAccessible(true);
+        return field.getBoolean(source);
+    }
+
+    private static Throwable unwrap(ReflectiveOperationException e) {
+        return e instanceof InvocationTargetException invocationTargetException ? invocationTargetException.getTargetException() : e;
+    }
+}

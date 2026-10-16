@@ -462,7 +462,7 @@ class DomainEventFeedTest {
     /**
      * The busy-loop class round 8 first closed for a stopped replay, now proven against the delegating
      * {@code BlockingHandover.isReadyForLiveDelivery()} (round 11) rather than a separately tracked flag. A stop
-     * mid-replay leaves the handover dropping every live delivery until a later catch-up revives it, so a bridge
+     * mid-replay leaves the handover dropping every live delivery until a later catch-up revives it, so a source
      * polling {@code hasProjection() && isReadyForLiveDelivery()} must not keep consuming and nack-requeue every
      * message in a hot loop for that whole interval. Readiness reads false for the entire replay, running or
      * stopped, since the delegating handover is not live until its drain actually runs, not only for the stopped
@@ -1077,12 +1077,12 @@ class DomainEventFeedTest {
      * {@code register(..)} returns, well before the application calls {@code goLive(..)}, so a live event arriving
      * in that window used to report {@link RoutingOutcome#DELIVERED} for an event only buffered in memory. A
      * {@code DomainEventFeed} bound for {@code goLive(..)} never replays (its own javadoc: the events are not in the
-     * local store), so a crash in that window lost the event for good even though a broker bridge would already have
+     * local store), so a crash in that window lost the event for good even though a broker source would already have
      * acknowledged it. {@link RoutingOutcome#DEFERRED} is what fixes it now: {@code acceptCloudEvent(..)} refuses
      * this event outright rather than buffering it, so a caller must redeliver instead of acknowledging, and a
      * redelivery once {@code goLive(..)} has actually run is what folds the event, proving it was recoverable
-     * rather than dropped. {@code RabbitMqDomainEventBridgeTest} (in the RabbitMQ broker module) exercises the same
-     * scenario end to end through the actual bridge; this is the unit-level proof of the feed's own contract.
+     * rather than dropped. {@code RabbitMqDomainEventSourceTest} (in the RabbitMQ broker module) exercises the same
+     * scenario end to end through the actual source. This is the unit-level proof of the feed's own contract.
      */
     @Test
     void accept_cloud_event_reports_deferred_for_an_event_offered_before_catch_up_or_go_live_has_started() {
@@ -1101,7 +1101,7 @@ class DomainEventFeedTest {
         assertThat(repo).as("refused outright, never buffered, and not dropped either").isEmpty();
 
         // Proof the event is recoverable rather than lost: goLive(..) makes the feed ready, exactly as it would for
-        // a real application that only decides goLive(..) once it starts, after the bridge could already have
+        // a real application that only decides goLive(..) once it starts, after the source could already have
         // offered a message, and redelivering the same event once ready is what actually folds it.
         feed.goLive("counter");
         RoutingOutcome redelivered = feed.acceptCloudEvent(cloudEvent);

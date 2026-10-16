@@ -21,7 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
-import org.occurrent.broker.kafka.blocking.KafkaCloudEventBridge;
+import org.occurrent.broker.kafka.blocking.KafkaCloudEventSource;
 import org.occurrent.broker.kafka.blocking.KafkaCloudEventSink;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
@@ -53,11 +53,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * {@code CatchupThenPushSubscriptionModel} beans subscribed under the same id ("orders", ADR 102 permits exactly
  * this), the first with a permanently failed catch-up, the second healthy, and no identity registry bean published
  * for either. A readiness lookup that picked a wrapper by id alone across the whole context could answer for the
- * healthy bridge with the failing wrapper's own permanent {@code false}, starving it forever even though its own
- * model has nothing wrong with it. {@link DefaultKafkaCloudEventBridgeFactory#forGroup} correlates by identity
+ * healthy source with the failing wrapper's own permanent {@code false}, starving it forever even though its own
+ * model has nothing wrong with it. {@link DefaultKafkaCloudEventSourceFactory#forGroup} correlates by identity
  * instead ({@link CatchupThenPushReadiness#memoized(org.springframework.context.ApplicationContext, PushSubscriptionModel)}),
  * and answers ready when it finds no registry entry for a given liveFeed rather than guessing by id, so the healthy
- * model's own bridge, built with no manual {@code readinessSource(...)} call, must still consume.
+ * model's own source, built with no manual {@code readinessSource(...)} call, must still consume.
  */
 @Testcontainers
 class CatchupThenPushReadinessAmbiguousIdTest {
@@ -69,7 +69,7 @@ class CatchupThenPushReadinessAmbiguousIdTest {
             .withReuse(true);
 
     @Test
-    void a_healthy_models_bridge_still_consumes_even_though_a_different_models_wrapper_sharing_its_subscription_id_has_permanently_failed() throws Exception {
+    void a_healthy_models_source_still_consumes_even_though_a_different_models_wrapper_sharing_its_subscription_id_has_permanently_failed() throws Exception {
         // The failing model: its catch-up fold throws, permanently failing its handover, so
         // isReadyForLiveDelivery("orders") answers false forever from this point on.
         PushSubscriptionModel failingLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
@@ -104,7 +104,7 @@ class CatchupThenPushReadinessAmbiguousIdTest {
                 .withPropertyValues(
                         "occurrent.broker.kafka.bootstrap-servers=" + kafkaContainer.getBootstrapServers(),
                         "occurrent.broker.kafka.topic=" + topic,
-                        "occurrent.broker.kafka.bridge.poll-timeout=100ms",
+                        "occurrent.broker.kafka.source.poll-timeout=100ms",
                         "occurrent.broker.kafka.consumer.additional-properties[auto.offset.reset]=earliest"
                 )
                 .run(context -> {
@@ -117,13 +117,13 @@ class CatchupThenPushReadinessAmbiguousIdTest {
                     springContext.getBeanFactory().registerSingleton("healthyWrapper", healthyWrapper);
 
                     KafkaCloudEventSink sink = context.getBean(KafkaCloudEventSink.class);
-                    KafkaCloudEventBridgeFactory bridgeFactory = context.getBean(KafkaCloudEventBridgeFactory.class);
+                    KafkaCloudEventSourceFactory sourceFactory = context.getBean(KafkaCloudEventSourceFactory.class);
 
                     // No manual readinessSource(...) call: the zero-config path, exactly what
-                    // DefaultKafkaCloudEventBridgeFactory.forGroup pre-seeds for every bridge. Fed with the healthy
-                    // model's own live feed, ADR 133 decision 1's "a bridge feeds the live model, never the
-                    // wrapper" shape, the same as every other bridge test in this module.
-                    KafkaCloudEventBridge healthyBridge = bridgeFactory.forGroup("test-group-" + UUID.randomUUID(), healthyLiveFeed).build();
+                    // DefaultKafkaCloudEventSourceFactory.forGroup pre-seeds for every source. Fed with the healthy
+                    // model's own live feed, ADR 133 decision 1's "a source feeds the live model, never the
+                    // wrapper" shape, the same as every other source test in this module.
+                    KafkaCloudEventSource healthySource = sourceFactory.forGroup("test-group-" + UUID.randomUUID(), healthyLiveFeed).build();
                     try {
                         CloudEvent event = CloudEventBuilder.v1()
                                 .withId(UUID.randomUUID().toString())
@@ -134,11 +134,11 @@ class CatchupThenPushReadinessAmbiguousIdTest {
 
                         CloudEvent delivered = healthyReceived.poll(15, TimeUnit.SECONDS);
                         assertThat(delivered)
-                                .as("the healthy model's own bridge must still consume, even though an unrelated " +
+                                .as("the healthy model's own source must still consume, even though an unrelated " +
                                         "model's wrapper sharing its subscription id has permanently failed")
                                 .isNotNull();
                     } finally {
-                        healthyBridge.close();
+                        healthySource.close();
                         healthyLiveFeed.shutdown();
                     }
                 });

@@ -21,7 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.broker.api.blocking.DomainEventSink;
-import org.occurrent.broker.kafka.blocking.domain.KafkaDomainEventBridge;
+import org.occurrent.broker.kafka.blocking.domain.KafkaDomainEventSource;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.view.ViewStateRepository;
@@ -46,7 +46,7 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Proves the domain-level half of the Kafka broker auto-configuration against a real Kafka. An auto-configured
- * {@code KafkaDomainEventSink} publishes a domain event, and a factory-built {@code KafkaDomainEventBridge} feeds
+ * {@code KafkaDomainEventSink} publishes a domain event, and a factory-built {@code KafkaDomainEventSource} feeds
  * it into a {@code DomainEventFeed} projection.
  */
 @Testcontainers
@@ -60,7 +60,7 @@ class KafkaDomainBrokerAutoConfigurationIntegrationTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void domain_level_round_trip_through_the_auto_configured_sink_and_bridge() throws Exception {
+    void domain_level_round_trip_through_the_auto_configured_sink_and_source() throws Exception {
         String topic = "test-topic-" + UUID.randomUUID();
         CloudEventConverter<TestOrderPlaced> converter = new TestOrderPlacedConverter();
 
@@ -71,16 +71,16 @@ class KafkaDomainBrokerAutoConfigurationIntegrationTest {
                 .withPropertyValues(
                         "occurrent.broker.kafka.bootstrap-servers=" + kafkaContainer.getBootstrapServers(),
                         "occurrent.broker.kafka.topic=" + topic,
-                        "occurrent.broker.kafka.bridge.poll-timeout=100ms",
+                        "occurrent.broker.kafka.source.poll-timeout=100ms",
                         // This test's consumer group is a fresh UUID with no committed offset, and the publish
-                        // below can land before the bridge's own subscription finishes joining the group. Kafka's
+                        // below can land before the source's own subscription finishes joining the group. Kafka's
                         // own default, auto.offset.reset=latest, would then skip straight past that already
                         // published record instead of ever seeing it.
                         "occurrent.broker.kafka.consumer.additional-properties[auto.offset.reset]=earliest"
                 )
                 .run(context -> {
                     DomainEventSink<TestOrderPlaced> sink = context.getBean(DomainEventSink.class);
-                    KafkaDomainEventBridgeFactory bridgeFactory = context.getBean(KafkaDomainEventBridgeFactory.class);
+                    KafkaDomainEventSourceFactory sourceFactory = context.getBean(KafkaDomainEventSourceFactory.class);
 
                     Map<String, String> orderStatusViews = new ConcurrentHashMap<>();
                     DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), converter, TestOrderPlaced::orderId);
@@ -91,9 +91,9 @@ class KafkaDomainBrokerAutoConfigurationIntegrationTest {
                                     .build(),
                             ViewStateRepository.create(orderStatusViews::get, orderStatusViews::put));
 
-                    KafkaDomainEventBridge<TestOrderPlaced> bridge = bridgeFactory.forGroup("test-group-" + UUID.randomUUID(), feed).build();
+                    KafkaDomainEventSource<TestOrderPlaced> source = sourceFactory.forGroup("test-group-" + UUID.randomUUID(), feed).build();
                     try {
-                        // register(...) alone does not reach live. isReadyForLiveDelivery() (what the bridge's
+                        // register(...) alone does not reach live. isReadyForLiveDelivery() (what the source's
                         // coarse lifecycle gate polls) only answers true once the one-time catch-up below has
                         // actually completed.
                         feed.catchUp("test-domain-projection");
@@ -104,7 +104,7 @@ class KafkaDomainBrokerAutoConfigurationIntegrationTest {
                         await().atMost(15, TimeUnit.SECONDS).untilAsserted(() ->
                                 assertThat(orderStatusViews.get(orderId)).isEqualTo("PLACED"));
                     } finally {
-                        bridge.close();
+                        source.close();
                     }
                 });
     }

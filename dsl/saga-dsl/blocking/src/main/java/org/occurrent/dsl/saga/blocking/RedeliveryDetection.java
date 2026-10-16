@@ -33,7 +33,7 @@ public enum RedeliveryDetection {
      * {@link SagaRedeliveryDetectionException} rather than reacted to, so the feed that dropped the metadata announces
      * itself instead of quietly costing the saga its redelivery protection. The exception propagates to the
      * subscription model, and whether the event is offered again is that model's own business. A push feed lets the
-     * listener that handed the event over decide, and on a broker bridge {@code DeliveryFailurePolicy} is where the
+     * listener that handed the event over decide, and on a broker source {@code DeliveryFailurePolicy} is where the
      * choice is configured.
      */
     REQUIRED,

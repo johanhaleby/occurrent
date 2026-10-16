@@ -45,7 +45,7 @@ import java.lang.annotation.*;
  * <p>
  * The two input paths fail differently. A failing event propagates to the subscription, and the whole step is retried
  * wherever the subscription model offers the event again. Whether it does is that model's own business. A push feed
- * lets the listener decide, and on a consume-side broker bridge the choice is set with
+ * lets the listener decide, and on a broker source the choice is set with
  * {@code DeliveryFailurePolicy}.
  * <p>
  * What a failing event holds up is decided by whatever feeds the subscription, and the javadoc on

@@ -19,7 +19,7 @@ package org.occurrent.dsl.saga.blocking;
 /**
  * Thrown when a saga's state cannot be saved because a concurrent writer kept winning the compare-and-set, exhausting
  * the configured retries. For an event this propagates to the subscription model. Whether the event is offered again
- * is that model's to decide, and {@code DeliveryFailurePolicy} is where a consume-side broker bridge's choice is
+ * is that model's to decide, and {@code DeliveryFailurePolicy} is where a broker source's choice is
  * configured. What the failing event holds up is decided by whatever feeds the subscription, and
  * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what that can be. {@link SagaRunner} describes how an
  * instance that keeps failing can be quarantined. For a timeout the poller catches it, logs it, and leaves the timer due for the next poll.

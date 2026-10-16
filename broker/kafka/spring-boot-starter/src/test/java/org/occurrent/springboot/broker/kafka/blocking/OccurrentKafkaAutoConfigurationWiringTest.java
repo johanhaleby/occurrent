@@ -19,7 +19,7 @@ package org.occurrent.springboot.broker.kafka.blocking;
 import org.junit.jupiter.api.Test;
 import org.occurrent.broker.api.blocking.CloudEventSink;
 import org.occurrent.broker.api.blocking.DestinationResolver;
-import org.occurrent.broker.kafka.blocking.KafkaCloudEventBridge;
+import org.occurrent.broker.kafka.blocking.KafkaCloudEventSource;
 import org.occurrent.broker.kafka.blocking.KafkaCloudEventSink;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -34,7 +34,7 @@ import static org.mockito.Mockito.mock;
  * Proves the wiring rules from the plan gate without a real broker. That covers what activates the whole
  * configuration, {@code bootstrap-servers} recognized in both its comma-separated and its indexed YAML list
  * binding forms included, what stays absent until its own prerequisite is met, and that {@code @Fallback} defers
- * to an application's own bean. Building a sink or a bridge never needs a reachable broker, since the Kafka client
+ * to an application's own bean. Building a sink or a source never needs a reachable broker, since the Kafka client
  * waits until it actually sends or polls before it opens a connection. Every {@code bootstrap-servers} value here
  * is a placeholder address never actually dialed. That behavior is proved for real against a Testcontainers broker
  * in {@link KafkaBrokerAutoConfigurationIntegrationTest}.
@@ -51,7 +51,7 @@ class OccurrentKafkaAutoConfigurationWiringTest {
     void nothing_is_registered_without_bootstrap_servers() {
         contextRunner.run(context -> {
             assertThat(context).doesNotHaveBean(KafkaCloudEventSink.class);
-            assertThat(context).doesNotHaveBean(KafkaCloudEventBridgeFactory.class);
+            assertThat(context).doesNotHaveBean(KafkaCloudEventSourceFactory.class);
             assertThat(context).doesNotHaveBean(org.occurrent.broker.kafka.blocking.KafkaSharedTopicDestinationResolver.class);
         });
     }
@@ -59,7 +59,7 @@ class OccurrentKafkaAutoConfigurationWiringTest {
     @Test
     void activates_with_the_comma_separated_scalar_binding_form() {
         contextRunner.withPropertyValues("occurrent.broker.kafka.bootstrap-servers=" + FAKE_BOOTSTRAP_SERVERS)
-                .run(context -> assertThat(context).hasSingleBean(KafkaCloudEventBridgeFactory.class));
+                .run(context -> assertThat(context).hasSingleBean(KafkaCloudEventSourceFactory.class));
     }
 
     @Test
@@ -67,7 +67,7 @@ class OccurrentKafkaAutoConfigurationWiringTest {
         contextRunner.withPropertyValues(
                         "occurrent.broker.kafka.bootstrap-servers[0]=host1:9092",
                         "occurrent.broker.kafka.bootstrap-servers[1]=host2:9092")
-                .run(context -> assertThat(context).hasSingleBean(KafkaCloudEventBridgeFactory.class));
+                .run(context -> assertThat(context).hasSingleBean(KafkaCloudEventSourceFactory.class));
     }
 
     /**
@@ -79,7 +79,7 @@ class OccurrentKafkaAutoConfigurationWiringTest {
     @Test
     void does_not_activate_for_an_indexed_form_with_only_a_blank_element() {
         contextRunner.withPropertyValues("occurrent.broker.kafka.bootstrap-servers[0]=")
-                .run(context -> assertThat(context).doesNotHaveBean(KafkaCloudEventBridgeFactory.class));
+                .run(context -> assertThat(context).doesNotHaveBean(KafkaCloudEventSourceFactory.class));
     }
 
     @Test
@@ -108,7 +108,7 @@ class OccurrentKafkaAutoConfigurationWiringTest {
 
     /**
      * A plain {@code @ConditionalOnProperty} treats an empty value as present, which would build a resolver for a
-     * blank topic name here, one that later fails when a bridge tries to subscribe to it.
+     * blank topic name here, one that later fails when a source tries to subscribe to it.
      * {@link KafkaTopicConfiguredCondition} requires a nonblank value.
      */
     @Test
@@ -142,24 +142,24 @@ class OccurrentKafkaAutoConfigurationWiringTest {
     }
 
     @Test
-    void bridge_without_a_resolver_or_explicit_bindings_refuses_at_build() {
+    void source_without_a_resolver_or_explicit_bindings_refuses_at_build() {
         contextRunner.withPropertyValues("occurrent.broker.kafka.bootstrap-servers=" + FAKE_BOOTSTRAP_SERVERS)
                 .run(context -> {
-                    KafkaCloudEventBridgeFactory factory = context.getBean(KafkaCloudEventBridgeFactory.class);
-                    KafkaCloudEventBridge.Builder builder = factory.forGroup("orders-projection", new PushSubscriptionModel());
+                    KafkaCloudEventSourceFactory factory = context.getBean(KafkaCloudEventSourceFactory.class);
+                    KafkaCloudEventSource.Builder builder = factory.forGroup("orders-projection", new PushSubscriptionModel());
                     assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class).hasMessageContaining("resolver");
                 });
     }
 
     @Test
-    void bridge_configured_to_park_without_a_parking_destination_refuses_at_build() {
+    void source_configured_to_park_without_a_parking_destination_refuses_at_build() {
         contextRunner.withPropertyValues(
                         "occurrent.broker.kafka.bootstrap-servers=" + FAKE_BOOTSTRAP_SERVERS,
                         "occurrent.broker.kafka.topic=orders",
-                        "occurrent.broker.kafka.bridge.on-delivery-failure=PARK")
+                        "occurrent.broker.kafka.source.on-delivery-failure=PARK")
                 .run(context -> {
-                    KafkaCloudEventBridgeFactory factory = context.getBean(KafkaCloudEventBridgeFactory.class);
-                    KafkaCloudEventBridge.Builder builder = factory.forGroup("orders-projection", new PushSubscriptionModel());
+                    KafkaCloudEventSourceFactory factory = context.getBean(KafkaCloudEventSourceFactory.class);
+                    KafkaCloudEventSource.Builder builder = factory.forGroup("orders-projection", new PushSubscriptionModel());
                     assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class).hasMessageContaining("parkingDestination");
                 });
     }

@@ -113,7 +113,7 @@ public class KafkaDomainBrokerConfiguration {
     }
 
     @Bean
-    KafkaDomainEventBridgeFactory occurrentKafkaDomainEventBridgeFactory(KafkaBrokerProperties properties, ObjectProvider<DestinationResolver<KafkaDestination>> resolver) {
-        return new DefaultKafkaDomainEventBridgeFactory(properties, resolver);
+    KafkaDomainEventSourceFactory occurrentKafkaDomainEventSourceFactory(KafkaBrokerProperties properties, ObjectProvider<DestinationResolver<KafkaDestination>> resolver) {
+        return new DefaultKafkaDomainEventSourceFactory(properties, resolver);
     }
 }

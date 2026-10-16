@@ -46,7 +46,7 @@ name or a branch index the current build does not have. There is nothing left fo
 **The two guarded call sites do not carry the same cost when they refuse.** `SagaRunner`'s own javadoc documents
 that an exception on the event path propagates to the subscription model, and that the whole step is retried
 wherever that model offers the event again. What one instance parked on a gone step holds up meanwhile is decided by
-whatever feeds the subscription, and `SagaStatus.QUARANTINED` says what that can be. A consume-side broker bridge need
+whatever feeds the subscription, and `SagaStatus.QUARANTINED` says what that can be. A broker source need
 not offer the event again, and `DeliveryFailurePolicy` is where that choice is configured. That is not a new failure mode this decision introduces, it is the same accepted
 architecture ADR 123's own refusal already lives with. The timer path is different. `SagaExecution.pollTimers`
 catches a failing timeout per instance, logs it, and leaves it due for the next poll.
@@ -70,9 +70,9 @@ where the budget elapses and the instance is quarantined instead is enough to fa
 record no longer asserts is that the wait always runs until somebody intervenes.
 
 **Amended for [#1071](https://github.com/johanhaleby/occurrent/issues/1071).** The paragraph attributed an
-unconditional redelivery to `SagaRunner`'s javadoc. `DeliveryFailurePolicy` is where a consume-side broker bridge's
+unconditional redelivery to `SagaRunner`'s javadoc. `DeliveryFailurePolicy` is where a broker source's
 choice is configured, so a redelivery is not something this record can assume. The held channel is the cost this
-record compares the two call sites on, and a bridge need not pay it.
+record compares the two call sites on, and a source need not pay it.
 
 **The decision below still stands, on a reason neither amendment touches.** It never rested on how long an
 event-path refusal blocks, only on that refusal costing what any other event-path exception in this architecture

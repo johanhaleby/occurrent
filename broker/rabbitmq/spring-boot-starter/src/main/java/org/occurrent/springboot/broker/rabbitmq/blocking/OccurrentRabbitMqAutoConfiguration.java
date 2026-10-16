@@ -41,7 +41,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Lazy;
 
 /**
- * Property-driven construction of the RabbitMQ broker sink and consume bridges, per
+ * Property-driven construction of the RabbitMQ broker sink and sources, per
  * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md">ADR 133</a>.
  * Enabled with {@link EnableOccurrentRabbitMqBroker}, an {@code @Import}-based activation like the MongoDB
  * starter's {@code EnableOccurrent}, rather than Spring Boot's automatic classpath scanning, but reached through
@@ -69,14 +69,14 @@ import org.springframework.context.annotation.Lazy;
 public class OccurrentRabbitMqAutoConfiguration {
 
     /**
-     * The zero-config {@link DestinationResolver} a sink or a bridge factory falls back to when the application
+     * The zero-config {@link DestinationResolver} a sink or a source factory falls back to when the application
      * declares none, active once {@code occurrent.broker.rabbitmq.exchange} is set, checked through
      * {@link RabbitMqExchangeConfiguredCondition} rather than a plain {@code @ConditionalOnProperty}, see that
      * condition's own javadoc for why. {@code @Fallback} rather than {@code @ConditionalOnMissingBean}, a
      * {@code @Fallback} bean is excluded at dependency-resolution time whenever a non-fallback candidate exists,
      * the same pattern ADR 72 documents for the MongoDB starter's own {@code Default*Provider} beans.
      * <p>
-     * {@code @ConditionalOnBean(CloudEventTypeMapper.class)}: a bridge whose {@code declare-topology} is
+     * {@code @ConditionalOnBean(CloudEventTypeMapper.class)}: a source whose {@code declare-topology} is
      * {@code false}, or whose caller supplies its own bindings, needs no resolver at all, and its factory reaches
      * this bean through an {@code ObjectProvider}, whose {@code getIfAvailable()} instantiates whatever bean
      * definition it finds regardless of {@code @Lazy}. Registering this bean only once a type mapper exists keeps
@@ -127,19 +127,19 @@ public class OccurrentRabbitMqAutoConfiguration {
     }
 
     /**
-     * Pre-seeds {@link RabbitMqCloudEventBridgeFactory} with the connection, the resolver bean if one exists (a
-     * bridge whose {@code occurrent.broker.rabbitmq.bridge.declare-topology} is {@code false}, or whose caller
-     * supplies its own bindings, needs none), and every {@code occurrent.broker.rabbitmq.bridge.*} default,
+     * Pre-seeds {@link RabbitMqCloudEventSourceFactory} with the connection, the resolver bean if one exists (a
+     * source whose {@code occurrent.broker.rabbitmq.source.declare-topology} is {@code false}, or whose caller
+     * supplies its own bindings, needs none), and every {@code occurrent.broker.rabbitmq.source.*} default,
      * including a zero-config {@code readinessSource} that defers to whichever
-     * {@code CatchupThenPushSubscriptionModel} bean, if any, owns the bridge's subscription id, see
+     * {@code CatchupThenPushSubscriptionModel} bean, if any, owns the source's subscription id, see
      * {@link CatchupThenPushReadiness}. Not conditioned on a resolver, and not {@code @Lazy}, since building this
      * factory does nothing but capture configuration. Nothing about it opens a channel or requires a resolver
-     * until a consumer actually calls {@link RabbitMqCloudEventBridgeFactory#forQueue}.
+     * until a consumer actually calls {@link RabbitMqCloudEventSourceFactory#forQueue}.
      */
     @Bean
-    RabbitMqCloudEventBridgeFactory occurrentRabbitMqCloudEventBridgeFactory(Connection connection, RabbitMqBrokerProperties properties,
+    RabbitMqCloudEventSourceFactory occurrentRabbitMqCloudEventSourceFactory(Connection connection, RabbitMqBrokerProperties properties,
                                                                               ObjectProvider<DestinationResolver<RabbitMqDestination>> resolver,
                                                                               ApplicationContext applicationContext) {
-        return new DefaultRabbitMqCloudEventBridgeFactory(connection, properties, resolver, applicationContext);
+        return new DefaultRabbitMqCloudEventSourceFactory(connection, properties, resolver, applicationContext);
     }
 }

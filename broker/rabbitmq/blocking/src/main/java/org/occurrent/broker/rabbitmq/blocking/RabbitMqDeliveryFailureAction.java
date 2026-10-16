@@ -36,8 +36,8 @@ import java.util.concurrent.TimeoutException;
 import static java.util.Objects.requireNonNull;
 
 /**
- * What a consume-side bridge does with a delivery it will not acknowledge, per ADR 133 decision 7. Shared between
- * {@link RabbitMqCloudEventBridge} and {@code RabbitMqDomainEventBridge} rather than written twice, since both apply
+ * What a broker source does with a delivery it will not acknowledge, per ADR 133 decision 7. Shared between
+ * {@link RabbitMqCloudEventSource} and {@code RabbitMqDomainEventSource} rather than written twice, since both apply
  * exactly the same sequence: {@link DeliveryFailurePolicy#REDELIVER} negatively acknowledges the original with
  * requeue, and {@link DeliveryFailurePolicy#PARK} republishes the original to a parking destination through a
  * {@link RabbitMqConfirmPublisher}, waits for that publish's own confirm, and only then acknowledges the original.
@@ -46,7 +46,7 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * {@link #apply(long, BasicProperties, byte[])} always parks or redelivers the delivery's own raw {@code properties}
  * and {@code body}, unchanged apart from {@link RabbitMqDestination#headers() parkingDestination}'s own configured
- * headers layered on top, whether or not the bridge managed to rebuild a CloudEvent from them. A parked message
+ * headers layered on top, whether or not the source managed to rebuild a CloudEvent from them. A parked message
  * therefore keeps every AMQP field outside the CloudEvents mapping, a caller-supplied {@code correlationId},
  * {@code appId} or {@code replyTo} among them, rather than only the attributes
  * {@link RabbitMqCloudEventMapper#toBasicProperties(io.cloudevents.CloudEvent, java.util.Map)} would have rebuilt
@@ -59,7 +59,7 @@ import static java.util.Objects.requireNonNull;
  * see, and RabbitMQ's own dead-lettering is never used for this, per ADR 133 decision 7: it can discard the message
  * outright with no matching dead-letter exchange, and even with one it republishes without publisher confirms.
  * <p>
- * {@link AutoCloseable} so a bridge can own exactly one of these and close it, rather than separately tracking and
+ * {@link AutoCloseable} so a source can own exactly one of these and close it, rather than separately tracking and
  * closing the parking publisher it may have built.
  */
 public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
@@ -121,7 +121,7 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
     /**
      * Applies this failure action to the delivery {@code deliveryTag} identifies, republishing its own raw
      * {@code properties} and {@code body}, plus the parking destination's own configured headers, when
-     * {@link DeliveryFailurePolicy#PARK} is configured, whether or not the bridge managed to rebuild a CloudEvent
+     * {@link DeliveryFailurePolicy#PARK} is configured, whether or not the source managed to rebuild a CloudEvent
      * from them. {@link DeliveryFailurePolicy#PARK} acknowledges {@code deliveryTag} only once that publish has
      * been confirmed and not returned as unroutable. Never acknowledges {@code deliveryTag} directly.
      */
@@ -151,7 +151,7 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
     }
 
     /**
-     * The {@link DeliveryFailurePolicy} this action applies. Exposed so a bridge can pace a
+     * The {@link DeliveryFailurePolicy} this action applies. Exposed so a source can pace a
      * {@link DeliveryFailurePolicy#REDELIVER} failure itself, held and released once per poll the same way it
      * already paces {@link RoutingOutcome#DEFERRED}, rather than nacking it immediately on every attempt, without
      * duplicating the policy this action was already built with.
@@ -182,14 +182,14 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
         try {
             consumeChannel.basicAck(deliveryTag, false);
         } catch (IOException e) {
-            throw new RabbitMqBridgeException("Failed to acknowledge delivery tag " + deliveryTag, e);
+            throw new RabbitMqSourceException("Failed to acknowledge delivery tag " + deliveryTag, e);
         }
     }
 
     /**
      * Whether {@code failure}, thrown by {@link #ack(long)}, {@link #redeliver(long)} or
      * {@link #apply(long, BasicProperties, byte[])}, means the connection under the delivery's channel went away and the
-     * RabbitMQ client is going to recover it. A bridge does not stop for such a failure and does not acknowledge the delivery either,
+     * RabbitMQ client is going to recover it. A source does not stop for such a failure and does not acknowledge the delivery either,
      * since RabbitMQ puts it back on the queue when the connection drops and delivers it again on the recovered
      * channel, and closing the channel to put it back would take that channel out of recovery for good. The message
      * only arrives again if topology recovery registers the consumer on the recovered channel, which this does not
@@ -199,7 +199,7 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * {@link ShutdownSignalException}, {@code AlreadyClosedException} included, for the whole connection rather than
      * only the channel, that {@link AutorecoveringConnection#DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION}
      * recovers from. A connection closed by the application is not recovered by that condition, and a channel the
-     * broker closed on its own is never recovered at all. The other is a {@link RabbitMqBridgeException} caused by an
+     * broker closed on its own is never recovered at all. The other is a {@link RabbitMqSourceException} caused by an
      * {@link IOException}, which is a failed write to the connection's socket, and a recovering connection closes
      * and recovers itself after one. A connection without automatic recovery never comes back, so every failure on
      * it is false here.
@@ -214,7 +214,7 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
         if (failure instanceof ShutdownSignalException shutdown) {
             return shutdown.isHardError() && AutorecoveringConnection.DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION.test(shutdown);
         }
-        return failure instanceof RabbitMqBridgeException && failure.getCause() instanceof IOException;
+        return failure instanceof RabbitMqSourceException && failure.getCause() instanceof IOException;
     }
 
     /**
@@ -223,15 +223,15 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * {@link #apply(long, BasicProperties, byte[])}, for {@link RoutingOutcome#DEFERRED} and
      * {@link RoutingOutcome#UNAVAILABLE}. A message a catch-up-then-live engine cannot accept yet, or a
      * subscription paused or not running, is never a candidate for {@link DeliveryFailurePolicy#PARK}, whatever
-     * this bridge is configured with, since nothing here is broken or wrong, only not ready yet, and pacing a
-     * bridge's own consumer this way happens far too often, by design, for a log line per occurrence to be useful.
+     * this source is configured with, since nothing here is broken or wrong, only not ready yet, and pacing a
+     * source's own consumer this way happens far too often, by design, for a log line per occurrence to be useful.
      * See {@link #redeliverFailure(long)} for the equivalent used on an actual failure, which does log.
      */
     public void redeliver(long deliveryTag) {
         try {
             consumeChannel.basicNack(deliveryTag, false, true);
         } catch (IOException e) {
-            throw new RabbitMqBridgeException("Failed to negatively acknowledge delivery tag " + deliveryTag, e);
+            throw new RabbitMqSourceException("Failed to negatively acknowledge delivery tag " + deliveryTag, e);
         }
     }
 
@@ -249,7 +249,7 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
 
     /**
      * Closes the parking publisher this action built, if {@link DeliveryFailurePolicy#PARK} was configured. Does
-     * not touch {@code consumeChannel}, which the bridge that owns it closes itself. Best effort, a failure closing
+     * not touch {@code consumeChannel}, which the source that owns it closes itself. Best effort, a failure closing
      * it is logged rather than thrown, since it happens during teardown with nothing left to hand it to.
      */
     @Override

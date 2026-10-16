@@ -44,7 +44,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class KafkaDeliveryFailureActionTest {
 
     /**
-     * The parking producer has to be seeded from the bridge's whole {@code consumerConfig}, not only
+     * The parking producer has to be seeded from the source's whole {@code consumerConfig}, not only
      * {@code bootstrap.servers}, or a cluster secured with {@code security.protocol}, SASL or SSL settings leaves
      * the consumer able to consume but the parking producer unable to connect at all. Proven here without a real
      * secured broker. A producer-only setting ({@code partitioner.class}, a consumer never reads) is planted in
@@ -106,7 +106,7 @@ class KafkaDeliveryFailureActionTest {
     /**
      * {@code interceptor.classes} names the same key in both {@code ConsumerConfig} and {@code ProducerConfig},
      * with a different expected interface on each side. A {@code ConsumerInterceptor} a caller configured for the
-     * bridge's own {@code Consumer} would otherwise carry straight into the parking producer's config too, where
+     * source's own {@code Consumer} would otherwise carry straight into the parking producer's config too, where
      * {@code ProducerConfig} eagerly instantiates it expecting a {@code ProducerInterceptor}, failing construction
      * for a perfectly valid consumer-side setting that has nothing to do with parking.
      */

@@ -16,7 +16,7 @@ against that record.
 > decides whether to acknowledge it. The Decision's "A push feed offers it again, the saga refuses it again, and the
 > application stays stuck on it" contradicted `PushSubscriptionModel`'s own javadoc, which already gave that decision
 > to the listener. The Consequence's "A refused event is not acknowledged, so a broker will keep offering it" assumed
-> a listener that does not acknowledge, and 0.34.0's parking bridge makes the other side a supported configuration.
+> a listener that does not acknowledge, and 0.34.0's parking source makes the other side a supported configuration.
 > The saga declines to acknowledge a refused event, and nothing here decides what happens to it next.
 
 ## Context

@@ -33,7 +33,7 @@ import static org.occurrent.subscription.RoutingOutcome.UNAVAILABLE;
 
 /**
  * {@link RoutingOutcome#disposition()} is the one place the six outcomes are sorted into the four responses a
- * broker bridge has, so these tests are what the four shipped bridges rely on instead of each sorting the
+ * broker source has, so these tests are what the four shipped sources rely on instead of each sorting the
  * constants themselves.
  */
 class RoutingOutcomeTest {
@@ -61,14 +61,14 @@ class RoutingOutcomeTest {
     }
 
     @Test
-    void refused_is_the_outcome_a_bridge_stops_on() {
+    void refused_is_the_outcome_a_source_stops_on() {
         assertThat(Arrays.stream(RoutingOutcome.values()).filter(outcome -> outcome.disposition() == Disposition.STOP))
                 .containsExactly(REFUSED);
     }
 
     /**
      * {@link RoutingOutcome#mayAcknowledge()} is a second way to ask a question {@link RoutingOutcome#disposition()}
-     * already answers, so the two are checked against each other for all six rather than only where a bridge
+     * already answers, so the two are checked against each other for all six rather than only where a source
      * happens to call one of them.
      */
     @ParameterizedTest
@@ -79,8 +79,8 @@ class RoutingOutcomeTest {
 
     /**
      * Every outcome has a disposition, and every disposition is reachable from one. The first half is what lets a
-     * bridge decide on {@code disposition()} alone, the second is what makes an exhaustive switch over
-     * {@link Disposition} at a bridge cover only branches that can actually run.
+     * source decide on {@code disposition()} alone, the second is what makes an exhaustive switch over
+     * {@link Disposition} at a source cover only branches that can actually run.
      */
     @ParameterizedTest
     @EnumSource(RoutingOutcome.class)

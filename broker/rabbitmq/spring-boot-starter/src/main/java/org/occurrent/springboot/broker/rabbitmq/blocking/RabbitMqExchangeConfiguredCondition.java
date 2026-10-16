@@ -28,7 +28,7 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
  * Whether {@code occurrent.broker.rabbitmq.exchange} is configured, checked by binding it rather than by a plain
  * {@code @ConditionalOnProperty(name = ...)}. That check is boolean-oriented, it fails to match the literal value
  * {@code false} and matches an empty value, and both readings are wrong for a resource name. {@code false} is a
- * legal exchange name, and an empty exchange builds a resolver that later fails when a bridge tries to bind it.
+ * legal exchange name, and an empty exchange builds a resolver that later fails when a source tries to bind it.
  * Binding to {@code String} and asking whether anything nonblank bound sidesteps both cases.
  */
 class RabbitMqExchangeConfiguredCondition extends SpringBootCondition {

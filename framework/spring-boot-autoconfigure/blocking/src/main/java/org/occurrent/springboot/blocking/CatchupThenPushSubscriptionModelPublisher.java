@@ -26,12 +26,12 @@ import org.springframework.context.ConfigurableApplicationContext;
 /**
  * Publishes the {@link CatchupThenPushSubscriptionModel} a {@code @Projection(source = PUSH)} or
  * {@code @Saga(source = PUSH)} registrar builds internally as a named Spring bean, so a
- * {@code RabbitMqCloudEventBridge} or {@code KafkaCloudEventBridge} the application wires separately (in a
+ * {@code RabbitMqCloudEventSource} or {@code KafkaCloudEventSource} the application wires separately (in a
  * different, deliberately decoupled starter module, per ADR 133 decision 1) can look it up and pass
- * {@code model::isReadyForLiveDelivery} to the bridge builder's {@code readinessSource(...)}. Without this, the
+ * {@code model::isReadyForLiveDelivery} to the source builder's {@code readinessSource(...)}. Without this, the
  * model these registrars build is kept only in a private list, reachable by nothing outside the registrar itself.
  * Also records the wrapper against the live feed it wraps in {@link CatchupThenPushWrapperRegistry}, so a starter's
- * readiness lookup can correlate a bridge's own model by identity rather than by subscription id alone, since ADR
+ * readiness lookup can correlate a source's own model by identity rather than by subscription id alone, since ADR
  * 102 allows two wrapper instances to share one id.
  * <p>
  * Shared between {@link ProjectionAnnotationRegistrar} and {@link SagaAnnotationRegistrar}, which each build one of
@@ -50,7 +50,7 @@ final class CatchupThenPushSubscriptionModelPublisher {
      * {@code liveFeed} in {@link CatchupThenPushWrapperRegistry}, or log and skip both if {@code applicationContext}
      * is not a {@link ConfigurableApplicationContext}.
      *
-     * @param liveFeed The {@link PushSubscriptionModel} {@code model} wraps, the same instance a bridge built
+     * @param liveFeed The {@link PushSubscriptionModel} {@code model} wraps, the same instance a source built
      *                 against it is fed. See {@link CatchupThenPushWrapperRegistry}.
      * @throws IllegalStateException if a bean with that name already exists
      */

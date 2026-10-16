@@ -27,7 +27,7 @@ import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.CloudEventForwarder;
-import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSource;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
 import org.occurrent.dsl.view.ViewStateRepository;
@@ -66,13 +66,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * The CloudEvent-level half of the broker example. {@code RabbitMqCloudEventBridge} bridges a queue into a
+ * The CloudEvent-level half of the broker example. {@code RabbitMqCloudEventSource} feeds a queue into a
  * {@code PushSubscriptionModel}, and a {@code @Projection(source = PUSH)} keeps a read model up to date from it.
  * Proves the two parts of ADR 133's contract that a fake in the middle cannot prove on its own. A handler that
  * throws does not lose the message, published straight to the broker through {@code RabbitMqCloudEventSink} rather
  * than through {@code CloudEventForwarder}, since the forwarder's own at-least-once retries could otherwise supply
- * a legal duplicate that satisfies the redelivery assertion without the bridge itself ever having redelivered
- * anything. A restarted consumer, the bridge and the push model, resumes from the broker instead of replaying its
+ * a legal duplicate that satisfies the redelivery assertion without the source itself ever having redelivered
+ * anything. A restarted consumer, the source and the push model, resumes from the broker instead of replaying its
  * whole history again, proven with the forwarder in front of it as a real application would run it. The forwarder
  * keeps running across that restart on purpose. Its own resumption is the {@code DurableSubscriptionModel}
  * checkpoint contract, already tested where the forwarder lives, and restarting it here would only duplicate that
@@ -89,7 +89,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         MongoEventStore eventStore = newEventStore();
 
         PushSubscriptionModel pushModel = new PushSubscriptionModel(DataFieldReader.refusing());
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, queue)
+        try (RabbitMqCloudEventSource source = RabbitMqCloudEventSource.builder(rabbitConnection, pushModel, queue)
                 .resolver(resolver)
                 .pollInterval(Duration.ofMillis(50))
                 .build();
@@ -103,13 +103,13 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
 
             // Published directly through the sink below, deliberately without a CloudEventForwarder in front of it.
             // The forwarder is at-least-once and can legally redeliver a lost confirm as a second physical copy of
-            // the same event, which the redelivery assertion below could then satisfy without the bridge itself
+            // the same event, which the redelivery assertion below could then satisfy without the source itself
             // ever having redelivered anything. Publishing straight to the broker guarantees exactly one physical
-            // copy per event instead, so a matching save can only be the bridge's own redelivery. Forwarder
+            // copy per event instead, so a matching save can only be the source's own redelivery. Forwarder
             // integration, and its own at-least-once retry behavior, is proven separately by the restart test below.
 
             // The read model store fails the very first write it is asked to make, whichever event that turns out
-            // to be, then succeeds on every write after. If the bridge lost the message that failing write belonged
+            // to be, then succeeds on every write after. If the source lost the message that failing write belonged
             // to instead of redelivering it, the order would never reach SHIPPED.
             AtomicBoolean failedOnce = new AtomicBoolean(false);
             // The exact view the failed save attempt tried to write, saved here so a later save can be checked for
@@ -156,7 +156,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
 
                 // redeliveredSaveAttempts is what proves the specific failed delivery came back, not just that some
                 // save happened again. With exactly one physical copy of each event ever on the broker, a matching
-                // save can only be the bridge's own redelivery of the failed one, never a coincidental duplicate.
+                // save can only be the source's own redelivery of the failed one, never a coincidental duplicate.
                 assertThat(failedOnce).isTrue();
                 assertThat(redeliveredSaveAttempts.get()).isGreaterThanOrEqualTo(1);
             } finally {
@@ -178,7 +178,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         CheckpointStorage forwarderCheckpoints = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "forwarder-checkpoints");
         DurableSubscriptionModel forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
         // The forwarder and its subscription are built once, below, and run continuously through both boots.
-        // Only the consumer side, the bridge, the push model and the projection's Spring context, is torn
+        // Only the consumer side, the source, the push model and the projection's Spring context, is torn
         // down and rebuilt between them. The same catch-up-complete marker backs both boots, which is the
         // one thing a real consumer restart must preserve for resume (rather than replay) to be possible.
         CheckpointStorage pushCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "push-catchup-checkpoints");
@@ -192,7 +192,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
 
         // Outer try/finally, not a bare statement after the block, so a failure anywhere inside
-        // (either boot, either context, either bridge) still shuts the forwarder subscription down
+        // (either boot, either context, either source) still shuts the forwarder subscription down
         // rather than leaking its background subscription for the rest of the test run.
         try {
             try (RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build()) {
@@ -202,13 +202,13 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 String orderIdBeforeRestart = "order-" + UUID.randomUUID();
 
                 // Boot 1: build the queue, forward and process one order to completion, then tear the consumer down.
-                // The bridge closes where this try-with-resources block ends, right after the context does in its own
+                // The source closes where this try-with-resources block ends, right after the context does in its own
                 // nested finally, which is also exactly the point the deliberate teardown belongs at. Writing it this
                 // way instead of two explicit close() calls after the await means a failure anywhere above, the
                 // context registration, refresh(), the writes, or the await itself, still closes both rather than
                 // leaking a running context and a live consumer for the rest of the test run.
                 PushSubscriptionModel pushModel1 = new PushSubscriptionModel(DataFieldReader.refusing());
-                try (RabbitMqCloudEventBridge bridge1 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel1, queue)
+                try (RabbitMqCloudEventSource source1 = RabbitMqCloudEventSource.builder(rabbitConnection, pushModel1, queue)
                         .resolver(resolver)
                         .pollInterval(Duration.ofMillis(50))
                         .build()) {
@@ -235,7 +235,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
 
                 // Written with the consumer already torn down and boot 2 not yet built, so this queues on the broker
                 // exactly like a real restart leaves work behind. The forwarder keeps running (it never stopped), but
-                // nothing is consuming queue until boot 2's bridge exists. Proving this arrives once boot 2 comes up,
+                // nothing is consuming queue until boot 2's source exists. Proving this arrives once boot 2 comes up,
                 // without a full replay, is the other half of "resumes", not just that catch-up itself is skipped.
                 String orderIdQueuedWhileConsumerWasDown = "order-" + UUID.randomUUID();
                 OrderPlaced placedWhileConsumerWasDown = new OrderPlaced(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown, "Widget");
@@ -263,12 +263,12 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                         assertThat(distinctEventIdsOnQueue(queue)).isEqualTo(expectedIdsWhileConsumerWasDown));
 
-                // Boot 2: a fresh model, a fresh bridge on the same queue, and a fresh Spring context, but the same
+                // Boot 2: a fresh model, a fresh source on the same queue, and a fresh Spring context, but the same
                 // catch-up marker and the same read-model store. A reader that counts its own replay calls proves the
                 // catch-up is skipped this time, not merely fast.
                 CountingPositionOrderedReader countingReader = new CountingPositionOrderedReader(eventStore);
                 PushSubscriptionModel pushModel2 = new PushSubscriptionModel(DataFieldReader.refusing());
-                try (RabbitMqCloudEventBridge bridge2 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel2, queue)
+                try (RabbitMqCloudEventSource source2 = RabbitMqCloudEventSource.builder(rabbitConnection, pushModel2, queue)
                         .resolver(resolver)
                         .pollInterval(Duration.ofMillis(50))
                         .build()) {
@@ -288,7 +288,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                         assertThat(countingReader.replays()).isZero();
                         assertThat(store.get(orderIdBeforeRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
 
-                        // The order queued while the consumer was down arrives now that boot 2's bridge is live,
+                        // The order queued while the consumer was down arrives now that boot 2's source is live,
                         // delivered from the broker's own backlog rather than from a replay, since the catch-up
                         // marker already said this feed was caught up before this order was ever written.
                         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
@@ -316,8 +316,8 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
     /**
      * The regression proof for the catch-up acknowledgement hole. What actually closes it is
      * {@code RoutingOutcome.DEFERRED}: {@code acceptRedeliverable(...)} refuses a message outright rather than
-     * buffering it while the wrapper is still replaying, so the bridge never acknowledges one it did not actually
-     * apply. {@code readinessSource} is configured here too, and this test still proves it keeps the bridge from
+     * buffering it while the wrapper is still replaying, so the source never acknowledges one it did not actually
+     * apply. {@code readinessSource} is configured here too, and this test still proves it keeps the source from
      * pulling the message off the queue at all while not ready, but that is a pacing measure now, not what makes
      * this safe. Exercised through the real {@code @Projection(source = PUSH)} wiring, not a hand-held
      * {@code CatchupThenPushSubscriptionModel} reference, since that annotation-driven path is exactly where the
@@ -332,11 +332,11 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
      * test itself controls.
      * <p>
      * The message published while parked carries an order id never written to the local event store at all, the
-     * same shape as an event a consume bridge exists to receive from another service. Nothing here could recover it
-     * from a replay if the bridge acknowledged it away before it was actually applied to the projection.
+     * same shape as an event a source exists to receive from another service. Nothing here could recover it
+     * from a replay if the source acknowledged it away before it was actually applied to the projection.
      */
     @Test
-    void catchup_readiness_keeps_the_bridge_from_consuming_until_the_replay_drains() throws Exception {
+    void catchup_readiness_keeps_the_source_from_consuming_until_the_replay_drains() throws Exception {
         CloudEventConverter<OrderEvent> converter = newConverter();
         CloudEventTypeMapper<OrderEvent> typeMapper = newTypeMapper();
         RabbitMqTopicExchangeDestinationResolver resolver = newResolver(typeMapper);
@@ -360,7 +360,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         context.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
         context.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
         context.registerBean("readinessProjectionHolder", ReadinessProjectionHolder.class, ReadinessProjectionHolder::new);
-        RabbitMqCloudEventBridge bridge = null;
+        RabbitMqCloudEventSource source = null;
         RabbitMqCloudEventSink sink = null;
         try {
             // Returns immediately. startupMode = BACKGROUND on the projection below is what keeps this from
@@ -376,14 +376,14 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
             assertThat(catchupThenPush.isReadyForLiveDelivery(projectionId)).isFalse();
 
             sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build();
-            bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, queue)
+            source = RabbitMqCloudEventSource.builder(rabbitConnection, pushModel, queue)
                     .resolver(resolver)
                     .pollInterval(Duration.ofMillis(50))
                     .readinessSource(catchupThenPush::isReadyForLiveDelivery)
                     .build();
 
             // Never written to eventStore at all, the same shape as an event only another service's store holds.
-            // Nothing here could replay it back if the bridge lost it. streamid and streamversion are stamped by
+            // Nothing here could replay it back if the source lost it. streamid and streamversion are stamped by
             // hand, standing in for whatever store actually owns this stream, since OrderStatusProjection applies
             // OrderPlaced through the metadata-aware handler and EventMetadata.from(...) requires both.
             String orderId = "order-" + UUID.randomUUID();
@@ -395,7 +395,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
             sink.publish(placedCloudEvent);
 
             // Long enough for several poll intervals, so this is a genuine "never consumed while not ready"
-            // assertion, not a race against the bridge's own poll cadence.
+            // assertion, not a race against the source's own poll cadence.
             Thread.sleep(500);
             assertThat(store).doesNotContainKey(orderId);
             assertThat(distinctEventIdsOnQueue(queue)).contains(placed.eventId());
@@ -405,19 +405,19 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
             await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(store).containsKey(orderId));
             assertThat(catchupThenPush.isReadyForLiveDelivery(projectionId)).isTrue();
             // Closed before the final queue assertion, deliberately: distinctEventIdsOnQueue's basicGet cannot see
-            // a delivery the bridge is still holding unacked on its own channel, so asserting the queue is empty
-            // while the bridge might still be open cannot tell a genuine ack apart from an ack that silently never
-            // happened. Closing first requeues anything the bridge never acknowledged, which turns "empty" back
+            // a delivery the source is still holding unacked on its own channel, so asserting the queue is empty
+            // while the source might still be open cannot tell a genuine ack apart from an ack that silently never
+            // happened. Closing first requeues anything the source never acknowledged, which turns "empty" back
             // into a real proof, the same correction RabbitMqDomainEventLevelBrokerExampleTest already applies.
-            bridge.close();
+            source.close();
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(distinctEventIdsOnQueue(queue)).isEmpty());
         } finally {
             // releaseReplay first, unconditionally. A failed assertion above must not leave the replay thread
             // parked forever, which would leak it past this test method.
             releaseReplay.countDown();
             try {
-                if (bridge != null) {
-                    bridge.close();
+                if (source != null) {
+                    source.close();
                 }
             } finally {
                 try {

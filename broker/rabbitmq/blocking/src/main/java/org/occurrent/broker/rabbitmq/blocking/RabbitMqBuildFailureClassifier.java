@@ -25,16 +25,16 @@ import java.util.IdentityHashMap;
 import java.util.Set;
 
 /**
- * The transient-versus-permanent classification {@link RabbitMqCloudEventBridge.Builder#retryStrategy(org.occurrent.retry.RetryStrategy)}
- * and {@link org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridge.Builder#retryStrategy(org.occurrent.retry.RetryStrategy)}
- * default to, and the Spring Boot starter's {@code occurrent.broker.rabbitmq.bridge.retry.*} wiring reapplies
+ * The transient-versus-permanent classification {@link RabbitMqCloudEventSource.Builder#retryStrategy(org.occurrent.retry.RetryStrategy)}
+ * and {@link org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSource.Builder#retryStrategy(org.occurrent.retry.RetryStrategy)}
+ * default to, and the Spring Boot starter's {@code occurrent.broker.rabbitmq.source.retry.*} wiring reapplies
  * whenever it replaces that default with property-driven timing. One shared method rather than the same
  * {@code instanceof} check written out at each of those four call sites, so a broadened or narrowed classification
  * never drifts between them.
  * <p>
- * A {@link RabbitMqBridgeException} or a {@link RabbitMqPublishException} is only sometimes transient.
+ * A {@link RabbitMqSourceException} or a {@link RabbitMqPublishException} is only sometimes transient.
  * {@code build()} opens two channels under {@link org.occurrent.broker.api.blocking.DeliveryFailurePolicy#PARK},
- * the consume channel through {@link RabbitMqBridgeException} and the parking publisher's confirm channel through
+ * the consume channel through {@link RabbitMqSourceException} and the parking publisher's confirm channel through
  * {@link RabbitMqPublishException} ({@link RabbitMqConfirmPublisher}'s own {@code openConfirmChannel}), and a
  * broker briefly unreachable can fail either one. Both usually wrap one of the same two underlying causes, an
  * {@link java.io.IOException} with no further detail (a socket failure, say, "the broker is not reachable right
@@ -82,7 +82,7 @@ public final class RabbitMqBuildFailureClassifier {
     }
 
     public static boolean isTransient(Throwable throwable) {
-        if (!(throwable instanceof RabbitMqBridgeException) && !(throwable instanceof RabbitMqPublishException)
+        if (!(throwable instanceof RabbitMqSourceException) && !(throwable instanceof RabbitMqPublishException)
                 && !(throwable instanceof ShutdownSignalException)) {
             return false;
         }

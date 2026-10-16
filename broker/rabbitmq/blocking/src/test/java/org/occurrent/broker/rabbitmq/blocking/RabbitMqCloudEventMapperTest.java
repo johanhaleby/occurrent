@@ -166,7 +166,7 @@ class RabbitMqCloudEventMapperTest {
 
     // This round trip stays in the JVM, so properties.getHeaders() already holds plain java.lang.String values.
     // It does not exercise the LongString branch toCloudEvent's own comment calls out, since that only shows up in
-    // a header read back off a real broker delivery. RabbitMqCloudEventBridgeTest and RabbitMqDomainEventBridgeTest
+    // a header read back off a real broker delivery. RabbitMqCloudEventSourceTest and RabbitMqDomainEventSourceTest
     // cover that conversion end to end, against an actual RabbitMQ container.
     @Test
     void toCloudEvent_rebuilds_every_context_attribute_and_extension_from_a_previously_written_message() {
@@ -278,9 +278,9 @@ class RabbitMqCloudEventMapperTest {
     /**
      * {@code streamversion} and {@code position} are restored as a {@code Long}, which means parsing one that is
      * not actually numeric throws rather than silently keeping it a String. A message this mapper never wrote (a
-     * corrupted header, or one from a producer that does not follow this mapping) can carry either. The bridges
+     * corrupted header, or one from a producer that does not follow this mapping) can carry either. The sources
      * already route any {@link RuntimeException} out of {@code toCloudEvent} to their undecodable-message path
-     * rather than acking or crashing on it, so this only has to prove the throw itself, not the bridge behaviour.
+     * rather than acking or crashing on it, so this only has to prove the throw itself, not the source behaviour.
      */
     @Test
     void toCloudEvent_throws_on_a_non_numeric_streamversion_or_position_header_rather_than_silently_keeping_it_a_string() {

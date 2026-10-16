@@ -1,0 +1,966 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.broker.rabbitmq.blocking;
+
+import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.Delivery;
+import com.rabbitmq.client.ShutdownSignalException;
+import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.Nullable;
+import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.broker.api.blocking.DestinationResolver;
+import org.occurrent.filter.Filter;
+import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.Deque;
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.LongConsumer;
+import java.util.function.Predicate;
+
+import static java.util.Objects.requireNonNull;
+
+/**
+ * Feeds a RabbitMQ queue into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
+ * describes. Rebuilds each message as a {@link CloudEvent} through {@link RabbitMqCloudEventMapper}, hands it to
+ * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}, and acknowledges only once the {@link RoutingOutcome}
+ * that call returns says the event was actually consumed.
+ * <p>
+ * <strong>Holds a {@link PushSubscriptionModel}, never a {@link CatchupThenPushSubscriptionModel}.</strong> ADR 133
+ * decision 1 is explicit that a source feeds the live model, not the catch-up wrapper in front of it, since a
+ * {@code CatchupThenPushSubscriptionModel} is not itself a push target: it composes a {@link PushSubscriptionModel}
+ * as a constructor argument and replays history through it before handing over. An application that wants catch-up
+ * builds one from the same {@link PushSubscriptionModel} this source is given, in front of it, not instead of it.
+ * <p>
+ * <strong>Acknowledgement.</strong> A message for which {@code acceptRedeliverable(...)} throws (a handler
+ * exception, or a subscription filter that failed to evaluate) goes through the failure policy below, and is
+ * acknowledged only once a {@link DeliveryFailurePolicy#PARK} of it is confirmed. A normal return is decided by
+ * {@link RoutingOutcome#disposition()} alone, so this source acknowledges an outcome exactly when
+ * {@link RoutingOutcome#mayAcknowledge()} answers true for it.
+ * {@link RoutingOutcome.Disposition#HOLD} holds the delivery unacknowledged and paces it rather than sending it
+ * through a failure policy, see below, and {@link RoutingOutcome.Disposition#STOP} stops this source for good, also
+ * below. {@link RoutingOutcome#NOT_DELIVERABLE}, a refusal the model decided before dispatch without promising it is
+ * permanent, goes through the failure policy like an exception. For those failures this source's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) holds the
+ * delivery unacknowledged and negatively acknowledges it with requeue on the next poll, {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only then
+ * acknowledges the original. A normal return with {@link RoutingOutcome#DEFERRED}, a
+ * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} still replaying or draining, say, also never
+ * acknowledges. It is held unacknowledged the same way and released with requeue on the next poll, bypassing
+ * {@link DeliveryFailurePolicy} entirely, since nothing here is broken, only not ready yet, and {@code PARK} exists for
+ * failures, not for pacing.
+ * <p>
+ * <strong>Topology.</strong> By default this source declares its own queue (durable, not exclusive, not
+ * auto-delete) and binds it to {@link Builder#bindings(Set)} if given, or else to
+ * {@link DestinationResolver#destinationsFor(SubscriptionFilter)} for {@link Builder#bindingFilter(SubscriptionFilter)}
+ * if given (falling back to {@link DestinationResolver#catchAllDestination()} when the resolver cannot narrow it),
+ * or else to {@link DestinationResolver#catchAllDestination()} outright. {@link Builder#declareTopology(boolean)
+ * declareTopology(false)} skips all of this for a deployment whose platform team owns the queue and its bindings
+ * itself, per #415. A binding only narrows what arrives. A {@link SubscriptionFilter} on anything other than the
+ * event type is invisible to it, and {@code acceptRedeliverable(...)} still applies the subscription's own filter
+ * regardless of what was bound.
+ * <p>
+ * <strong>{@link Builder#build()} retries a broker briefly unreachable, per #867, on the {@code Connection} it was
+ * given.</strong> Opening the channel, declaring the queue and its bindings, and setting QoS all happen inside
+ * {@link Builder#retryStrategy(RetryStrategy)}, exponential backoff from 100 ms up to 2 seconds by default, ten
+ * attempts in total, every one of them against that same supplied {@code Connection}. {@code build()} never
+ * creates or reconnects the {@code Connection} itself, so this survives only a broker briefly unreachable while
+ * that {@code Connection}'s own automatic recovery is what is reopening it. A {@code Connection} with automatic
+ * recovery disabled, or a broker still unreachable when the {@code Connection} was created in the first place,
+ * stays dead for every attempt. See that method's own javadoc for exactly what is retried and what is refused
+ * immediately.
+ * <p>
+ * <strong>Each source handles its deliveries on a thread of its own.</strong> The RabbitMQ client calls every consumer
+ * on a connection from one shared pool, so this source only hands a delivery over to its own worker thread there and
+ * returns. A handler that blocks, waiting on a database that is down say, holds up only the source it belongs to,
+ * never another source built on the same {@link Connection}. That one thread handles deliveries one at a time and in
+ * the order the broker sent them, and about {@link Builder#prefetchCount(int)} of them wait for it. An {@code Error}
+ * a handler throws, {@link AssertionError} aside, a checked exception it throws, which a handler written in Kotlin
+ * has nothing to declare and nothing to stop it from doing, or an acknowledgement this source cannot issue for a
+ * reason other than a connection recovery, stops this source and closes its channel, which puts the delivery back on
+ * the queue.
+ * <p>
+ * <strong>Coarse lifecycle.</strong> A background poll, {@link Builder#pollInterval(Duration)} apart (one second by
+ * default), reads {@link PushSubscriptionModel#subscriptionIds()} and {@link PushSubscriptionModel#isRunning(String)}
+ * and starts or cancels this source's own AMQP consumer to match: consuming while the model has a running
+ * subscription, not consuming otherwise. This is deliberately coarse, a small delay either way is harmless, and it
+ * exists so this source never feeds a stopped or paused model, which per ADR 85 and ADR 104 drops the event rather
+ * than holding it. Never used to decide a single message, that decision comes from the {@link RoutingOutcome} above.
+ * The same poll also reads {@link Builder#readinessSource(Predicate)} for the subscription id, {@code true} by
+ * default, so this source pulls fewer messages off the queue while a {@link CatchupThenPushSubscriptionModel}
+ * wrapping {@code model} is still replaying or draining into it, cutting down on {@link RoutingOutcome#DEFERRED}
+ * redeliveries during a replay. Pacing only: {@link RoutingOutcome#DEFERRED} is what keeps this source correct with
+ * no {@code readinessSource} configured at all, just noisier, and even that noise is bounded on its own. A
+ * {@code DEFERRED} delivery is held unacked rather than nacked immediately, so with {@link Builder#prefetchCount(int)}
+ * left at its default of one, the broker sends nothing further on this consumer until the next poll releases it,
+ * which is what bounds a replay with no {@code readinessSource} configured to at most one redelivery per
+ * {@link Builder#pollInterval(Duration)} (or {@code prefetchCount} many, configured above the default) rather than
+ * refusing and requeuing continuously for the whole replay. See {@link Builder#readinessSource(Predicate)} for how
+ * to wire it.
+ * <p>
+ * <strong>{@link RoutingOutcome#UNAVAILABLE} is paced exactly like {@link RoutingOutcome#DEFERRED}, never sent
+ * through {@link DeliveryFailurePolicy}.</strong> That outcome says nothing was in a position to be asked, the sole
+ * subscription paused, the model not running, or nothing registered at all, and it never comes with an exception.
+ * Earlier revisions of this source re-read the model's own running state at this point to cancel the consumer
+ * immediately. That re-read raced this source's own {@link #stopPermanently()} for the same delivery tag, since
+ * both a lifecycle check and a permanent stop can be deciding the same tag's fate at once. Held and released the
+ * same way and on the same schedule as {@code DEFERRED} instead, bypassing {@link DeliveryFailurePolicy} entirely.
+ * Nothing here is broken, only not deliverable right now, and {@code PARK} exists for failures, not for pacing. See
+ * {@code heldDeferredDeliveryTags}'s own javadoc for the pacing mechanism itself.
+ * <p>
+ * <strong>A permanently failed catch-up stops this source, it does not park or redeliver into it.</strong> A
+ * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} whose replay has permanently failed refuses
+ * every later live event before attempting any dispatch, and promises that refusing is permanent, which
+ * {@code acceptRedeliverable(...)} returns as {@link RoutingOutcome#REFUSED}. That outcome is returned for nothing
+ * else, so this source decides on it alone. A handler that reached into some other permanently failed engine throws
+ * instead, and goes through {@link DeliveryFailurePolicy} like any other handler failure.
+ * <p>
+ * On {@link RoutingOutcome#REFUSED} this source logs at error once and stops consuming for good.
+ * {@link #stopPermanently()} cancels the consumer, releases every tag this source is still holding
+ * (negatively acknowledged with requeue), and closes the consume channel, all under the same
+ * lock, in that order. Closing the channel also requeues the triggering delivery itself, along with anything else
+ * still unacknowledged on it, RabbitMQ's own guarantee for a closed channel, so this source never has to
+ * acknowledge that delivery tag by hand once a permanent stop has decided to close the channel out from under it.
+ * Bypasses {@link DeliveryFailurePolicy} entirely the same way {@link RoutingOutcome#DEFERRED} already does, so
+ * every message this permanent stop touches stays visibly on the original queue rather than being parked or
+ * committed into the same permanent refusal.
+ * <p>
+ * <strong>A delivery tag from before an automatic connection recovery is acted on like any other.</strong> The
+ * RabbitMQ client already refuses to act on one for you. Every channel a {@code Recoverable} connection hands out
+ * offsets its own delivery tags past everything the channel it replaced ever issued, so {@code basicAck} and
+ * {@code basicNack} send nothing at all for a tag from the dead channel. A connection that never recovers
+ * automatically cannot produce such a tag either, since its channel stays dead and no further delivery arrives on
+ * it.
+ * <p>
+ * <strong>A delivery finishing while the connection is down is left for RabbitMQ to deliver again.</strong> Its
+ * acknowledgement cannot be sent, since the channel it would go on is closed, and RabbitMQ has put the delivery back on
+ * the queue for the dropped connection. On a connection with automatic recovery this source logs that at {@code warn}
+ * and keeps its channel, and the recovered channel delivers the message again once the recovery has registered the
+ * consumer on it. That takes topology recovery, which a {@code ConnectionFactory} has on by default. With it turned off
+ * nothing registers the consumer again, after this or any other recovery. Stopping instead would mean closing the
+ * channel, which takes it out of the connection's recovery, so this source would never consume again while every other
+ * source on the connection did. A connection without automatic recovery never comes back, so on one of those this
+ * source stops for good, as it does for an {@link Error} a handler throws, an {@link AssertionError} aside, which goes
+ * through {@link DeliveryFailurePolicy} like any other handler failure.
+ * <p>
+ * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
+ * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
+ * nothing, so RabbitMQ requeues the message as well. You end up with a parked copy and a copy still on the original
+ * queue, which is the same at-least-once delivery this source gives you everywhere else. A delivery still waiting
+ * for the worker thread when the connection drops is not handled at all. It is dropped as soon as the recovery
+ * starts, since RabbitMQ delivers it again on the recovered channel.
+ */
+public final class RabbitMqCloudEventSource implements AutoCloseable {
+
+    private static final Logger log = LoggerFactory.getLogger(RabbitMqCloudEventSource.class);
+
+    private final PushSubscriptionModel model;
+    private final Channel consumeChannel;
+    private final String queue;
+    private final int prefetchCount;
+    private final Duration pollInterval;
+    private final RabbitMqDeliveryFailureAction failureAction;
+    private final Predicate<String> readinessSource;
+    private final ScheduledExecutorService scheduler;
+    private final RabbitMqDeliveryWorker worker;
+    private final Duration closeTimeout;
+
+    private final Lock consumeLock = new ReentrantLock();
+    private @Nullable String consumerTag;
+
+    // Appended to (never under consumeLock) by handleDelivery the instant a delivery reports DEFERRED or a
+    // UNAVAILABLE, in place of nacking it there and then. With prefetchCount == 1 (the default) the
+    // broker sends nothing further on this consumer once a delivery is left unacked, so the churn stops at that
+    // instant with no cancel involved at all. Configured above 1, up to that many can be held between releases,
+    // since that many can be outstanding at once. reconcileConsumption, on its own poll thread, releases at most a
+    // snapshot of what is here under its own lock, once per pollInterval, which is what bounds this to at most one
+    // redelivery per pollInterval per unit of prefetchCount, by construction, rather than racing a scheduled cancel
+    // against however fast the broker itself round-trips a nack. A deque rather than a single held tag, so a source
+    // configured with prefetchCount above 1 never drops an earlier held tag under a later one, and a failed release
+    // can push a tag back to the front rather than only ever appending to the back. See handleDelivery and
+    // releaseHeldDeferredDelivery.
+    private final Deque<Long> heldDeferredDeliveryTags = new ConcurrentLinkedDeque<>();
+    // A REDELIVER-policy failure (a handler or filter that fails on every attempt, say) is held here instead of
+    // nacked on the spot, released the same way heldDeferredDeliveryTags is: a snapshot per pollInterval under
+    // consumeLock, via the same releaseHeldDeferredDelivery(Deque, LongConsumer) helper. Without this a
+    // poison message under REDELIVER (the default policy) would nack-and-redeliver as fast as the broker
+    // round-trips it, keeping this source's worker thread busy at prefetchCount(1) instead of being paced like DEFERRED
+    // already is. PARK is never held here: parking exists to move a failed delivery out of the retry loop, not to
+    // pace it, so it still applies immediately, through failureAction, from the point of failure.
+    private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
+    private volatile boolean permanentlyStopped;
+    // When close() has to give up on a delivery, which is at this moment. Published before close() starts waiting and
+    // read under consumeLock, so a handler that returns around the deadline either acknowledges before it or is
+    // fenced by it, rather than racing a flag close() would set afterwards. A park or acknowledgement that already
+    // holds the lock finishes, since the handler returned before it started. Long.MAX_VALUE until close() runs.
+    private final AtomicLong closeDeadlineNanos = new AtomicLong(Long.MAX_VALUE);
+
+    // Package-private rather than private so RabbitMqCloudEventSourceOutcomeRoutingTest can build one over a
+    // mocked Channel. Nothing here talks to a broker, the builder's own start(..) does that.
+    RabbitMqCloudEventSource(PushSubscriptionModel model, Channel consumeChannel,
+                                      String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
+                                      Predicate<String> readinessSource, Duration closeTimeout) {
+        this.model = model;
+        this.consumeChannel = consumeChannel;
+        this.queue = queue;
+        this.prefetchCount = prefetchCount;
+        this.pollInterval = pollInterval;
+        this.failureAction = failureAction;
+        this.readinessSource = readinessSource;
+        this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "rabbitmq-cloudevent-source-" + queue);
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.worker = new RabbitMqDeliveryWorker("rabbitmq-cloudevent-source-worker-" + queue, queue, log);
+        this.closeTimeout = closeTimeout;
+    }
+
+    /**
+     * @param connection     The connection this source creates its own {@link Channel} on for consuming, declaring
+     *                       topology, and acknowledging.
+     * @param model          The live model this source feeds. Never a {@link CatchupThenPushSubscriptionModel}, see
+     *                       the class javadoc.
+     * @param queue          The queue this source consumes from, and declares unless {@link Builder#declareTopology(boolean)}
+     *                       is set to {@code false}.
+     */
+    public static Builder builder(Connection connection, PushSubscriptionModel model, String queue) {
+        return new Builder(connection, model, queue);
+    }
+
+    private void start(Builder builder, Set<RabbitMqDestination> destinations) {
+        try {
+            if (builder.declareTopology) {
+                consumeChannel.queueDeclare(queue, true, false, false, null);
+                for (RabbitMqDestination destination : destinations) {
+                    consumeChannel.queueBind(queue, destination.exchange(), destination.routingKey());
+                }
+            }
+            consumeChannel.basicQos(prefetchCount);
+        } catch (IOException e) {
+            throw new RabbitMqSourceException("Failed to declare topology for queue \"" + queue + "\"", e);
+        }
+        worker.discardOnRecovery(consumeChannel);
+        scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    // Coarse lifecycle control, per the class javadoc: consumes while the model has a running subscription and
+    // readinessSource agrees, not otherwise, checked on a fixed poll rather than on every message. subscriptionIds()
+    // has at most one element by ADR 90 (PushSubscriptionModel declares Consumers.ONE), so there is never an
+    // ambiguity about which id to ask isRunning(...) or readinessSource about.
+    //
+    // Also releases any DEFERRED delivery handleDelivery is holding unacked, every pass, regardless of
+    // shouldConsume: a subscription that stops or pauses right after a delivery was held must not leave that
+    // delivery sitting unacked on this channel until this source eventually closes, so this runs whether or not
+    // this poll also starts or cancels the consumer.
+    private void reconcileConsumption() {
+        try {
+            Set<String> subscriptionIds = model.subscriptionIds();
+            String subscriptionId = subscriptionIds.isEmpty() ? null : subscriptionIds.iterator().next();
+            boolean shouldConsume = !permanentlyStopped && subscriptionId != null && model.isRunning(subscriptionId) && readinessSource.test(subscriptionId);
+            consumeLock.lock();
+            try {
+                if (permanentlyStopped) {
+                    return;
+                }
+                // Waits for the worker to finish what an earlier consumer sent it, see RabbitMqDeliveryWorker#isIdle.
+                if (shouldConsume && consumerTag == null && worker.isIdle()) {
+                    consumerTag = consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel);
+                } else if (!shouldConsume && consumerTag != null) {
+                    consumeChannel.basicCancel(consumerTag);
+                    consumerTag = null;
+                }
+                releaseHeldDeferredDelivery();
+                releaseHeldFailedDelivery();
+            } finally {
+                consumeLock.unlock();
+            }
+        } catch (Throwable e) {
+            // Throwable rather than the IOException and RuntimeException this used to name, because anything escaping
+            // this method cancels the scheduled poll for good. The source would never start or cancel a consumer
+            // again, and a held delivery would sit unacknowledged with nothing left to release it, all without a word.
+            // Two things reach that. A readinessSource written in Kotlin throws a checked exception through the
+            // Predicate this source calls it behind, and an Error out of anything called here does the same. An
+            // OutOfMemoryError is swallowed along with the rest, the same as the saga timer poll's own wrapper, since
+            // keeping the poll alive is worth more than passing a failure on to a scheduled task that does nothing
+            // with it.
+            log.warn("Failed to reconcile consumption for queue \"{}\" against the subscription model's running state. " +
+                    "Retrying on the next poll.", queue, e);
+        }
+    }
+
+    // Nacks (with requeue) a snapshot of what handleDelivery left held, if anything, bypassing DeliveryFailurePolicy
+    // exactly as the DEFERRED branch there always has. Always called under consumeLock, since it issues a
+    // blocking Channel call per held tag. With prefetchCount == 1 (the default), the broker sends nothing further
+    // on this consumer between a delivery being held and this releasing it, so calling this once per pollInterval
+    // is what bounds a DEFERRED delivery to at most one redelivery per poll interval by construction, not a race
+    // against however fast the broker itself round-trips a nack.
+    //
+    // The snapshot size is read once, up front, rather than draining until empty: a nack this loop issues can
+    // cause an immediate redelivery whose DEFERRED handleDelivery call appends a fresh tag to this same deque
+    // while this loop is still running, and draining until empty would nack that fresh tag too, in the same
+    // pass, collapsing the at-most-one-per-poll-interval bound this exists to keep. A tag appended mid-loop waits
+    // for the next poll instead.
+    //
+    // A failed nack (an IOException surfacing as RabbitMqSourceException from basicNack) never drops the tag it
+    // was for: it goes back to the front, ahead of whatever this pass has not gotten to yet, and this pass stops
+    // rather than trying the next slot, since a channel failing to nack once is not going to succeed on a
+    // different tag straight after. The next poll retries it. A channel that has actually died requeues
+    // everything still unacked on it by itself regardless, so this is only for one that survives the failure.
+    private void releaseHeldDeferredDelivery() {
+        releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver);
+    }
+
+    // Releases a REDELIVER-policy failure paced behind heldFailedDeliveryTags, the same mechanism and the same
+    // once-per-poll bound as releaseHeldDeferredDelivery() above, see that field's own javadoc.
+    // failureAction.redeliverFailure, not the plain redeliver() heldDeferredDeliveryTags releases through: this
+    // deque holds a genuine failure, and redeliverFailure logs the one warn line that failure needs, where
+    // heldDeferredDeliveryTags' own pacing releases (DEFERRED and UNAVAILABLE) are not failures
+    // and stay silent.
+    private void releaseHeldFailedDelivery() {
+        releaseHeldDeferredDelivery(heldFailedDeliveryTags, failureAction::redeliverFailure);
+    }
+
+    // Package-private and static, parameterized on the deque and the release call, so this source's redelivery
+    // bookkeeping is directly testable with a stub that throws on demand, no real Channel or broker required.
+    // Always called under consumeLock.
+    static void releaseHeldDeferredDelivery(Deque<Long> heldDeferredDeliveryTags, LongConsumer redeliver) {
+        int snapshotCount = heldDeferredDeliveryTags.size();
+        for (int i = 0; i < snapshotCount; i++) {
+            Long heldDeliveryTag = heldDeferredDeliveryTags.pollFirst();
+            if (heldDeliveryTag == null) {
+                return;
+            }
+            try {
+                redeliver.accept(heldDeliveryTag);
+            } catch (Throwable e) {
+                // Throwable, so the tag goes back for anything at all that escapes the release. The poll this runs
+                // under catches an Error and comes back on the next tick, and a tag taken out of the deque by a
+                // release that failed has nothing left to nack it. At the default prefetchCount of one the broker
+                // then sends that consumer nothing further, on a source that is still consuming.
+                heldDeferredDeliveryTags.offerFirst(heldDeliveryTag);
+                throw e;
+            }
+        }
+    }
+
+    private void handleCancel(String cancelledConsumerTag) {
+        consumeLock.lock();
+        try {
+            if (cancelledConsumerTag.equals(consumerTag)) {
+                consumerTag = null;
+            }
+        } finally {
+            consumeLock.unlock();
+        }
+    }
+
+    // Runs on the client's shared consumer thread, so it only hands the delivery to this source's own worker.
+    private void submitDelivery(String deliveryConsumerTag, Delivery delivery) {
+        long deliveryTag = delivery.getEnvelope().getDeliveryTag();
+        worker.submit(deliveryTag, () -> handleDeliveryOrStop(delivery, deliveryTag));
+    }
+
+    // handleDelivery routes a handler's own RuntimeException and AssertionError through the delivery failure policy, so
+    // anything escaping it is an Error the handler threw, a checked exception it threw, or an acknowledgement this
+    // source could not issue. Throwable rather than the exception types javac allows here, because a handler written
+    // in Kotlin has no checked exception to declare and throws one straight through the Java interface this source
+    // calls it behind. An acknowledgement that failed because the connection dropped and is being recovered does not
+    // stop this source, since RabbitMQ puts the delivery back on the queue when the connection drops, and closing this
+    // channel would take it out of the connection's recovery so the source never consumed again. Anything else stops
+    // this source and closes the channel, which is what puts the delivery back on the queue. Without that the delivery
+    // would sit unacknowledged on a consumer the broker sends nothing further to. Not rethrown, since the cause is
+    // logged here, and rethrowing would only end the worker thread.
+    private void handleDeliveryOrStop(Delivery delivery, long deliveryTag) {
+        try {
+            handleDelivery(delivery);
+        } catch (Throwable e) {
+            if (failureAction.isLostToConnectionRecovery(e)) {
+                log.warn("The connection under queue \"{}\" dropped before delivery tag {} could be acknowledged or "
+                        + "rejected. RabbitMQ puts it back on the queue, and this source receives it again once the "
+                        + "connection's recovery has registered its consumer again, which needs topology recovery turned on.",
+                        queue, deliveryTag, e);
+                return;
+            }
+            log.error("Handling delivery tag {} on queue \"{}\" failed outside this source's delivery failure policy. "
+                    + "Stopping this source and closing its channel, which puts that delivery back on the queue.",
+                    deliveryTag, queue, e);
+            stopPermanently();
+        }
+    }
+
+    private void handleDelivery(Delivery delivery) {
+        long deliveryTag = delivery.getEnvelope().getDeliveryTag();
+        CloudEvent cloudEvent;
+        try {
+            cloudEvent = RabbitMqCloudEventMapper.toCloudEvent(delivery.getProperties(), delivery.getBody());
+        } catch (RuntimeException e) {
+            log.debug("Failed to rebuild a CloudEvent from a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
+            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
+            return;
+        }
+        RoutingOutcome outcome;
+        try {
+            outcome = model.acceptRedeliverable(cloudEvent);
+        } catch (RuntimeException | AssertionError e) {
+            // Catches AssertionError too, since a filter or the handler can throw one, and it belongs in the failure
+            // policy like any other handler failure. Any other Error stops this source instead, see
+            // handleDeliveryOrStop. Only a filter or a handler failure throws, a refusal comes back as an outcome.
+            log.debug("A filter or handler failed for a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
+            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
+            return;
+        }
+        route(outcome, deliveryTag, delivery.getProperties(), delivery.getBody());
+    }
+
+    // Acts on one outcome and reports which of the four dispositions it acted on. Package-private, and returning
+    // that disposition rather than nothing, so RabbitMqCloudEventSourceOutcomeRoutingTest can drive all six
+    // outcomes through it with no broker behind it. A switch expression rather than a switch statement because
+    // javac only checks an expression for exhaustiveness, so a statement here would compile clean with a
+    // disposition missing.
+    RoutingOutcome.Disposition route(RoutingOutcome outcome, long deliveryTag, BasicProperties properties, byte[] body) {
+        return switch (outcome.disposition()) {
+            case ACKNOWLEDGE -> {
+                ackNow(deliveryTag);
+                yield RoutingOutcome.Disposition.ACKNOWLEDGE;
+            }
+            case HOLD -> {
+                // DEFERRED (a catch-up-then-live wrapper still replaying or draining) and UNAVAILABLE
+                // (the sole subscription paused, or the model not running at all) are paced identically, held
+                // unacked rather than nacked here, so with prefetchCount == 1 (the default) the broker sends
+                // nothing further on this consumer until reconcileConsumption's own poll releases it, at most once
+                // per pollInterval. An earlier revision of this source cancelled its own consumer and redelivered
+                // a lifecycle state immediately instead, to keep it visible sooner than a full pollInterval away,
+                // and that immediate cancel-and-redeliver raced this source's own stopPermanently() for the same
+                // delivery tag, since both a lifecycle check and a permanent stop can be deciding the same tag's
+                // fate at once, so it is gone. Never takes consumeLock here, this callback can run concurrently
+                // with reconcileConsumption, which already holds it across a blocking AMQP call, so this only ever
+                // hands the tag off for that poll thread to act on instead.
+                heldDeferredDeliveryTags.add(deliveryTag);
+                yield RoutingOutcome.Disposition.HOLD;
+            }
+            case FAIL -> {
+                // NOT_DELIVERABLE, a refusal the model decided before dispatch without promising it is permanent
+                log.debug("A message on queue \"{}\", delivery tag {}, could not be delivered. Routing it " +
+                        "through the configured delivery failure policy.", queue, deliveryTag);
+                routeFailure(deliveryTag, properties, body);
+                yield RoutingOutcome.Disposition.FAIL;
+            }
+            case STOP -> {
+                // REFUSED, a catch-up wrapping this source's model has failed for good. Stopped rather than routed
+                // through the failure policy, because offering the message again gets the same refusal. See the
+                // class javadoc.
+                log.error("A catch-up wrapping this source's model has permanently failed, refusing delivery tag {} "
+                        + "on queue \"{}\". Stopping this source rather than parking or redelivering into the same "
+                        + "refusal. That tag, and every other tag this source is still holding, is requeued by the "
+                        + "channel this permanent stop closes, so it stays visible on the queue until the wrapper's "
+                        + "catch-up is fixed and restarted.", deliveryTag, queue);
+                stopPermanently();
+                yield RoutingOutcome.Disposition.STOP;
+            }
+        };
+    }
+
+    // Under consumeLock, the lock reconcileConsumption also holds across its own blocking Channel calls, so two
+    // threads never talk to consumeChannel at once.
+    private void ackNow(long deliveryTag) {
+        consumeLock.lock();
+        try {
+            if (closeDeadlinePassed()) {
+                return;
+            }
+            failureAction.ack(deliveryTag);
+        } finally {
+            consumeLock.unlock();
+        }
+    }
+
+    // Routes a genuine failure (UNAVAILABLE and a permanent catch-up refusal are both handled
+    // separately above, never reaching here) to this source's configured DeliveryFailurePolicy. PARK applies
+    // immediately, through failureAction, since parking exists to move a failed delivery out of the retry loop, not
+    // to pace it. REDELIVER is paced instead, held and released once per poll exactly like a DEFERRED delivery, via
+    // a second deque, so a message that fails on every attempt is bounded to one redelivery per pollInterval rather
+    // than nacking as fast as the broker round-trips it. See heldFailedDeliveryTags's own javadoc.
+    private void routeFailure(long deliveryTag, BasicProperties properties, byte[] body) {
+        if (failureAction.policy() == DeliveryFailurePolicy.REDELIVER) {
+            heldFailedDeliveryTags.add(deliveryTag);
+        } else {
+            consumeLock.lock();
+            try {
+                if (closeDeadlinePassed()) {
+                    return;
+                }
+                failureAction.apply(deliveryTag, properties, body);
+            } finally {
+                consumeLock.unlock();
+            }
+        }
+    }
+
+    // Cancels this source's own consumer, releases every tag this source is still holding, and closes the channel,
+    // in that order, all under the same lock, then stops the coarse poll for good. Closing the channel here, rather
+    // than leaving that to close() as an earlier revision did, is what keeps a permanent stop from leaving an
+    // already-held tag stuck: the poll this method also shuts down was the only thing that would otherwise ever
+    // release it, and with prefetchCount above the default of one an earlier held delivery could sit invisible on
+    // this consumer indefinitely if nothing forced it back onto the queue. Closing an already-closing or
+    // already-closed channel is tolerated the same as close() already tolerates it, since an application may still
+    // call close() afterward.
+    private void stopPermanently() {
+        consumeLock.lock();
+        try {
+            // Set under the same lock reconcileConsumption() now reads it under, so the two can never interleave:
+            // whichever of this method and a concurrent poll acquires the lock first fully decides the consumer's
+            // fate before the other even reads the flag.
+            permanentlyStopped = true;
+            if (consumerTag != null) {
+                try {
+                    consumeChannel.basicCancel(consumerTag);
+                } catch (IOException | RuntimeException e) {
+                    log.warn("Failed to cancel the consumer on queue \"{}\" while stopping permanently.", queue, e);
+                }
+                consumerTag = null;
+            }
+            try {
+                releaseHeldDeferredDelivery();
+            } catch (RuntimeException ignored) {
+                // Best effort, the channel close in the finally below requeues whatever this could not.
+            }
+            try {
+                releaseHeldFailedDelivery();
+            } catch (RuntimeException ignored) {
+                // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
+            }
+        } finally {
+            // A finally, so an Error out of the cancel or a release still closes the channel and stops the poll and the
+            // worker. The close is what requeues a held delivery, the release only makes that happen sooner. The Error
+            // still propagates once the teardown is done, unless the teardown throws something of its own, which then
+            // replaces it.
+            try {
+                consumeChannel.close();
+            } catch (IOException | TimeoutException | RuntimeException ignored) {
+                // Best effort, mirroring close()'s own channel teardown: the channel is going away either way, and
+                // an already-failed or already-closed channel has nothing further this source can do about it.
+                // RuntimeException also catches ShutdownSignalException, which extends it.
+            } finally {
+                consumeLock.unlock();
+                scheduler.shutdown();
+                worker.stopAcceptingWork();
+            }
+        }
+    }
+
+    /**
+     * Stops the background poll, cancels this source's consumer if it has one, waits up to
+     * {@link Builder#closeTimeout(Duration)} for a delivery already being handled to finish, releases any
+     * {@code DEFERRED} delivery still held unacked, and closes the {@link Channel} (and, with
+     * {@link DeliveryFailurePolicy#PARK}, the parking sink) this source created. Does not close the
+     * {@link Connection} it was built from.
+     * <p>
+     * A delivery that arrived but was not yet being handled is not started, and a handler still running after
+     * {@code closeTimeout} is interrupted and logged at {@code warn}. Neither was acknowledged, so closing the channel
+     * puts both back on the queue and they are delivered again. Nothing acknowledges or parks a delivery once that
+     * deadline has passed, so a handler finishing just after it has its delivery redelivered rather than committed.
+     * The same holds from the moment this method stops waiting early, which happens when the calling thread is
+     * interrupted or when a handler is closing its own source.
+     * Called from inside a handler, this method does not wait for that handler, since it is the one calling.
+     * <p>
+     * A handler that ignores its interrupt keeps running after this returns, so whatever it writes is written
+     * whenever it finishes, which for a source built again on the same queue in the same process can be after events
+     * that later source has already handled. {@code closeTimeout} bounds how long this waits for a handler and for the lock, not
+     * how long the method takes, since closing the channel and the parking sink happens after that deadline.
+     * <p>
+     * Releasing a held delivery here is belt and braces rather than load bearing: closing a channel with an
+     * unacked delivery on it already requeues that delivery at the broker on its own, so skipping this line would
+     * still leave nothing stuck. Doing it explicitly means a delivery this source is holding is redelivered the
+     * instant this method runs rather than whenever the broker notices the channel is gone.
+     */
+    @Override
+    public void close() {
+        try {
+            long deadline = System.nanoTime() + closeTimeout.toNanos();
+            bringCloseDeadlineForwardTo(deadline);
+            scheduler.shutdownNow();
+            // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
+            permanentlyStopped = true;
+            // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle worker
+            // and start a handler while this is closing.
+            worker.stopAcceptingWork();
+            // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
+            // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
+            if (lockBefore(deadline)) {
+                try {
+                    if (consumerTag != null) {
+                        try {
+                            consumeChannel.basicCancel(consumerTag);
+                        } catch (IOException ignored) {
+                            // Best effort: the channel is about to be closed either way.
+                        }
+                        consumerTag = null;
+                    }
+                } finally {
+                    consumeLock.unlock();
+                }
+            }
+            boolean workerFinished = worker.stop(remainingUntil(deadline));
+            if (!workerFinished || worker.isWorkerThread()) {
+                // The teardown below goes ahead with a delivery still running, either because this thread was interrupted
+                // while waiting or because a handler is closing its own source, so fence the acknowledgement from here
+                // rather than at a deadline that may still be in the future.
+                bringCloseDeadlineForwardTo(System.nanoTime());
+            }
+            if (!workerFinished) {
+                worker.interruptRunningWork(closeTimeout);
+            }
+            if (lockBefore(deadline)) {
+                try {
+                    try {
+                        releaseHeldDeferredDelivery();
+                    } catch (RuntimeException ignored) {
+                        // Best effort, the channel close in the finally below requeues whatever is left held.
+                    }
+                    try {
+                        releaseHeldFailedDelivery();
+                    } catch (RuntimeException ignored) {
+                        // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
+                    }
+                } finally {
+                    consumeLock.unlock();
+                }
+            }
+        } finally {
+            // A finally like stopPermanently()'s, so an exception from anything above, the deadline arithmetic included,
+            // still reaches the channel close, and the parking sink's close after it under PARK.
+            try {
+                consumeChannel.close();
+            } catch (IOException | ShutdownSignalException | TimeoutException ignored) {
+                // Best effort, mirroring RabbitMqCloudEventSink#close's own channel teardown.
+            } finally {
+                failureAction.close();
+            }
+        }
+    }
+
+    // Only ever moved earlier, so a second close() cannot push a deadline the first one has already passed back into
+    // the future and let a handler that ignored its interrupt acknowledge after all.
+    private void bringCloseDeadlineForwardTo(long deadlineNanos) {
+        closeDeadlineNanos.accumulateAndGet(deadlineNanos,
+                (current, candidate) -> current == Long.MAX_VALUE || candidate - current < 0 ? candidate : current);
+    }
+
+    private boolean closeDeadlinePassed() {
+        long deadline = closeDeadlineNanos.get();
+        return deadline != Long.MAX_VALUE && System.nanoTime() - deadline >= 0;
+    }
+
+    private boolean lockBefore(long deadlineNanos) {
+        try {
+            return consumeLock.tryLock(Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private static Duration remainingUntil(long deadlineNanos) {
+        return Duration.ofNanos(Math.max(0, deadlineNanos - System.nanoTime()));
+    }
+
+    public static final class Builder {
+        private final Connection connection;
+        private final PushSubscriptionModel model;
+        private final String queue;
+        private @Nullable DestinationResolver<RabbitMqDestination> resolver;
+        private @Nullable SubscriptionFilter bindingFilter;
+        private @Nullable Set<RabbitMqDestination> bindings;
+        private boolean declareTopology = true;
+        private DeliveryFailurePolicy deliveryFailurePolicy = DeliveryFailurePolicy.REDELIVER;
+        private @Nullable RabbitMqDestination parkingDestination;
+        private Duration pollInterval = Duration.ofSeconds(1);
+        private int prefetchCount = 1;
+        private Predicate<String> readinessSource = subscriptionId -> true;
+        private Duration closeTimeout = Duration.ofSeconds(30);
+        private RetryStrategy retryStrategy;
+
+        private Builder(Connection connection, PushSubscriptionModel model, String queue) {
+            this.connection = requireNonNull(connection, "connection cannot be null");
+            this.model = requireNonNull(model, PushSubscriptionModel.class.getSimpleName() + " cannot be null");
+            this.queue = requireNonNull(queue, "queue cannot be null");
+            this.retryStrategy = defaultRetryStrategy(queue);
+        }
+
+        /**
+         * Derives the queue's bindings from {@link #bindingFilter(SubscriptionFilter)} or, absent one, from
+         * {@link DestinationResolver#catchAllDestination()}. Required unless {@link #bindings(Set)} is given or
+         * {@link #declareTopology(boolean)} is set to {@code false}.
+         */
+        public Builder resolver(DestinationResolver<RabbitMqDestination> resolver) {
+            this.resolver = requireNonNull(resolver, DestinationResolver.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
+        /**
+         * Narrows the declared bindings to {@link DestinationResolver#destinationsFor(SubscriptionFilter)} for this
+         * filter, falling back to {@link DestinationResolver#catchAllDestination()} when the resolver cannot derive
+         * one. Requires {@link #resolver(DestinationResolver)}. Per ADR 133 decision 5, this filter narrows what
+         * arrives. It must be at least as inclusive as the subscription's own filter, or events the subscription
+         * would have accepted never arrive at all.
+         */
+        public Builder bindingFilter(SubscriptionFilter bindingFilter) {
+            this.bindingFilter = requireNonNull(bindingFilter, "bindingFilter cannot be null");
+            return this;
+        }
+
+        /**
+         * The same narrowing for a plain {@link Filter}, wrapped in an {@link AgnosticSubscriptionFilter} so it
+         * applies whichever event store the events came from. Pass a {@link SubscriptionFilter} instead when the
+         * narrowing has to be stream-specific or DCB-specific.
+         */
+        public Builder bindingFilter(Filter bindingFilter) {
+            requireNonNull(bindingFilter, "bindingFilter cannot be null");
+            return bindingFilter(AgnosticSubscriptionFilter.filter(bindingFilter));
+        }
+
+        /**
+         * Declares exactly these bindings instead of deriving any from a resolver, the explicit escape hatch for a
+         * binding scheme a resolver cannot express.
+         */
+        public Builder bindings(Set<RabbitMqDestination> bindings) {
+            this.bindings = Set.copyOf(requireNonNull(bindings, "bindings cannot be null"));
+            return this;
+        }
+
+        /**
+         * Whether this source declares its queue and bindings at all. {@code true} by default. Set to {@code false}
+         * for a deployment whose platform team owns the queue and its bindings itself, per #415. This source then
+         * only consumes from {@code queue} and never calls {@code queueDeclare} or {@code queueBind}.
+         */
+        public Builder declareTopology(boolean declareTopology) {
+            this.declareTopology = declareTopology;
+            return this;
+        }
+
+        /**
+         * What this source does with a delivery it will not acknowledge. {@link DeliveryFailurePolicy#REDELIVER} by
+         * default.
+         */
+        public Builder onDeliveryFailure(DeliveryFailurePolicy deliveryFailurePolicy) {
+            this.deliveryFailurePolicy = requireNonNull(deliveryFailurePolicy, DeliveryFailurePolicy.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
+        /**
+         * The destination {@link DeliveryFailurePolicy#PARK} publishes a failed delivery to. Required when
+         * {@link #onDeliveryFailure(DeliveryFailurePolicy)} is {@code PARK} ({@link #build()} refuses otherwise).
+         * Given without {@code PARK}, this is accepted but unused, not refused, the same choice
+         * {@link RabbitMqDeliveryFailureAction#create(Connection, Channel, DeliveryFailurePolicy, RabbitMqDestination, Logger)}
+         * makes and documents, so switching {@link #onDeliveryFailure} back to {@code REDELIVER} in application
+         * config never has to strip this call out along with it.
+         */
+        public Builder parkingDestination(RabbitMqDestination parkingDestination) {
+            this.parkingDestination = requireNonNull(parkingDestination, "parkingDestination cannot be null");
+            return this;
+        }
+
+        /**
+         * How often the coarse lifecycle poll checks the model's running state. One second by default. A small
+         * delay is harmless, see the class javadoc, so this rarely needs changing.
+         */
+        public Builder pollInterval(Duration pollInterval) {
+            requireNonNull(pollInterval, "pollInterval cannot be null");
+            if (pollInterval.toMillis() <= 0) {
+                throw new IllegalArgumentException("pollInterval must be at least 1 millisecond, was " + pollInterval);
+            }
+            this.pollInterval = pollInterval;
+            return this;
+        }
+
+        /**
+         * How many unacknowledged deliveries this source allows itself at once. One by default. This source handles
+         * its deliveries one at a time and in order on its own thread whatever this is set to, so raising it only
+         * lets more of them wait in memory for that thread, which is also how many a connection recovery or a
+         * {@link RabbitMqCloudEventSource#close()} can hand back to the queue to be delivered again.
+         */
+        public Builder prefetchCount(int prefetchCount) {
+            if (prefetchCount < 1) {
+                throw new IllegalArgumentException("prefetchCount must be at least 1, was " + prefetchCount);
+            }
+            this.prefetchCount = prefetchCount;
+            return this;
+        }
+
+        /**
+         * Asked, alongside {@code model}'s own running state, on every coarse lifecycle poll (see the class
+         * javadoc). {@code true} for every subscription id by default, which is exactly right for {@code model} fed
+         * directly with no catch-up in front of it, or for {@code catchup = NONE}, since no wrapper exists there to
+         * pace against.
+         * <p>
+         * A pacing hint only, never a correctness dependency: {@link RoutingOutcome#DEFERRED} is what keeps this
+         * source correct against a {@link CatchupThenPushSubscriptionModel} wrapping {@code model} with no
+         * {@code readinessSource} configured at all, refusing rather than acknowledging a message the wrapper is
+         * still replaying or draining into, and redelivering it. Configuring this only cuts down on how often that
+         * refuse-and-redeliver round trip happens during a replay. Wrap {@code model} in a
+         * {@link CatchupThenPushSubscriptionModel} and pass {@code catchupThenPush::isReadyForLiveDelivery} here, so
+         * this source stops pulling from the queue for as long as that wrapper's replay is still running or
+         * draining, and resumes once it reaches live. Built by an {@code @Projection(source = PUSH)} or
+         * {@code @Saga(source = PUSH)} bean instead of by hand, the wrapper is published as a Spring bean named
+         * {@code "catchupThenPushSubscriptionModel-" + id}, so {@code applicationContext.getBean(name,
+         * CatchupThenPushSubscriptionModel.class)::isReadyForLiveDelivery} reaches the same object, or, through the
+         * RabbitMQ Spring Boot starter, wired automatically with no configuration at all.
+         */
+        public Builder readinessSource(Predicate<String> readinessSource) {
+            this.readinessSource = requireNonNull(readinessSource, "readinessSource cannot be null");
+            return this;
+        }
+
+        /**
+         * How long {@link RabbitMqCloudEventSource#close()} waits for a delivery already being handled to finish.
+         * Thirty seconds by default, the same as the Kafka sources. A handler still running after that is
+         * interrupted, and its delivery goes back on the queue when the channel closes, so it is handled again.
+         */
+        public Builder closeTimeout(Duration closeTimeout) {
+            requireNonNull(closeTimeout, "closeTimeout cannot be null");
+            if (closeTimeout.isNegative()) {
+                throw new IllegalArgumentException("closeTimeout cannot be negative, was " + closeTimeout);
+            }
+            this.closeTimeout = closeTimeout;
+            return this;
+        }
+
+        /**
+         * How a broker briefly unreachable while {@link #build()} runs is retried before it throws. This retries
+         * only opening a channel, declaring topology, and setting QoS on the {@code Connection} this builder was
+         * given. It neither creates nor reconnects that {@code Connection}, so surviving anything past the very
+         * first attempt needs that {@code Connection}'s own automatic recovery already enabled. Exponential backoff from
+         * 100 ms up to 2 seconds by default, ten attempts in total, matching the shape
+         * {@code AGENTS.md} sets for every component that talks to an external store, capped at that count because a
+         * {@link #build()} that never gives up turns a broker that is permanently misconfigured, a rejected
+         * credential or a nonexistent vhost, into an application that hangs at startup with no diagnosis, which is
+         * worse than the failure this retry exists to absorb. By default {@link #build()} logs each retried
+         * attempt at {@code WARN} so a retrying startup is never mistaken for a hung one. A caller-supplied
+         * {@link RetryStrategy} replaces that logging along with everything else this default configures. See
+         * {@link RabbitMqBuildFailureClassifier} for exactly what is retried and what is refused immediately,
+         * including under {@link org.occurrent.broker.api.blocking.DeliveryFailurePolicy#PARK}, where the parking
+         * publisher's own channel can fail too. Never retries the {@link IllegalStateException} a missing
+         * {@code resolver} or {@code parkingDestination} throws above, since that failure is identical on every
+         * attempt regardless of the broker's state, and never any other {@link RuntimeException}, since that is a
+         * bug this retry cannot fix by trying again. Passing a {@link RetryStrategy} here replaces that
+         * classification too, so a caller that wants a different bound or a wider retry configures its own.
+         */
+        public Builder retryStrategy(RetryStrategy retryStrategy) {
+            this.retryStrategy = requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
+        public RabbitMqCloudEventSource build() {
+            if (declareTopology && bindings == null && resolver == null) {
+                throw new IllegalStateException("A resolver(...), or explicit bindings(...), is required unless declareTopology(false) is set");
+            }
+            if (deliveryFailurePolicy == DeliveryFailurePolicy.PARK && parkingDestination == null) {
+                throw new IllegalStateException("A parkingDestination is required when onDeliveryFailure(PARK) is set");
+            }
+            Set<RabbitMqDestination> destinations = declareTopology
+                    ? RabbitMqTopology.destinationsToBind(resolver, bindingFilter, bindings)
+                    : Set.of();
+            // retryStrategy wraps only this call, not the validation above: a failed validation throws the same
+            // way on every attempt regardless of the broker's state, so retrying it would spend the whole backoff
+            // window on a failure a retry can never fix. A failed attempt closes the local resources it opened,
+            // the channel, the failure action, the scheduler, before rethrowing, but not a durable queue
+            // declaration or binding it already completed on the broker. Redeclaring those on the next attempt
+            // is a safe no-op, since queueDeclare and queueBind succeed again, unchanged, against a queue or
+            // binding that already exists exactly as declared.
+            return retryStrategy.execute(() -> buildOnce(destinations));
+        }
+
+        // Validated above, before opening anything: a failure past this point has a channel (and, under PARK, a
+        // parking sink) already open, so every later failure path in this method closes what it opened rather
+        // than leaking it.
+        private RabbitMqCloudEventSource buildOnce(Set<RabbitMqDestination> destinations) {
+            Channel channel = openChannel(connection);
+            RabbitMqDeliveryFailureAction failureAction = null;
+            RabbitMqCloudEventSource source = null;
+            try {
+                failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
+                source = new RabbitMqCloudEventSource(model, channel, queue, prefetchCount,
+                        pollInterval, failureAction, readinessSource, closeTimeout);
+                source.start(this, destinations);
+                return source;
+            } catch (RuntimeException e) {
+                closeQuietly(channel);
+                if (failureAction != null) {
+                    failureAction.close();
+                }
+                if (source != null) {
+                    // start() can fail after the source, and its scheduler, already exist. The scheduler has no
+                    // thread yet here, since scheduleWithFixedDelay(...) is the last thing start() does, but this
+                    // stays defensive against that ordering changing later, and symmetric with the domain source's
+                    // own build() failure path.
+                    source.scheduler.shutdownNow();
+                }
+                throw e;
+            }
+        }
+
+        /**
+         * See {@link RabbitMqBuildFailureClassifier} for the classification and {@link #retryStrategy(RetryStrategy)}
+         * for the rest of this default. Takes {@code queue} explicitly rather than reading the field: this runs
+         * from the constructor, before the field assignment it would otherwise read completes.
+         */
+        private static RetryStrategy defaultRetryStrategy(String queue) {
+            return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0)
+                    .maxAttempts(10)
+                    .retryIf(RabbitMqBuildFailureClassifier::isTransient)
+                    .onRetryableError((info, throwable) -> log.warn(
+                            "Attempt {} of {} to build the RabbitMQ source for queue \"{}\" failed. Retrying in {}.",
+                            info.getAttemptNumber(), info.getMaxAttempts(), queue, info.getBackoffBeforeNextRetryAttempt(), throwable));
+        }
+
+        private static Channel openChannel(Connection connection) {
+            try {
+                return connection.openChannel()
+                        .orElseThrow(() -> new RabbitMqSourceException("No RabbitMQ channel number was available to create the source's channel on"));
+            } catch (IOException e) {
+                throw new RabbitMqSourceException("Failed to create the source's RabbitMQ channel", e);
+            }
+        }
+
+        // Best effort: build() is already failing for another reason by the time this runs, so a failure here is
+        // logged rather than allowed to replace the failure the caller actually asked about.
+        private static void closeQuietly(Channel channel) {
+            try {
+                channel.close();
+            } catch (IOException | ShutdownSignalException | TimeoutException e) {
+                log.warn("Failed to close the source's channel while unwinding a failed build().", e);
+            }
+        }
+    }
+}

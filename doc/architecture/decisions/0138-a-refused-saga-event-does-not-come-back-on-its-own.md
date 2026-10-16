@@ -33,19 +33,19 @@ event is not acknowledged, which is true of the saga, and infers that a broker w
 whatever fed the event to leave it unacknowledged as well. The sentence needed a condition it did not state, since
 the same javadoc gave the listener that choice.
 
-0.34.0 makes it wrong in a stronger way. Occurrent now ships a consume-side bridge, `43af19f9f` adding the
-transport-neutral API on 2026-08-18 and `bf72e48d0` the first RabbitMQ bridge a day later, and under
-`DeliveryFailurePolicy.PARK` that bridge republishes a refused event to the parking destination and acknowledges it
-out of the source queue once the republish is confirmed. The acknowledging side is now a configuration Occurrent
+0.34.0 makes it wrong in a stronger way. Occurrent now ships a broker source, `43af19f9f` adding the
+transport-neutral API on 2026-08-18 and `bf72e48d0` the first RabbitMQ source a day later, and under
+`DeliveryFailurePolicy.PARK` that source republishes a refused event to the parking destination and acknowledges it
+out of the original queue once the republish is confirmed. The acknowledging side is now a configuration Occurrent
 supplies and documents rather than something a listener might happen to do. A park publish that fails redelivers the
 original instead, which is one way `PARK` can still end in a redelivery. The dead-letter hedge does not cover
-parking, because dead-lettering is the broker's own policy and parking is the bridge's.
+parking, because dead-lettering is the broker's own policy and parking is the source's.
 
 ## Decision
 
 **The saga declines to acknowledge a refused event, and what happens to it afterwards belongs to the subscription
 model.** A `PushSubscriptionModel` hands the acknowledge-or-redeliver decision to the listener that called `accept`,
-and on a consume-side broker bridge `DeliveryFailurePolicy` is where the choice is configured. For as long as the
+and on a broker source `DeliveryFailurePolicy` is where the choice is configured. For as long as the
 model keeps offering the event, the saga refuses it again, which is the outcome ADR 109 described. What that costs
 the events behind it is the feed's, and this record says nothing about it. Where the event is not offered again, the
 saga still issues no duplicate commands, and that is the part this decision owns either way.
@@ -61,7 +61,7 @@ them.
 
 **The argument ADR 109 gave for `REQUIRED` being the default is weaker than it read.** That argument is the trade
 ADR 104 made, that an event a saga cannot handle correctly is better stuck and visible than consumed and wrong. It
-holds wherever the model offers the event again. On a bridge configured with `PARK` the event is neither stuck nor
+holds wherever the model offers the event again. On a source configured with `PARK` the event is neither stuck nor
 visible where a reader of ADR 109 would look for it, so someone choosing `REQUIRED` there is promised something they
 do not get. `BEST_EFFORT` and the reasoning for the opt-out are unaffected, and so is everything else ADR 109
 decided.

@@ -17,7 +17,7 @@
 package org.occurrent.example.broker.rabbitmq;
 
 /**
- * The two-event order lifecycle the broker example forwards, bridges and projects. The permitted types are
+ * The two-event order lifecycle the broker example forwards, sources and projects. The permitted types are
  * top-level, not nested, so the reflection-based {@code CloudEventTypeMapper} can resolve each one from its simple
  * name.
  * <p>
