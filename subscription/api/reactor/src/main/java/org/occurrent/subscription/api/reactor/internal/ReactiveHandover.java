@@ -527,16 +527,18 @@ public final class ReactiveHandover<T, K> {
      * so a payload offered while an earlier delivery of the same key is still queued or folding simply waits its
      * turn behind it rather than racing it, and completes {@code true} once that earlier delivery lands.
      *
-     * @return A {@link Mono} that completes with {@code true} once the payload has genuinely landed, delivered live
-     *         just now, or already delivered by an earlier attempt, including one still queued or folding ahead of
-     *         it on the sink. {@code false} only when this handover is not live yet or is stopped, so this call
-     *         refused the payload outright rather than queuing it. Every {@code false} is safe to retry. Errors with
-     *         {@link PreDispatchRefusalException} for the same reasons {@link #acceptReportingDelivery(Object)}
-     *         does, checked first, before the live check, so a payload fed after a permanently failed catch-up
-     *         fails fast rather than completing {@code false} forever for a caller to retry a catch-up that is
-     *         never coming back. Called from this handover's own code, it decides live or not the same way, and a
-     *         payload it takes in completes {@code true} once it is queued, as
-     *         {@link #acceptReportingDelivery(Object)} describes.
+     * @return A {@link Mono} that completes with {@code true} only once the payload's delivery has completed,
+     *         delivered live by this call, or by an earlier attempt with the same key. An earlier attempt still
+     *         queued or delivering ahead of this one on the sink finishes first, since the sink delivers one payload
+     *         at a time, so this one completes {@code true} only after it. {@code false} when this handover is not
+     *         live yet or is stopped, so this call refused the payload outright rather than queuing it. Every
+     *         {@code false} is safe to retry. Errors with {@link PreDispatchRefusalException} for the same reasons
+     *         {@link #acceptReportingDelivery(Object)} does, checked first, before the live check, so a payload fed
+     *         after a permanently failed catch-up fails fast rather than completing {@code false} forever for a
+     *         caller to retry a catch-up that is never coming back. Also errors with
+     *         {@link PreDispatchRefusalException} when called from this handover's own code, live or not, because
+     *         the delivery cannot start before that code returns, so this call could only answer before the payload
+     *         is delivered. Such a call does not flip {@link #refusesPermanently()}.
      */
     public Mono<Boolean> acceptIfLive(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
@@ -545,6 +547,11 @@ public final class ReactiveHandover<T, K> {
             Throwable failure = refusalCause(ownCode);
             if (failure != null) {
                 ackSink.error(refusal(failure));
+                return;
+            }
+            if (ownCode) {
+                // Its delivery cannot start before the code that fed it returns, so true could only mean queued
+                ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.acceptedOrDeferredFromOwnDelivery(noun)));
                 return;
             }
             if (!live || liveDeliveryPaused()) {
@@ -556,7 +563,7 @@ public final class ReactiveHandover<T, K> {
                 ackSink.success(Outcome.NOT_LIVE);
                 return;
             }
-            bufferOrDeliverLive(payload, ackSink, ownCode);
+            bufferOrDeliverLive(payload, ackSink, false);
         }).map(outcome -> outcome == Outcome.APPLIED);
     }
 

@@ -345,13 +345,14 @@ public final class DomainEventFeed<E> {
      * reused for every call after that against the same registration, rather than rebuilt each time.
      * <p>
      * Reports {@link RoutingOutcome#DEFERRED} rather than {@link RoutingOutcome#DELIVERED} for a matching event
-     * that only reaches the buffer, not the view, whatever the reason. One evaluation decides both the live check
-     * and the accept together, under the same lock the underlying handover already holds for that decision, so
+     * that this call does not fold, whatever the reason, and never buffers it. One evaluation decides both the live
+     * check and the accept together, under the same lock the underlying handover already holds for that decision, so
      * there is no window between "is it live" and "hand it over" for a concurrent {@link #goLive(String)} to land
      * in. That covers an event fed before {@link #catchUpAll()}/{@link #catchUp(String)} or
      * {@link #goLive(String)} has been called at all, one fed while a replay is still running and buffering ahead
-     * of its own drain, and one fed after {@link #stopCatchUp()} interrupted a replay in flight. Redelivering a
-     * {@link RoutingOutcome#DEFERRED} event is always safe: this feed's own de-dup key absorbs a repeat that
+     * of its own drain, one fed after {@link #stopCatchUp()} interrupted a replay before the projection went live,
+     * and one fed while another thread is still folding the same event. Redelivering a
+     * {@link RoutingOutcome#DEFERRED} event is always safe. This feed's own de-dup key absorbs a repeat that
      * already landed, and a caller with nowhere else to redeliver from, {@link #goLive(String)} exists precisely
      * for a registration whose events are not in the local store, gets the same outcome either way, since this
      * feed has no way to know in advance which kind of registration it is fielding an event for.

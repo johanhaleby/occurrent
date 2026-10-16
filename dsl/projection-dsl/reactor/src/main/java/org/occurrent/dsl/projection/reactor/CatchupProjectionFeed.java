@@ -249,14 +249,22 @@ public final class CatchupProjectionFeed<E> {
      * {@link RoutingOutcome#DEFERRED} covers an event fed before {@link #catchUp()} or {@link #goLive()} has taken the
      * feed live, while a replay runs, and after {@link #stopCatchUp()} stopped a replay before the feed went live.
      * {@link RoutingOutcome#DELIVERED} also covers an event the replay or an earlier delivery already folded, which is
-     * not folded again. Called from inside this feed's fold, it completes with {@link RoutingOutcome#DELIVERED} once
-     * the event is queued rather than once it is folded, for the reason {@link #acceptAndWait(Object)} gives.
+     * not folded again while its id is among the latest {@link CatchupThenLiveOptions#dedupCacheSize()} ids this feed
+     * remembers. An event older than that is folded a second time, and the {@link Mono} completes with
+     * {@link RoutingOutcome#DELIVERED} once that fold has completed. An earlier delivery of the same event that is
+     * still queued or being folded finishes first, since this feed folds one event at a time.
      * <p>
      * The returned {@link Mono} errors with an {@link IllegalStateException} instead when the feed is failing or has
      * failed, and when the queue of live events waiting for their fold is full, a size
      * {@link CatchupThenLiveOptions#maxBufferedEvents()} sets. Leave the message unacknowledged on either error, so
      * the broker delivers it again. A full queue empties as the fold catches up, while a failed feed never accepts
      * again. An error from the projection's fold is passed on as well.
+     * <p>
+     * Called from inside this feed's fold, live or not, it errors with an {@link IllegalStateException} too. This feed
+     * folds one event at a time, so the event could not be folded before the answer, and
+     * {@link RoutingOutcome#DELIVERED} would report an event as folded that is only queued. Call
+     * {@link #acceptAndWait(Object)} from inside the fold instead. The fold's call is recognized the way
+     * {@link #acceptAndWait(Object)} describes.
      *
      * @param event The domain event received from the external source.
      * @return A {@link Mono} that completes with {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#DEFERRED}.

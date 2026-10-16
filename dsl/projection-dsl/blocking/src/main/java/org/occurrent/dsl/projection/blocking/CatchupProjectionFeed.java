@@ -225,7 +225,12 @@ public final class CatchupProjectionFeed<E> {
      * {@link RoutingOutcome#DEFERRED} covers an event fed before {@link #catchUp()} or {@link #goLive()} has taken the
      * feed live, while a replay runs, after {@link #stopCatchUp()} stopped a replay before the feed went live, and while
      * another delivery of the same event is still being folded. {@link RoutingOutcome#DELIVERED} also covers an event
-     * the replay or an earlier delivery already folded, which is not folded again.
+     * the replay or an earlier delivery already folded, which is not folded again while its id is among the latest
+     * {@link CatchupThenLiveOptions#dedupCacheSize()} ids this feed remembers. An event older than that is folded a
+     * second time, and this returns {@link RoutingOutcome#DELIVERED} once that fold has returned.
+     * <p>
+     * Called from inside this feed's fold once the feed is live, it folds the event on that same thread, before this
+     * returns. Before the feed is live it returns {@link RoutingOutcome#DEFERRED} there too.
      * <p>
      * Unlike {@link #acceptAndWait(Object)}, this never waits for a replay, so a Kafka consumer keeps polling while the
      * catch-up runs. It folds with no metadata, see {@link #acceptOrDefer(EventMetadata, Object)}.

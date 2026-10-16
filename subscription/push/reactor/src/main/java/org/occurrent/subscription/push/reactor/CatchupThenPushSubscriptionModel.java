@@ -88,9 +88,10 @@ import java.util.function.Supplier;
  * live. A replay that ends before that writes no catch-up marker, so the next replay hands the handler the same
  * history again. The model recognizes the write when the handler returns it as part of the {@link Mono} it returns,
  * or subscribes it, blocking or not, on the thread it was called on. A handler that blocks on the write from a thread
- * it switched to still waits for itself. The same holds for {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} called
- * from the handler, which decides live or not as for any caller, and reports
- * {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} once the event is queued.
+ * it switched to still waits for itself. {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} called from the
+ * handler, recognized the same way, is refused for this subscription instead, live or not, and reported as
+ * {@link org.occurrent.subscription.RoutingOutcome#NOT_DELIVERABLE}, since it could only report the event as queued
+ * rather than applied.
  * <p>
  * When applying an event written that way fails, the write has already returned. The subscription then starts
  * failing, and a failed catch-up starts it failing the same way. It deletes its catch-up marker, refuses every later

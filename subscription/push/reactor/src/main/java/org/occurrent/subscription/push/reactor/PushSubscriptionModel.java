@@ -165,8 +165,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      *     <li>{@link RoutingOutcome#DELIVERED} once the registered handler has applied the event, or once a
      *     {@link CatchupThenPushSubscriptionModel} in front finds it had already applied it, from its replay or from
      *     an earlier delivery. With a {@link CatchupThenPushSubscriptionModel} in front, an event offered while an
-     *     earlier delivery of the same event is still running waits behind that delivery. Called from inside that
-     *     model's handler, it means the event is queued behind that handler instead.</li>
+     *     earlier delivery of the same event is still running waits behind that delivery.</li>
      *     <li>{@link RoutingOutcome#FILTERED} when the subscription's filter declined the event. Redelivering it to
      *     the same filter would only be declined again.</li>
      *     <li>{@link RoutingOutcome#DEFERRED} when a {@link CatchupThenPushSubscriptionModel} in front has not gone
@@ -178,7 +177,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      *     <li>{@link RoutingOutcome#REFUSED} when the subscription is failing or has failed, which a failed catch-up
      *     in front or a failed event its handler wrote starts. No redelivery gets past that, so stop consuming.</li>
      *     <li>{@link RoutingOutcome#NOT_DELIVERABLE} for any other refusal decided before the handler would run, a
-     *     full live buffer in the catch-up in front, say. Apply the listener's failure policy.</li>
+     *     full live buffer in the catch-up in front, say. Apply the listener's failure policy. A call from inside the
+     *     handler of a {@link CatchupThenPushSubscriptionModel} in front is refused this way for that model's
+     *     subscription, live or not, since the event could only be queued behind that handler, not applied.</li>
      * </ul>
      * <p>
      * The {@link Mono} errors instead of completing with an outcome only when the subscription's filter or the

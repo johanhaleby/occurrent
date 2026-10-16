@@ -230,7 +230,9 @@ public final class DomainEventFeed<E> {
      * Once the projection is live the returned {@link Mono} can error with an {@link IllegalStateException} when the
      * queue of live events waiting for the fold is full. It also errors when the projection's catch-up has failed, and
      * when no projection is registered, for the reason {@link #acceptAndWait(Object)} gives. Leave the message
-     * unacknowledged on any of these errors. {@link CatchupProjectionFeed#acceptOrDefer(Object)} has the details.
+     * unacknowledged on any of these errors. Called from inside the registered projection's fold, it errors with an
+     * {@link IllegalStateException} as well, since the event could only be queued by then, not folded.
+     * {@link CatchupProjectionFeed#acceptOrDefer(Object)} has the details.
      */
     public Mono<RoutingOutcome> acceptOrDefer(E event) {
         Objects.requireNonNull(event, "event cannot be null");
@@ -257,6 +259,8 @@ public final class DomainEventFeed<E> {
      * {@link EventMetadata} from {@link EventMetadata#from(CloudEvent)}, and the returned {@link Mono} completes once
      * it is folded and errors when it is not, the way {@link #acceptAndWait(Object)} does, rather than completing with
      * {@link RoutingOutcome#DEFERRED}. Acknowledge the message once it completes, whether the event matched or not.
+     * Called from inside the registered projection's fold, it completes once a matching event is queued, see
+     * {@link CatchupProjectionFeed#acceptAndWait(Object)}.
      * <p>
      * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
      * {@link #acceptAndWait(Object)} gives, and with {@link UnreadableLiveFilterException} for the reasons
@@ -298,7 +302,8 @@ public final class DomainEventFeed<E> {
      * Completes with {@link RoutingOutcome#DEFERRED} rather than {@link RoutingOutcome#DELIVERED} for a matching
      * event that arrives while the registered projection is not live yet. That covers an event fed before
      * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has been called at all, one fed
-     * while a replay is still running, and one fed after {@link #stopCatchUp()} interrupted a replay in flight. The
+     * while a replay is still running, and one fed after {@link #stopCatchUp()} interrupted a replay before the
+     * projection went live. The
      * underlying {@code ReactiveHandover.acceptIfLive} refuses such an event outright rather than buffering it, so
      * the returned {@link Mono} completes with {@link RoutingOutcome#DEFERRED} right away, never waiting on a
      * replay or a drain that might resolve it only much later. One evaluation decides both the live check and the
@@ -320,9 +325,9 @@ public final class DomainEventFeed<E> {
      * the caller's own source, the broker or listener feeding this method, actually redelivers it. Losing it there
      * is a caller-side loss, not this feed's.
      * <p>
-     * Called from inside the registered projection's fold, it decides between {@link RoutingOutcome#DELIVERED} and
-     * {@link RoutingOutcome#DEFERRED} the same way, and completes with {@link RoutingOutcome#DELIVERED} once the event
-     * is queued rather than once it is folded, see {@link CatchupProjectionFeed#acceptAndWait(Object)}.
+     * Called from inside the registered projection's fold, it errors with an {@link IllegalStateException} for a
+     * matching event, see {@link CatchupProjectionFeed#acceptOrDefer(Object)}. Call
+     * {@link #acceptAndWaitCloudEvent(CloudEvent)} from there instead.
      * <p>
      * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
      * {@link #acceptAndWait(Object)} gives, rather than completing with {@link RoutingOutcome#NOT_DELIVERABLE}. This feed,
