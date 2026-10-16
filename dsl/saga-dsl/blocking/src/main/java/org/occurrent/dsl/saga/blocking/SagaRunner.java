@@ -81,7 +81,7 @@ import static java.util.Objects.requireNonNull;
  *   <li><strong>Event path.</strong> A failure (including a {@link SagaConcurrencyException} once the retries are
  *       exhausted) propagates to the subscription model, and the whole step is retried wherever that model offers
  *       the event again. Whether it does is the model's own business. A push feed lets the listener decide, and on
- *       a consume-side broker bridge the choice is set with {@code DeliveryFailurePolicy}.
+ *       a broker source the choice is set with {@code DeliveryFailurePolicy}.
  *       <p>
  *       What a failing event holds up is decided by whatever feeds the subscription rather than by the runner, and
  *       {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what that can be.
@@ -113,7 +113,7 @@ import static java.util.Objects.requireNonNull;
  *       again, once the converter or the id extractor is repaired the event is applied in the order it was written,
  *       with nothing to feed again. What it holds up in the meantime is decided by whatever feeds the subscription, the
  *       same as for an instance that keeps failing. Whether it is offered again is the subscription model's to decide, and
- *       {@code DeliveryFailurePolicy} is where a consume-side broker bridge's choice is configured. The first
+ *       {@code DeliveryFailurePolicy} is where a broker source's choice is configured. The first
  *       failure is logged at WARN and, after that, at ERROR once per {@code quarantineAfter} when it is set or a
  *       fixed five-minute default when it is not, naming the event and the exception that stopped it, so that ERROR
  *       fires for as long as the event keeps being offered, never on a
@@ -307,7 +307,7 @@ public final class SagaRunner<E, C> {
      * 0.34.0.
      * <p>
      * Refusing it rather than warning about it is the point. Quarantining means returning normally, which acknowledges
-     * the event to whatever fed it. On a feed that keeps nothing, a queue reached through a broker bridge, that is what
+     * the event to whatever fed it. On a feed that keeps nothing, a queue reached through a broker source, that is what
      * stages the offset and moves past the record, so the one copy this saga could ever be given is gone at the moment
      * of quarantine. Between an instance left active and an event this saga would be acknowledging away,
      * this refuses the acknowledgement and leaves what happens to the event to whatever fed it. It says so at

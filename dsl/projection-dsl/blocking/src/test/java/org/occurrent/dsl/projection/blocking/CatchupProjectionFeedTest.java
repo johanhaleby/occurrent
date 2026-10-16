@@ -295,7 +295,7 @@ class CatchupProjectionFeedTest {
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
                 "counter", view, Filter.all(), store, converter, Counted::eventId, null);
 
-        // "2" also arrives live before the catch-up completes, carrying the metadata a broker bridge reads off the
+        // "2" also arrives live before the catch-up completes, carrying the metadata a broker source reads off the
         // message rather than the no-metadata overload the test above uses.
         FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(metadataOf(store, "2"), new Counted("2")));
         feed.catchUp();
@@ -1109,7 +1109,7 @@ class CatchupProjectionFeedTest {
     }
 
     // The stored CloudEvent's metadata, which is where the append id lives, so a live copy fed here carries what a
-    // broker bridge would have read off the message.
+    // broker source would have read off the message.
     private static EventMetadata metadataOf(InMemoryEventStore store, String eventId) {
         try (Stream<CloudEvent> events = store.readInPositionOrder(Filter.all(), PositionRange.fromBeginning())) {
             return events.filter(event -> event.getId().equals(eventId))

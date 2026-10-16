@@ -297,7 +297,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
 
     /**
      * Nothing covered the three lifecycle states before this. They are the only outcomes a caller can see without
-     * an exception coming with them, which is what lets a broker bridge hold and pace them instead of sending them
+     * an exception coming with them, which is what lets a broker source hold and pace them instead of sending them
      * through a failure policy, so each one is asserted on its own rather than through a shared helper.
      */
     @Test

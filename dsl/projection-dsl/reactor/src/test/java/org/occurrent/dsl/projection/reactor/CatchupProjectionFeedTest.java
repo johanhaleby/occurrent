@@ -678,7 +678,7 @@ class CatchupProjectionFeedTest {
                         Projections.reactiveUpdateWithMetadata(projection(), repository, "counter"), "counter", appliedAppends),
                 Filter.all(), stampedReader(appendId, "1", "2"), converter, Counted::eventId, null);
 
-        // "2" also arrives live before the catch-up completes, carrying the metadata a broker bridge reads off the
+        // "2" also arrives live before the catch-up completes, carrying the metadata a broker source reads off the
         // message rather than the no-metadata overload the test above uses.
         feed.accept(EventMetadata.from(stamped(appendId, "2")), new Counted("2")).subscribe();
         feed.catchUp().block();

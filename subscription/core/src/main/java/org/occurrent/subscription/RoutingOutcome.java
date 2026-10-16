@@ -23,7 +23,7 @@ package org.occurrent.subscription;
  * A caller that acknowledges an externally sourced event (a broker message, say) reads {@link #disposition()}
  * rather than testing the six constants itself. That answer is one of four {@link Disposition} values, and it is
  * what decides whether the event is acknowledged, held for later, sent through the caller's own failure policy, or
- * stopped on. {@link #mayAcknowledge()} answers the one question a broker bridge asks most.
+ * stopped on. {@link #mayAcknowledge()} answers the one question a broker source asks most.
  * <p>
  * {@link #DELIVERED} and {@link #FILTERED} describe an event a filter evaluated and either accepted or declined on
  * its own terms, which is why those two share a disposition. The other four each say something different about why
@@ -123,7 +123,7 @@ public enum RoutingOutcome {
 
     /**
      * What a caller that owns the event does with it now. Four answers over these six outcomes, so a broker
-     * bridge decides on this rather than on the constants themselves.
+     * source decides on this rather than on the constants themselves.
      *
      * @return the disposition this outcome calls for
      */

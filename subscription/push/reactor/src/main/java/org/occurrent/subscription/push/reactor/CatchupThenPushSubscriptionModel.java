@@ -344,7 +344,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // fromRunnable rather than a plain call, so a listener that throws errors the payload's own
                 // acknowledgement instead of the pipeline that was about to acknowledge it. On boundedElastic
                 // because a recording listener writes to a store, and a payload emitted into the live sink is
-                // delivered inline on whichever thread emitted it, which for a broker bridge is one that must not
+                // delivered inline on whichever thread emitted it, which for a broker source is one that must not
                 // block.
                 return Mono.<Void>fromRunnable(() -> {
                     CatchupListener listener = catchupListeners.get(subscriptionId);

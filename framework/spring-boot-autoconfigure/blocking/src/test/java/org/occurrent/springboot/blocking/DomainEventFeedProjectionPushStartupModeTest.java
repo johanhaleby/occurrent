@@ -117,7 +117,7 @@ class DomainEventFeedProjectionPushStartupModeTest {
                 });
     }
 
-    // The whole path from a broker bridge down. The replay applies the event, the bridge offers the concurrent copy of
+    // The whole path from a broker source down. The replay applies the event, the source offers the concurrent copy of
     // it, the copy is de-duplicated against the replay rather than applied twice, and the append is recorded anyway. A
     // recording projection whose only delivery of an append is one the replay already made used to apply the event and
     // record nothing, so waitUntilApplied on that append ran to its timeout.
@@ -133,7 +133,7 @@ class DomainEventFeedProjectionPushStartupModeTest {
 
                     @SuppressWarnings("unchecked")
                     DomainEventFeed<TestEvent> feed = context.getBean(DomainEventFeed.class);
-                    // Offered while the replay still holds the event, so the bridge is told to offer it again rather
+                    // Offered while the replay still holds the event, so the source is told to offer it again rather
                     // than acknowledge it.
                     assertThat(feed.acceptCloudEvent(historyEvent()))
                             .as("the copy offered during the replay")
@@ -359,7 +359,7 @@ class DomainEventFeedProjectionPushStartupModeTest {
     }
 
     // The single history event, stamped with the append it came from, built fresh each call because the replay and a
-    // bridge offering the concurrent copy both need it.
+    // source offering the concurrent copy both need it.
     private static CloudEvent historyEvent() {
         return OccurrentCloudEventExtension.withAppendId(cloudEvent("history"), HISTORY_APPEND.value().toString());
     }

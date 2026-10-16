@@ -266,7 +266,7 @@ public final class SagaExecutionSupport {
      * the budget would otherwise put the clock back to zero forever.
      * <p>
      * The budget is wall-clock rather than an attempt count because the retry loop is not always Occurrent's. On the
-     * MongoDB subscription models it is a {@code RetryStrategy} the user can replace, and behind a broker bridge it is
+     * MongoDB subscription models it is a {@code RetryStrategy} the user can replace, and behind a broker source it is
      * the broker's own redelivery. Those run at unrelated rates, so a count means a different amount of time on each
      * while five minutes means five minutes on both. It also follows that a transport which never re-offers a failing
      * input can never reach the budget, and such a saga keeps the behaviour it has always had.

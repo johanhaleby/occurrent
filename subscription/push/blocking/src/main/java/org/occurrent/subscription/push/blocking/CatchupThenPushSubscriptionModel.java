@@ -402,14 +402,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * only once the catch-up has reached live, {@code false} while replaying or buffering ahead of its own drain, and
      * {@code false} forever after a catch-up failure on a thread that was not interrupted.
      * <p>
-     * A CloudEvent-level broker bridge that feeds the live {@link PushSubscriptionModel} this model wraps through
+     * A CloudEvent-level broker source that feeds the live {@link PushSubscriptionModel} this model wraps through
      * {@link PushSubscriptionModel#acceptRedeliverable(io.cloudevents.CloudEvent)} needs no call to this method to
      * decide whether to acknowledge. That call already refuses, rather than buffers, a message this catch-up would
-     * only have buffered, reported {@link org.occurrent.subscription.RoutingOutcome#DEFERRED} so the bridge
-     * redelivers it instead of acknowledging. This method exists only for a bridge that wants to pace itself,
+     * only have buffered, reported {@link org.occurrent.subscription.RoutingOutcome#DEFERRED} so the source
+     * redelivers it instead of acknowledging. This method exists only for a source that wants to pace itself,
      * skipping a fetch it can predict would come back {@code DEFERRED} rather than pulling the message off the broker
      * and immediately handing it back. It is an optional throughput optimization, never a correctness dependency,
-     * since a bridge that never calls this acknowledges the same messages, just after a few more refuse-and-redeliver
+     * since a source that never calls this acknowledges the same messages, just after a few more refuse-and-redeliver
      * round trips than one that does. {@code false} for a {@code subscriptionId} this model never subscribed, or
      * already cancelled, the safe answer for an id nothing here is tracking.
      *
