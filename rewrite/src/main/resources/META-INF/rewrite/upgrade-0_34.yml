@@ -53,8 +53,24 @@ description: >-
   family under one that maps a hierarchy onto a single CloudEvent type string down to nothing at all under one
   that maps each type to its own class name, exactly as before this release, and section 3 names that shape
   and its fix. See section 3 of doc/migration/upgrading-to-0.34.0.md for the manual steps.
+  Also renames accept(..) to acceptAndWait(..) on the blocking and reactor DomainEventFeed and
+  CatchupProjectionFeed. The deprecated accept(..) forwards to acceptAndWait(..), so code that called accept(..) runs the
+  same as before. A listener whose broker delivers an unacknowledged message again can call acceptOrDefer(..) instead,
+  which section 12 of doc/migration/upgrading-to-0.34.0.md describes.
 recipeList:
   - org.occurrent.MigrateSagaJoinToStepCondition_0_34
   - org.occurrent.MigrateStoreNeutralMongoConfigKeys_0_34
   - org.occurrent.MigrateAppendResultRecordPattern_0_34
   - org.occurrent.MigrateReactorCancelSubscriptionReturnType_0_34
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.dsl.projection.blocking.DomainEventFeed accept(..)
+      newMethodName: acceptAndWait
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.dsl.projection.blocking.CatchupProjectionFeed accept(..)
+      newMethodName: acceptAndWait
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.dsl.projection.reactor.DomainEventFeed accept(..)
+      newMethodName: acceptAndWait
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.dsl.projection.reactor.CatchupProjectionFeed accept(..)
+      newMethodName: acceptAndWait
