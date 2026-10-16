@@ -80,7 +80,7 @@
             <artifactId>occurrent-subscription-push-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- KafkaDomainEventSource holds a DomainEventFeed and calls its acceptCloudEvent(...), per ADR 133
+        <!-- KafkaDomainEventSource holds a DomainEventFeed and calls its acceptOrDeferCloudEvent(...), per ADR 133
              decision 5. -->
         <dependency>
             <groupId>org.occurrent</groupId>
@@ -171,7 +171,7 @@
             <scope>test</scope>
         </dependency>
         <!-- A trivial PositionOrderedReader for the domain source tests' DomainEventFeed, which never actually
-             replays in these tests (they only feed acceptCloudEvent(...)), so an in-memory store is enough. -->
+             replays in these tests (they only feed acceptOrDeferCloudEvent(...)), so an in-memory store is enough. -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-inmemory</artifactId>

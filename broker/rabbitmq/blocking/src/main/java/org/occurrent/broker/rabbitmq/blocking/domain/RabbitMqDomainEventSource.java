@@ -62,11 +62,11 @@ import static java.util.Objects.requireNonNull;
 /**
  * Feeds a RabbitMQ queue into a {@link DomainEventFeed}, the domain-level consume side ADR 133 decision 5
  * describes. Rebuilds each message as a {@link CloudEvent} through {@link RabbitMqCloudEventMapper} and calls
- * {@link DomainEventFeed#acceptCloudEvent(CloudEvent)}, which is where the matching, the decoding and the delivery
+ * {@link DomainEventFeed#acceptOrDeferCloudEvent(CloudEvent)}, which is where the matching, the decoding and the delivery
  * all happen. This source does no filtering of its own, since the feed is the only thing that can decide per ADR 133
  * decision 5.
  * <p>
- * <strong>Acknowledgement</strong> follows the {@link RoutingOutcome} {@code acceptCloudEvent(...)} returns, exactly
+ * <strong>Acknowledgement</strong> follows the {@link RoutingOutcome} {@code acceptOrDeferCloudEvent(...)} returns, exactly
  * as {@link RabbitMqCloudEventSource} follows the one its own model reports, and by reading the same
  * {@link RoutingOutcome#disposition()} that source reads. {@link RoutingOutcome.Disposition#ACKNOWLEDGE}
  * acknowledges. {@link RoutingOutcome.Disposition#FAIL} and a thrown exception both apply this source's configured
@@ -118,12 +118,12 @@ import static java.util.Objects.requireNonNull;
  * starts or cancels this source's own AMQP consumer to match, consuming only once a projection is registered and its
  * catch-up-then-live transition has actually reached live, not merely started. This exists for the same reason
  * {@link RabbitMqCloudEventSource} polls {@code isRunning(...)}. Without the registration half, a message arriving
- * before the application registers its projection would hit {@code acceptCloudEvent(...)}'s
+ * before the application registers its projection would hit {@code acceptOrDeferCloudEvent(...)}'s
  * {@link IllegalStateException} refusal on every delivery, and under {@link DeliveryFailurePolicy#REDELIVER} that is
  * an instant requeue-and-redeliver loop, not a wait. Without the readiness half, a message arriving before the
  * application calls {@code catchUpAll()}/{@code catchUp(...)} or {@code goLive(...)}, or while a
  * {@code catchUpAll()}/{@code catchUp(...)} replay is still actively running, would only ever buffer with nothing
- * behind it, which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#DEFERRED} rather than
+ * behind it, which {@code acceptOrDeferCloudEvent(...)} answers with {@link RoutingOutcome#DEFERRED} rather than
  * {@link RoutingOutcome#DELIVERED} for exactly that reason (see its own javadoc): refused outright rather than
  * buffered, bypassing {@link DeliveryFailurePolicy} regardless of what this source is configured with, so
  * {@code PARK} can never fire for a message that only needs the replay to catch up. A {@code DEFERRED} delivery is
@@ -131,7 +131,7 @@ import static java.util.Objects.requireNonNull;
  * with {@link Builder#prefetchCount(int)} left at its default of one, the broker sends nothing further on this
  * consumer until the next poll releases it, bounding a replay to at most one redelivery per
  * {@link Builder#pollInterval(Duration)} rather than saturating the channel for the whole replay. Feeding
- * {@code acceptCloudEvent(...)} can still throw {@link IllegalStateException} despite the poll, for the narrow race where the check ran just before the one
+ * {@code acceptOrDeferCloudEvent(...)} can still throw {@link IllegalStateException} despite the poll, for the narrow race where the check ran just before the one
  * registration this feed ever accepts. That case, unlike {@link UnreadableLiveFilterException}, applies the
  * configured {@link DeliveryFailurePolicy} like any other failure, since it is transient rather than permanent.
  * <p>
@@ -148,7 +148,7 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * <strong>A permanently failed catch-up stops this source, the same as {@link UnreadableLiveFilterException}.</strong>
  * Once the registered projection's own catch-up-then-live handover has failed, that failure never clears, so
- * {@link DomainEventFeed#acceptCloudEvent(CloudEvent)} refuses every later event. This source asks the feed rather
+ * {@link DomainEventFeed#acceptOrDeferCloudEvent(CloudEvent)} refuses every later event. This source asks the feed rather
  * than reading the exception's type. {@link DomainEventFeed#refusesPermanently()} is false until this feed's own
  * catch-up throws and true for good afterwards, so reading it inside the failure branch answers about this feed
  * and nothing else. A handler that reached into some other projection or subscription model whose catch-up has
@@ -267,7 +267,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     /**
      * @param connection The connection this source creates its own {@link Channel} on for consuming, declaring
      *                   topology, and acknowledging.
-     * @param feed       The feed this source calls {@link DomainEventFeed#acceptCloudEvent(CloudEvent)} on.
+     * @param feed       The feed this source calls {@link DomainEventFeed#acceptOrDeferCloudEvent(CloudEvent)} on.
      * @param queue      The queue this source consumes from, and declares unless {@link Builder#declareTopology(boolean)}
      *                   is set to {@code false}.
      */
@@ -455,7 +455,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
 
         RoutingOutcome outcome;
         try {
-            outcome = feed.acceptCloudEvent(cloudEvent);
+            outcome = feed.acceptOrDeferCloudEvent(cloudEvent);
         } catch (UnreadableLiveFilterException e) {
             log.error("The registration on queue \"{}\"'s feed has a data payload filter this feed cannot answer " +
                     "live. This is a permanent configuration error; stopping this source rather than redelivering " +
@@ -506,14 +506,14 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
             }
             case HOLD -> {
                 // Held unacked rather than nacked here, deliberately. Never takes consumeLock here, see
-                // heldDeferredDeliveryTags's own javadoc for the full reasoning. DomainEventFeed#acceptCloudEvent
+                // heldDeferredDeliveryTags's own javadoc for the full reasoning. DomainEventFeed#acceptOrDeferCloudEvent
                 // reports DEFERRED for this today, not UNAVAILABLE, per its own javadoc, and both share this
                 // disposition either way.
                 heldDeferredDeliveryTags.add(deliveryTag);
                 yield RoutingOutcome.Disposition.HOLD;
             }
             case FAIL -> {
-                // DomainEventFeed#acceptCloudEvent does not report NOT_DELIVERABLE today, per its own javadoc, so
+                // DomainEventFeed#acceptOrDeferCloudEvent does not report NOT_DELIVERABLE today, per its own javadoc, so
                 // this branch is what a later one would reach rather than a path a shipped feed takes.
                 log.debug("A message on queue \"{}\", delivery tag {}, could not be delivered. Routing it " +
                         "through the configured delivery failure policy.", queue, deliveryTag);

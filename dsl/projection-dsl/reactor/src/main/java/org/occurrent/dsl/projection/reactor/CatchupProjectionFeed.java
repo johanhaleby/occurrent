@@ -29,6 +29,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
@@ -45,16 +46,18 @@ import java.util.function.Function;
  * <strong>domain events</strong> and gives it a one-time <strong>catch-up</strong>, without the double
  * encode/decode of routing domain events through the CloudEvent push feed.
  * <p>
- * The live path is conversion-free: {@link #accept(Object)} folds a domain event straight into the read model. Only the
+ * The live path is conversion-free: {@link #acceptAndWait(Object)} folds a domain event straight into the read model. Only the
  * catch-up reads the event store (CloudEvents) and decodes each replayed event once with the {@link CloudEventConverter}.
  * The replay, a catch-up-complete marker step, and the live feed are composed into one ordered pipeline with
  * {@link Flux#concat}: the replay is consumed first, then the marker is recorded, then live events buffered in a bounded
  * unicast sink during the replay flow through, de-duplicated by an event-id extracted from the <em>domain</em> event.
  * Because the pipeline is serialized by {@code concatMap}, the de-dup cache needs no locking.
  * <p>
- * Contract (see ADR 62): catch-up is Occurrent's job, live-resume is the broker's. A live event's {@code accept}
- * {@link Mono} completes only after its handler runs, so the listener can acknowledge after processing. Delivery is
- * at-least-once, so the fold must be idempotent. The buffer is bounded and fails loud on overflow.
+ * Contract (see ADR 62): catch-up is Occurrent's job, live-resume is the broker's. The {@link Mono} from
+ * {@link #acceptAndWait(Object)} completes only after its handler runs, so the listener can acknowledge after
+ * processing. {@link #acceptOrDefer(Object)} completes with {@link RoutingOutcome#DEFERRED} instead of waiting while
+ * the feed is not live. Delivery is at-least-once, so the fold must be idempotent. The buffer is bounded and fails
+ * loud on overflow.
  * <p>
  * The replay decodes CloudEvents, so {@link EventMetadata} is available there and is folded with the event. A live
  * domain event arrives with no CloudEvent behind it and is folded with {@link EventMetadata#empty()}. A projection
@@ -158,7 +161,7 @@ public final class CatchupProjectionFeed<E> {
      * {@link EventMetadata}. Prefer this over
      * {@link #create(String, Function, Filter, PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage)}
      * when the fold reads metadata: the replay always supplies the metadata it decoded from the CloudEvent, and the live
-     * path supplies whatever the source passed to {@link #accept(EventMetadata, Object)}.
+     * path supplies whatever the source passed to {@link #acceptAndWait(EventMetadata, Object)}.
      */
     public static <E> CatchupProjectionFeed<E> create(
             String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter,
@@ -211,7 +214,7 @@ public final class CatchupProjectionFeed<E> {
      * @param event The domain event received from the external source.
      * @return A {@link Mono} that completes when the event has been folded.
      */
-    public Mono<Void> accept(E event) {
+    public Mono<Void> acceptAndWait(E event) {
         Objects.requireNonNull(event, "event cannot be null");
         return handover.accept(new DeliveredEvent<>(EventMetadata.empty(), event));
     }
@@ -220,28 +223,89 @@ public final class CatchupProjectionFeed<E> {
      * Feed a live domain event together with the {@link EventMetadata} the source knows about it, so a projection keyed on
      * the stream id, version or position works on the live path and not only during the catch-up replay. Use this when the
      * broker message carries those values (as headers, say) and your listener can read them. Otherwise call
-     * {@link #accept(Object)}, which folds with {@link EventMetadata#empty()}.
+     * {@link #acceptAndWait(Object)}, which folds with {@link EventMetadata#empty()}.
      *
      * <p>
-     * Completes and errors for the same reasons {@link #accept(Object)} does.
+     * Completes and errors for the same reasons {@link #acceptAndWait(Object)} does.
      *
      * @param metadata The metadata the source has for this event.
      * @param event    The domain event received from the external source.
      * @return A {@link Mono} that completes when the event has been folded.
      */
-    public Mono<Void> accept(EventMetadata metadata, E event) {
+    public Mono<Void> acceptAndWait(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
         Objects.requireNonNull(event, "event cannot be null");
         return handover.accept(new DeliveredEvent<>(metadata, event));
     }
 
-    // Package-private. Lets DomainEventFeed.acceptCloudEvent(CloudEvent) refuse rather than buffer an event it can
-    // redeliver, one evaluation deciding both the live check and the accept, see ReactiveHandover.acceptIfLive(..)
-    // for why that matters.
-    Mono<Boolean> acceptIfLive(EventMetadata metadata, E event) {
+    /**
+     * Feed a live domain event without waiting for the catch-up. Once the feed is live the event is queued for its fold,
+     * and the returned {@link Mono} completes with {@link RoutingOutcome#DELIVERED} once it has been folded. Before that
+     * it completes with {@link RoutingOutcome#DEFERRED} right away, and the event is not kept anywhere. Call this from a
+     * listener whose broker delivers a message again when it is not acknowledged. Acknowledge the message on
+     * {@link RoutingOutcome#DELIVERED} and leave it unacknowledged on {@link RoutingOutcome#DEFERRED}, so the broker
+     * delivers it again.
+     * <p>
+     * {@link RoutingOutcome#DEFERRED} covers an event fed before {@link #catchUp()} or {@link #goLive()} has taken the
+     * feed live, while a replay runs, and after {@link #stopCatchUp()} stopped a replay before the feed went live.
+     * {@link RoutingOutcome#DELIVERED} also covers an event the replay or an earlier delivery already folded, which is
+     * not folded again. Called from inside this feed's fold, it completes with {@link RoutingOutcome#DELIVERED} once
+     * the event is queued rather than once it is folded, for the reason {@link #acceptAndWait(Object)} gives.
+     * <p>
+     * The returned {@link Mono} errors with an {@link IllegalStateException} instead when the feed is failing or has
+     * failed, and when the queue of live events waiting for their fold is full, a size
+     * {@link CatchupThenLiveOptions#maxBufferedEvents()} sets. Leave the message unacknowledged on either error, so
+     * the broker delivers it again. A full queue empties as the fold catches up, while a failed feed never accepts
+     * again. An error from the projection's fold is passed on as well.
+     *
+     * @param event The domain event received from the external source.
+     * @return A {@link Mono} that completes with {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#DEFERRED}.
+     */
+    public Mono<RoutingOutcome> acceptOrDefer(E event) {
+        Objects.requireNonNull(event, "event cannot be null");
+        return outcome(handover.acceptIfLive(new DeliveredEvent<>(EventMetadata.empty(), event)));
+    }
+
+    /**
+     * As {@link #acceptOrDefer(Object)}, together with the {@link EventMetadata} the source knows about the event, for
+     * a projection keyed on the stream id, version or position.
+     *
+     * @param metadata The metadata the source has for this event.
+     * @param event    The domain event received from the external source.
+     * @return A {@link Mono} that completes and errors for the reasons {@link #acceptOrDefer(Object)} gives.
+     */
+    public Mono<RoutingOutcome> acceptOrDefer(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
         Objects.requireNonNull(event, "event cannot be null");
-        return handover.acceptIfLive(new DeliveredEvent<>(metadata, event));
+        return outcome(handover.acceptIfLive(new DeliveredEvent<>(metadata, event)));
+    }
+
+    /**
+     * Forwards to {@link #acceptAndWait(Object)}.
+     *
+     * @deprecated Use {@link #acceptAndWait(Object)}, which completes once the event is folded, or
+     *             {@link #acceptOrDefer(Object)}, which completes with {@link RoutingOutcome#DEFERRED} instead of
+     *             waiting.
+     */
+    @Deprecated(since = "0.34.0", forRemoval = true)
+    public Mono<Void> accept(E event) {
+        return acceptAndWait(event);
+    }
+
+    /**
+     * Forwards to {@link #acceptAndWait(EventMetadata, Object)}.
+     *
+     * @deprecated Use {@link #acceptAndWait(EventMetadata, Object)}, which completes once the event is folded, or
+     *             {@link #acceptOrDefer(EventMetadata, Object)}, which completes with {@link RoutingOutcome#DEFERRED}
+     *             instead of waiting.
+     */
+    @Deprecated(since = "0.34.0", forRemoval = true)
+    public Mono<Void> accept(EventMetadata metadata, E event) {
+        return acceptAndWait(metadata, event);
+    }
+
+    private static Mono<RoutingOutcome> outcome(Mono<Boolean> delivered) {
+        return delivered.map(folded -> folded ? RoutingOutcome.DELIVERED : RoutingOutcome.DEFERRED);
     }
 
     /**
@@ -396,14 +460,14 @@ public final class CatchupProjectionFeed<E> {
      * that buffers during a replay writes that buffer in {@code replayCompleted()}.
      * <p>
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay started.
-     * One that had not gone live drains nothing and does not go live, and the {@link Mono} {@link #accept(Object)}
+     * One that had not gone live drains nothing and does not go live, and the {@link Mono} {@link #acceptAndWait(Object)}
      * returned for each event it held errors rather than completing, the same as for an event fed after the stop, so
      * the listener does not acknowledge it and the broker delivers it again. One replaying after a {@link #goLive()}
      * delivers what it held while the replay ran and goes on delivering, since those events were accepted by a feed
      * that was already live.
      * <p>
      * A feed with no catch-up running that has not gone live stops the same way. The {@link Mono}
-     * {@link #accept(Object)} returned for an event fed before the stop, or after it and before the next
+     * {@link #acceptAndWait(Object)} returned for an event fed before the stop, or after it and before the next
      * {@link #catchUp()} or {@link #goLive()}, errors, so a shutting-down application that never starts a catch-up does
      * not leave it waiting. When this method finds no catch-up running and stops the feed, the error handling of
      * each event still waiting runs on the calling thread, unless the listener's own pipeline moves it. A catch-up

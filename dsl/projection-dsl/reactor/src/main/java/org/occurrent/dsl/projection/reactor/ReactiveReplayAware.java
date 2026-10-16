@@ -74,8 +74,8 @@ public interface ReactiveReplayAware {
      * offers the event again. The default emits nothing.
      *
      * @param metadata What the feed knows about the event that was not delivered a second time. Empty when the live
-     *                 copy arrived through {@code accept(E)}, which carries no metadata, and there is then no append
-     *                 to write down.
+     *                 copy arrived through {@code acceptAndWait(E)} or {@code acceptOrDefer(E)}, which carry no
+     *                 metadata, and there is then no append to write down.
      */
     default Mono<Void> alreadyDeliveredByReplay(EventMetadata metadata) {
         return Mono.empty();
