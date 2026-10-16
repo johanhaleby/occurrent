@@ -47,7 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * {@code PushSubscriptionModel.acceptRedeliverable(CloudEvent)} reporting {@code RoutingOutcome.DEFERRED} is what
+ * {@code PushSubscriptionModel.acceptOrDefer(CloudEvent)} reporting {@code RoutingOutcome.DEFERRED} is what
  * closes the catch-up acknowledgement hole on its own, with no {@code readinessSource} configured at all.
  * {@link KafkaCloudEventSource.Builder#readinessSource(java.util.function.Predicate)} is a pacing hint on top of
  * that, proven here against a real broker rather than against {@code CatchupThenPushSubscriptionModel} itself,

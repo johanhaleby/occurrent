@@ -439,10 +439,10 @@ class KafkaDomainEventSourceTest extends KafkaTestSupport {
      * {@code RoutingOutcome.DEFERRED} bypasses {@link DeliveryFailurePolicy} entirely, including {@code PARK}, the
      * same as the CloudEvent-level source. {@code DomainEventFeed}'s coarse gate requires
      * {@code isReadyForLiveDelivery()} before consuming at all, unlike the push-side source, and this source runs
-     * one dedicated poll loop thread, so two records can never race each other into {@code acceptIfLive}
+     * one dedicated poll loop thread, so two records can never race each other into {@code acceptOrDefer}
      * concurrently. The reachable way to prove this against a real broker is a direct, out-of-band call for the
      * same dedup key (the domain event's {@code orderId}, this feed's own id extractor) that holds it in flight
-     * while the source delivers a duplicate for that same key: {@code acceptIfLive} refuses the source's delivery
+     * while the source delivers a duplicate for that same key: {@code acceptOrDefer} refuses the source's delivery
      * while the direct call is still folding, reported {@code DEFERRED}.
      */
     @Test
@@ -468,7 +468,7 @@ class KafkaDomainEventSourceTest extends KafkaTestSupport {
         // delivery for the same key below is the one that gets refused, without needing two records racing on the
         // same single poll loop thread.
         CloudEvent directCloudEvent = new TestOrderPlacedConverter().toCloudEvent(new TestOrderPlaced("order-1"));
-        Thread directCaller = new Thread(() -> feed.acceptCloudEvent(directCloudEvent), "direct-in-flight-caller");
+        Thread directCaller = new Thread(() -> feed.acceptOrDeferCloudEvent(directCloudEvent), "direct-in-flight-caller");
         directCaller.start();
         assertThat(directCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
@@ -658,7 +658,7 @@ class KafkaDomainEventSourceTest extends KafkaTestSupport {
         String groupId = "group-" + UUID.randomUUID();
         DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
         List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
-        // A data-field filter with the default (refusing) DataFieldReader. Refused live on the first acceptCloudEvent.
+        // A data-field filter with the default (refusing) DataFieldReader. Refused live on the first acceptOrDeferCloudEvent.
         feed.register("proj", handled::add, Filter.data("amount", Condition.eq(42)));
         feed.goLive("proj");
 

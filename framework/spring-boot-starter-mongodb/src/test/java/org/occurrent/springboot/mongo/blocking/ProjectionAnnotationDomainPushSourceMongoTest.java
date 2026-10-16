@@ -96,7 +96,7 @@ class ProjectionAnnotationDomainPushSourceMongoTest {
                 assertThat(orderCountStore.countFor("orders")).isEqualTo(2));
 
         // A live domain event is fed directly (no CloudEvent), as an application listener would after decoding it.
-        ordersFeed.accept(new OrderPlaced("live"));
+        ordersFeed.acceptAndWait(new OrderPlaced("live"));
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.countFor("orders")).isEqualTo(3));
     }

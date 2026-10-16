@@ -76,7 +76,7 @@ class DomainEventFeedProjectionMaterializedViewMetadataTest {
             DomainEventFeed<TestEvent> feed = context.getBean(DomainEventFeed.class);
             EventMetadata metadata = new EventMetadata(Map.of(OccurrentCloudEventExtension.STREAM_ID, "order-1"));
 
-            feed.accept(metadata, new TestEvent("live")).block();
+            feed.acceptAndWait(metadata, new TestEvent("live")).block();
 
             assertThat(RECEIVED_METADATA.get()).isNotNull();
             assertThat(RECEIVED_METADATA.get().getStreamId()).contains("order-1");

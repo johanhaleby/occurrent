@@ -46,7 +46,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code RoutingOutcome.UNAVAILABLE} for a later record in the very same poll batch. Nothing about that record is
  * broken, so it must never be parked with its offset committed under {@link DeliveryFailurePolicy#PARK}. Only a
  * {@code NOT_DELIVERABLE} outcome, or a {@code RuntimeException} or {@code AssertionError} thrown out of
- * {@code acceptRedeliverable(..)}, goes through the failure policy.
+ * {@code acceptOrDefer(..)}, goes through the failure policy.
  * <p>
  * Publishes five records to a single-partition topic before the source ever starts, so a single {@code poll()} is
  * very likely to return all five in one batch, pauses the subscription from the first record's own handler, and

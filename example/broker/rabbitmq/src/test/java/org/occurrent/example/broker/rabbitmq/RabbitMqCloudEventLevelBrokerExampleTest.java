@@ -315,7 +315,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
 
     /**
      * The regression proof for the catch-up acknowledgement hole. What actually closes it is
-     * {@code RoutingOutcome.DEFERRED}: {@code acceptRedeliverable(...)} refuses a message outright rather than
+     * {@code RoutingOutcome.DEFERRED}: {@code acceptOrDefer(...)} refuses a message outright rather than
      * buffering it while the wrapper is still replaying, so the source never acknowledges one it did not actually
      * apply. {@code readinessSource} is configured here too, and this test still proves it keeps the source from
      * pulling the message off the queue at all while not ready, but that is a pacing measure now, not what makes

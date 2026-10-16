@@ -102,7 +102,7 @@ class ReactiveSubscriptionModeManualDomainPushProjectionMongoTest {
         // Nothing is registered on the feed yet, so an event fed now is refused rather than accepted. It used to
         // complete quietly, which meant a listener acknowledged it and the source discarded an event no projection
         // ever received. Refusing is what makes manual mode withhold rather than lose (ADR 104).
-        StepVerifier.create(ordersFeed.accept(new OrderPlaced("refused-before-start")))
+        StepVerifier.create(ordersFeed.acceptAndWait(new OrderPlaced("refused-before-start")))
                 .expectErrorSatisfies(e -> assertThat(e)
                         .isInstanceOf(IllegalStateException.class)
                         .hasMessageContaining("has no projection registered"))
@@ -117,7 +117,7 @@ class ReactiveSubscriptionModeManualDomainPushProjectionMongoTest {
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(2)));
 
-        ordersFeed.accept(new OrderPlaced("live")).block();
+        ordersFeed.acceptAndWait(new OrderPlaced("live")).block();
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(3)));
     }

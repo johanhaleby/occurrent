@@ -336,7 +336,7 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void accept_redeliverable_errors_with_the_filters_own_failure() {
+    void accept_or_defer_errors_with_the_filters_own_failure() {
         // Only a refusal decided before dispatch comes back as an outcome, a filter that fails to answer still errors
         List<RoutingOutcome> outcomes = new ArrayList<>();
         DataFieldReader throwingReader = (cloudEvent, path) -> {
@@ -348,7 +348,7 @@ class PushSubscriptionModelTest {
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))),
                 cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
 
-        StepVerifier.create(model.acceptRedeliverable(cloudEvent("1", "NameDefined")))
+        StepVerifier.create(model.acceptOrDefer(cloudEvent("1", "NameDefined")))
                 .verifyErrorSatisfies(error -> assertThat(error)
                         .isExactlyInstanceOf(IllegalStateException.class)
                         .hasMessage("payload unreadable"));
@@ -776,14 +776,14 @@ class PushSubscriptionModelTest {
         assertThat(received).containsExactly("1");
     }
 
-    // A broker listener acknowledges on the outcome acceptRedeliverable returns, so each case has to return its own
+    // A broker listener acknowledges on the outcome acceptOrDefer returns, so each case has to return its own
     @Test
-    void accept_redeliverable_returns_unavailable_when_nothing_is_registered() {
+    void accept_or_defer_returns_unavailable_when_nothing_is_registered() {
         List<RoutingOutcome> outcomes = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
 
-        StepVerifier.create(model.acceptRedeliverable(cloudEvent("1", "NameDefined")))
+        StepVerifier.create(model.acceptOrDefer(cloudEvent("1", "NameDefined")))
                 .expectNext(UNAVAILABLE)
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
@@ -792,13 +792,13 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void accept_redeliverable_returns_unavailable_while_the_model_is_stopped() {
+    void accept_or_defer_returns_unavailable_while_the_model_is_stopped() {
         List<String> received = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel();
         model.subscribe("sub", cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
         model.stop();
 
-        StepVerifier.create(model.acceptRedeliverable(cloudEvent("1", "NameDefined")))
+        StepVerifier.create(model.acceptOrDefer(cloudEvent("1", "NameDefined")))
                 .expectNext(UNAVAILABLE)
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
@@ -807,13 +807,13 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void accept_redeliverable_returns_unavailable_while_the_subscription_is_paused() {
+    void accept_or_defer_returns_unavailable_while_the_subscription_is_paused() {
         List<String> received = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel();
         model.subscribe("sub", cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
         model.pauseSubscription("sub");
 
-        StepVerifier.create(model.acceptRedeliverable(cloudEvent("1", "NameDefined")))
+        StepVerifier.create(model.acceptOrDefer(cloudEvent("1", "NameDefined")))
                 .expectNext(UNAVAILABLE)
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
@@ -822,7 +822,7 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void accept_redeliverable_returns_delivered_only_after_the_handler_has_run() {
+    void accept_or_defer_returns_delivered_only_after_the_handler_has_run() {
         List<String> received = new CopyOnWriteArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel();
         // The delay puts the handler's side effect after the call returns, so completing any earlier shows up as a
@@ -830,7 +830,7 @@ class PushSubscriptionModelTest {
         model.subscribe("sub", cloudEvent -> Mono.delay(Duration.ofMillis(50))
                 .then(Mono.fromRunnable(() -> received.add(cloudEvent.getId()))));
 
-        StepVerifier.create(model.acceptRedeliverable(cloudEvent("1", "NameDefined")))
+        StepVerifier.create(model.acceptOrDefer(cloudEvent("1", "NameDefined")))
                 .assertNext(outcome -> {
                     assertThat(outcome).isEqualTo(DELIVERED);
                     assertThat(received).containsExactly("1");
@@ -840,13 +840,13 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void accept_redeliverable_returns_filtered_for_an_event_the_filter_declines() {
+    void accept_or_defer_returns_filtered_for_an_event_the_filter_declines() {
         List<String> received = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel();
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type("SomethingElseHappened")),
                 cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
 
-        StepVerifier.create(model.acceptRedeliverable(cloudEvent("1", "NameDefined")))
+        StepVerifier.create(model.acceptOrDefer(cloudEvent("1", "NameDefined")))
                 .expectNext(FILTERED)
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
@@ -855,13 +855,13 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void accept_redeliverable_errors_with_the_handlers_own_failure() {
+    void accept_or_defer_errors_with_the_handlers_own_failure() {
         List<RoutingOutcome> outcomes = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
         model.subscribe("boom", cloudEvent -> Mono.error(new IllegalStateException("handler failed")));
 
-        StepVerifier.create(model.acceptRedeliverable(cloudEvent("1", "NameDefined")))
+        StepVerifier.create(model.acceptOrDefer(cloudEvent("1", "NameDefined")))
                 .expectErrorSatisfies(error -> assertThat(error).isExactlyInstanceOf(IllegalStateException.class).hasMessage("handler failed"))
                 .verify(Duration.ofSeconds(5));
 
@@ -870,11 +870,11 @@ class PushSubscriptionModelTest {
 
     // A routing action that completes empty reports no outcome, and no outcome proves nothing was applied
     @Test
-    void accept_redeliverable_errors_when_the_routing_action_reports_no_outcome() {
+    void accept_or_defer_errors_when_the_routing_action_reports_no_outcome() {
         PushSubscriptionModel model = new PushSubscriptionModel();
         model.subscribeCatchupThenPush("sub", null, StartAt.subscriptionModelDefault(), (cloudEvent, bufferIfNotLive) -> Mono.empty());
 
-        StepVerifier.create(model.acceptRedeliverable(cloudEvent("1", "NameDefined")))
+        StepVerifier.create(model.acceptOrDefer(cloudEvent("1", "NameDefined")))
                 .expectErrorSatisfies(error -> assertThat(error).isExactlyInstanceOf(IllegalStateException.class).hasMessageContaining("No routing outcome"))
                 .verify(Duration.ofSeconds(5));
     }

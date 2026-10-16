@@ -43,7 +43,7 @@ import static org.awaitility.Awaitility.await;
  * exercises {@code PARK}: CLAIM 5 of PR #895's adversarial verification asks for both policies. The routing
  * decision under test, whether a {@code PreDispatchRefusalException} is this source's own model refusing
  * permanently versus an ordinary handler failure that happened to touch a different, broken model, is whether
- * {@code acceptRedeliverable(..)} returns {@code REFUSED} or throws, decided before {@code failureAction} is ever
+ * {@code acceptOrDefer(..)} returns {@code REFUSED} or throws, decided before {@code failureAction} is ever
  * consulted, so it does not branch on policy at all. This proves the same fix holds under the other one too.
  * <p>
  * Under {@code REDELIVER}, id-1's nested, unrelated refusal fails identically on every attempt (the same one

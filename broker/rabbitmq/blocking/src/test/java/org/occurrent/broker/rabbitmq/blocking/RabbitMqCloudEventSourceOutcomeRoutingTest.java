@@ -55,7 +55,7 @@ import static org.mockito.Mockito.when;
  * {@code RoutingOutcomeTest} states for the outcomes themselves, so a mapping that compiles but sends an outcome
  * to the wrong branch fails here rather than on a queue somewhere. The tests that go through {@code handleDelivery}
  * put a mocked {@link PushSubscriptionModel} in front, so what the source does follows from the outcome
- * {@code acceptRedeliverable(..)} returns and from nothing else.
+ * {@code acceptOrDefer(..)} returns and from nothing else.
  */
 class RabbitMqCloudEventSourceOutcomeRoutingTest {
 
@@ -192,7 +192,7 @@ class RabbitMqCloudEventSourceOutcomeRoutingTest {
         Channel channel = mock(Channel.class);
         RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
         PushSubscriptionModel model = mock(PushSubscriptionModel.class);
-        when(model.acceptRedeliverable(any(CloudEvent.class))).thenThrow(new IllegalStateException("handler failed"));
+        when(model.acceptOrDefer(any(CloudEvent.class))).thenThrow(new IllegalStateException("handler failed"));
         RabbitMqCloudEventSource source = parkingSourceOver(model, channel, parkingPublisher);
 
         handleDelivery(source, delivery());
@@ -203,7 +203,7 @@ class RabbitMqCloudEventSourceOutcomeRoutingTest {
 
     private static PushSubscriptionModel modelReturning(RoutingOutcome outcome) {
         PushSubscriptionModel model = mock(PushSubscriptionModel.class);
-        when(model.acceptRedeliverable(any(CloudEvent.class))).thenReturn(outcome);
+        when(model.acceptOrDefer(any(CloudEvent.class))).thenReturn(outcome);
         return model;
     }
 

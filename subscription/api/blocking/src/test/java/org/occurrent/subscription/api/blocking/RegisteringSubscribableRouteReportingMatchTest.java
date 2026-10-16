@@ -389,7 +389,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         });
 
         List<RoutingOutcome> observed = new ArrayList<>();
-        Throwable thrown = catchThrowable(() -> model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
+        Throwable thrown = catchThrowable(() -> model.acceptOrDeferRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
 
         assertThat(thrown).isNull();
         assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
@@ -404,7 +404,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         });
 
         List<RoutingOutcome> observed = new ArrayList<>();
-        Throwable thrown = catchThrowable(() -> model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
+        Throwable thrown = catchThrowable(() -> model.acceptOrDeferRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
 
         assertThat(thrown).isNull();
         assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
@@ -420,7 +420,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         model.subscribeRaw("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), (cloudEvent, bufferIfNotLive) -> true);
 
         List<RoutingOutcome> observed = new ArrayList<>();
-        Throwable thrown = catchThrowable(() -> model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
+        Throwable thrown = catchThrowable(() -> model.acceptOrDeferRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
 
         assertThat(thrown).isSameAs(matcherFailure);
         assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
@@ -435,7 +435,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         });
 
         List<RoutingOutcome> observed = new ArrayList<>();
-        Throwable thrown = catchThrowable(() -> model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
+        Throwable thrown = catchThrowable(() -> model.acceptOrDeferRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
 
         assertThat(thrown).isSameAs(actionFailure);
         assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
@@ -450,7 +450,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
             throw new RegisteringSubscribable.RoutingAction.Refusal(new IllegalStateException("catch-up has failed"), true);
         });
 
-        Throwable thrown = catchThrowable(() -> model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
+        Throwable thrown = catchThrowable(() -> model.acceptOrDeferRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
             throw observerFailure;
         }));
 
@@ -531,7 +531,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
             routeReportingMatch(cloudEvent, bufferIfNotLive, matchObserver);
         }
 
-        void acceptRedeliverableRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+        void acceptOrDeferRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
             routeRedeliverable(cloudEvent, matchObserver);
         }
     }

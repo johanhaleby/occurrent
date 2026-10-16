@@ -83,7 +83,7 @@ class BlockingMaterializedViewUpdateTest {
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
                 "counter", Projections.reactiveUpdateWithMetadata(view), Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, null);
 
-        feed.accept(new Counted("2")).subscribe(); // buffered before the catch-up, overlaps the replay
+        feed.acceptAndWait(new Counted("2")).subscribe(); // buffered before the catch-up, overlaps the replay
         feed.catchUp().block();
 
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(view.calls)

@@ -93,7 +93,7 @@ class KafkaCloudEventSourceRewindTest {
         doThrow(new RuntimeException("simulated rebalance")).when(consumer).seek(eq(PARTITION_0), eq(5L));
 
         PushSubscriptionModel model = mock(PushSubscriptionModel.class);
-        when(model.acceptRedeliverable(any(CloudEvent.class))).thenAnswer(invocation ->
+        when(model.acceptOrDefer(any(CloudEvent.class))).thenAnswer(invocation ->
                 "id-1".equals(invocation.<CloudEvent>getArgument(0).getId()) ? RoutingOutcome.UNAVAILABLE : RoutingOutcome.DELIVERED);
         KafkaCloudEventSource source = sourceForTesting(consumer, model);
 
@@ -226,7 +226,7 @@ class KafkaCloudEventSourceRewindTest {
             CloudEvent cloudEvent = invocation.getArgument(0);
             offered.add(cloudEvent.getId());
             return "id-1".equals(cloudEvent.getId()) ? RoutingOutcome.REFUSED : RoutingOutcome.DELIVERED;
-        }).when(model).acceptRedeliverable(any(CloudEvent.class));
+        }).when(model).acceptOrDefer(any(CloudEvent.class));
         KafkaCloudEventSource source = sourceForTesting(consumer, model);
 
         Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
@@ -309,7 +309,7 @@ class KafkaCloudEventSourceRewindTest {
     }
 
     /**
-     * Only a filter or a handler failure throws out of acceptRedeliverable(..), and that goes to the failure policy.
+     * Only a filter or a handler failure throws out of acceptOrDefer(..), and that goes to the failure policy.
      */
     @Test
     void an_exception_from_the_model_goes_to_the_failure_policy() throws Exception {
@@ -317,7 +317,7 @@ class KafkaCloudEventSourceRewindTest {
         KafkaDeliveryFailureAction failureAction = mock(KafkaDeliveryFailureAction.class);
         when(failureAction.apply(any())).thenReturn(KafkaDeliveryFailureAction.Outcome.REDELIVER);
         PushSubscriptionModel model = mock(PushSubscriptionModel.class);
-        when(model.acceptRedeliverable(any(CloudEvent.class))).thenThrow(new IllegalStateException("handler failed"));
+        when(model.acceptOrDefer(any(CloudEvent.class))).thenThrow(new IllegalStateException("handler failed"));
         KafkaCloudEventSource source = sourceForTesting(consumer, model, failureAction);
 
         invokeProcessBatch(source, singleRecordBatch());
@@ -330,7 +330,7 @@ class KafkaCloudEventSourceRewindTest {
 
     private static PushSubscriptionModel modelReturning(RoutingOutcome outcome) {
         PushSubscriptionModel model = mock(PushSubscriptionModel.class);
-        when(model.acceptRedeliverable(any(CloudEvent.class))).thenReturn(outcome);
+        when(model.acceptOrDefer(any(CloudEvent.class))).thenReturn(outcome);
         return model;
     }
 

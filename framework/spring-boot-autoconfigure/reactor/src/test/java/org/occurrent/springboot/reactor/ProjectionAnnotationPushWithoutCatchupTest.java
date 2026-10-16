@@ -86,7 +86,7 @@ class ProjectionAnnotationPushWithoutCatchupTest {
             Map<String, Integer> repo = context.getBean("domainNoneRepo", Map.class);
 
             // The feed's own reader would answer with history if it were ever consulted; goLive() must not consult it.
-            feed.accept(new TestEvent("live")).block();
+            feed.acceptAndWait(new TestEvent("live")).block();
 
             assertThat(repo.get("counter")).isEqualTo(1);
         });

@@ -374,7 +374,7 @@ class RabbitMqDomainEventSourceTest extends RabbitMqTestSupport {
         String queue = declareAndBindQueue(TestOrderPlaced.class.getName());
         DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
         List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
-        // A data-field filter with the default (refusing) DataFieldReader: refused live on the first acceptCloudEvent.
+        // A data-field filter with the default (refusing) DataFieldReader: refused live on the first acceptOrDeferCloudEvent.
         feed.register("proj", handled::add, Filter.data("amount", Condition.eq(42)));
         feed.goLive("proj");
 
@@ -406,10 +406,10 @@ class RabbitMqDomainEventSourceTest extends RabbitMqTestSupport {
      * same as the CloudEvent-level source. {@code DomainEventFeed}'s coarse gate requires
      * {@code isReadyForLiveDelivery()} before consuming at all, unlike the push-side source, and the source handles
      * its deliveries one at a time on its own worker thread regardless of prefetch, so
-     * two messages from the same source can never race each other into {@code acceptIfLive} concurrently. The
+     * two messages from the same source can never race each other into {@code acceptOrDefer} concurrently. The
      * reachable way to prove this against a real broker is a direct, out-of-band call for the same dedup key (the
      * domain event's {@code orderId}, this feed's own id extractor) that holds it in flight while the source
-     * delivers a duplicate for that same key: {@code acceptIfLive} refuses the source's delivery while the direct
+     * delivers a duplicate for that same key: {@code acceptOrDefer} refuses the source's delivery while the direct
      * call is still folding, reported {@code DEFERRED}.
      */
     @Test
@@ -436,7 +436,7 @@ class RabbitMqDomainEventSourceTest extends RabbitMqTestSupport {
         // delivery for the same key below is the one that gets refused, without needing two deliveries racing on
         // the same sequential dispatch thread.
         CloudEvent directCloudEvent = new TestOrderPlacedConverter().toCloudEvent(new TestOrderPlaced("order-1"));
-        Thread directCaller = new Thread(() -> feed.acceptCloudEvent(directCloudEvent), "direct-in-flight-caller");
+        Thread directCaller = new Thread(() -> feed.acceptOrDeferCloudEvent(directCloudEvent), "direct-in-flight-caller");
         directCaller.start();
         assertThat(directCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
@@ -471,7 +471,7 @@ class RabbitMqDomainEventSourceTest extends RabbitMqTestSupport {
      * rather than statistical: a raw wall-clock count depends on how fast the broker itself round-trips a nack and
      * flakes with it, the mistake an earlier version of {@code RabbitMqCloudEventSource}'s own equivalent test made.
      * There is no {@code RoutingOutcome} observer on {@code DomainEventFeed} to count {@code DEFERRED} directly, so
-     * this counts {@code CloudEventConverter#toDomainEvent} calls instead: {@code acceptCloudEvent} decodes on
+     * this counts {@code CloudEventConverter#toDomainEvent} calls instead: {@code acceptOrDeferCloudEvent} decodes on
      * every matching attempt, {@code DELIVERED} or {@code DEFERRED} alike, so with the dedup key held in flight for
      * the whole observation window, every one of those decodes but the direct call's own first one is a redelivery
      * this source issued.
@@ -513,7 +513,7 @@ class RabbitMqDomainEventSourceTest extends RabbitMqTestSupport {
         feed.goLive("proj");
 
         CloudEvent directCloudEvent = delegate.toCloudEvent(new TestOrderPlaced("order-1"));
-        Thread directCaller = new Thread(() -> feed.acceptCloudEvent(directCloudEvent), "direct-in-flight-caller");
+        Thread directCaller = new Thread(() -> feed.acceptOrDeferCloudEvent(directCloudEvent), "direct-in-flight-caller");
         directCaller.start();
         assertThat(directCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
 

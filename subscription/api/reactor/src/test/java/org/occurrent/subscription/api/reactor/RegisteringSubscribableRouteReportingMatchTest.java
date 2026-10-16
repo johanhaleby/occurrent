@@ -464,7 +464,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         });
 
         List<RoutingOutcome> observed = new ArrayList<>();
-        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+        StepVerifier.create(model.acceptOrDeferRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
                 .verifyComplete();
 
         assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
@@ -477,7 +477,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(new IllegalStateException("the live buffer is full"), false)));
 
         List<RoutingOutcome> observed = new ArrayList<>();
-        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+        StepVerifier.create(model.acceptOrDeferRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
                 .verifyComplete();
 
         assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
@@ -493,7 +493,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         model.subscribeRaw("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> Mono.just(true));
 
         List<RoutingOutcome> observed = new ArrayList<>();
-        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+        StepVerifier.create(model.acceptOrDeferRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
                 .verifyErrorSatisfies(error -> assertThat(error).isSameAs(matcherFailure));
 
         assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
@@ -506,7 +506,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         model.subscribeRaw("sub", null, cloudEvent -> Mono.error(actionFailure));
 
         List<RoutingOutcome> observed = new ArrayList<>();
-        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+        StepVerifier.create(model.acceptOrDeferRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
                 .verifyErrorSatisfies(error -> assertThat(error).isSameAs(actionFailure));
 
         assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
@@ -542,7 +542,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
             return routeReportingMatch(cloudEvent, bufferIfNotLive, matchObserver);
         }
 
-        Mono<Void> acceptRedeliverableRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+        Mono<Void> acceptOrDeferRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
             return routeRedeliverable(cloudEvent, matchObserver);
         }
     }

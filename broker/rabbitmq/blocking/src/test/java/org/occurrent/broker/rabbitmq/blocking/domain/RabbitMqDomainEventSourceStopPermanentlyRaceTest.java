@@ -104,7 +104,7 @@ class RabbitMqDomainEventSourceStopPermanentlyRaceTest {
         // The coarse poll now also gates on isReadyForLiveDelivery(); stubbed true throughout, since this test's
         // race is about the hasProjection()/permanent-stop interleaving, not about readiness.
         when(feed.isReadyForLiveDelivery()).thenReturn(true);
-        when(feed.acceptCloudEvent(any())).thenThrow(new UnreadableLiveFilterException("unreadable", new UnsupportedOperationException()));
+        when(feed.acceptOrDeferCloudEvent(any())).thenThrow(new UnreadableLiveFilterException("unreadable", new UnsupportedOperationException()));
 
         RabbitMqDomainEventSource<String> source = RabbitMqDomainEventSource.builder(connection, feed, "queue")
                 .declareTopology(false)

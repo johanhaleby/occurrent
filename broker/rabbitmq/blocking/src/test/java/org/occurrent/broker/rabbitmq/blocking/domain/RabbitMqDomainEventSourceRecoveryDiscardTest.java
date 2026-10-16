@@ -86,7 +86,7 @@ class RabbitMqDomainEventSourceRecoveryDiscardTest {
         CountDownLatch firstCallEntered = new CountDownLatch(1);
         CountDownLatch releaseFirstCall = new CountDownLatch(1);
         List<String> handled = new CopyOnWriteArrayList<>();
-        when(feed.acceptCloudEvent(any())).thenAnswer(invocation -> {
+        when(feed.acceptOrDeferCloudEvent(any())).thenAnswer(invocation -> {
             CloudEvent cloudEvent = invocation.getArgument(0);
             handled.add(cloudEvent.getId());
             if (handled.size() == 1) {
@@ -151,7 +151,7 @@ class RabbitMqDomainEventSourceRecoveryDiscardTest {
         CountDownLatch firstCallEntered = new CountDownLatch(1);
         CountDownLatch releaseFirstCall = new CountDownLatch(1);
         List<String> handled = new CopyOnWriteArrayList<>();
-        when(feed.acceptCloudEvent(any())).thenAnswer(invocation -> {
+        when(feed.acceptOrDeferCloudEvent(any())).thenAnswer(invocation -> {
             CloudEvent cloudEvent = invocation.getArgument(0);
             handled.add(cloudEvent.getId());
             if (handled.size() == 1) {

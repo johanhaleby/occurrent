@@ -77,27 +77,27 @@ class DomainEventFeedTest {
         // discard an event nothing received. Under occurrent.subscription.mode=manual registration is deferred, so a
         // listener that starts consuming before startAll() lands exactly here, and refusing is what makes the broker
         // hold the backlog instead. That is ADR 86's withheld-not-lost guarantee on a push stack.
-        StepVerifier.create(feed.accept(new Counted("1")))
+        StepVerifier.create(feed.acceptAndWait(new Counted("1")))
                 .expectErrorSatisfies(e -> assertThat(e)
                         .isInstanceOf(IllegalStateException.class)
                         .hasMessageContaining("has no projection registered")
                         .hasMessageContaining("refused rather than accepted"))
                 .verify(Duration.ofSeconds(5));
 
-        StepVerifier.create(feed.accept(EventMetadata.empty(), new Counted("1")))
+        StepVerifier.create(feed.acceptAndWait(EventMetadata.empty(), new Counted("1")))
                 .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class)
                         .hasMessageContaining("has no projection registered"))
                 .verify(Duration.ofSeconds(5));
     }
 
     @Test
-    void a_projection_registered_after_the_accept_mono_was_assembled_is_still_found() {
+    void a_projection_registered_after_the_accept_and_wait_mono_was_assembled_is_still_found() {
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), countedConverter(), Counted::eventId);
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
 
         // Assembled while the feed is empty. The lookup is deferred to subscription time, the same lateness
         // catchUp(String) and goLive(String) already have, so this must not have captured the refusal.
-        Mono<Void> accept = feed.accept(new Counted("1"));
+        Mono<Void> accept = feed.acceptAndWait(new Counted("1"));
 
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
         feed.goLive("counter").block(Duration.ofSeconds(5));
@@ -200,7 +200,7 @@ class DomainEventFeedTest {
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
 
         feed.goLive("counter").block();
-        feed.accept(new Counted("live")).block();
+        feed.acceptAndWait(new Counted("live")).block();
 
         // The two history events were never replayed, so only the live one was folded.
         assertThat(repo.get("counter")).isEqualTo(1);
@@ -270,12 +270,12 @@ class DomainEventFeedTest {
 
         // The first registration is unaffected by the refused second one: it still works.
         feed.catchUpAll().block();
-        feed.accept(new Counted("1")).block();
+        feed.acceptAndWait(new Counted("1")).block();
         assertThat(repo.get("counter")).isEqualTo(1);
     }
 
     @Test
-    void accept_with_metadata_feeds_the_registered_projection_with_the_metadata_intact() {
+    void accept_and_wait_with_metadata_feeds_the_registered_projection_with_the_metadata_intact() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
 
@@ -284,7 +284,7 @@ class DomainEventFeedTest {
         feed.register("positions", positionKeyedProjection(), repository);
         feed.catchUpAll().block();
 
-        feed.accept(metadata("stream-1", 7L), new Counted("live")).block();
+        feed.acceptAndWait(metadata("stream-1", 7L), new Counted("live")).block();
 
         assertThat(repo.get("stream-1")).isEqualTo(7L);
     }
@@ -332,21 +332,21 @@ class DomainEventFeedTest {
         feed.catchUpAll().block();
         assertThat(repo.get("counter")).isEqualTo(2);
 
-        feed.accept(new Counted("3")).block();
+        feed.acceptAndWait(new Counted("3")).block();
         assertThat(repo.get("counter")).isEqualTo(3);
     }
 
     @Test
-    void stopping_a_feed_whose_catch_up_never_started_errors_a_waiting_accept_and_a_later_catch_up_does_not_fold_its_event() {
+    void stopping_a_feed_whose_catch_up_never_started_errors_a_waiting_accept_and_wait_and_a_later_catch_up_does_not_fold_its_event() {
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), countedConverter(), Counted::eventId);
         Map<String, Integer> repo = new ConcurrentHashMap<>();
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
-        CompletableFuture<Void> accepted = feed.accept(new Counted("3")).toFuture();
+        CompletableFuture<Void> accepted = feed.acceptAndWait(new Counted("3")).toFuture();
 
         feed.stopCatchUp();
         feed.catchUpAll().block(Duration.ofSeconds(5));
 
-        assertThat(catchThrowable(() -> accepted.get(5, TimeUnit.SECONDS))).as("what accept(..) failed with once the feed stopped")
+        assertThat(catchThrowable(() -> accepted.get(5, TimeUnit.SECONDS))).as("what acceptAndWait(..) failed with once the feed stopped")
                 .isInstanceOf(java.util.concurrent.ExecutionException.class)
                 .cause()
                 .isInstanceOf(IllegalStateException.class)
@@ -402,7 +402,7 @@ class DomainEventFeedTest {
         feed.register("positions", fold, Filter.all());
         feed.catchUpAll().block();
 
-        feed.accept(metadata("stream-1", 5L), new Counted("live")).block();
+        feed.acceptAndWait(metadata("stream-1", 5L), new Counted("live")).block();
 
         assertThat(repo.get("stream-1")).isEqualTo(5L);
     }
@@ -418,11 +418,11 @@ class DomainEventFeedTest {
 
         // Buffered before the catch-up runs, so the third one exceeds the cap of two. The message names the cap, which
         // is what proves the constructor's options reached CatchupProjectionFeed rather than the defaults being used.
-        feed.accept(new Counted("l1")).subscribe();
-        feed.accept(new Counted("l2")).subscribe();
+        feed.acceptAndWait(new Counted("l1")).subscribe();
+        feed.acceptAndWait(new Counted("l2")).subscribe();
         // verify(Duration) rather than verifyErrorSatisfies(): if the cap were not applied, this ack would stay pending
         // until the catch-up drained it, so an unbounded verify would hang instead of failing.
-        StepVerifier.create(feed.accept(new Counted("l3")))
+        StepVerifier.create(feed.acceptAndWait(new Counted("l3")))
                 .expectErrorSatisfies(error -> assertThat(error)
                         .isInstanceOf(IllegalStateException.class)
                         .hasMessageContaining("buffer overflowed")
@@ -431,14 +431,263 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void accept_cloud_event_matching_the_registered_filter_delivers_and_reports_delivered() {
+    void accept_or_defer_completes_with_deferred_before_the_registered_projection_is_live_and_never_folds_the_event_afterwards() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1"), converter, Counted::eventId);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        Function<Counted, Mono<Void>> fold = event -> Mono.fromRunnable(() -> folded.add(event.eventId()));
+        feed.register("counter", fold, Filter.all());
+
+        RoutingOutcome plain = feed.acceptOrDefer(new Counted("early")).block(Duration.ofSeconds(5));
+        RoutingOutcome withMetadata = feed.acceptOrDefer(metadata("early-stream", 7L), new Counted("early-with-metadata")).block(Duration.ofSeconds(5));
+
+        assertThat(plain).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(withMetadata).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(folded).isEmpty();
+
+        feed.catchUpAll().block(Duration.ofSeconds(5));
+
+        assertThat(folded).as("only the replayed event, the deferred ones were not kept").containsExactly("1");
+    }
+
+    @Test
+    void accept_or_defer_completes_with_delivered_once_the_registered_projection_is_live_and_the_event_is_folded() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
         feed.catchUpAll().block();
 
-        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
+        RoutingOutcome outcome = feed.acceptOrDefer(new Counted("1")).block(Duration.ofSeconds(5));
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    void accept_or_defer_with_metadata_feeds_the_registered_projection_with_the_metadata_intact() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        feed.register("positions", positionKeyedProjection(), ViewStateRepository.create(repo::get, repo::put));
+        feed.catchUpAll().block();
+
+        RoutingOutcome outcome = feed.acceptOrDefer(metadata("stream-1", 7L), new Counted("live")).block(Duration.ofSeconds(5));
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(repo.get("stream-1")).isEqualTo(7L);
+    }
+
+    @Test
+    void accept_or_defer_before_a_projection_is_registered_is_refused() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), countedConverter(), Counted::eventId);
+
+        StepVerifier.create(feed.acceptOrDefer(new Counted("1")))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered"))
+                .verify(Duration.ofSeconds(5));
+        StepVerifier.create(feed.acceptOrDefer(EventMetadata.empty(), new Counted("1")))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered"))
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void accept_or_defer_errors_after_a_failed_catch_up_instead_of_completing_with_an_outcome() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(failingReader(), countedConverter(), Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        StepVerifier.create(feed.catchUpAll()).expectError(IllegalStateException.class).verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(feed.acceptOrDefer(new Counted("1")))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed"))
+                .verify(Duration.ofSeconds(5));
+        assertThat(repo).isEmpty();
+    }
+
+    @Test
+    void accept_and_wait_cloud_event_matching_the_registered_filter_folds_the_event_once_live() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        feed.catchUpAll().block();
+
+        feed.acceptAndWaitCloudEvent(converter.toCloudEvent(new Counted("1"))).block(Duration.ofSeconds(5));
+
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    void accept_and_wait_cloud_event_folds_the_event_with_the_metadata_of_the_cloud_event() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        feed.register("positions", positionKeyedProjection(), ViewStateRepository.create(repo::get, repo::put));
+        feed.catchUpAll().block();
+        CloudEvent stamped = OccurrentCloudEventExtension.withPosition(CloudEventBuilder.v1()
+                .withId("1")
+                .withSource(SOURCE)
+                .withType("Counted")
+                .withExtension(OccurrentCloudEventExtension.occurrent("stream-1", 4L))
+                .build(), 4L);
+
+        feed.acceptAndWaitCloudEvent(stamped).block(Duration.ofSeconds(5));
+
+        assertThat(repo.get("stream-1")).isEqualTo(4L);
+    }
+
+    @Test
+    void accept_and_wait_cloud_event_waits_for_the_catch_up_instead_of_completing_with_a_deferral() throws Exception {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        CompletableFuture<Void> accepted = feed.acceptAndWaitCloudEvent(converter.toCloudEvent(new Counted("live"))).toFuture();
+
+        assertThat(accepted).as("acceptAndWaitCloudEvent(..) before the catch-up has run").isNotDone();
+        feed.catchUpAll().block(Duration.ofSeconds(5));
+
+        accepted.get(5, TimeUnit.SECONDS);
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    void accept_and_wait_cloud_event_not_matching_the_registered_filter_completes_without_decoding_or_folding() {
+        AtomicInteger decodes = new AtomicInteger();
+        CloudEventConverter<Counted> converter = countingConverter(decodes);
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        CloudEvent nonMatching = CloudEventBuilder.v1().withId("x").withSource(SOURCE).withType("SomethingElseHappened").build();
+
+        // Not live yet, so a call that waited for the catch-up would not complete.
+        StepVerifier.create(feed.acceptAndWaitCloudEvent(nonMatching)).expectComplete().verify(Duration.ofSeconds(5));
+
+        feed.catchUpAll().block();
+        assertThat(repo).isEmpty();
+        assertThat(decodes.get()).as("a non-matching event is never decoded").isZero();
+    }
+
+    @Test
+    void accept_and_wait_cloud_event_before_a_projection_is_registered_is_refused() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+
+        StepVerifier.create(feed.acceptAndWaitCloudEvent(converter.toCloudEvent(new Counted("1"))))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered"))
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void accept_and_wait_cloud_event_with_a_payload_filter_no_data_field_reader_can_read_is_refused() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        Function<Counted, Mono<Void>> fold = event -> Mono.empty();
+        feed.register("counter", fold, Filter.data("amount", eq(42)));
+        feed.goLive("counter").block();
+
+        Throwable thrown = catchThrowable(() -> feed.acceptAndWaitCloudEvent(converter.toCloudEvent(new Counted("1"))).block());
+
+        assertThat(thrown).isInstanceOf(UnreadableLiveFilterException.class).hasMessageContaining("DataFieldReader");
+    }
+
+    @Test
+    void accept_and_wait_cloud_event_errors_after_a_failed_catch_up_instead_of_completing() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(failingReader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        StepVerifier.create(feed.catchUpAll()).expectError(IllegalStateException.class).verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(feed.acceptAndWaitCloudEvent(converter.toCloudEvent(new Counted("1"))))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed"))
+                .verify(Duration.ofSeconds(5));
+        assertThat(repo).isEmpty();
+    }
+
+    @Test
+    void accept_or_defer_cloud_event_errors_instead_of_completing_with_an_outcome_once_the_live_queue_is_full() throws Exception {
+        CloudEventConverter<Counted> converter = countedConverter();
+        CountDownLatch folding = new CountDownLatch(1);
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        List<String> folded = new CopyOnWriteArrayList<>();
+        Function<Counted, Mono<Void>> fold = event -> "blocked".equals(event.eventId())
+                ? Mono.defer(() -> {
+                    folding.countDown();
+                    return Mono.fromFuture(release);
+                })
+                : Mono.fromRunnable(() -> folded.add(event.eventId()));
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId, null, new CatchupThenLiveOptions(10, 1));
+        feed.register("counter", fold, Filter.type(converter.getCloudEventType(Counted.class)));
+        feed.catchUpAll().block(Duration.ofSeconds(5));
+        // A listener that acknowledges its message only when it is handed an outcome.
+        List<RoutingOutcome> acknowledged = new CopyOnWriteArrayList<>();
+        try {
+            CompletableFuture<RoutingOutcome> blocked = feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("blocked")))
+                    .doOnNext(acknowledged::add).toFuture();
+            assertThat(folding.await(5, TimeUnit.SECONDS)).as("the first fold started").isTrue();
+
+            StepVerifier.create(feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("overflow"))).doOnNext(acknowledged::add))
+                    .expectErrorSatisfies(error -> assertThat(error)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("buffer overflowed")
+                            .hasMessageContaining("(cap 1)"))
+                    .verify(Duration.ofSeconds(5));
+
+            assertThat(acknowledged).as("the overflowing event is not acknowledged, so the broker delivers it again").isEmpty();
+            release.complete(null);
+            assertThat(blocked.get(5, TimeUnit.SECONDS)).isEqualTo(RoutingOutcome.DELIVERED);
+            assertThat(acknowledged).containsExactly(RoutingOutcome.DELIVERED);
+            assertThat(folded).as("the refused event was never folded").isEmpty();
+        } finally {
+            release.complete(null);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("removal")
+    void the_deprecated_accept_forwards_to_accept_and_wait_and_folds_the_event_live() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        feed.register("positions", positionKeyedProjection(), ViewStateRepository.create(repo::get, repo::put));
+        feed.catchUpAll().block();
+
+        feed.accept(metadata("stream-1", 7L), new Counted("live")).block(Duration.ofSeconds(5));
+
+        assertThat(repo.get("stream-1")).as("the metadata overload forwards its metadata").isEqualTo(7L);
+
+        DomainEventFeed<Counted> plainFeed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> plainRepo = new ConcurrentHashMap<>();
+        plainFeed.register("counter", projection(), ViewStateRepository.create(plainRepo::get, plainRepo::put));
+        plainFeed.catchUpAll().block();
+
+        plainFeed.accept(new Counted("1")).block(Duration.ofSeconds(5));
+
+        assertThat(plainRepo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    @SuppressWarnings("removal")
+    void the_deprecated_accept_errors_like_accept_and_wait_before_a_projection_is_registered() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), countedConverter(), Counted::eventId);
+
+        StepVerifier.create(feed.accept(new Counted("1")))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered"))
+                .verify(Duration.ofSeconds(5));
+        StepVerifier.create(feed.accept(EventMetadata.empty(), new Counted("1")))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered"))
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void accept_or_defer_cloud_event_matching_the_registered_filter_delivers_and_reports_delivered() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        feed.catchUpAll().block();
+
+        RoutingOutcome outcome = feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
 
         assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).isEqualTo(1);
@@ -450,14 +699,14 @@ class DomainEventFeedTest {
      * being buffered and reported as though it had already reached the view.
      */
     @Test
-    void accept_cloud_event_matching_the_registered_filter_reports_deferred_before_catch_up_and_never_buffers() {
+    void accept_or_defer_cloud_event_matching_the_registered_filter_reports_deferred_before_catch_up_and_never_buffers() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
         // Deliberately never caught up or gone live. The projection is registered but not yet ready to receive.
 
-        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
+        RoutingOutcome outcome = feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
 
         assertThat(outcome).isEqualTo(RoutingOutcome.DEFERRED);
         assertThat(repo).as("refused outright, never buffered or applied").isEmpty();
@@ -476,22 +725,22 @@ class DomainEventFeedTest {
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
         CloudEvent event = converter.toCloudEvent(new Counted("1"));
 
-        RoutingOutcome beforeLive = feed.acceptCloudEvent(event).block();
+        RoutingOutcome beforeLive = feed.acceptOrDeferCloudEvent(event).block();
         assertThat(beforeLive).isEqualTo(RoutingOutcome.DEFERRED);
         assertThat(repo).isEmpty();
 
         feed.goLive("counter").block();
 
-        RoutingOutcome firstLiveDelivery = feed.acceptCloudEvent(event).block();
+        RoutingOutcome firstLiveDelivery = feed.acceptOrDeferCloudEvent(event).block();
         assertThat(firstLiveDelivery).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).isEqualTo(1);
 
-        RoutingOutcome retriedDelivery = feed.acceptCloudEvent(event).block();
+        RoutingOutcome retriedDelivery = feed.acceptOrDeferCloudEvent(event).block();
         assertThat(retriedDelivery).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).as("applied once, not twice").isEqualTo(1);
     }
 
-    // goLive(id) completing while catchUp(id) still replayed left acceptCloudEvent(..) returning DEFERRED after the
+    // goLive(id) completing while catchUp(id) still replayed left acceptOrDeferCloudEvent(..) returning DEFERRED after the
     // caller was told the projection is live.
     @Test
     void go_live_while_the_catch_up_replays_completes_only_once_that_replay_has_ended() throws Exception {
@@ -517,7 +766,7 @@ class DomainEventFeedTest {
             releaseReplay.countDown();
             catchUp.get(5, TimeUnit.SECONDS);
             wentLive.get(5, TimeUnit.SECONDS);
-            assertThat(feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live"))).block(Duration.ofSeconds(5)))
+            assertThat(feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("live"))).block(Duration.ofSeconds(5)))
                     .isEqualTo(RoutingOutcome.DELIVERED);
             assertThat(folded).containsExactly("1", "live");
         } finally {
@@ -544,9 +793,9 @@ class DomainEventFeedTest {
         }), Filter.all());
         try {
             feed.goLive("counter").block(Duration.ofSeconds(5));
-            CompletableFuture<RoutingOutcome> l2 = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("L1")))
+            CompletableFuture<RoutingOutcome> l2 = feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("L1")))
                     .then(feed.goLive("counter"))
-                    .then(feed.acceptCloudEvent(converter.toCloudEvent(new Counted("L2"))))
+                    .then(feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("L2"))))
                     .subscribeOn(Schedulers.boundedElastic())
                     .toFuture();
             assertThat(foldingL1.await(5, TimeUnit.SECONDS)).isTrue();
@@ -563,18 +812,18 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void accept_from_the_registered_fold_completes_once_queued_and_the_event_is_folded_after_that_fold() {
+    void accept_and_wait_from_the_registered_fold_completes_once_queued_and_the_event_is_folded_after_that_fold() {
         List<Object> answers = assertThatAFeedBackFromTheLiveFoldIsFoldedAfterIt((feed, converter) ->
-                feed.accept(new Counted("n")).thenReturn("queued"));
+                feed.acceptAndWait(new Counted("n")).thenReturn("queued"));
 
         assertThat(answers).containsExactly("queued");
     }
 
     // The same live-or-not decision any caller gets, answered once "n" is queued rather than once it is folded
     @Test
-    void accept_cloud_event_from_the_registered_fold_completes_delivered_once_queued_and_the_event_is_folded_after_that_fold() {
+    void accept_or_defer_cloud_event_from_the_registered_fold_completes_delivered_once_queued_and_the_event_is_folded_after_that_fold() {
         List<Object> answers = assertThatAFeedBackFromTheLiveFoldIsFoldedAfterIt((feed, converter) ->
-                feed.acceptCloudEvent(converter.toCloudEvent(new Counted("n"))).map(outcome -> outcome));
+                feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("n"))).map(outcome -> outcome));
 
         assertThat(answers).containsExactly(RoutingOutcome.DELIVERED);
     }
@@ -590,7 +839,7 @@ class DomainEventFeedTest {
                 .then(Mono.fromRunnable(() -> folded.add(event.eventId()))), Filter.all());
         StepVerifier.create(feed.catchUp("counter")).expectComplete().verify(Duration.ofSeconds(5));
 
-        StepVerifier.create(feed.accept(new Counted("2"))).expectComplete().verify(Duration.ofSeconds(5));
+        StepVerifier.create(feed.acceptAndWait(new Counted("2"))).expectComplete().verify(Duration.ofSeconds(5));
 
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "n"));
         return answers;
@@ -627,7 +876,7 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void accept_cloud_event_not_matching_the_registered_filter_reports_filtered_and_is_never_decoded() {
+    void accept_or_defer_cloud_event_not_matching_the_registered_filter_reports_filtered_and_is_never_decoded() {
         AtomicInteger decodes = new AtomicInteger();
         CloudEventConverter<Counted> converter = countingConverter(decodes);
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
@@ -636,7 +885,7 @@ class DomainEventFeedTest {
         feed.catchUpAll().block();
         CloudEvent nonMatching = CloudEventBuilder.v1().withId("x").withSource(SOURCE).withType("SomethingElseHappened").build();
 
-        RoutingOutcome outcome = feed.acceptCloudEvent(nonMatching).block();
+        RoutingOutcome outcome = feed.acceptOrDeferCloudEvent(nonMatching).block();
 
         assertThat(outcome).isEqualTo(RoutingOutcome.FILTERED);
         assertThat(repo).isEmpty();
@@ -644,11 +893,11 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void accept_cloud_event_before_a_projection_is_registered_is_refused() {
+    void accept_or_defer_cloud_event_before_a_projection_is_registered_is_refused() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
 
-        StepVerifier.create(feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))))
+        StepVerifier.create(feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("1"))))
                 .expectErrorSatisfies(e -> assertThat(e)
                         .isInstanceOf(IllegalStateException.class)
                         .hasMessageContaining("has no projection registered"))
@@ -656,7 +905,7 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void accept_cloud_event_uses_the_same_filter_the_projection_was_registered_with_not_a_second_one() {
+    void accept_or_defer_cloud_event_uses_the_same_filter_the_projection_was_registered_with_not_a_second_one() {
         // The live match and the replay share one filter, given once at register(..), so they can never disagree
         // about which events are this projection's the way two independently configured filters could.
         CloudEventConverter<Counted> converter = countedConverter();
@@ -666,8 +915,8 @@ class DomainEventFeedTest {
         feed.register("counter", fold, Filter.type(converter.getCloudEventType(Counted.class)));
         feed.goLive("counter").block();
 
-        RoutingOutcome delivered = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
-        RoutingOutcome filtered = feed.acceptCloudEvent(CloudEventBuilder.v1().withId("x").withSource(SOURCE).withType("SomethingElseHappened").build()).block();
+        RoutingOutcome delivered = feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
+        RoutingOutcome filtered = feed.acceptOrDeferCloudEvent(CloudEventBuilder.v1().withId("x").withSource(SOURCE).withType("SomethingElseHappened").build()).block();
 
         assertThat(delivered).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(filtered).isEqualTo(RoutingOutcome.FILTERED);
@@ -676,10 +925,10 @@ class DomainEventFeedTest {
 
     @Test
     void registering_a_payload_filter_with_no_data_field_reader_still_succeeds_since_the_replay_never_needed_one() {
-        // DomainEventFeed.register(..) shipped long before acceptCloudEvent existed, and the store has always
+        // DomainEventFeed.register(..) shipped long before acceptOrDeferCloudEvent existed, and the store has always
         // evaluated a data payload condition on the replay filter itself, with no DataFieldReader involved. An
-        // existing caller who never touches acceptCloudEvent must keep registering exactly the filters it always
-        // could, so this must not regress into a startup failure now that acceptCloudEvent needs a DataFieldReader
+        // existing caller who never touches acceptOrDeferCloudEvent must keep registering exactly the filters it always
+        // could, so this must not regress into a startup failure now that acceptOrDeferCloudEvent needs a DataFieldReader
         // for the very same filter.
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
@@ -692,14 +941,14 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void a_payload_filter_with_no_data_field_reader_is_refused_on_the_first_accept_cloud_event_call_not_at_register() {
+    void a_payload_filter_with_no_data_field_reader_is_refused_on_the_first_accept_or_defer_cloud_event_call_not_at_register() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
         Function<Counted, Mono<Void>> fold = event -> Mono.empty();
         feed.register("counter", fold, Filter.data("amount", eq(42)));
         feed.goLive("counter").block();
 
-        Throwable thrown = catchThrowable(() -> feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))).block());
+        Throwable thrown = catchThrowable(() -> feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("1"))).block());
 
         assertThat(thrown).isInstanceOf(UnreadableLiveFilterException.class)
                 .hasMessageContaining("DataFieldReader");
@@ -731,9 +980,9 @@ class DomainEventFeedTest {
         feed.goLive("counter").block();
         CloudEvent event = converter.toCloudEvent(new Counted("1"));
 
-        Throwable first = catchThrowable(() -> feed.acceptCloudEvent(event).block());
-        Throwable second = catchThrowable(() -> feed.acceptCloudEvent(event).block());
-        Throwable third = catchThrowable(() -> feed.acceptCloudEvent(event).block());
+        Throwable first = catchThrowable(() -> feed.acceptOrDeferCloudEvent(event).block());
+        Throwable second = catchThrowable(() -> feed.acceptOrDeferCloudEvent(event).block());
+        Throwable third = catchThrowable(() -> feed.acceptOrDeferCloudEvent(event).block());
 
         assertThat(first).isInstanceOf(UnreadableLiveFilterException.class);
         assertThat(second).as("the same exception instance, not a fresh one rebuilt for this call").isSameAs(first);
@@ -753,14 +1002,14 @@ class DomainEventFeedTest {
         feed.register("counter", fold, Filter.data("amount", eq(42)));
         feed.goLive("counter").block();
 
-        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
+        RoutingOutcome outcome = feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
 
         assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).isEqualTo(1);
     }
 
     @Test
-    void accept_cloud_event_errors_when_the_live_matcher_itself_throws() {
+    void accept_or_defer_cloud_event_errors_when_the_live_matcher_itself_throws() {
         CloudEventConverter<Counted> converter = countedConverter();
         DataFieldReader throwingReader = (cloudEvent, path) -> {
             throw new IllegalStateException("payload unreadable");
@@ -770,15 +1019,15 @@ class DomainEventFeedTest {
         Function<Counted, Mono<Void>> fold = event -> Mono.empty();
         feed.register("counter", fold, Filter.data("amount", eq(42)));
 
-        StepVerifier.create(feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))))
+        StepVerifier.create(feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("1"))))
                 .verifyErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessage("payload unreadable"));
     }
 
     @Test
-    void accept_cloud_event_reports_deferred_rather_than_delivered_when_a_stopped_catch_up_drops_the_event() {
-        // The one-evaluation fix this unit mirrors from the blocking stack. acceptIfLive refuses an event outright
+    void accept_or_defer_cloud_event_reports_deferred_rather_than_delivered_when_a_stopped_catch_up_drops_the_event() {
+        // The one-evaluation fix this unit mirrors from the blocking stack. acceptOrDefer refuses an event outright
         // while the registered projection is not live, rather than buffering it and completing as though it might
-        // still be folded, so acceptCloudEvent(..) reads that refusal back as DEFERRED, safe to redeliver.
+        // still be folded, so acceptOrDeferCloudEvent(..) reads that refusal back as DEFERRED, safe to redeliver.
         CountDownLatch parked = new CountDownLatch(1);
         CountDownLatch proceed = new CountDownLatch(1);
         AtomicInteger converted = new AtomicInteger();
@@ -794,7 +1043,7 @@ class DomainEventFeedTest {
         proceed.countDown();
         assertThat(awaitBoolean(catchUpFinished, 5, TimeUnit.SECONDS)).isTrue();
 
-        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live"))).block();
+        RoutingOutcome outcome = feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("live"))).block();
 
         assertThat(outcome).as("the event matched the filter but the stopped handover refused it outright, so it "
                         + "was never actually delivered to the projection, and a redelivery is always safe")
@@ -803,13 +1052,13 @@ class DomainEventFeedTest {
     }
 
     /**
-     * Proves acceptIfLive's refusal is immediate rather than waiting on the replay. An event fed while the replay is
+     * Proves acceptOrDefer's refusal is immediate rather than waiting on the replay. An event fed while the replay is
      * still parked (mid-fold, before any stop) reports {@link RoutingOutcome#DEFERRED} right away, never buffered
      * and never left pending on whatever resolves the replay next. This is the behaviour
      * {@code acceptReportingDelivery} did not have, the defect this unit's fix closes.
      */
     @Test
-    void accept_cloud_event_reports_deferred_immediately_for_an_event_that_arrives_while_the_replay_is_still_running() {
+    void accept_or_defer_cloud_event_reports_deferred_immediately_for_an_event_that_arrives_while_the_replay_is_still_running() {
         CountDownLatch parked = new CountDownLatch(1);
         CountDownLatch proceed = new CountDownLatch(1);
         AtomicInteger converted = new AtomicInteger();
@@ -824,7 +1073,7 @@ class DomainEventFeedTest {
 
         // Asked while the replay is still parked mid-fold, neither stopped nor finished. Refused immediately rather
         // than waiting on either.
-        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live"))).block(Duration.ofSeconds(5));
+        RoutingOutcome outcome = feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("live"))).block(Duration.ofSeconds(5));
 
         assertThat(outcome).as("refused immediately, never buffered against a replay still in flight")
                 .isEqualTo(RoutingOutcome.DEFERRED);
@@ -919,6 +1168,25 @@ class DomainEventFeedTest {
             @Override
             public Mono<Long> currentPosition() {
                 return Mono.just((long) events.size());
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+    }
+
+    private static PositionOrderedReader failingReader() {
+        return new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Flux.error(new IllegalStateException("replay boom"));
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just(0L);
             }
 
             @Override

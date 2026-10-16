@@ -42,7 +42,7 @@ import static org.mockito.Mockito.verify;
  * {@code RabbitMqCloudEventSourceOutcomeRoutingTest}, written because the two sources used to sort the outcomes
  * separately and could disagree without either one failing a test.
  * <p>
- * {@code DomainEventFeed#acceptCloudEvent} reports three of the six today. The other three are checked here
+ * {@code DomainEventFeed#acceptOrDeferCloudEvent} reports three of the six today. The other three are checked here
  * anyway, since what decides them is {@link RoutingOutcome#disposition()} rather than which of them a feed
  * happens to report.
  */

@@ -98,7 +98,7 @@ class KafkaDomainEventSourcePermanentStopTest {
 
         DomainEventFeed<String> feed = new DomainEventFeed<>(new InMemoryEventStore(), new IdentityConverter(), orderId -> orderId);
         // A data-field filter with the default (refusing) DataFieldReader. Refused live on the first
-        // acceptCloudEvent for this registration, whichever record reaches it first.
+        // acceptOrDeferCloudEvent for this registration, whichever record reaches it first.
         feed.register("proj", orderId -> {
         }, Filter.data("amount", Condition.eq(42)));
         feed.goLive("proj");
@@ -144,7 +144,7 @@ class KafkaDomainEventSourcePermanentStopTest {
      * later in the same batch, must never reach the feed at all. Before the fix, this loop kept walking the rest
      * of the batch into the same permanent refusal, one partition at a time, offering a feed that had already
      * given up a record it could only ever refuse again. Proven with a spy on the feed itself rather than on a
-     * mocked {@code Consumer} call, since the defect was calling {@code acceptCloudEvent} at all, not any seek or
+     * mocked {@code Consumer} call, since the defect was calling {@code acceptOrDeferCloudEvent} at all, not any seek or
      * commit around it.
      */
     @Test
@@ -179,7 +179,7 @@ class KafkaDomainEventSourcePermanentStopTest {
         assertThat(shouldContinue).isFalse();
         // Partition 0's record never decodes, so it never reaches the feed either. Only partition 1's record, the
         // one that actually triggered the permanent stop, may.
-        verify(feed, times(1)).acceptCloudEvent(any());
+        verify(feed, times(1)).acceptOrDeferCloudEvent(any());
         // Rewound to its own earliest fetched record instead, so the next consumer in this group refetches it,
         // rather than left at whatever position poll() already advanced it to.
         verify(consumer).seek(PARTITION_2, 9L);
