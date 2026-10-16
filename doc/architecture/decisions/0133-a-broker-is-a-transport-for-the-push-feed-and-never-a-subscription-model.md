@@ -897,8 +897,18 @@ reactor `DomainEventFeed`.
 Both projection feeds, on both stacks, make that refusal public as `acceptOrDefer(E)` and
 `acceptOrDefer(EventMetadata, E)`, which return `DELIVERED` or `DEFERRED` without waiting for a catch-up. The
 `accept` they shipped with in 0.33.0 is renamed `acceptAndWait`, which waits for the catch-up instead, and `accept`
-stays as a deprecated method that calls it. The push models' method has the same name, so a broker source calls
-`acceptOrDefer` whichever of these types it feeds.
+stays as a deprecated method that calls it. The push models' method has the same name. The two domain sources call
+`DomainEventFeed.acceptOrDeferCloudEvent`, which matches and decodes the event first and then answers as
+`acceptOrDefer` does, or `FILTERED` for an event the registered filter does not match.
+
+`DELIVERED` from either feed means the event's fold, the projection function that applies it, has completed before the
+answer, in this call or in an earlier delivery of the same event. On the reactor stack a call from inside the
+projection's own fold could only answer once the event is queued, because the feed folds one event at a time.
+`ReactiveHandover.acceptIfLive` therefore refuses any call from its own code with
+`ReactiveHandover.PreDispatchRefusalException`, live or not, and the reactor `CatchupThenPushSubscriptionModel` reports
+that refusal as `NOT_DELIVERABLE`. `refusesPermanently()` stays false, so neither a source that stops on `REFUSED` nor a
+domain source that stops on a feed refusing permanently stops for it. The blocking feed folds such a call on the calling
+thread before it returns, so it needs no refusal.
 
 ## Amendment (2026-08-21): a permanent catch-up refusal stops a source, and a lifecycle `NOT_DELIVERABLE` is paced, not failed
 

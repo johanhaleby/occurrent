@@ -1188,14 +1188,18 @@ feed goes live, its replay notices a stop, or it fails. A replay notices a stop 
 projection, so one with no event left to hand over goes live as if there had been no stop.
 
 `acceptOrDefer(..)` never waits for a catch-up, so a Kafka consumer that calls it keeps polling through a long replay.
-Once the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`. Before that, during a catch-up,
-and after a stop, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Leave the message unacknowledged
-then, and the broker delivers it again. The blocking `acceptOrDefer(..)` also returns `DEFERRED` while another
-thread is still applying the same event. It throws an `IllegalStateException` once the catch-up has failed, and on
-the reactor stack its `Mono` errors with one instead. That `Mono` also errors when the queue of live events waiting
-to be applied is full, at the size `CatchupThenLiveOptions.maxBufferedEvents()` sets. Do not acknowledge the message
-on either error. `DomainEventFeed.acceptOrDeferCloudEvent(..)`, which the Kafka and RabbitMQ sources call, gives the
-same outcomes for a `CloudEvent`, and `FILTERED` for one that does not match the filter given to `register(..)`.
+Once the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`, so `DELIVERED` means the event has
+been applied. Before that, during a catch-up, and after a `stopCatchUp()` that stopped a replay before the feed went
+live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Leave the message unacknowledged then, and the
+broker delivers it again. A stop that ends a replay on a feed that was already live keeps it live, so the call applies
+the event and returns `DELIVERED` again. The blocking `acceptOrDefer(..)` also returns `DEFERRED` while another thread
+is still applying the same event. It throws an `IllegalStateException` once the catch-up has failed, and on the reactor
+stack its `Mono` errors with one instead. On the reactor stack the `Mono` also errors with an `IllegalStateException`
+when the code that applies an event to the feed, the `fold` you passed it, calls it. Section 15 says why. That `Mono`
+also errors when the queue of live events waiting to be applied is full, at the size
+`CatchupThenLiveOptions.maxBufferedEvents()` sets. Do not acknowledge the message on any of these errors.
+`DomainEventFeed.acceptOrDeferCloudEvent(..)`, which the Kafka and RabbitMQ sources call, gives the same outcomes for a
+`CloudEvent`, and `FILTERED` for one that does not match the filter given to `register(..)`.
 
 `UpgradeToOccurrent_0_34` renames `accept(..)` to `acceptAndWait(..)` on both feeds and both stacks, which changes
 nothing at runtime. Which thread calls `acceptAndWait(..)` and what a listener does when it throws are runtime
@@ -1292,14 +1296,16 @@ its `Mono`.
 Now the call completes once the event is queued. The event is applied once the handler or fold has returned, in the
 order it was fed, and an event fed during the replay once the subscription or feed has gone live. A replay that ends
 before that writes no catch-up marker, so the next replay hands the handler or fold the same history again. That holds
-for `PushSubscriptionModel.accept(..)` and `acceptOrDefer(..)` called from the handler, and for `acceptAndWait(..)`
-and `acceptOrDefer(..)` on `CatchupProjectionFeed` and `DomainEventFeed`, and `DomainEventFeed.acceptOrDeferCloudEvent(..)`,
-called from the fold.
+for `PushSubscriptionModel.accept(..)` called from the handler, and for `acceptAndWait(..)` on `CatchupProjectionFeed`
+and `DomainEventFeed` and `DomainEventFeed.acceptAndWaitCloudEvent(..)` called from the fold. A handler or fold that
+used the call's completion or its error to learn that the event was applied now learns only that it was queued.
 
-`acceptOrDefer(..)` and `acceptOrDeferCloudEvent(..)` decide between `DELIVERED` and `DEFERRED` the same way they do
-for any other caller. During a replay that is `DEFERRED`. When live they report `DELIVERED` once the event is queued.
-A handler or fold that used the call's completion, its error or its `DELIVERED` to learn that the event was applied
-now learns only that it was queued.
+`acceptOrDefer(..)` and `acceptOrDeferCloudEvent(..)` report `DELIVERED` only for an event that has been applied, and
+an event fed from the handler or fold cannot be applied before that code returns. So called from the fold, live or
+not, `acceptOrDefer(..)` on either feed, and `acceptOrDeferCloudEvent(..)` for an event that matches the filter, error
+with an `IllegalStateException` and queue nothing. Call `acceptAndWait(..)` or `acceptAndWaitCloudEvent(..)` there
+instead. `PushSubscriptionModel.acceptOrDefer(..)` called from the handler reports `NOT_DELIVERABLE` for that
+handler's own subscription and queues nothing for it. None of these calls existed in 0.33.0.
 
 When applying one of these events fails, nobody is waiting for it any more. The subscription or feed then starts
 failing. It deletes its catch-up marker, refuses every later event from anywhere else with that failure, applies the
