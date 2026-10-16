@@ -218,7 +218,8 @@ marker, so a caller that sees a refusal and starts a new catch-up gets a replay.
 the handover logs an error that says to delete the marker by hand before replacing the subscription or feed.
 
 While it is failing, the handover refuses every later payload from any other code with that failure, and refuses a
-new catch-up. It delivers every payload it has already taken in and every payload its own code feeds it meanwhile.
+new catch-up. It delivers every payload it has already taken in and every payload its own code feeds it meanwhile
+through `accept` or `acceptReportingDelivery`. One its own code feeds through `acceptIfLive` is refused, as above.
 A failed catch-up also answers each payload from other code still waiting with its failure and does not deliver it,
 as described further down. A later failure is logged while the rest are still delivered. Once none is left, it fails for good with the first failure.
 

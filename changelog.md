@@ -30,7 +30,7 @@
   | `FILTERED` | That subscription evaluated the event and declined it. | `ACKNOWLEDGE`. Acknowledge it. |
   | `UNAVAILABLE` | No running, unpaused subscription to reach, a paused one included. | `HOLD`. Leave it unacknowledged for redelivery, don't park it. |
   | `DEFERRED` | A `CatchupThenPushSubscriptionModel` in front is still replaying, and refused the event instead of buffering it. | `HOLD`. Leave it unacknowledged for redelivery, don't park it. |
-  | `NOT_DELIVERABLE` | A filter threw, or the catch-up refused the event for a reason that can pass, such as a full live buffer or a call from that subscription's own handler, where the event could only be queued. | `FAIL`. Apply your delivery failure policy. |
+  | `NOT_DELIVERABLE` | A filter threw, or the catch-up refused the event for a reason that can pass, such as a full live buffer. On the reactor stack it also reports a call from that subscription's own handler, which is refused every time, since the event could only be queued there. | `FAIL`. Apply your delivery failure policy. |
   | `REFUSED` | The refusal is permanent, as for every event once a catch-up has failed. | `STOP`. Stop consuming. |
 
   `mayAcknowledge()` answers the acknowledge question on its own, so a source you write yourself switches on four `disposition()` values rather than six constants.

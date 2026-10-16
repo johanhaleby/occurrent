@@ -1188,15 +1188,16 @@ feed goes live, its replay notices a stop, or it fails. A replay notices a stop 
 projection, so one with no event left to hand over goes live as if there had been no stop.
 
 `acceptOrDefer(..)` never waits for a catch-up, so a Kafka consumer that calls it keeps polling through a long replay.
-Once the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`, so `DELIVERED` means the event has
-been applied. Before that, during a catch-up, and after a `stopCatchUp()` that stopped a replay before the feed went
-live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Leave the message unacknowledged then, and the
-broker delivers it again. A stop that ends a replay on a feed that was already live keeps it live, so the call applies
-the event and returns `DELIVERED` again. The blocking `acceptOrDefer(..)` also returns `DEFERRED` while another thread
-is still applying the same event. It throws an `IllegalStateException` once the catch-up has failed, and on the reactor
-stack its `Mono` errors with one instead. On the reactor stack the `Mono` also errors with an `IllegalStateException`
-when the code that applies an event to the feed, the `fold` you passed it, calls it. Section 15 says why. That `Mono`
-also errors when the queue of live events waiting to be applied is full, at the size
+Nor does it run one on the calling thread. A catch-up the fold asks for while the call applies the event replays on a
+thread of its own. Once the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`, so `DELIVERED`
+means the event has been applied. Before that, during a catch-up, and after a `stopCatchUp()` that stopped a replay
+before the feed went live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Leave the message
+unacknowledged then, and the broker delivers it again. A stop that ends a replay on a feed that was already live keeps
+it live, so the call applies the event and returns `DELIVERED` again. The blocking `acceptOrDefer(..)` also returns
+`DEFERRED` while another thread is still applying the same event. It throws an `IllegalStateException` once the catch-up
+has failed, and on the reactor stack its `Mono` errors with one instead. On the reactor stack the `Mono` also errors
+with an `IllegalStateException` when the code that applies an event to the feed, the `fold` you passed it, calls it.
+Section 15 says why. That `Mono` also errors when the queue of live events waiting to be applied is full, at the size
 `CatchupThenLiveOptions.maxBufferedEvents()` sets. Do not acknowledge the message on any of these errors.
 `DomainEventFeed.acceptOrDeferCloudEvent(..)`, which the Kafka and RabbitMQ sources call, gives the same outcomes for a
 `CloudEvent`, and `FILTERED` for one that does not match the filter given to `register(..)`.
