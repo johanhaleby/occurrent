@@ -35,7 +35,7 @@ import org.springframework.context.annotation.Lazy;
 import java.util.Map;
 
 /**
- * Property-driven construction of the Kafka broker sink and consume bridges, per
+ * Property-driven construction of the Kafka broker sink and sources, per
  * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md">ADR 133</a>.
  * Enabled with {@link EnableOccurrentKafkaBroker}, the same {@code @Import}-based activation the MongoDB starter
  * uses, rather than Spring Boot's automatic classpath scanning.
@@ -55,7 +55,7 @@ import java.util.Map;
 public class OccurrentKafkaAutoConfiguration {
 
     /**
-     * The zero-config {@link DestinationResolver} a sink or a bridge factory falls back to when the application
+     * The zero-config {@link DestinationResolver} a sink or a source factory falls back to when the application
      * declares none, active once {@code occurrent.broker.kafka.topic} is set, checked through
      * {@link KafkaTopicConfiguredCondition} rather than a plain {@code @ConditionalOnProperty}, see that
      * condition's own javadoc for why. {@code @Fallback} rather than {@code @ConditionalOnMissingBean}, a
@@ -91,17 +91,17 @@ public class OccurrentKafkaAutoConfiguration {
     }
 
     /**
-     * Pre-seeds {@link KafkaCloudEventBridgeFactory} with {@code bootstrap.servers}, the resolver bean if one
-     * exists (a caller supplying its own bindings needs none), and every {@code occurrent.broker.kafka.bridge.*}
+     * Pre-seeds {@link KafkaCloudEventSourceFactory} with {@code bootstrap.servers}, the resolver bean if one
+     * exists (a caller supplying its own bindings needs none), and every {@code occurrent.broker.kafka.source.*}
      * default, including a zero-config {@code readinessSource} that defers to whichever
-     * {@code CatchupThenPushSubscriptionModel} bean, if any, owns the bridge's subscription id, see
+     * {@code CatchupThenPushSubscriptionModel} bean, if any, owns the source's subscription id, see
      * {@link CatchupThenPushReadiness}. Not conditioned on a resolver, since building this factory does nothing
      * but capture configuration. Nothing about it opens a consumer until a caller actually calls
-     * {@link KafkaCloudEventBridgeFactory#forGroup}.
+     * {@link KafkaCloudEventSourceFactory#forGroup}.
      */
     @Bean
-    KafkaCloudEventBridgeFactory occurrentKafkaCloudEventBridgeFactory(KafkaBrokerProperties properties, ObjectProvider<DestinationResolver<KafkaDestination>> resolver,
+    KafkaCloudEventSourceFactory occurrentKafkaCloudEventSourceFactory(KafkaBrokerProperties properties, ObjectProvider<DestinationResolver<KafkaDestination>> resolver,
                                                                         ApplicationContext applicationContext) {
-        return new DefaultKafkaCloudEventBridgeFactory(properties, resolver, applicationContext);
+        return new DefaultKafkaCloudEventSourceFactory(properties, resolver, applicationContext);
     }
 }

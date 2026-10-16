@@ -30,15 +30,15 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@link RabbitMqBuildFailureClassifier#isTransient(Throwable)}, the classification
- * {@code build()}'s default retry shares across both bridges and the Spring Boot starter. Constructs each
+ * {@code build()}'s default retry shares across both sources and the Spring Boot starter. Constructs each
  * {@link ShutdownSignalException} directly against a mocked {@link AMQP.Connection.Close}/{@link AMQP.Channel.Close}
  * rather than against a real broker, which has no way to force a chosen reply code on demand.
  */
 class RabbitMqBuildFailureClassifierTest {
 
     @Test
-    void a_plain_ioexception_wrapped_in_a_bridge_exception_is_transient() {
-        RabbitMqBridgeException exception = new RabbitMqBridgeException("failed", new IOException("connection reset"));
+    void a_plain_ioexception_wrapped_in_a_source_exception_is_transient() {
+        RabbitMqSourceException exception = new RabbitMqSourceException("failed", new IOException("connection reset"));
 
         assertThat(RabbitMqBuildFailureClassifier.isTransient(exception)).isTrue();
     }
@@ -81,11 +81,11 @@ class RabbitMqBuildFailureClassifierTest {
     }
 
     @Test
-    void a_not_found_channel_close_wrapped_in_a_bridge_exception_is_not_transient() {
+    void a_not_found_channel_close_wrapped_in_a_source_exception_is_not_transient() {
         AMQP.Channel.Close close = mock(AMQP.Channel.Close.class);
         when(close.getReplyCode()).thenReturn(AMQP.NOT_FOUND);
         ShutdownSignalException shutdown = new ShutdownSignalException(false, false, close, "channel");
-        RabbitMqBridgeException exception = new RabbitMqBridgeException("failed to declare topology", shutdown);
+        RabbitMqSourceException exception = new RabbitMqSourceException("failed to declare topology", shutdown);
 
         assertThat(RabbitMqBuildFailureClassifier.isTransient(exception)).isFalse();
     }
@@ -161,7 +161,7 @@ class RabbitMqBuildFailureClassifierTest {
         RuntimeException a = new RuntimeException("A");
         RuntimeException b = new RuntimeException("B", a);
         a.initCause(b);
-        RabbitMqBridgeException cyclic = new RabbitMqBridgeException("cyclic", a);
+        RabbitMqSourceException cyclic = new RabbitMqSourceException("cyclic", a);
 
         boolean result = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> RabbitMqBuildFailureClassifier.isTransient(cyclic));
 
@@ -184,7 +184,7 @@ class RabbitMqBuildFailureClassifierTest {
                 return new RelentlessCause();
             }
         }
-        RabbitMqBridgeException neverRepeating = new RabbitMqBridgeException("wrapping an ever-growing cause chain", new RelentlessCause());
+        RabbitMqSourceException neverRepeating = new RabbitMqSourceException("wrapping an ever-growing cause chain", new RelentlessCause());
 
         boolean result = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> RabbitMqBuildFailureClassifier.isTransient(neverRepeating));
 

@@ -49,14 +49,14 @@
             <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- PushSubscriptionModel appears directly in the CloudEvent bridge factory's own
+        <!-- PushSubscriptionModel appears directly in the CloudEvent source factory's own
              public API, so it's declared rather than left to arrive transitively. -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-push-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- DomainEventFeed appears directly in the domain bridge factory's own public API, so it's declared
+        <!-- DomainEventFeed appears directly in the domain source factory's own public API, so it's declared
              rather than left to arrive transitively. -->
         <dependency>
             <groupId>org.occurrent</groupId>

@@ -1,0 +1,1006 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.broker.kafka.blocking.domain;
+
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.TopicPartition;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.broker.api.blocking.DestinationResolver;
+import org.occurrent.broker.kafka.blocking.KafkaDestination;
+import org.occurrent.broker.kafka.blocking.KafkaTestSupport;
+import org.occurrent.condition.Condition;
+import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.dsl.view.MaterializedView;
+import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.filter.Filter;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
+
+class KafkaDomainEventSourceTest extends KafkaTestSupport {
+
+    private static final Duration POLL_TIMEOUT = Duration.ofMillis(100);
+
+    /**
+     * The plain {@link Filter} overload of {@code bindingFilter}, which wraps into an
+     * {@link org.occurrent.subscription.AgnosticSubscriptionFilter} and delegates. {@link NarrowingRecorder}
+     * narrows to the topic the event is published on and its catch-all is a different, empty topic, so an overload
+     * that stopped delegating would subscribe to the empty one and nothing would arrive.
+     */
+    @Test
+    void a_plain_filter_bindingFilter_subscribes_to_the_narrowed_topic_rather_than_the_catch_all() throws Exception {
+        String emptyTopic = createTopic(1);
+        String groupId = "group-" + UUID.randomUUID();
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+        Filter bindingFilter = Filter.type(TestOrderPlaced.class.getName());
+        NarrowingRecorder resolver = new NarrowingRecorder(topic, emptyTopic);
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .resolver(resolver)
+                .bindingFilter(bindingFilter)
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
+            assertThat(resolver.received).isSameAs(bindingFilter);
+        } finally {
+            deleteTopic(emptyTopic);
+        }
+    }
+
+    /**
+     * Narrows any filter to {@code narrowedTopic} and answers {@link #catchAllDestination()} with a different one,
+     * so which of the two a source subscribed to is visible in whether an event arrives at all.
+     */
+    private static final class NarrowingRecorder implements DestinationResolver<KafkaDestination> {
+
+        private final String narrowedTopic;
+        private final String catchAllTopic;
+        private Filter received;
+
+        private NarrowingRecorder(String narrowedTopic, String catchAllTopic) {
+            this.narrowedTopic = narrowedTopic;
+            this.catchAllTopic = catchAllTopic;
+        }
+
+        @Override
+        public KafkaDestination destinationFor(CloudEvent cloudEvent) {
+            return KafkaDestination.of(narrowedTopic);
+        }
+
+        @Override
+        public Optional<Set<KafkaDestination>> destinationsFor(Filter filter) {
+            received = filter;
+            return Optional.of(Set.of(KafkaDestination.of(narrowedTopic)));
+        }
+
+        @Override
+        public KafkaDestination catchAllDestination() {
+            return KafkaDestination.of(catchAllTopic);
+        }
+    }
+
+    @Test
+    void commits_on_delivered_and_the_committed_offset_advances() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
+        // No catch-up in this test (nothing stored, nothing to replay), so go straight live and a live event is
+        // handled immediately rather than buffered awaiting a replay handover that never happens.
+        feed.goLive("proj");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        }
+    }
+
+    /**
+     * The domain source's own copy of {@code KafkaCloudEventSourceTest}'s numeric-extension round-trip test. Both
+     * sources share {@code KafkaCloudEventMapper}, so the fix covers both, but this exact class of bug, a rebuilt
+     * CloudEvent losing the type a live filter needs to match it, gets its own direct proof rather than relying on
+     * the CloudEvent source's coverage alone.
+     */
+    @Test
+    void a_numeric_extension_survives_the_broker_round_trip_so_a_stream_version_filter_still_matches_it() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()).and(Filter.streamVersion(Condition.eq(3L))));
+        feed.goLive("proj");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            CloudEvent cloudEvent = CloudEventBuilder.v1()
+                    .withId("id-1")
+                    .withSource(URI.create("urn:test"))
+                    .withType(TestOrderPlaced.class.getName())
+                    .withDataContentType("text/plain")
+                    .withData("order-1".getBytes(StandardCharsets.UTF_8))
+                    .withExtension("streamid", "stream-1")
+                    .withExtension("streamversion", 3L)
+                    .build();
+            publishCloudEvent(topic, "stream-1", cloudEvent);
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
+        }
+    }
+
+    @Test
+    void the_source_does_not_consume_before_a_projection_is_registered_then_starts_once_one_is() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            Thread.sleep(POLL_TIMEOUT.toMillis() * 10);
+            assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
+            assertThat(handled).isEmpty();
+
+            feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
+            feed.goLive("proj");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
+        }
+    }
+
+    /**
+     * The silent-loss case ADR 133 exists to prevent. A projection registered but not yet caught up or gone live
+     * only buffers in memory, and a {@code DomainEventFeed} bound for {@code goLive(..)} never replays, so a
+     * committed record in that window would be lost for good on a crash. Proof this cannot happen. The offset
+     * stays uncommitted until the application actually calls {@code goLive(..)}, at which point the record is
+     * delivered and only then committed.
+     */
+    @Test
+    void a_message_delivered_before_the_feed_has_gone_live_is_not_committed_and_is_delivered_once_it_does() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        // Registered, but goLive(..) is deliberately not called yet. hasProjection() is already true, so without the
+        // isReadyForLiveDelivery() gate the source would start consuming and commit a merely buffered event.
+        feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            Thread.sleep(POLL_TIMEOUT.toMillis() * 10);
+            assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
+            assertThat(handled).isEmpty();
+
+            feed.goLive("proj");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        }
+    }
+
+    @Test
+    void redelivers_on_a_projection_failure_and_the_retry_succeeds() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        AtomicInteger attempts = new AtomicInteger();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        MaterializedView<TestOrderPlaced> view = event -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new RuntimeException("fails once");
+            }
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(attempts).hasValue(2));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        }
+    }
+
+    @Test
+    void a_projection_that_throws_an_assertionError_is_redelivered_rather_than_stalling_the_consumer() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        AtomicInteger attempts = new AtomicInteger();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        MaterializedView<TestOrderPlaced> view = event -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new AssertionError("simulated assertion failure");
+            }
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(attempts).hasValue(2));
+        }
+    }
+
+    /**
+     * Proves ADR 133's rule directly on this source's own copy of the seek-and-break partition loop, "after a seek
+     * the source stops processing that partition's remaining polled records." Three events land on the topic's one
+     * partition, in order, before the source ever starts consuming, so all three are available in the very first
+     * {@code poll()} call. The middle one fails on every attempt. If the loop kept walking the batch past it, the
+     * third would eventually be handled and its offset committed. Instead it stays untouched for as long as the
+     * middle one keeps failing. The CloudEvent-level source has its own version of this proof, but this source
+     * carries its own separate copy of the same loop, so a regression here would not fail that suite.
+     */
+    @Test
+    void after_a_seek_the_source_stops_processing_that_partitions_remaining_polled_records_for_this_poll() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        publish("stream-1", "id-1", "order-1");
+        publish("stream-1", "id-2", "order-2");
+        publish("stream-1", "id-3", "order-3");
+
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        List<String> handled = new CopyOnWriteArrayList<>();
+        AtomicInteger order2Attempts = new AtomicInteger();
+        MaterializedView<TestOrderPlaced> view = event -> {
+            if (event.orderId().equals("order-2")) {
+                order2Attempts.incrementAndGet();
+                throw new RuntimeException("order-2 always fails");
+            }
+            handled.add(event.orderId());
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            // order-2 is redelivered at least three times, proving the loop keeps retrying it rather than moving on.
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(order2Attempts.get()).isGreaterThanOrEqualTo(3));
+
+            assertThat(handled).containsExactly("order-1");
+            assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L);
+        }
+    }
+
+    /**
+     * This source's own copy of the poison-record backoff proof. A record whose projection can never resolve makes
+     * every poll seek back to the exact offset it started at, with nothing staged to commit, the shape
+     * {@code processBatch}'s own comment calls a poison record. That path throws nothing the outer catch-all in
+     * {@code runLoop} could back off for on its own, so {@code processBatch} backs off for {@code pollTimeout}
+     * itself whenever a batch seeks back without staging anything. A generous {@code pollTimeout} here keeps the
+     * attempt count bounded over a fixed window. Without that backoff this loop would instead spin at the JVM's
+     * own maximum rate against a record that can never resolve. The CloudEvent-level source has its own version of
+     * this proof, but this source carries its own separate copy of the same loop, so a regression here would not
+     * fail that suite.
+     */
+    @Test
+    void a_poison_record_backs_off_at_pollTimeout_instead_of_spinning() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        publish("stream-1", "id-1", "order-1");
+
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        AtomicInteger attempts = new AtomicInteger();
+        MaterializedView<TestOrderPlaced> view = event -> {
+            attempts.incrementAndGet();
+            throw new RuntimeException("poison record, never resolves");
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(Duration.ofSeconds(2))
+                .build()) {
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(attempts.get()).isGreaterThanOrEqualTo(1));
+            Thread.sleep(4500);
+            // A record already sitting on the broker makes poll() return immediately, so without the backoff this
+            // loop iterates at its natural network round-trip cadence, comfortably double digits in 4500 ms. A
+            // 2 second backoff caps that same window to the first attempt plus at most one or two more.
+            assertThat(attempts.get()).isLessThanOrEqualTo(4);
+        }
+    }
+
+    /**
+     * Proves the ADR's other half of the same rule on this source's own copy of the loop, "other partitions in the
+     * same poll are unaffected, since their offsets are independent." Partition 0 gets a permanently-failing event,
+     * partition 1 gets one that always succeeds. The second partition's offset still commits despite the first's
+     * failure in the same poll batch.
+     */
+    @Test
+    void a_failure_on_one_partition_does_not_block_committing_another_partitions_progress_in_the_same_poll() throws Exception {
+        String twoPartitionTopic = createTopic(2);
+        publishCloudEvent(twoPartitionTopic, 0, "stream-1", testOrderPlaced("id-fails", "order-fails"));
+        publishCloudEvent(twoPartitionTopic, 1, "stream-1", testOrderPlaced("id-succeeds", "order-succeeds"));
+
+        String groupId = "group-" + UUID.randomUUID();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        List<String> handled = new CopyOnWriteArrayList<>();
+        AtomicInteger orderFailsAttempts = new AtomicInteger();
+        MaterializedView<TestOrderPlaced> view = event -> {
+            if (event.orderId().equals("order-fails")) {
+                orderFailsAttempts.incrementAndGet();
+                throw new RuntimeException("always fails");
+            }
+            handled.add(event.orderId());
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(twoPartitionTopic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly("order-succeeds"));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(twoPartitionTopic, 1))).isEqualTo(1L));
+            // Proves partition 0 was genuinely reached and kept failing, not merely never touched. The null commit
+            // below is only meaningful once order-fails is known to have actually been retried more than once.
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(orderFailsAttempts.get()).isGreaterThanOrEqualTo(2));
+            assertThat(committedOffset(groupId, new TopicPartition(twoPartitionTopic, 0))).isNull();
+        }
+    }
+
+    @Test
+    void parks_a_delivery_that_keeps_failing_and_commits_the_original_only_once_the_park_is_confirmed() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        String parkingTopic = createTopic(1);
+        KafkaDestination parkingDestination = KafkaDestination.of(parkingTopic);
+
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        MaterializedView<TestOrderPlaced> view = event -> {
+            throw new RuntimeException("always fails");
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(parkingDestination)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            ConsumerRecord<String, byte[]> parked = consumeOneRecord(parkingTopic);
+            assertThat(headerValue(parked, "ce_id")).isEqualTo("id-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        }
+    }
+
+    /**
+     * {@code RoutingOutcome.DEFERRED} bypasses {@link DeliveryFailurePolicy} entirely, including {@code PARK}, the
+     * same as the CloudEvent-level source. {@code DomainEventFeed}'s coarse gate requires
+     * {@code isReadyForLiveDelivery()} before consuming at all, unlike the push-side source, and this source runs
+     * one dedicated poll loop thread, so two records can never race each other into {@code acceptIfLive}
+     * concurrently. The reachable way to prove this against a real broker is a direct, out-of-band call for the
+     * same dedup key (the domain event's {@code orderId}, this feed's own id extractor) that holds it in flight
+     * while the source delivers a duplicate for that same key: {@code acceptIfLive} refuses the source's delivery
+     * while the direct call is still folding, reported {@code DEFERRED}.
+     */
+    @Test
+    void park_configured_never_parks_a_deferred_record() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        String parkingTopic = createTopic(1);
+        KafkaDestination parkingDestination = KafkaDestination.of(parkingTopic);
+
+        CountDownLatch directCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseDirectCall = new CountDownLatch(1);
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+            handled.add(event);
+            if (handled.size() == 1) {
+                directCallEntered.countDown();
+                awaitLatch(releaseDirectCall);
+            }
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        // Out-of-band, bypassing the source entirely: holds the "order-1" dedup key in flight so the source's own
+        // delivery for the same key below is the one that gets refused, without needing two records racing on the
+        // same single poll loop thread.
+        CloudEvent directCloudEvent = new TestOrderPlacedConverter().toCloudEvent(new TestOrderPlaced("order-1"));
+        Thread directCaller = new Thread(() -> feed.acceptCloudEvent(directCloudEvent), "direct-in-flight-caller");
+        directCaller.start();
+        assertThat(directCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(parkingDestination)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            // Long enough for several seek-back-and-retry round trips of the DEFERRED record, so this is a genuine
+            // "never parked" assertion, not a race against the source's own retry pace.
+            Thread.sleep(POLL_TIMEOUT.toMillis() * 20);
+
+            releaseDirectCall.countDown();
+            directCaller.join(TimeUnit.SECONDS.toMillis(5));
+
+            // The redelivered duplicate finds the dedup key already applied by the direct call and does not fold
+            // the handler a second time.
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+            assertThat(handled).containsExactly(new TestOrderPlaced("order-1"));
+        }
+
+        assertThat(recordCount(parkingTopic)).as("DEFERRED bypasses PARK entirely").isZero();
+    }
+
+    private long recordCount(String recordTopic) {
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, "test-consumer-" + recordTopic,
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        try (org.apache.kafka.clients.consumer.KafkaConsumer<String, byte[]> consumer = new org.apache.kafka.clients.consumer.KafkaConsumer<>(
+                consumerConfig, new org.apache.kafka.common.serialization.StringDeserializer(), new org.apache.kafka.common.serialization.ByteArrayDeserializer())) {
+            consumer.subscribe(List.of(recordTopic));
+            org.apache.kafka.clients.consumer.ConsumerRecords<String, byte[]> records = consumer.poll(Duration.ofSeconds(3));
+            return records.count();
+        }
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch reached within the timeout").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void an_undecodable_message_is_parked_with_its_raw_bytes_and_the_original_commits_once_confirmed() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        String parkingTopic = createTopic(1);
+        KafkaDestination parkingDestination = KafkaDestination.of(parkingTopic);
+
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(parkingDestination)
+                .build()) {
+            byte[] malformedBody = "not a cloud event".getBytes(StandardCharsets.UTF_8);
+            publishRaw(topic, "stream-1", malformedBody);
+
+            ConsumerRecord<String, byte[]> parked = consumeOneRecord(parkingTopic);
+            assertThat(parked.value()).isEqualTo(malformedBody);
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        }
+    }
+
+    /**
+     * Proves the {@code Consumer} thread-ownership property directly, this source's own copy of it.
+     * {@link KafkaDomainEventSource#close()} never touches the {@code Consumer} itself, only the loop thread's own
+     * {@code finally} block does, reached once its current work actually finishes. A projection that blocks well
+     * past {@link KafkaDomainEventSource.Builder#closeTimeout(Duration)} proves both halves. {@code close()}
+     * returns promptly, at the join timeout, rather than waiting for it, and the consumer group has not departed
+     * yet at that point, since nothing has closed its {@code Consumer}. Only once the projection is released does
+     * the loop thread finish its own iteration and reach its {@code finally}, and only then does the group show a
+     * clean departure.
+     */
+    @Test
+    void close_returns_at_the_join_timeout_and_the_consumer_only_closes_once_the_loop_thread_finishes() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        CountDownLatch handlerEntered = new CountDownLatch(1);
+        CountDownLatch releaseHandler = new CountDownLatch(1);
+        MaterializedView<TestOrderPlaced> view = event -> {
+            handlerEntered.countDown();
+            try {
+                assertThat(releaseHandler.await(5, TimeUnit.SECONDS)).as("test released the handler in time").isTrue();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .closeTimeout(Duration.ofMillis(200))
+                .build();
+        publish("stream-1", "id-1", "order-1");
+        assertThat(handlerEntered.await(5, TimeUnit.SECONDS)).as("handler entered").isTrue();
+
+        long closeStartedAtNanos = System.nanoTime();
+        source.close();
+        Duration closeElapsed = Duration.ofNanos(System.nanoTime() - closeStartedAtNanos);
+        assertThat(closeElapsed).isLessThan(Duration.ofSeconds(3));
+
+        assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1);
+
+        releaseHandler.countDown();
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(consumerGroupMemberCount(groupId)).isZero());
+    }
+
+    /**
+     * A projection that calls {@link KafkaDomainEventSource#close()} runs on the loop thread itself, so
+     * {@code loopThread.join(closeTimeout)} would join the calling thread and stall the full {@code closeTimeout}
+     * before returning, even though the loop thread's own {@code finally} block cannot run until this same
+     * projection call returns. {@code closeTimeout} is set far above what a prompt return should ever take, so a
+     * regression here shows up as a slow {@code close()} well past this test's own assertion bound rather than a
+     * flaky race against the timeout itself.
+     * <p>
+     * Also proves the batch this projection is part of still gets committed rather than lost. {@code close()}
+     * calling {@code wakeup()} while this thread is inside the projection arms exactly one pending interrupt,
+     * which the loop thread's own next blocking call raises in, its own batch commit, not anything the
+     * projection itself called. Without retrying that one commit, every record this batch already resolved,
+     * id-1 included, would never be acknowledged at all and would replay in full the next time this source
+     * starts. Against this real, fast, local broker the underlying commit request often completes on the broker
+     * side before the client-side interrupt is even raised, so this assertion alone does not reliably
+     * mutation-fail without the retry, the deterministic proof for that is the {@code CloseFromHandlerHarness}
+     * the epic's adversarial verifier built against a fake {@code Consumer} that never delivers a thrown
+     * {@code commitSync} call regardless of timing.
+     */
+    @Test
+    void close_called_from_a_projection_running_on_the_loop_thread_returns_promptly_rather_than_joining_itself() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        AtomicReference<KafkaDomainEventSource<TestOrderPlaced>> sourceRef = new AtomicReference<>();
+        AtomicLong closeElapsedNanos = new AtomicLong(-1);
+        CountDownLatch closedFromProjection = new CountDownLatch(1);
+        MaterializedView<TestOrderPlaced> view = event -> {
+            long startedAtNanos = System.nanoTime();
+            sourceRef.get().close();
+            closeElapsedNanos.set(System.nanoTime() - startedAtNanos);
+            closedFromProjection.countDown();
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .closeTimeout(Duration.ofSeconds(10))
+                .build();
+        sourceRef.set(source);
+        publish("stream-1", "id-1", "order-1");
+
+        assertThat(closedFromProjection.await(5, TimeUnit.SECONDS)).as("projection called close() in time").isTrue();
+        assertThat(Duration.ofNanos(closeElapsedNanos.get())).isLessThan(Duration.ofSeconds(2));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+    }
+
+    /**
+     * What the permanent stop for {@code UnreadableLiveFilterException} guarantees. A data payload filter with no
+     * {@code DataFieldReader} is refused live, the source stops itself rather than redelivering into the same
+     * permanent failure, and the triggering record's offset is never committed. Proven here by the committed
+     * offset staying at its pre-failure value (never advancing to or past the triggering record) even after the
+     * source has visibly stopped, and by the consumer group's member count making the round trip from zero to one
+     * (proving the source actually joined) and back to zero once the triggering record arrives (proving a real
+     * departure, not an initial state that was already zero before the source ever joined at all), well inside
+     * {@code max.poll.interval.ms}'s eviction window rather than waiting it out.
+     */
+    @Test
+    void an_unreadable_live_filter_stops_the_source_and_leaves_the_group_immediately_without_committing_the_triggering_record() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        // A data-field filter with the default (refusing) DataFieldReader. Refused live on the first acceptCloudEvent.
+        feed.register("proj", handled::add, Filter.data("amount", Condition.eq(42)));
+        feed.goLive("proj");
+
+        KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build();
+        try {
+            // The feed is already live, so the source joins the group immediately on its own, before any record is
+            // published. Awaiting that join first is what makes the later zero-member check a proof of departure
+            // rather than a state that could have been true all along because the source never joined at all.
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1));
+
+            publish("stream-1", "id-1", "order-1");
+
+            // The source stops itself and leaves the group. Wait for that transition back to zero, well under
+            // max.poll.interval.ms's default five-minute eviction window.
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isZero());
+            assertThat(handled).isEmpty();
+            assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
+        } finally {
+            source.close();
+        }
+    }
+
+    /**
+     * The same permanent-stop departure proven above, now under {@code group.instance.id} (static membership),
+     * where an ordinary {@code Consumer.close()} deliberately keeps the assignment in place rather than leaving,
+     * correct for a caller restarting the same source but wrong for a stop that has nothing coming back to reclaim
+     * it. Proves the permanent stop still forces an immediate departure on this configuration rather than
+     * inheriting the static member's usual close behavior.
+     */
+    @Test
+    void an_unreadable_live_filter_leaves_the_group_immediately_even_under_static_membership() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "instance-" + UUID.randomUUID(),
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        feed.register("proj", handled::add, Filter.data("amount", Condition.eq(42)));
+        feed.goLive("proj");
+
+        KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig, feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build();
+        try {
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1));
+
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isZero());
+            assertThat(handled).isEmpty();
+            assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
+        } finally {
+            source.close();
+        }
+    }
+
+    /**
+     * A projection throwing something the delivery failure policy does not route, an {@link Error} or a checked
+     * exception it never declared, ends the loop thread. The source has to leave the group on the way out, even
+     * under static membership, where an ordinary close keeps the partitions assigned until
+     * {@code session.timeout.ms} runs out.
+     */
+    @ParameterizedTest
+    @MethodSource("failuresTheDeliveryFailurePolicyDoesNotRoute")
+    void a_projection_failure_the_delivery_failure_policy_does_not_route_leaves_the_group_immediately_even_under_static_membership(
+            Throwable failure) throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "instance-" + UUID.randomUUID(),
+                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, "60000",
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        AtomicInteger attempts = new AtomicInteger();
+        feed.register("proj", event -> {
+            attempts.incrementAndGet();
+            sneakyThrow(failure);
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig, feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build();
+        try {
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1));
+
+            publish("stream-1", "id-1", "order-1");
+
+            // The loop thread rethrows the failure after leaving the group, and Awaitility would otherwise fail
+            // this wait with it before checking the member count.
+            await().atMost(Duration.ofSeconds(10)).dontCatchUncaughtExceptions().untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isZero());
+            assertThat(attempts).hasValue(1);
+            assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
+        } finally {
+            source.close();
+        }
+    }
+
+    /**
+     * A projection that sets the loop thread's interrupt flag and then fails stages nothing, so the flag is still set
+     * when the next {@code poll()} runs. That poll throws Kafka's {@code InterruptException}, which sets the flag
+     * again. Unless the source clears it, every later poll throws the same way and the backoff sleep returns at once,
+     * so the loop logs a failed iteration thousands of times a second.
+     */
+    @Test
+    void a_projection_that_interrupts_the_loop_thread_does_not_spin_the_poll_loop() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        AtomicInteger attempts = new AtomicInteger();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+            if (attempts.incrementAndGet() == 1) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("simulated failure after interrupting");
+            }
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(KafkaDomainEventSource.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(attempts).hasPositiveValue());
+            Thread.sleep(POLL_TIMEOUT.toMillis() * 20);
+
+            assertThat(logged(appender, groupId, "failed this iteration")).isLessThan(5);
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
+    /**
+     * {@code commitSync} on an interrupted thread throws Kafka's {@code InterruptException}, which is not retriable,
+     * right after its first attempt to send the commit and without waiting to learn whether the broker applied it. A
+     * projection that sets the loop thread's interrupt flag and returns normally must not fail the commit of its batch.
+     */
+    @Test
+    void a_projection_that_interrupts_the_loop_thread_does_not_fail_the_commit_of_its_batch() {
+        String groupId = "group-" + UUID.randomUUID();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> Thread.currentThread().interrupt(), Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(KafkaDomainEventSource.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+            assertThat(logged(appender, groupId, "Failed to commit")).isZero();
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
+    /**
+     * {@code Consumer#close} on an interrupted thread throws Kafka's {@code InterruptException} from its leave-group
+     * step, right after one non-blocking attempt to send the request, and skips waiting for it to go out. A projection
+     * that sets the loop thread's interrupt flag and then throws an {@link Error} must still get a whole close.
+     */
+    @Test
+    void a_projection_that_interrupts_the_loop_thread_and_then_throws_an_error_still_closes_the_consumer_cleanly() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "instance-" + UUID.randomUUID(),
+                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, "60000",
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+            Thread.currentThread().interrupt();
+            throw new Error("simulated projection error after interrupting");
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(KafkaDomainEventSource.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig, feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build();
+        try {
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1));
+
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(10)).dontCatchUncaughtExceptions().untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isZero());
+            // Joins the loop thread, so its own close of the Consumer has finished before the log is read
+            source.close();
+            assertThat(logged(appender, groupId, "Failed to close the Kafka consumer cleanly")).isZero();
+        } finally {
+            source.close();
+            logger.detachAppender(appender);
+        }
+    }
+
+    // Counts only what this test's own source logged, since its loop thread's name contains the group id
+    private static long logged(ListAppender<ILoggingEvent> appender, String groupId, String text) {
+        synchronized (appender) {
+            return appender.list.stream()
+                    .filter(event -> event.getThreadName().contains(groupId) && event.getFormattedMessage().contains(text))
+                    .count();
+        }
+    }
+
+    static Stream<Throwable> failuresTheDeliveryFailurePolicyDoesNotRoute() {
+        return Stream.of(new Error("simulated projection error"), new IOException("simulated undeclared checked exception"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
+    }
+
+    /**
+     * A permanent stop never calls {@code close()} itself, so with {@link DeliveryFailurePolicy#PARK} configured,
+     * the parking producer {@code KafkaDeliveryFailureAction} owns has nothing else guaranteeing it ever closes.
+     * Reaches the private {@code failureAction} field, and its own private {@code parkingProducer} field, through
+     * reflection, then calls {@code send(...)} on it as a proxy for closed state, a {@code KafkaProducer} throws
+     * {@code IllegalStateException} from that call once closed, checked before any network access.
+     * {@code partitionsFor(...)} does not work for this, it never checks closed state at all. Never calls
+     * {@link KafkaDomainEventSource#close()} on this source at all, proving the loop thread's own teardown closed
+     * it, not an explicit shutdown this test triggered.
+     */
+    @Test
+    void a_permanent_stop_closes_the_parking_producer_without_close_ever_being_called() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        String parkingTopic = createTopic(1);
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+        }, Filter.data("amount", Condition.eq(42)));
+        feed.goLive("proj");
+
+        KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(KafkaDestination.of(parkingTopic))
+                .build();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1));
+
+        publish("stream-1", "id-1", "order-1");
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThat(consumerGroupMemberCount(groupId)).isZero());
+
+        Field failureActionField = KafkaDomainEventSource.class.getDeclaredField("failureAction");
+        failureActionField.setAccessible(true);
+        Object failureAction = failureActionField.get(source);
+        Field parkingProducerField = failureAction.getClass().getDeclaredField("parkingProducer");
+        parkingProducerField.setAccessible(true);
+        org.apache.kafka.clients.producer.Producer<String, byte[]> parkingProducer =
+                (org.apache.kafka.clients.producer.Producer<String, byte[]>) parkingProducerField.get(failureAction);
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThatThrownBy(() -> parkingProducer.send(new org.apache.kafka.clients.producer.ProducerRecord<>(parkingTopic, "k", new byte[0])))
+                        .isInstanceOf(IllegalStateException.class));
+    }
+
+    private Map<String, Object> consumerConfig(String groupId) {
+        return Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+    }
+
+    private void publish(String key, String id, String orderId) {
+        publishCloudEvent(topic, key, testOrderPlaced(id, orderId));
+    }
+
+    private static CloudEvent testOrderPlaced(String id, String orderId) {
+        return CloudEventBuilder.v1()
+                .withId(id)
+                .withSource(URI.create("urn:test"))
+                .withType(TestOrderPlaced.class.getName())
+                .withDataContentType("text/plain")
+                .withData(orderId.getBytes(StandardCharsets.UTF_8))
+                .withExtension("streamid", "stream-1")
+                .build();
+    }
+
+    private record TestOrderPlaced(String orderId) {
+    }
+
+    private static final class TestOrderPlacedConverter implements CloudEventConverter<TestOrderPlaced> {
+
+        @Override
+        public CloudEvent toCloudEvent(TestOrderPlaced domainEvent) {
+            return CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("urn:test"))
+                    .withType(TestOrderPlaced.class.getName())
+                    .withDataContentType("text/plain")
+                    .withData(domainEvent.orderId().getBytes(StandardCharsets.UTF_8))
+                    .build();
+        }
+
+        @Override
+        public TestOrderPlaced toDomainEvent(CloudEvent cloudEvent) {
+            byte[] data = cloudEvent.getData() == null ? new byte[0] : cloudEvent.getData().toBytes();
+            return new TestOrderPlaced(new String(data, StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public String getCloudEventType(Class<? extends TestOrderPlaced> type) {
+            return TestOrderPlaced.class.getName();
+        }
+    }
+}

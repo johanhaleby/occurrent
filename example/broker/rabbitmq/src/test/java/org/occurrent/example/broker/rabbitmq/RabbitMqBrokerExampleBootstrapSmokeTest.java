@@ -24,8 +24,8 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
-import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqSourceException;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSource;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -115,14 +115,14 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
      * already started before it. The sink built in the same window is not asserted here, neither bootstrap exposes
      * an accessor for it, and {@code RabbitMqCloudEventSink} itself has no closed-state to probe from outside. A
      * leaked sink would show up as an open channel on the connection, not as anything this probe can observe.
-     * Failing the bridge's own channel open,
+     * Failing the source's own channel open,
      * the second {@code openChannel()} call on the connection and every one after it (the first is the sink's),
-     * forces exactly that partial-construction failure without touching the bridge's own topology. That failure is
+     * forces exactly that partial-construction failure without touching the source's own topology. That failure is
      * a permanent one, a hard AMQP close rather than a plain {@link IOException}, so {@code build()}'s default
      * retry (#867) fails fast on it instead of exhausting ten attempts and the roughly 11 seconds of backoff that
      * would cost this test nothing. If the forwarder
      * subscription leaked, it would still be watching the store and would forward a fresh order to the exchange,
-     * so a queue bound directly to it, independent of the bridge that never got to declare its own, proves it did
+     * so a queue bound directly to it, independent of the source that never got to declare its own, proves it did
      * not.
      */
     @Test
@@ -130,7 +130,7 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
         Connection failingOnSecondChannel = failOnSecondOpenChannel(rabbitConnection);
 
         assertThatThrownBy(() -> RabbitMqCloudEventLevelBootstrap.start(mongoClient, failingOnSecondChannel))
-                .isInstanceOf(RabbitMqBridgeException.class);
+                .isInstanceOf(RabbitMqSourceException.class);
 
         assertNothingArrivesFromALeakedForwarder();
     }
@@ -143,15 +143,15 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
         Connection failingOnSecondChannel = failOnSecondOpenChannel(rabbitConnection);
 
         assertThatThrownBy(() -> RabbitMqDomainEventLevelBootstrap.start(mongoClient, failingOnSecondChannel))
-                .isInstanceOf(RabbitMqBridgeException.class);
+                .isInstanceOf(RabbitMqSourceException.class);
 
         assertNothingArrivesFromALeakedForwarder();
     }
 
     /** A {@link Connection} that delegates everything to {@code real}, except its second no-argument
-     * {@code openChannel()} call and every one after it, which it fails instead, simulating the bridge's own
+     * {@code openChannel()} call and every one after it, which it fails instead, simulating the source's own
      * channel open failing while leaving the sink's earlier one, and everything built from it, already running.
-     * Throws a hard-close {@link ShutdownSignalException} rather than a plain {@link IOException}, so the bridge's
+     * Throws a hard-close {@link ShutdownSignalException} rather than a plain {@link IOException}, so the source's
      * own default retry (#867) fails fast on the second call instead of exhausting all ten attempts, roughly 11
      * seconds of backoff this test does not need, before ever reaching the failure it forces. */
     private static Connection failOnSecondOpenChannel(Connection real) {
@@ -160,7 +160,7 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
             if ("openChannel".equals(method.getName()) && method.getParameterCount() == 0
                     && openChannelCalls.incrementAndGet() >= 2) {
                 AMQP.Channel.Close hardClose = new AMQP.Channel.Close.Builder().replyCode(AMQP.NOT_FOUND).build();
-                throw new IOException("Simulated permanent failure opening the bridge's channel",
+                throw new IOException("Simulated permanent failure opening the source's channel",
                         new ShutdownSignalException(false, false, hardClose, "channel"));
             }
             try {
@@ -239,9 +239,9 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
     }
 
     /**
-     * {@code close()} must shut the push model down itself. {@link RabbitMqCloudEventBridge} only ever holds the
-     * model it was given, it never shuts it down, on the ADR 133 grounds that a bridge does not own the model's
-     * lifecycle, so a bootstrap that only closed the bridge would leak the model on every successful run, not just
+     * {@code close()} must shut the push model down itself. {@link RabbitMqCloudEventSource} only ever holds the
+     * model it was given, it never shuts it down, on the ADR 133 grounds that a source does not own the model's
+     * lifecycle, so a bootstrap that only closed the source would leak the model on every successful run, not just
      * a partial-construction failure. {@code hasSubscriptions()} is the direct, documented effect of
      * {@code RegisteringSubscribable.shutdown()}, which clears every registration, so it is {@code false} only if
      * the model was actually shut down rather than merely abandoned mid-registration.
@@ -258,17 +258,17 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
     }
 
     /**
-     * Proves {@code close()} still shuts the catch-up model and the forwarder down when the bridge's own channel
-     * fails to close, rather than the bridge's failure aborting the rest. The channel's {@code close()} is made to
+     * Proves {@code close()} still shuts the catch-up model and the forwarder down when the source's own channel
+     * fails to close, rather than the source's failure aborting the rest. The channel's {@code close()} is made to
      * throw a plain {@link RuntimeException}, not one of the checked or {@link
-     * com.rabbitmq.client.ShutdownSignalException} failures {@link RabbitMqCloudEventBridge#close()} already treats
+     * com.rabbitmq.client.ShutdownSignalException} failures {@link RabbitMqCloudEventSource#close()} already treats
      * as best effort, so the failure actually reaches the bootstrap uncaught instead of being swallowed before it
      * gets there. {@code hasSubscriptions()} false afterward proves the catch-up model still ran, and nothing
-     * arriving from the probe proves the forwarder subscription still ran too, both despite the bridge going first
+     * arriving from the probe proves the forwarder subscription still ran too, both despite the source going first
      * and throwing.
      */
     @Test
-    void a_failure_closing_the_cloud_event_level_bootstraps_bridge_channel_still_closes_the_rest() throws Exception {
+    void a_failure_closing_the_cloud_event_level_bootstraps_source_channel_still_closes_the_rest() throws Exception {
         Connection failingChannelClose = failCloseOnSecondOpenChannel(rabbitConnection);
         RabbitMqCloudEventLevelBootstrap app = RabbitMqCloudEventLevelBootstrap.start(mongoClient, failingChannelClose);
         app.placeAndShipOneOrder(Duration.ofSeconds(20));
@@ -276,31 +276,31 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
 
         assertThatThrownBy(app::close)
                 .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("Simulated failure closing the bridge's channel");
+                .hasMessageContaining("Simulated failure closing the source's channel");
 
         assertThat(pushModel.hasSubscriptions()).isFalse();
         assertNothingArrivesFromALeakedForwarder();
     }
 
     /**
-     * The domain-level twin of {@link #a_failure_closing_the_cloud_event_level_bootstraps_bridge_channel_still_closes_the_rest()}.
+     * The domain-level twin of {@link #a_failure_closing_the_cloud_event_level_bootstraps_source_channel_still_closes_the_rest()}.
      * The domain-level bootstrap has no separate push model to probe, so only the forwarder-leak probe applies here.
      */
     @Test
-    void a_failure_closing_the_domain_event_level_bootstraps_bridge_channel_still_closes_the_rest() throws Exception {
+    void a_failure_closing_the_domain_event_level_bootstraps_source_channel_still_closes_the_rest() throws Exception {
         Connection failingChannelClose = failCloseOnSecondOpenChannel(rabbitConnection);
         RabbitMqDomainEventLevelBootstrap app = RabbitMqDomainEventLevelBootstrap.start(mongoClient, failingChannelClose);
         app.placeAndShipOneOrder(Duration.ofSeconds(20));
 
         assertThatThrownBy(app::close)
                 .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("Simulated failure closing the bridge's channel");
+                .hasMessageContaining("Simulated failure closing the source's channel");
 
         assertNothingArrivesFromALeakedForwarder();
     }
 
     /**
-     * Like {@link #failOnSecondOpenChannel(Connection)}, but the bridge's own channel opens normally, the same real
+     * Like {@link #failOnSecondOpenChannel(Connection)}, but the source's own channel opens normally, the same real
      * channel {@code start(...)} would have gotten, wrapped only to fail its own no-argument {@code close()} call.
      */
     private static Connection failCloseOnSecondOpenChannel(Connection real) {
@@ -326,7 +326,7 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
     private static Channel failingCloseChannel(Channel real) {
         InvocationHandler handler = (proxy, method, args) -> {
             if ("close".equals(method.getName()) && method.getParameterCount() == 0) {
-                throw new RuntimeException("Simulated failure closing the bridge's channel");
+                throw new RuntimeException("Simulated failure closing the source's channel");
             }
             try {
                 return method.invoke(real, args);

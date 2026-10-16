@@ -17,10 +17,10 @@
 package org.occurrent.broker.api.blocking;
 
 /**
- * What a consume-side bridge does after a failed delivery, shared across transports rather than declared as two
- * enums that happen to line up. The actual promise, regardless of this setting: a bridge never acknowledges a
+ * What a broker source does after a failed delivery, shared across transports rather than declared as two
+ * enums that happen to line up. The actual promise, regardless of this setting: a source never acknowledges a
  * message without that message being durable somewhere else first. Under {@link #PARK}, that somewhere else is the
- * parking destination, so a parked message <strong>is</strong> acknowledged out of the source queue or topic, once
+ * parking destination, so a parked message <strong>is</strong> acknowledged out of the original queue or topic, once
  * the republish to parking is confirmed, even though nothing ever consumed it.
  */
 public enum DeliveryFailurePolicy {
@@ -35,7 +35,7 @@ public enum DeliveryFailurePolicy {
     /**
      * Route the message to a holding destination nobody consumes from, so an operator can look at what failed
      * without it looping forever. Choosing this requires a parking destination of the transport's own
-     * {@link EventDestination} type. A bridge configured with {@code PARK} and no parking destination refuses to
+     * {@link EventDestination} type. A source configured with {@code PARK} and no parking destination refuses to
      * start.
      */
     PARK

@@ -58,7 +58,7 @@ import static java.util.Objects.requireNonNull;
  * domain-level example tests. Each test method gets its own scratch database (Mongo) and its own scratch exchange
  * and queue names (RabbitMQ), so tests running against the same reused containers never see each other's events.
  * The one connection to each opened here is deliberately kept open for the whole test method, including across a
- * simulated restart. That restart is consumer-side only. It tears down and rebuilds the bridge and the push model,
+ * simulated restart. That restart is consumer-side only. It tears down and rebuilds the source and the push model,
  * never the forwarder's own subscription, the database connection or the broker connection themselves.
  */
 @Testcontainers
@@ -97,7 +97,7 @@ abstract class AbstractBrokerExampleTest {
 
         exchange = "broker-example-" + scratch;
         queue = "broker-example-" + scratch;
-        // Neither RabbitMqCloudEventSink nor either bridge declares the exchange itself, only queues and bindings
+        // Neither RabbitMqCloudEventSink nor either source declares the exchange itself, only queues and bindings
         // against one that already exists, so the application declares it, the same as Bootstrap.java does for the
         // number-guessing-game example's own basicPublish.
         adminChannel.exchangeDeclare(exchange, "topic", true);
@@ -170,7 +170,7 @@ abstract class AbstractBrokerExampleTest {
     }
 
     /**
-     * A single topic exchange, shared by every publisher and every bridge in one test, with the routing key derived
+     * A single topic exchange, shared by every publisher and every source in one test, with the routing key derived
      * from {@code OrderEvent}'s cloud event type. Give it the same {@link CloudEventTypeMapper} instance
      * {@link #newConverter()} used, so a publisher and a consumer agree on where an event goes by reading one
      * mapping.
@@ -184,12 +184,12 @@ abstract class AbstractBrokerExampleTest {
      * message count cannot tell a genuinely distinct event apart from the forwarder's own legal republish of one it
      * already sent, since a duplicate is the identical event arriving twice, not a new one. This drains the queue
      * with {@code basicGet}, decodes each message's id with the same {@link RabbitMqCloudEventMapper} the sink and
-     * both bridges already use, then negatively acknowledges every message it read with requeue before returning.
+     * both sources already use, then negatively acknowledges every message it read with requeue before returning.
      * That is not "without disturbing them": {@code basicNack} sets each message's {@code redelivered} flag, which
      * a plain publish never carries, and only requeues what {@code basicGet} could see in the first place. A
      * delivery a real consumer is currently holding unacked, on a different channel, never shows up here at all,
-     * ready-count semantics, not "everything on the queue". A test asserting against a bridge that might still be
-     * consuming needs to account for that itself, closing the bridge first if it must see a truly settled count.
+     * ready-count semantics, not "everything on the queue". A test asserting against a source that might still be
+     * consuming needs to account for that itself, closing the source first if it must see a truly settled count.
      */
     protected Set<String> distinctEventIdsOnQueue(String queueName) throws IOException {
         Set<String> ids = new HashSet<>();

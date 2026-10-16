@@ -58,7 +58,7 @@ import static org.occurrent.broker.kafka.blocking.KafkaDestinations.streamIdOf;
  * that narrower guarantee.
  * <p>
  * The constructor takes the topic name. Nothing here invents one, the same reasoning ADR 133 decision 7 already
- * gives for refusing a parking bridge with no {@code parkingDestination} of its own. A default destination name is
+ * gives for refusing a parking source with no {@code parkingDestination} of its own. A default destination name is
  * precisely the thing an operator has to know, not something a library should guess on their behalf.
  * <p>
  * {@link #destinationsFor(Filter)} returns this one topic regardless of what {@code filter} asks for.

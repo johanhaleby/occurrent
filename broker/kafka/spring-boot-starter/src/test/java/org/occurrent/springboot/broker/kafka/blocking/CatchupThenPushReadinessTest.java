@@ -36,7 +36,7 @@ import java.util.function.Predicate;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link CatchupThenPushReadiness} is what {@link DefaultKafkaCloudEventBridgeFactory} pre-seeds every bridge's
+ * {@link CatchupThenPushReadiness} is what {@link DefaultKafkaCloudEventSourceFactory} pre-seeds every source's
  * {@code readinessSource} with, so a zero-config Spring application gets the quiet path during a replay without
  * naming {@code readinessSource} itself.
  */
@@ -70,8 +70,8 @@ class CatchupThenPushReadinessTest {
             Predicate<String> readinessSource = CatchupThenPushReadiness.memoized(context, new PushSubscriptionModel());
 
             assertThat(readinessSource.test("proj"))
-                    .as("this bridge's own liveFeed is not unrelatedWrapper's, so its still-replaying answer must " +
-                            "not pause a bridge that has nothing to do with it")
+                    .as("this source's own liveFeed is not unrelatedWrapper's, so its still-replaying answer must " +
+                            "not pause a source that has nothing to do with it")
                     .isTrue();
         } finally {
             releaseReplay.countDown();
@@ -92,9 +92,9 @@ class CatchupThenPushReadinessTest {
         assertThat(otherWrapper.isReadyForLiveDelivery("proj")).isTrue();
 
         // The registry bean itself: published lazily by the framework registrar, on its first registration, so a
-        // bridge's own poll can run before it exists at all, and separately, before this specific liveFeed's own
+        // source's own poll can run before it exists at all, and separately, before this specific liveFeed's own
         // entry lands in it once it does. Registered here as a plain mutable map, standing in for both windows:
-        // liveFeed is absent from it at first, exactly as if this bridge's own poll ran before the framework
+        // liveFeed is absent from it at first, exactly as if this source's own poll ran before the framework
         // registrar's registration for it had completed.
         Map<PushSubscriptionModel, CatchupThenPushSubscriptionModel> wrappersByLiveFeed = new ConcurrentHashMap<>();
         GenericApplicationContext context = new GenericApplicationContext();
@@ -118,9 +118,9 @@ class CatchupThenPushReadinessTest {
         });
         assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-        // The bridge's own predicate, built here before the registrar has published anything for liveFeed: this is
+        // The source's own predicate, built here before the registrar has published anything for liveFeed: this is
         // the exact "poll once before publishing" this test is about, one Predicate<String> instance carried across
-        // both polls below, since memoized(...) is only called once per bridge, at build time.
+        // both polls below, since memoized(...) is only called once per source, at build time.
         Predicate<String> readinessSource = CatchupThenPushReadiness.memoized(context, liveFeed);
 
         assertThat(readinessSource.test("proj"))
@@ -130,7 +130,7 @@ class CatchupThenPushReadinessTest {
                 .isTrue();
 
         // The registrar's own registration, landing between these two polls, the same as a projection or saga bean
-        // finishing initialization after this bridge's consumer has already started polling.
+        // finishing initialization after this source's consumer has already started polling.
         wrappersByLiveFeed.put(liveFeed, wrapper);
 
         try {

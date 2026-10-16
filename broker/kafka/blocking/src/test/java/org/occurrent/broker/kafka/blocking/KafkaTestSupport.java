@@ -191,8 +191,8 @@ public abstract class KafkaTestSupport {
      * Awaits until {@code groupId}'s consumer group assignment, read through {@link AdminClient#describeConsumerGroups},
      * covers every partition in {@code expectedPartitions}. A pattern-subscribed {@code Consumer} only starts
      * fetching a topic once its own group rebalance completes and hands it that topic's partitions, not the instant
-     * {@code Consumer.subscribe(Pattern)} (or the bridge's own {@code build()}) returns. A test that publishes right
-     * after {@code build()} races that rebalance instead of the bridge's actual readiness, a race #893 item 21 traced
+     * {@code Consumer.subscribe(Pattern)} (or the source's own {@code build()}) returns. A test that publishes right
+     * after {@code build()} races that rebalance instead of the source's actual readiness, a race #893 item 21 traced
      * to exactly this gap. Polls the group description on a short interval rather than sleeping a fixed window, so
      * this converges the moment the assignment is actually in place and never earlier, and never later than a real
      * stall would need.
@@ -211,7 +211,7 @@ public abstract class KafkaTestSupport {
     /**
      * Reads back the offset {@code groupId} has committed for {@code topicPartition}, through
      * {@link AdminClient#listConsumerGroupOffsets(String)}, which reads a group's committed offsets without
-     * joining it. {@code null} when nothing has been committed yet. This is how every commit claim in the bridge
+     * joining it. {@code null} when nothing has been committed yet. This is how every commit claim in the source
      * tests is proven. A committed offset read back from the broker, never the absence of a record arriving
      * somewhere else, which on Kafka proves nothing on its own unless bounded by something observable.
      * <p>
@@ -229,7 +229,7 @@ public abstract class KafkaTestSupport {
 
     /**
      * The number of members currently in consumer group {@code groupId}, read through {@link AdminClient#describeConsumerGroups}.
-     * Used to prove a bridge's permanent stop leaves the group immediately by closing its own {@code Consumer},
+     * Used to prove a source's permanent stop leaves the group immediately by closing its own {@code Consumer},
      * rather than waiting to be evicted at {@code max.poll.interval.ms}.
      * <p>
      * A group the broker does not know counts as zero members. The broker answers with
@@ -253,8 +253,8 @@ public abstract class KafkaTestSupport {
     /**
      * Publishes {@code cloudEvent} to {@code recordTopic} in the CloudEvents Kafka binary content mode, keyed by
      * {@code key}, waiting for the broker's acknowledgement before returning. A lean direct producer rather than
-     * going through {@link KafkaCloudEventSink}, the same directness {@code RabbitMqCloudEventBridgeTest.publish(...)}
-     * uses on the RabbitMQ side, so a bridge test controls exactly what lands on the wire without a sink's own
+     * going through {@link KafkaCloudEventSink}, the same directness {@code RabbitMqCloudEventSourceTest.publish(...)}
+     * uses on the RabbitMQ side, so a source test controls exactly what lands on the wire without a sink's own
      * retry and validation machinery in the way.
      */
     protected void publishCloudEvent(String recordTopic, @Nullable String key, CloudEvent cloudEvent) {
@@ -293,7 +293,7 @@ public abstract class KafkaTestSupport {
 
     /**
      * Publishes {@code body} to {@code recordTopic} unchanged, with no CloudEvents headers at all, for a test
-     * proving how a bridge handles a record it cannot rebuild as a {@link CloudEvent}.
+     * proving how a source handles a record it cannot rebuild as a {@link CloudEvent}.
      */
     protected void publishRaw(String recordTopic, @Nullable String key, byte[] body) {
         Map<String, Object> producerConfig = Map.of(

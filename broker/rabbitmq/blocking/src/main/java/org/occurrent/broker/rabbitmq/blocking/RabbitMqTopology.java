@@ -25,11 +25,11 @@ import java.util.Set;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The binding-derivation rule both bridge builders apply, per ADR 133 decision 5: explicit {@code bindings} if
+ * The binding-derivation rule both source builders apply, per ADR 133 decision 5: explicit {@code bindings} if
  * given, otherwise {@link DestinationResolver#destinationsFor(SubscriptionFilter)} for {@code bindingFilter} if
  * given, falling back to {@link DestinationResolver#catchAllDestination()} whenever the resolver cannot narrow it,
- * or {@code bindingFilter} was never given at all. Shared rather than written once per bridge, since both bridges'
- * builders offer exactly the same three ways to declare a topology. Public because the domain bridge lives in a
+ * or {@code bindingFilter} was never given at all. Shared rather than written once per source, since both sources'
+ * builders offer exactly the same three ways to declare a topology. Public because the domain source lives in a
  * sub-package of this one.
  */
 public final class RabbitMqTopology {

@@ -103,7 +103,7 @@ class OrderStatusProjectionTest {
 
     /**
      * ADR 133 decision 7: an event published through {@code publish(E)} carries no stream identity at all, so a
-     * consume bridge cannot assume {@link EventMetadata#getStreamId()}/{@link EventMetadata#getStreamVersion()}
+     * source cannot assume {@link EventMetadata#getStreamId()}/{@link EventMetadata#getStreamVersion()}
      * answer anything for every event it is fed. {@code EventMetadata.empty()} is exactly that shape.
      * {@code OrderShipped} with no prior view read those unconditionally before this fix, throwing
      * {@code NullPointerException} instead of folding.

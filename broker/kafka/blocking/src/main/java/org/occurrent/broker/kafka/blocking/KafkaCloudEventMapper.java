@@ -28,7 +28,7 @@ import java.util.Set;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Rebuilds the {@link CloudEvent} a {@link ConsumerRecord} carries, the read side a consume-side bridge needs.
+ * Rebuilds the {@link CloudEvent} a {@link ConsumerRecord} carries, the read side a broker source needs.
  * Reuses {@code io.cloudevents:cloudevents-kafka}'s own binary reader ({@link KafkaMessageFactory#createReader(ConsumerRecord)})
  * for the header mapping itself, rather than hand-rolling it the way {@code RabbitMqCloudEventMapper} has to,
  * since {@code cloudevents-kafka} already implements the Kafka binary binding correctly for the general case and
@@ -58,7 +58,7 @@ import static java.util.Objects.requireNonNull;
  * event {@code toEvent()} built has no data, it overrides the data with an explicit empty {@link BytesCloudEventData}
  * instead of leaving it absent.
  * <p>
- * Public because {@code KafkaDomainEventBridge} lives in a sub-package of this one and needs it too, the same
+ * Public because {@code KafkaDomainEventSource} lives in a sub-package of this one and needs it too, the same
  * reasoning {@code RabbitMqCloudEventMapper} and {@code RabbitMqTopology} already state for themselves.
  */
 public final class KafkaCloudEventMapper {

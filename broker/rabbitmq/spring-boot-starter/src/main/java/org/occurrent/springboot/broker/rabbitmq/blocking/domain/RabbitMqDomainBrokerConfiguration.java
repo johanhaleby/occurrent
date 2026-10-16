@@ -114,8 +114,8 @@ public class RabbitMqDomainBrokerConfiguration {
     }
 
     @Bean
-    RabbitMqDomainEventBridgeFactory occurrentRabbitMqDomainEventBridgeFactory(Connection connection, RabbitMqBrokerProperties properties,
+    RabbitMqDomainEventSourceFactory occurrentRabbitMqDomainEventSourceFactory(Connection connection, RabbitMqBrokerProperties properties,
                                                                                 ObjectProvider<DestinationResolver<RabbitMqDestination>> resolver) {
-        return new DefaultRabbitMqDomainEventBridgeFactory(connection, properties, resolver);
+        return new DefaultRabbitMqDomainEventSourceFactory(connection, properties, resolver);
     }
 }

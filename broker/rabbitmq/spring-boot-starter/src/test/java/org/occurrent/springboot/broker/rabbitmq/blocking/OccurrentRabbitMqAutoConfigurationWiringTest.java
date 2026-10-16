@@ -22,7 +22,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.CloudEventSink;
 import org.occurrent.broker.api.blocking.DestinationResolver;
-import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSource;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
@@ -40,7 +40,7 @@ import static org.mockito.Mockito.mock;
 /**
  * Proves the wiring rules from the plan gate without a real broker. That covers what activates the whole
  * configuration, what stays absent until its own prerequisite is met, and that {@code @Fallback} defers to an
- * application's own bean. The sink and the bridge factory's channel-opening behavior is never exercised here, so a
+ * application's own bean. The sink and the source factory's channel-opening behavior is never exercised here, so a
  * bare, unstubbed {@link Connection} mock is safe throughout. None of these tests ever call it. That behavior is
  * proved for real against a Testcontainers broker in {@link RabbitMqBrokerAutoConfigurationIntegrationTest}.
  */
@@ -54,15 +54,15 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
     void nothing_is_registered_without_a_connection_bean() {
         contextRunner.run(context -> {
             assertThat(context).doesNotHaveBean(RabbitMqCloudEventSink.class);
-            assertThat(context).doesNotHaveBean(RabbitMqCloudEventBridgeFactory.class);
+            assertThat(context).doesNotHaveBean(RabbitMqCloudEventSourceFactory.class);
             assertThat(context).doesNotHaveBean(RabbitMqTopicExchangeDestinationResolver.class);
         });
     }
 
     @Test
-    void bridge_factory_activates_without_an_exchange_but_the_resolver_bean_does_not() {
+    void source_factory_activates_without_an_exchange_but_the_resolver_bean_does_not() {
         contextRunner.withBean(Connection.class, () -> mock(Connection.class)).run(context -> {
-            assertThat(context).hasSingleBean(RabbitMqCloudEventBridgeFactory.class);
+            assertThat(context).hasSingleBean(RabbitMqCloudEventSourceFactory.class);
             assertThat(context).doesNotHaveBean(RabbitMqTopicExchangeDestinationResolver.class);
         });
     }
@@ -95,7 +95,7 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
 
     /**
      * A plain {@code @ConditionalOnProperty} treats an empty value as present, which would build a resolver for a
-     * blank exchange name here, one that later fails when a bridge tries to bind it.
+     * blank exchange name here, one that later fails when a source tries to bind it.
      * {@link RabbitMqExchangeConfiguredCondition} requires a nonblank value.
      */
     @Test
@@ -122,21 +122,21 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
     }
 
     /**
-     * The bridge factory reaches the resolver through an {@code ObjectProvider}, and {@code getIfAvailable()}
+     * The source factory reaches the resolver through an {@code ObjectProvider}, and {@code getIfAvailable()}
      * instantiates whatever bean definition it finds regardless of {@code @Lazy}. Without
      * {@code @ConditionalOnBean(CloudEventTypeMapper.class)} excluding the bean definition itself when no type
-     * mapper exists, building a bridge that needs no resolver, one with {@code declare-topology=false} here, would
-     * fail through that lookup even though nothing about this bridge asked for a resolver.
+     * mapper exists, building a source that needs no resolver, one with {@code declare-topology=false} here, would
+     * fail through that lookup even though nothing about this source asked for a resolver.
      */
     @Test
-    void bridge_factory_builds_a_topology_free_bridge_even_when_the_exchange_resolver_cannot_be_built() {
+    void source_factory_builds_a_topology_free_source_even_when_the_exchange_resolver_cannot_be_built() {
         contextRunner
                 .withBean(Connection.class, () -> mock(Connection.class))
                 .withPropertyValues(
                         "occurrent.broker.rabbitmq.exchange=orders",
-                        "occurrent.broker.rabbitmq.bridge.declare-topology=false")
+                        "occurrent.broker.rabbitmq.source.declare-topology=false")
                 .run(context -> {
-                    RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
+                    RabbitMqCloudEventSourceFactory factory = context.getBean(RabbitMqCloudEventSourceFactory.class);
                     assertThatCode(() -> factory.forQueue("orders-projection", new PushSubscriptionModel()))
                             .doesNotThrowAnyException();
                 });
@@ -172,26 +172,26 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
     }
 
     @Test
-    void bridge_declaring_topology_without_a_resolver_or_explicit_bindings_refuses_at_build() {
+    void source_declaring_topology_without_a_resolver_or_explicit_bindings_refuses_at_build() {
         contextRunner.withBean(Connection.class, () -> mock(Connection.class)).run(context -> {
-            RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
-            RabbitMqCloudEventBridge.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel());
+            RabbitMqCloudEventSourceFactory factory = context.getBean(RabbitMqCloudEventSourceFactory.class);
+            RabbitMqCloudEventSource.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel());
             assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class).hasMessageContaining("resolver");
         });
     }
 
     @Test
-    void bridge_configured_to_park_without_a_parking_destination_refuses_at_build() {
+    void source_configured_to_park_without_a_parking_destination_refuses_at_build() {
         contextRunner
                 .withBean(Connection.class, () -> mock(Connection.class))
                 .withBean(CloudEventTypeMapper.class, ReflectionCloudEventTypeMapper::qualified)
                 .withPropertyValues(
                         "occurrent.broker.rabbitmq.exchange=orders",
-                        "occurrent.broker.rabbitmq.bridge.on-delivery-failure=PARK"
+                        "occurrent.broker.rabbitmq.source.on-delivery-failure=PARK"
                 )
                 .run(context -> {
-                    RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
-                    RabbitMqCloudEventBridge.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel());
+                    RabbitMqCloudEventSourceFactory factory = context.getBean(RabbitMqCloudEventSourceFactory.class);
+                    RabbitMqCloudEventSource.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel());
                     assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class).hasMessageContaining("parkingDestination");
                 });
     }
@@ -208,7 +208,7 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
     void the_starter_activates_even_when_the_connection_bean_is_declared_after_the_enabling_configuration() {
         new ApplicationContextRunner()
                 .withUserConfiguration(EnabledConfiguration.class, ConnectionSupplyingConfiguration.class)
-                .run(context -> assertThat(context).hasSingleBean(RabbitMqCloudEventBridgeFactory.class));
+                .run(context -> assertThat(context).hasSingleBean(RabbitMqCloudEventSourceFactory.class));
     }
 
     @Configuration(proxyBeanMethods = false)

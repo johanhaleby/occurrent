@@ -26,7 +26,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
-import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSource;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
@@ -51,7 +51,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Proves the auto-configured sink and a factory-built bridge round-trip a real event through a real RabbitMQ,
+ * Proves the auto-configured sink and a factory-built source round-trip a real event through a real RabbitMQ,
  * the same loop {@code RabbitMqCloudEventLevelBrokerExampleTest} proves for the hand-wired bootstrap, driven here
  * by properties and the auto-configuration beans instead of manual builder calls.
  */
@@ -84,7 +84,7 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
     }
 
     @Test
-    void cloud_event_level_round_trip_through_the_auto_configured_sink_and_bridge() throws Exception {
+    void cloud_event_level_round_trip_through_the_auto_configured_sink_and_source() throws Exception {
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(OccurrentRabbitMqAutoConfiguration.class))
                 .withUserConfiguration(EnabledConfiguration.class)
@@ -95,17 +95,17 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                 .withBean(CloudEventTypeMapper.class, ReflectionCloudEventTypeMapper::qualified)
                 .withPropertyValues(
                         "occurrent.broker.rabbitmq.exchange=" + exchange,
-                        "occurrent.broker.rabbitmq.bridge.poll-interval=100ms"
+                        "occurrent.broker.rabbitmq.source.poll-interval=100ms"
                 )
                 .run(context -> {
                     RabbitMqCloudEventSink sink = context.getBean(RabbitMqCloudEventSink.class);
-                    RabbitMqCloudEventBridgeFactory bridgeFactory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
+                    RabbitMqCloudEventSourceFactory sourceFactory = context.getBean(RabbitMqCloudEventSourceFactory.class);
 
                     BlockingQueue<CloudEvent> received = new LinkedBlockingQueue<>();
                     PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
                     model.subscribe("test-subscription", received::add);
 
-                    RabbitMqCloudEventBridge bridge = bridgeFactory.forQueue("test-queue-" + UUID.randomUUID(), model).build();
+                    RabbitMqCloudEventSource source = sourceFactory.forQueue("test-queue-" + UUID.randomUUID(), model).build();
                     try {
                         // The type has to be a resolvable fully qualified class name, not an arbitrary string.
                         // ReflectionCloudEventTypeMapper.qualified() round-trips it through Class.forName(...) on
@@ -123,15 +123,15 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                         assertThat(delivered.getId()).isEqualTo(event.getId());
                         assertThat(delivered.getType()).isEqualTo(event.getType());
                     } finally {
-                        bridge.close();
+                        source.close();
                         model.shutdown();
                     }
                 });
     }
 
     /**
-     * The starter wiring itself, not just {@code CatchupThenPushReadiness} in isolation: a bridge built through
-     * {@link RabbitMqCloudEventBridgeFactory#forQueue} with no manual {@code readinessSource(...)} call must still
+     * The starter wiring itself, not just {@code CatchupThenPushReadiness} in isolation: a source built through
+     * {@link RabbitMqCloudEventSourceFactory#forQueue} with no manual {@code readinessSource(...)} call must still
      * defer to the exact {@link PushSubscriptionModel} it was built with, correlated by identity through the
      * {@code occurrentCatchupThenPushSubscriptionModelsByLiveFeed} bean a framework
      * {@code @Projection(source = PUSH)} or {@code @Saga(source = PUSH)} registration publishes. Registered here as
@@ -145,7 +145,7 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
      * refused every time". A ready count that never drops below 1 is what only the former produces.
      */
     @Test
-    void the_factory_built_bridge_defers_to_a_catchup_then_push_wrapper_the_identity_registry_names_for_its_own_liveFeed() throws Exception {
+    void the_factory_built_source_defers_to_a_catchup_then_push_wrapper_the_identity_registry_names_for_its_own_liveFeed() throws Exception {
         CountDownLatch replayEntered = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
         String queue = "test-queue-" + UUID.randomUUID();
@@ -156,11 +156,11 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                 .withBean(CloudEventTypeMapper.class, ReflectionCloudEventTypeMapper::qualified)
                 .withPropertyValues(
                         "occurrent.broker.rabbitmq.exchange=" + exchange,
-                        "occurrent.broker.rabbitmq.bridge.poll-interval=100ms"
+                        "occurrent.broker.rabbitmq.source.poll-interval=100ms"
                 )
                 .run(context -> {
                     RabbitMqCloudEventSink sink = context.getBean(RabbitMqCloudEventSink.class);
-                    RabbitMqCloudEventBridgeFactory bridgeFactory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
+                    RabbitMqCloudEventSourceFactory sourceFactory = context.getBean(RabbitMqCloudEventSourceFactory.class);
 
                     BlockingQueue<CloudEvent> received = new LinkedBlockingQueue<>();
                     PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
@@ -189,7 +189,7 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                     });
                     assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-                    RabbitMqCloudEventBridge bridge = bridgeFactory.forQueue(queue, liveFeed).build();
+                    RabbitMqCloudEventSource source = sourceFactory.forQueue(queue, liveFeed).build();
                     try {
                         CloudEvent event = CloudEventBuilder.v1()
                                 .withId(UUID.randomUUID().toString())
@@ -198,15 +198,15 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                                 .build();
                         sink.publish(event);
 
-                        // Sampled repeatedly rather than once: a bridge that is fetching and refusing on every poll
+                        // Sampled repeatedly rather than once: a source that is fetching and refusing on every poll
                         // (readinessSource not actually gating it) still shows the queue empty at some individual
                         // instants too, since a fetched-then-nacked message spends part of each cycle "delivered,
-                        // not yet ready again". Never dropping below 1 across many samples is what only a bridge
+                        // not yet ready again". Never dropping below 1 across many samples is what only a source
                         // that never fetched at all produces.
                         try (Channel adminChannel = connection.createChannel()) {
                             for (int i = 0; i < 20; i++) {
                                 assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount())
-                                        .as("the auto-wired readinessSource must keep this bridge from fetching at all while parked")
+                                        .as("the auto-wired readinessSource must keep this source from fetching at all while parked")
                                         .isEqualTo(1);
                                 Thread.sleep(20);
                             }
@@ -218,7 +218,7 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                         assertThat(delivered).isNotNull();
                         assertThat(delivered.getId()).isEqualTo(event.getId());
                     } finally {
-                        bridge.close();
+                        source.close();
                         liveFeed.shutdown();
                     }
                 });

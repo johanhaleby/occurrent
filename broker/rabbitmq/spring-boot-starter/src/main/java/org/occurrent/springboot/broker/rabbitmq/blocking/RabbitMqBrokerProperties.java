@@ -42,7 +42,7 @@ public class RabbitMqBrokerProperties {
     private @Nullable String exchange;
 
     private final Sink sink = new Sink();
-    private final Bridge bridge = new Bridge();
+    private final Source source = new Source();
 
     public @Nullable String getExchange() {
         return exchange;
@@ -56,8 +56,8 @@ public class RabbitMqBrokerProperties {
         return sink;
     }
 
-    public Bridge getBridge() {
-        return bridge;
+    public Source getSource() {
+        return source;
     }
 
     public static class Sink {
@@ -83,46 +83,46 @@ public class RabbitMqBrokerProperties {
         }
     }
 
-    public static class Bridge {
+    public static class Source {
 
         /**
-         * {@code RabbitMqCloudEventBridge.Builder#pollInterval(Duration)} and
-         * {@code RabbitMqDomainEventBridge.Builder#pollInterval(Duration)}. One second by default, matching those
+         * {@code RabbitMqCloudEventSource.Builder#pollInterval(Duration)} and
+         * {@code RabbitMqDomainEventSource.Builder#pollInterval(Duration)}. One second by default, matching those
          * builders' own default.
          */
         private Duration pollInterval = Duration.ofSeconds(1);
 
         /**
-         * {@code RabbitMqCloudEventBridge.Builder#prefetchCount(int)} and
-         * {@code RabbitMqDomainEventBridge.Builder#prefetchCount(int)}. One by default, matching those builders'
+         * {@code RabbitMqCloudEventSource.Builder#prefetchCount(int)} and
+         * {@code RabbitMqDomainEventSource.Builder#prefetchCount(int)}. One by default, matching those builders'
          * own default.
          */
         private int prefetchCount = 1;
 
         /**
-         * {@code RabbitMqCloudEventBridge.Builder#closeTimeout(Duration)} and
-         * {@code RabbitMqDomainEventBridge.Builder#closeTimeout(Duration)}. Thirty seconds by default, matching those
+         * {@code RabbitMqCloudEventSource.Builder#closeTimeout(Duration)} and
+         * {@code RabbitMqDomainEventSource.Builder#closeTimeout(Duration)}. Thirty seconds by default, matching those
          * builders' own default.
          */
         private Duration closeTimeout = Duration.ofSeconds(30);
 
         /**
-         * {@code RabbitMqCloudEventBridge.Builder#declareTopology(boolean)} and
-         * {@code RabbitMqDomainEventBridge.Builder#declareTopology(boolean)}. {@code true} by default, matching
+         * {@code RabbitMqCloudEventSource.Builder#declareTopology(boolean)} and
+         * {@code RabbitMqDomainEventSource.Builder#declareTopology(boolean)}. {@code true} by default, matching
          * those builders' own default. Set to {@code false} for a deployment whose platform team owns the queue
          * and its bindings itself.
          */
         private boolean declareTopology = true;
 
         /**
-         * {@code RabbitMqCloudEventBridge.Builder#onDeliveryFailure(DeliveryFailurePolicy)} and
-         * {@code RabbitMqDomainEventBridge.Builder#onDeliveryFailure(DeliveryFailurePolicy)}.
+         * {@code RabbitMqCloudEventSource.Builder#onDeliveryFailure(DeliveryFailurePolicy)} and
+         * {@code RabbitMqDomainEventSource.Builder#onDeliveryFailure(DeliveryFailurePolicy)}.
          * {@link DeliveryFailurePolicy#REDELIVER} by default, matching those builders' own default.
          */
         private DeliveryFailurePolicy onDeliveryFailure = DeliveryFailurePolicy.REDELIVER;
 
         private final ParkingDestination parkingDestination = new ParkingDestination();
-        private final BridgeRetry retry = new BridgeRetry();
+        private final SourceRetry retry = new SourceRetry();
 
         public Duration getPollInterval() {
             return pollInterval;
@@ -168,14 +168,14 @@ public class RabbitMqBrokerProperties {
             return parkingDestination;
         }
 
-        public BridgeRetry getRetry() {
+        public SourceRetry getRetry() {
             return retry;
         }
     }
 
     /**
      * The destination {@code DeliveryFailurePolicy#PARK} publishes a failed delivery to. Required only when
-     * {@link Bridge#getOnDeliveryFailure()} is {@code PARK}. When either field is blank, a bridge factory does not
+     * {@link Source#getOnDeliveryFailure()} is {@code PARK}. When either field is blank, a source factory does not
      * call {@code parkingDestination(...)} at all, rather than calling it with a half-configured value, the same
      * "accepted but unused outside PARK" choice the underlying builder documents for a value given without
      * {@code PARK}.
@@ -202,7 +202,7 @@ public class RabbitMqBrokerProperties {
         }
 
         /**
-         * The configured destination, or empty when either field is null or blank. A bridge factory calls this
+         * The configured destination, or empty when either field is null or blank. A source factory calls this
          * rather than checking the fields itself, so a blank value from an unset placeholder in a property file
          * is treated the same as an absent one instead of reaching {@code parkingDestination(...)} as a
          * half-configured value.
@@ -265,35 +265,35 @@ public class RabbitMqBrokerProperties {
 
     /**
      * The same {@code initial}/{@code max}/{@code multiplier} shape as {@link Retry}, plus {@code maxAttempts}. A
-     * bridge's {@code build()} retry has nothing else to stop it, no {@code close()} to cancel an attempt already
+     * source's {@code build()} retry has nothing else to stop it, no {@code close()} to cancel an attempt already
      * in flight the way a sink's publish retry has, so it needs its own attempt limit instead of the sink's
      * deliberately uncapped default. A distinct type rather than an added field on {@link Retry}, so
      * {@code sink.retry.max-attempts} never appears as a setting that looks wired in but does nothing. See
      * {@code RabbitMqCloudEventSink}'s class javadoc for why the sink's own retry stays uncapped.
      */
-    public static class BridgeRetry {
+    public static class SourceRetry {
 
         /**
-         * The first retry delay. 100 milliseconds by default, matching {@code RabbitMqCloudEventBridge.Builder}'s
+         * The first retry delay. 100 milliseconds by default, matching {@code RabbitMqCloudEventSource.Builder}'s
          * own default backoff.
          */
         private Duration initial = Duration.ofMillis(100);
 
         /**
          * The longest the retry delay grows to. Two seconds by default, matching
-         * {@code RabbitMqCloudEventBridge.Builder}'s own default backoff.
+         * {@code RabbitMqCloudEventSource.Builder}'s own default backoff.
          */
         private Duration max = Duration.ofSeconds(2);
 
         /**
          * What the delay is multiplied by after each retried attempt. {@code 2.0} by default, matching
-         * {@code RabbitMqCloudEventBridge.Builder}'s own default backoff.
+         * {@code RabbitMqCloudEventSource.Builder}'s own default backoff.
          */
         private double multiplier = 2.0;
 
         /**
          * The most attempts {@code build()} makes before failing loudly instead of retrying again. Ten by default,
-         * matching {@code RabbitMqCloudEventBridge.Builder}'s own default, which spends roughly eleven seconds
+         * matching {@code RabbitMqCloudEventSource.Builder}'s own default, which spends roughly eleven seconds
          * sleeping between the nine retried attempts with the backoff above, on top of whatever each attempt's own
          * broker calls take. Set lower for a deployment that would rather fail startup fast, or higher for a
          * broker that routinely takes longer than that to come back.

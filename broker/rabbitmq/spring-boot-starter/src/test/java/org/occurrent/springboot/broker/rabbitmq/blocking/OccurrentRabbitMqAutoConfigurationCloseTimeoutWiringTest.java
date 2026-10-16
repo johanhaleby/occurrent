@@ -19,7 +19,7 @@ package org.occurrent.springboot.broker.rabbitmq.blocking;
 import com.rabbitmq.client.Connection;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
-import org.occurrent.springboot.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridgeFactory;
+import org.occurrent.springboot.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSourceFactory;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * {@code occurrent.broker.rabbitmq.bridge.close-timeout} reaches the builder each bridge factory hands out. The two
+ * {@code occurrent.broker.rabbitmq.source.close-timeout} reaches the builder each source factory hands out. The two
  * factories read the property separately, so each gets its own test. The builder has no getter for it, so the tests
  * read the builder's own {@code closeTimeout} field, and a value other than the thirty-second default is what tells
  * a factory that set it apart from one that did not.
@@ -41,12 +41,12 @@ class OccurrentRabbitMqAutoConfigurationCloseTimeoutWiringTest {
             .withConfiguration(AutoConfigurations.of(OccurrentRabbitMqAutoConfiguration.class))
             .withUserConfiguration(OccurrentRabbitMqAutoConfigurationWiringTest.EnabledConfiguration.class)
             .withBean(Connection.class, () -> mock(Connection.class))
-            .withPropertyValues("occurrent.broker.rabbitmq.bridge.close-timeout=7s");
+            .withPropertyValues("occurrent.broker.rabbitmq.source.close-timeout=7s");
 
     @Test
-    void close_timeout_from_properties_reaches_the_cloud_event_bridge_builder() {
+    void close_timeout_from_properties_reaches_the_cloud_event_source_builder() {
         contextRunner.run(context -> {
-            RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
+            RabbitMqCloudEventSourceFactory factory = context.getBean(RabbitMqCloudEventSourceFactory.class);
 
             assertThat(factory.forQueue("orders-projection", new PushSubscriptionModel()))
                     .extracting("closeTimeout")
@@ -56,9 +56,9 @@ class OccurrentRabbitMqAutoConfigurationCloseTimeoutWiringTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void close_timeout_from_properties_reaches_the_domain_event_bridge_builder() {
+    void close_timeout_from_properties_reaches_the_domain_event_source_builder() {
         contextRunner.run(context -> {
-            RabbitMqDomainEventBridgeFactory factory = context.getBean(RabbitMqDomainEventBridgeFactory.class);
+            RabbitMqDomainEventSourceFactory factory = context.getBean(RabbitMqDomainEventSourceFactory.class);
 
             assertThat(factory.forQueue("orders-projection", mock(DomainEventFeed.class)))
                     .extracting("closeTimeout")

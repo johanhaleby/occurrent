@@ -33,8 +33,8 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * The one place that maps a {@link CloudEvent} onto AMQP 0-9-1, in both directions {@link RabbitMqCloudEventSink} and
- * a consume-side bridge need. The CloudEvents SDK has no writer for 0-9-1, only for AMQP 1.0, so this mapping is
- * Occurrent's own, modelled on the AMQP 1.0 binding so it is recognisable rather than invented from nothing. A bridge
+ * a broker source need. The CloudEvents SDK has no writer for 0-9-1, only for AMQP 1.0, so this mapping is
+ * Occurrent's own, modelled on the AMQP 1.0 binding so it is recognisable rather than invented from nothing. A source
  * reads a message back through the same mapping the sink writes it with, so the two directions belong on this one
  * class rather than on two that could drift apart from each other.
  * <p>
@@ -176,7 +176,7 @@ public final class RabbitMqCloudEventMapper {
      * {@link #toBasicProperties(CloudEvent, Map)}/{@link #toBody(CloudEvent)}, the reverse of that mapping. Every
      * {@value #HEADER_PREFIX}-prefixed header becomes a context attribute or an extension, as it originally was, and
      * {@link BasicProperties#getContentType()} becomes {@code datacontenttype}. A header outside that namespace (an
-     * application header on the destination the sink or the bridge was built with) is not part of the mapping and is
+     * application header on the destination the sink or the source was built with) is not part of the mapping and is
      * ignored here, exactly as {@link RabbitMqDestination}'s reserved-prefix check assumes.
      * <p>
      * Every rebuilt attribute and extension is a {@link String}, since that is what a header actually carries,

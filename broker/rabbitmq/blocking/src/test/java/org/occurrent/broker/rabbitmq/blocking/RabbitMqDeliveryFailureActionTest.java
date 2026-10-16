@@ -54,7 +54,7 @@ class RabbitMqDeliveryFailureActionTest {
     /**
      * {@link DeliveryFailurePolicy#REDELIVER} never publishes anywhere, so {@code create(...)} must not open a
      * parking channel at all, even when a {@code parkingDestination} happens to be supplied alongside it. Opening
-     * one anyway would waste a channel nothing will ever use, and could fail startup for a resource the bridge
+     * one anyway would waste a channel nothing will ever use, and could fail startup for a resource the source
      * never needed.
      */
     @Test
@@ -105,7 +105,7 @@ class RabbitMqDeliveryFailureActionTest {
                 parkingPublisher, parkingDestination, log);
 
         assertThatThrownBy(() -> action.apply(42L, new BasicProperties(), new byte[0]))
-                .isInstanceOf(RabbitMqBridgeException.class);
+                .isInstanceOf(RabbitMqSourceException.class);
 
         verifyNoInteractions(log);
     }
@@ -124,7 +124,7 @@ class RabbitMqDeliveryFailureActionTest {
                 null, null, log);
 
         assertThatThrownBy(() -> action.redeliverFailure(42L))
-                .isInstanceOf(RabbitMqBridgeException.class);
+                .isInstanceOf(RabbitMqSourceException.class);
 
         verifyNoInteractions(log);
     }
@@ -205,7 +205,7 @@ class RabbitMqDeliveryFailureActionTest {
     }
 
     /**
-     * Only a failure the client recovers the connection from lets a bridge wait for the delivery to arrive again
+     * Only a failure the client recovers the connection from lets a source wait for the delivery to arrive again
      * instead of stopping. For each other case here that wait would be for a channel that never comes back.
      */
     @Test
@@ -218,11 +218,11 @@ class RabbitMqDeliveryFailureActionTest {
 
         assertThat(recovering.isLostToConnectionRecovery(new AlreadyClosedException(connectionDropped))).isTrue();
         assertThat(recovering.isLostToConnectionRecovery(connectionDropped)).isTrue();
-        assertThat(recovering.isLostToConnectionRecovery(new RabbitMqBridgeException("ack failed", new IOException("broken pipe")))).isTrue();
+        assertThat(recovering.isLostToConnectionRecovery(new RabbitMqSourceException("ack failed", new IOException("broken pipe")))).isTrue();
 
         assertThat(recovering.isLostToConnectionRecovery(new ShutdownSignalException(true, true, null, null))).as("connection closed by the application").isFalse();
         assertThat(recovering.isLostToConnectionRecovery(new AlreadyClosedException(new ShutdownSignalException(false, false, null, null)))).as("channel closed by the broker").isFalse();
-        assertThat(recovering.isLostToConnectionRecovery(new RabbitMqBridgeException("no cause"))).isFalse();
+        assertThat(recovering.isLostToConnectionRecovery(new RabbitMqSourceException("no cause"))).isFalse();
         assertThat(recovering.isLostToConnectionRecovery(new IllegalStateException("unrelated"))).isFalse();
         assertThat(recovering.isLostToConnectionRecovery(new OutOfMemoryError())).isFalse();
         assertThat(notRecovering.isLostToConnectionRecovery(new AlreadyClosedException(connectionDropped))).as("connection without automatic recovery").isFalse();

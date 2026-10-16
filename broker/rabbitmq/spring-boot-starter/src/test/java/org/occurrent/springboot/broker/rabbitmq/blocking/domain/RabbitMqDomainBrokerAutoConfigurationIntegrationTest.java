@@ -28,7 +28,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DomainEventSink;
-import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridge;
+import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSource;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.view.ViewStateRepository;
@@ -53,7 +53,7 @@ import static org.awaitility.Awaitility.await;
 /**
  * Proves the domain-level half of the RabbitMQ broker auto-configuration against a real RabbitMQ. An
  * auto-configured {@code RabbitMqDomainEventSink} publishes a domain event, and a factory-built
- * {@code RabbitMqDomainEventBridge} feeds it into a {@code DomainEventFeed} projection.
+ * {@code RabbitMqDomainEventSource} feeds it into a {@code DomainEventFeed} projection.
  */
 @Testcontainers
 class RabbitMqDomainBrokerAutoConfigurationIntegrationTest {
@@ -85,7 +85,7 @@ class RabbitMqDomainBrokerAutoConfigurationIntegrationTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void domain_level_round_trip_through_the_auto_configured_sink_and_bridge() throws Exception {
+    void domain_level_round_trip_through_the_auto_configured_sink_and_source() throws Exception {
         CloudEventConverter<TestOrderPlaced> converter = new TestOrderPlacedConverter();
 
         new ApplicationContextRunner()
@@ -100,11 +100,11 @@ class RabbitMqDomainBrokerAutoConfigurationIntegrationTest {
                 .withBean(CloudEventConverter.class, () -> converter)
                 .withPropertyValues(
                         "occurrent.broker.rabbitmq.exchange=" + exchange,
-                        "occurrent.broker.rabbitmq.bridge.poll-interval=100ms"
+                        "occurrent.broker.rabbitmq.source.poll-interval=100ms"
                 )
                 .run(context -> {
                     DomainEventSink<TestOrderPlaced> sink = context.getBean(DomainEventSink.class);
-                    RabbitMqDomainEventBridgeFactory bridgeFactory = context.getBean(RabbitMqDomainEventBridgeFactory.class);
+                    RabbitMqDomainEventSourceFactory sourceFactory = context.getBean(RabbitMqDomainEventSourceFactory.class);
 
                     Map<String, String> orderStatusViews = new ConcurrentHashMap<>();
                     DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), converter, TestOrderPlaced::orderId);
@@ -115,9 +115,9 @@ class RabbitMqDomainBrokerAutoConfigurationIntegrationTest {
                                     .build(),
                             ViewStateRepository.create(orderStatusViews::get, orderStatusViews::put));
 
-                    RabbitMqDomainEventBridge<TestOrderPlaced> bridge = bridgeFactory.forQueue("test-domain-queue-" + UUID.randomUUID(), feed).build();
+                    RabbitMqDomainEventSource<TestOrderPlaced> source = sourceFactory.forQueue("test-domain-queue-" + UUID.randomUUID(), feed).build();
                     try {
-                        // register(...) alone does not reach live. isReadyForLiveDelivery() (what the bridge's
+                        // register(...) alone does not reach live. isReadyForLiveDelivery() (what the source's
                         // coarse lifecycle gate polls) only answers true once the one-time catch-up below has
                         // actually completed, the same order RabbitMqDomainEventLevelBootstrap follows.
                         feed.catchUp("test-domain-projection");
@@ -128,7 +128,7 @@ class RabbitMqDomainBrokerAutoConfigurationIntegrationTest {
                         await().atMost(15, TimeUnit.SECONDS).untilAsserted(() ->
                                 assertThat(orderStatusViews.get(orderId)).isEqualTo("PLACED"));
                     } finally {
-                        bridge.close();
+                        source.close();
                     }
                 });
     }

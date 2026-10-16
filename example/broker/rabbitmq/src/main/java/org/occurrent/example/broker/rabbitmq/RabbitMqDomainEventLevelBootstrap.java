@@ -29,7 +29,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.broker.api.blocking.CloudEventForwarder;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
-import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridge;
+import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSource;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
@@ -53,16 +53,16 @@ import java.util.concurrent.Executors;
 
 /**
  * A runnable, hand-wired bootstrap for the domain-level half of this broker example. It builds an event store, a
- * {@code CloudEventForwarder} publishing to RabbitMQ, a {@code RabbitMqDomainEventBridge} bridging the queue back
+ * {@code CloudEventForwarder} publishing to RabbitMQ, a {@code RabbitMqDomainEventSource} bridging the queue back
  * into a {@code DomainEventFeed}, and an {@link OrderStatusProjection} fed directly from domain events, entirely by
  * constructing each piece itself. There is no Spring Boot auto-configuration and no {@code application.yaml}
  * RabbitMQ configuration here. That arrives with the broker Spring Boot starter in
  * <a href="https://github.com/johanhaleby/occurrent/issues/846">#846</a>, and this class wires the same interfaces
  * that starter will eventually configure.
  * <p>
- * The bridge is built, declaring the queue and its bindings, before the catch-up replay below starts, not after.
+ * The source is built, declaring the queue and its bindings, before the catch-up replay below starts, not after.
  * Declare where events will land before replaying what will land there, since the forwarder is already running by
- * then and a replay can take a while on a large store. Building the bridge after would leave every event the
+ * then and a replay can take a while on a large store. Building the source after would leave every event the
  * forwarder publishes during that whole window unroutable until the binding finally exists.
  * <p>
  * {@link #main(String[])} needs a real MongoDB single-node replica set and a real RabbitMQ, not Testcontainers.
@@ -75,7 +75,7 @@ import java.util.concurrent.Executors;
  * give the Mongo container a couple of seconds to accept connections before the {@code rs.initiate()} call, then
  * run this class. It places and ships one order, waits for the read model to reach {@code SHIPPED}, and logs the
  * result, so the console shows the event travel the whole loop, from the store through the forwarder and the
- * broker to the bridge and the projection.
+ * broker to the source and the projection.
  * <p>
  * {@code rs.initiate()} with no member list advertises the container's own hostname as the replica set member
  * address, not {@code localhost}, and a driver doing ordinary replica set discovery switches to that unreachable
@@ -91,7 +91,7 @@ import java.util.concurrent.Executors;
  * {@code guest} account. Verified on macOS with Colima, where the docker command above accepts that account over the
  * published port with no extra step, which is what {@link #main(String[])} was actually run against. RabbitMQ
  * restricts {@code guest} to connections it can recognise as loopback, and on native Linux Docker a host
- * connection through a published port can arrive at the container from the Docker bridge address rather than one
+ * connection through a published port can arrive at the container from the Docker source address rather than one
  * RabbitMQ recognises as loopback, which fails the login with {@code ACCESS_REFUSED}. This was not verified on
  * that platform. If it bites, start the container with {@code -e RABBITMQ_DEFAULT_USER=broker-example -e
  * RABBITMQ_DEFAULT_PASS=broker-example} instead, a named user is never subject to the loopback restriction, and
@@ -122,17 +122,17 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
     private final CloudEventConverter<OrderEvent> converter;
     private final DurableSubscriptionModel forwarderSubscription;
     private final RabbitMqCloudEventSink sink;
-    private final RabbitMqDomainEventBridge<OrderEvent> bridge;
+    private final RabbitMqDomainEventSource<OrderEvent> source;
     private final Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews;
 
     private RabbitMqDomainEventLevelBootstrap(MongoEventStore eventStore, CloudEventConverter<OrderEvent> converter,
                                                DurableSubscriptionModel forwarderSubscription, RabbitMqCloudEventSink sink,
-                                               RabbitMqDomainEventBridge<OrderEvent> bridge, Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews) {
+                                               RabbitMqDomainEventSource<OrderEvent> source, Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews) {
         this.eventStore = eventStore;
         this.converter = converter;
         this.forwarderSubscription = forwarderSubscription;
         this.sink = sink;
-        this.bridge = bridge;
+        this.source = source;
         this.orderStatusViews = orderStatusViews;
     }
 
@@ -150,17 +150,17 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
                 .build();
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(EXCHANGE, typeMapper);
 
-        // Neither the sink nor the bridge declares the exchange itself, only queues and bindings against one that
+        // Neither the sink nor the source declares the exchange itself, only queues and bindings against one that
         // already exists, so the application declares it, on its own short-lived channel.
         declareExchange(rabbitConnection);
 
-        // From here on, forwarder.forward(...) and the bridge builder each start a background subscription the
+        // From here on, forwarder.forward(...) and the source builder each start a background subscription the
         // instant they succeed, before this method has anywhere to return a handle to. A later step throwing
-        // (catch-up, the bridge) would otherwise leak whatever already started. The catch below closes exactly
+        // (catch-up, the source) would otherwise leak whatever already started. The catch below closes exactly
         // that, in reverse order, before the failure reaches the caller.
         DurableSubscriptionModel forwarderSubscription = null;
         RabbitMqCloudEventSink sink = null;
-        RabbitMqDomainEventBridge<OrderEvent> bridge = null;
+        RabbitMqDomainEventSource<OrderEvent> source = null;
         try {
             NativeMongoSubscriptionModel forwarderSubscriptionModel = new NativeMongoSubscriptionModel(
                     mongoClient.getDatabase(DATABASE_NAME), EVENTS_COLLECTION, TimeRepresentation.RFC_3339_STRING, Executors.newVirtualThreadPerTaskExecutor());
@@ -180,22 +180,22 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
             ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(orderStatusViews::get, orderStatusViews::put);
             feed.register(SUBSCRIPTION_ID, OrderStatusProjection.orderStatusProjection(), repository);
 
-            // The bridge builder declares the queue and its bindings before this returns. Building it before the
+            // The source builder declares the queue and its bindings before this returns. Building it before the
             // catch-up below, not after, means the exchange already has somewhere to route to for the whole
             // replay, however long that runs. Building it after would leave the forwarder publishing into an
             // exchange nothing is bound to for that entire window, RabbitMQ returning every one of those publishes
             // unroutable, the sink treating that as a failed publish, and the forwarder retrying the same event
             // until the binding finally exists. No event is lost, since the checkpoint never advances past a
             // failed publish, but the startup would be needlessly noisy. See the class javadoc.
-            bridge = RabbitMqDomainEventBridge.builder(rabbitConnection, feed, QUEUE)
+            source = RabbitMqDomainEventSource.builder(rabbitConnection, feed, QUEUE)
                     .resolver(resolver)
                     .build();
 
             feed.catchUp(SUBSCRIPTION_ID);
 
-            return new RabbitMqDomainEventLevelBootstrap(eventStore, converter, forwarderSubscription, sink, bridge, orderStatusViews);
+            return new RabbitMqDomainEventLevelBootstrap(eventStore, converter, forwarderSubscription, sink, source, orderStatusViews);
         } catch (RuntimeException e) {
-            closeQuietly(bridge, e);
+            closeQuietly(source, e);
             closeQuietly(forwarderSubscription, e);
             closeQuietly(sink, e);
             throw e;
@@ -267,7 +267,7 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
     }
 
     /**
-     * Closes the bridge first, so nothing is consuming, then the forwarder, then the sink. Each of the three is
+     * Closes the source first, so nothing is consuming, then the forwarder, then the sink. Each of the three is
      * closed in its own try, so one throwing does not skip the rest. The first failure is rethrown with every
      * later one attached as a suppressed exception, which is what an {@link AutoCloseable} implementation owes
      * its caller, every resource actually gets a close attempt regardless of what an earlier one did.
@@ -276,7 +276,7 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
     public void close() {
         RuntimeException failure = null;
         try {
-            bridge.close();
+            source.close();
         } catch (Exception e) {
             failure = collectFailure(failure, e);
         }
@@ -322,7 +322,7 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
              Connection rabbitConnection = newRabbitConnection(rabbitUri);
              RabbitMqDomainEventLevelBootstrap app = RabbitMqDomainEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
             OrderStatusProjection.OrderStatusView view = app.placeAndShipOneOrder(Duration.ofSeconds(30));
-            log.info("Order placed, forwarded to RabbitMQ, bridged back, and projected: {}", view);
+            log.info("Order placed, forwarded to RabbitMQ, consumed back, and projected: {}", view);
         }
     }
 

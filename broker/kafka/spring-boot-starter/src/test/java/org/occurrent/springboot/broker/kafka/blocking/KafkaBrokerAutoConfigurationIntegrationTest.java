@@ -19,7 +19,7 @@ package org.occurrent.springboot.broker.kafka.blocking;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
-import org.occurrent.broker.kafka.blocking.KafkaCloudEventBridge;
+import org.occurrent.broker.kafka.blocking.KafkaCloudEventSource;
 import org.occurrent.broker.kafka.blocking.KafkaCloudEventSink;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
@@ -47,7 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Proves the auto-configured sink and a factory-built bridge round-trip a real event through a real Kafka, the
+ * Proves the auto-configured sink and a factory-built source round-trip a real event through a real Kafka, the
  * same loop the RabbitMQ starter's own integration test proves, driven here by properties and the
  * auto-configuration beans instead of manual builder calls.
  */
@@ -61,7 +61,7 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
             .withReuse(true);
 
     @Test
-    void cloud_event_level_round_trip_through_the_auto_configured_sink_and_bridge() {
+    void cloud_event_level_round_trip_through_the_auto_configured_sink_and_source() {
         String topic = "test-topic-" + UUID.randomUUID();
 
         new ApplicationContextRunner()
@@ -70,22 +70,22 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                 .withPropertyValues(
                         "occurrent.broker.kafka.bootstrap-servers=" + kafkaContainer.getBootstrapServers(),
                         "occurrent.broker.kafka.topic=" + topic,
-                        "occurrent.broker.kafka.bridge.poll-timeout=100ms",
+                        "occurrent.broker.kafka.source.poll-timeout=100ms",
                         // This test's consumer group is a fresh UUID with no committed offset, and the publish
-                        // below can land before the bridge's own subscription finishes joining the group. Kafka's
+                        // below can land before the source's own subscription finishes joining the group. Kafka's
                         // own default, auto.offset.reset=latest, would then skip straight past that already
                         // published record instead of ever seeing it.
                         "occurrent.broker.kafka.consumer.additional-properties[auto.offset.reset]=earliest"
                 )
                 .run(context -> {
                     KafkaCloudEventSink sink = context.getBean(KafkaCloudEventSink.class);
-                    KafkaCloudEventBridgeFactory bridgeFactory = context.getBean(KafkaCloudEventBridgeFactory.class);
+                    KafkaCloudEventSourceFactory sourceFactory = context.getBean(KafkaCloudEventSourceFactory.class);
 
                     BlockingQueue<CloudEvent> received = new LinkedBlockingQueue<>();
                     PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
                     model.subscribe("test-subscription", received::add);
 
-                    KafkaCloudEventBridge bridge = bridgeFactory.forGroup("test-group-" + UUID.randomUUID(), model).build();
+                    KafkaCloudEventSource source = sourceFactory.forGroup("test-group-" + UUID.randomUUID(), model).build();
                     try {
                         CloudEvent event = CloudEventBuilder.v1()
                                 .withId(UUID.randomUUID().toString())
@@ -99,22 +99,22 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                         assertThat(delivered.getId()).isEqualTo(event.getId());
                         assertThat(delivered.getType()).isEqualTo(event.getType());
                     } finally {
-                        bridge.close();
+                        source.close();
                         model.shutdown();
                     }
                 });
     }
 
     /**
-     * The starter wiring itself, not just {@code CatchupThenPushReadiness} in isolation: a bridge built through
-     * {@link KafkaCloudEventBridgeFactory#forGroup} with no manual {@code readinessSource(...)} call must still
+     * The starter wiring itself, not just {@code CatchupThenPushReadiness} in isolation: a source built through
+     * {@link KafkaCloudEventSourceFactory#forGroup} with no manual {@code readinessSource(...)} call must still
      * defer to the exact {@link PushSubscriptionModel} it was built with, correlated by identity through the
      * {@code occurrentCatchupThenPushSubscriptionModelsByLiveFeed} bean a framework
      * {@code @Projection(source = PUSH)} or {@code @Saga(source = PUSH)} registration publishes. Registered here as
      * a plain map, standing in for that publisher, since this module has no compile-time dependency on the
      * framework autoconfigure module that does the real publishing.
      * <p>
-     * Checked against how many {@code DEFERRED} outcomes this bridge reports while the wrapper is parked, held at
+     * Checked against how many {@code DEFERRED} outcomes this source reports while the wrapper is parked, held at
      * zero the whole time, rather than against whether the handler ever ran: {@code RoutingOutcome.DEFERRED} alone
      * would already keep the handler from running even with no {@code readinessSource} wired at all, refusing and
      * seeking back on every fetch, so that alone cannot tell "never fetched because readinessSource gated it"
@@ -122,7 +122,7 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
      * what only the former produces.
      */
     @Test
-    void the_factory_built_bridge_defers_to_a_catchup_then_push_wrapper_the_identity_registry_names_for_its_own_liveFeed() throws Exception {
+    void the_factory_built_source_defers_to_a_catchup_then_push_wrapper_the_identity_registry_names_for_its_own_liveFeed() throws Exception {
         String topic = "test-topic-" + UUID.randomUUID();
         CountDownLatch replayEntered = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
@@ -134,12 +134,12 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                 .withPropertyValues(
                         "occurrent.broker.kafka.bootstrap-servers=" + kafkaContainer.getBootstrapServers(),
                         "occurrent.broker.kafka.topic=" + topic,
-                        "occurrent.broker.kafka.bridge.poll-timeout=100ms",
+                        "occurrent.broker.kafka.source.poll-timeout=100ms",
                         "occurrent.broker.kafka.consumer.additional-properties[auto.offset.reset]=earliest"
                 )
                 .run(context -> {
                     KafkaCloudEventSink sink = context.getBean(KafkaCloudEventSink.class);
-                    KafkaCloudEventBridgeFactory bridgeFactory = context.getBean(KafkaCloudEventBridgeFactory.class);
+                    KafkaCloudEventSourceFactory sourceFactory = context.getBean(KafkaCloudEventSourceFactory.class);
 
                     BlockingQueue<CloudEvent> received = new LinkedBlockingQueue<>();
                     PushObserver deferredCounter = (cloudEvent, outcome) -> {
@@ -173,7 +173,7 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                     });
                     assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-                    KafkaCloudEventBridge bridge = bridgeFactory.forGroup("test-group-" + UUID.randomUUID(), liveFeed).build();
+                    KafkaCloudEventSource source = sourceFactory.forGroup("test-group-" + UUID.randomUUID(), liveFeed).build();
                     try {
                         CloudEvent event = CloudEventBuilder.v1()
                                 .withId(UUID.randomUUID().toString())
@@ -184,7 +184,7 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
 
                         // Several poll intervals' worth of wall-clock time, with the wrapper still parked.
                         Thread.sleep(1000);
-                        assertThat(deferredCount.get()).as("the auto-wired readinessSource must keep this bridge from fetching at all while parked")
+                        assertThat(deferredCount.get()).as("the auto-wired readinessSource must keep this source from fetching at all while parked")
                                 .isZero();
 
                         releaseReplay.countDown();
@@ -193,7 +193,7 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                         assertThat(delivered).isNotNull();
                         assertThat(delivered.getId()).isEqualTo(event.getId());
                     } finally {
-                        bridge.close();
+                        source.close();
                         liveFeed.shutdown();
                     }
                 });
