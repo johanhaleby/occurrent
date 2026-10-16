@@ -17,7 +17,7 @@ event for the same instance arrived first. This has not shipped either, so the c
 
 Amended in place a third time for [#1061](https://github.com/johanhaleby/occurrent/issues/1061), which found that
 pacing the unroutable-delivery `ERROR` on the budget alone left it unfired on every subscription model the budget is
-switched off for, which is push feeds and the broker bridges. The paragraph below now says the `ERROR` is paced on the
+switched off for, which is push feeds and the broker sources. The paragraph below now says the `ERROR` is paced on the
 budget when one is configured and on a fixed five-minute default otherwise. This has not shipped either.
 
 Amended in place a fourth time on 2026-10-10, before 0.34.0 shipped, to make quarantine off by default. Decision point 7
@@ -190,8 +190,8 @@ budget, and `SagaStatus.QUARANTINED` lists what else has to hold first.
 
 The budget is a `Duration` rather than an attempt count, and the reason is stronger than the retry cadence being
 tunable. **The retry loop is not always Occurrent's at all.** On the MongoDB models it is a `RetryStrategy` the user
-can replace. Behind the shipped Kafka bridge it is not a `RetryStrategy` in any form. Under the default `REDELIVER`
-policy `KafkaCloudEventBridge` catches the exception, declines to stage the offset, seeks the consumer back to that
+can replace. Behind the shipped Kafka source it is not a `RetryStrategy` in any form. Under the default `REDELIVER`
+policy `KafkaCloudEventSource` catches the exception, declines to stage the offset, seeks the consumer back to that
 record and pauses the partition for roughly one poll timeout before offering it again, without limit. Those two are
 unrelated mechanisms running at unrelated rates, so an attempt count means a different amount of time on each, while
 five minutes means five minutes on both.
@@ -217,7 +217,7 @@ exception propagates to the caller. Fed by a bare in-process `accept(...)` with 
 failure is also the last, no second failure ever arrives, and a budget measured across repeated failures never
 elapses. Such a saga keeps today's behaviour. Re-offering the input is necessary rather than enough, since `SagaRunner` also
 needs a model that says it holds every event it delivers, which is the MongoDB models. The in-memory model and a push
-feed behind a redelivering bridge say nothing of the kind, so they get no quarantine either.
+feed behind a redelivering source say nothing of the kind, so they get no quarantine either.
 
 Two details keep the budget cheap. The elapsed time is measured from a value already read, because `process` loads
 the envelope on every attempt anyway, so no extra read is needed. And only the first failure of an input writes, so
@@ -327,10 +327,10 @@ is paced independently of whether the budget is switched on for this saga, a `WA
 `ERROR` once per interval after that for as long as the event keeps being offered, so an operator hears about it at a
 rate they can read rather than at the redelivery cadence. That interval is the budget when one is configured, and a
 fixed five-minute default when it is not, because the model this decision most needs to be loud on, a push feed with
-no way to hold an event it delivers, including one a broker bridge feeds, is exactly the model the budget is switched
+no way to hold an event it delivers, including one a broker source feeds, is exactly the model the budget is switched
 off for. A model
 that does not offer a refused delivery again never repeats past the first `WARN`, and `DeliveryFailurePolicy` is
-where a consume-side broker bridge's choice is configured.
+where a broker source's choice is configured.
 
 The first implementation skipped the delivery past the budget instead, logging an error and writing nothing, and
 relied on the retention check to make refeeding a recovery. [#1042](https://github.com/johanhaleby/occurrent/issues/1042)
@@ -370,7 +370,7 @@ advanced a watermark, a later replay would treat it as already handled and skip 
 loss this design exists to avoid. The watermarks are what make the recorded position meaningful.
 
 The same no-loss property holds on the transports that are not checkpoint-based, enforced by the transport rather
-than by a checkpoint. Under the Kafka bridge's default `REDELIVER` policy the offset is not staged for a record whose
+than by a checkpoint. Under the Kafka source's default `REDELIVER` policy the offset is not staged for a record whose
 handler threw, so the record stays available for exactly as long as the instance keeps failing on it.
 
 Being inert also has a consequence worth naming, because it is what makes the next section possible. Nothing writes
@@ -486,8 +486,8 @@ either, so `catchup = NONE` comes out unquarantined without anything checking fo
 **The fact varies per event inside a single wiring, which is why it cannot be a property of the model or of the
 configuration.** `CatchupThenPushSubscriptionModel` is the case. It replays an event store and takes live events from
 a feed, and the two are independent. An event this application wrote is in the store, and an event that arrived over
-a bridge from another service is there only if something here persisted it, which the amendment to ADR 133 describes
-as exactly what a consume bridge cannot be assumed to have done. The repository's own RabbitMQ example is exactly this mixture, writing its orders locally and publishing them,
+a source from another service is there only if something here persisted it, which the amendment to ADR 133 describes
+as exactly what a source cannot be assumed to have done. The repository's own RabbitMQ example is exactly this mixture, writing its orders locally and publishing them,
 while its readiness test injects one message whose order id was never written here. Any answer given once at
 construction, or once by a `catchup` attribute, would be wrong for some of the events that wiring delivers. Asking
 the store per event is the only way to be right about both halves of it, which is why the capability answers per
@@ -530,8 +530,8 @@ Retention means the event remains obtainable from that source, not that the mode
 MongoDB model has moved past the event and has no intention of reading it again, and the event is still there, which
 is all quarantine needs. Going back for it is release's problem, and release is not in this version.
 
-This turns on whether the source retains history, not on which retry loop re-offers the input, so it is unchanged by
-the transport differences in Decision point 3. A push feed behind the Kafka bridge does re-offer a failing record,
+This turns on whether the feed retains history, not on which retry loop re-offers the input, so it is unchanged by
+the transport differences in Decision point 3. A push feed behind the Kafka source does re-offer a failing record,
 which is enough to reach the budget, and it is still not enough to release afterwards, because recording the
 quarantine is what stages the offset and moves past the record.
 

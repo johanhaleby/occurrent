@@ -794,7 +794,7 @@ having handled it, so the event would be lost. It is refused instead, and the fi
 interval is the quarantine budget when the saga has one, and a fixed five minutes when it does not, so the
 `ERROR` still repeats on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
 offering the event. A model that does not offer a refused delivery again gets only the first `WARN`, and
-`DeliveryFailurePolicy` is where a consume-side broker bridge's choice is configured.
+`DeliveryFailurePolicy` is where a broker source's choice is configured.
 Where the event is offered again, repair the converter or the id extractor and the saga applies it in the order it was
 written.
 
@@ -827,7 +827,7 @@ afterwards, which is that the instance goes inert and skips everything addressed
 Protecting the failing event alone would leave the ones behind it unprotected.
 
 That is deliberate rather than an omission. Quarantining means returning normally, which acknowledges the event to
-whatever fed it, and on a push feed behind a broker bridge that is what stages the offset and moves past the record.
+whatever fed it, and on a push feed behind a broker source that is what stages the offset and moves past the record.
 The one copy this saga could ever be given would be gone at the moment of quarantine. Between an instance left active
 and an event this saga would be acknowledging away, this refuses the acknowledgement and leaves what happens to the
 event to whatever fed it.
@@ -1184,7 +1184,7 @@ subscription to the `Mono` that `DomainEventFeed.catchUpAll()`, `catchUp(id)` or
 feed goes live, its replay notices a stop, or it fails. A replay notices a stop at the next event it hands to the
 projection, so one with no event left to hand over goes live as if there had been no stop.
 
-`DomainEventFeed.acceptCloudEvent(..)`, which the Kafka and RabbitMQ bridges call, is unchanged.
+`DomainEventFeed.acceptCloudEvent(..)`, which the Kafka and RabbitMQ sources call, is unchanged.
 
 There is no recipe for this change. Which thread calls `accept(..)` and what a listener does when it throws are
 runtime behavior that a rewrite of the source cannot see.
@@ -1203,7 +1203,7 @@ run. The in-memory event store loses the event in that crash too, which is why i
 What to use instead depends on where the events come from:
 
 - A RabbitMQ or Kafka listener calls `acceptRedeliverable(CloudEvent)` and acknowledges the message only when the
-  outcome is `DELIVERED` or `FILTERED`. `RabbitMqCloudEventBridge` and `KafkaCloudEventBridge` already call it.
+  outcome is `DELIVERED` or `FILTERED`. `RabbitMqCloudEventSource` and `KafkaCloudEventSource` already call it.
   Under `DeliveryFailurePolicy.PARK` they also acknowledge a failed message, once its republish to the parking
   destination is confirmed.
 - An HTTP endpoint whose caller retries a failed request calls `acceptRedeliverable(CloudEvent)` too, and answers

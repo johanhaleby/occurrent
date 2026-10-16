@@ -71,7 +71,7 @@ as real. That is the case the header rule in decision 4 protects.
 
 ## Decision
 
-### 1. Each transport module contributes a bridge into the push feed that already ships
+### 1. Each transport module contributes a source into the push feed that already ships
 
 A transport module consumes a broker message, rebuilds the event, and hands it to `Pushable.accept(CloudEvent)` at the
 CloudEvent level or to `DomainEventFeed.accept(EventMetadata, E)` at the domain level.
@@ -80,27 +80,27 @@ No new `SubscriptionModel` is added, for the reason above. `PushSubscriptionMode
 `CatchupThenPushSubscriptionModel` keep the shapes they have. The one exception is `PushObserver` and the outcome
 `routeReportingMatch` reports to it, which this decision changes for the reason given below.
 
-Two existing rules constrain what a bridge may do, and both are there to stop events being lost.
+Two existing rules constrain what a source may do, and both are there to stop events being lost.
 
 [ADR 104](0104-an-undeliverable-push-event-is-refused-not-acknowledged.md) decided that an `accept(...)` which returns
-normally without delivering is an acknowledgement of an event nothing consumed. So a bridge never acknowledges when
+normally without delivering is an acknowledgement of an event nothing consumed. So a source never acknowledges when
 `accept(...)` throws.
 
-A normal return is not on its own proof of delivery, and the CloudEvent bridge needs one more check because of it.
-ADR 104 made `DomainEventFeed` refuse when nothing is registered, so the domain bridge can read a normal return as
+A normal return is not on its own proof of delivery, and the CloudEvent source needs one more check because of it.
+ADR 104 made `DomainEventFeed` refuse when nothing is registered, so the domain source can read a normal return as
 delivery. It deliberately did not make `PushSubscriptionModel` refuse, because that model is also fed from the write
 path by `new InMemoryEventStore(pushModel::accept)`. That store has already kept the event when its listener runs, so
 refusing would only make the write call throw, without protecting anything. The amendment at the end of this ADR limits
 that write path to the in-memory event store. A stopped model also drops live events and returns normally, which ADR 85
 decided and ADR 104 kept.
 
-So a CloudEvent bridge that only looked at whether `accept(...)` threw would acknowledge and lose events in three
+So a CloudEvent source that only looked at whether `accept(...)` threw would acknowledge and lose events in three
 states, before anything is registered, while the model is stopped, and while its subscription is paused. `route`
 returns normally in all three.
 
 **The acknowledgement decision comes from the routing outcome, not from a check taken before or after the push.**
 `PushSubscriptionModel` decides it in `routeReportingMatch`, which evaluates the sole registration's eligibility
-once. The bridge gets that outcome as the return value of `acceptRedeliverable(...)`, and a `PushObserver` the
+once. The source gets that outcome as the return value of `acceptRedeliverable(...)`, and a `PushObserver` the
 application configured is told the same one. (The 2026-08-21 amendment below adds `acceptRedeliverable(...)` and moves
 the report to after the matched action runs, replacing the mechanism this paragraph originally described. The
 decision itself, one evaluation shared between the match and the report, is unchanged.)
@@ -114,47 +114,47 @@ not running, the subscription being paused, and nothing being registered. Only t
 The other three mean the event was not delivered, so acknowledging discards it.
 
 A lifecycle check afterwards cannot separate them. A pause reports `false`, a concurrent resume then makes
-`isRunning(subscriptionId)` true, and the bridge acknowledges a message nothing consumed. That is the same two-step
+`isRunning(subscriptionId)` true, and the source acknowledges a message nothing consumed. That is the same two-step
 race one paragraph up, just moved after the push, so it has to be answered in the routing evaluation itself.
 
 So the push module gains an outcome reported from that one evaluation, `DELIVERED`, `FILTERED` and `NOT_DELIVERABLE`
 at the time this decision was written (`DEFERRED` was added by the 2026-08-21 amendment below, and `UNAVAILABLE`
 and `REFUSED` by the 2026-08-22 one, which also narrows what `NOT_DELIVERABLE` means), and
-the bridge acknowledges on `DELIVERED`, and on `FILTERED`, where redelivering would loop forever because the event
+the source acknowledges on `DELIVERED`, and on `FILTERED`, where redelivering would loop forever because the event
 is simply not this consumer's. It does not acknowledge on `NOT_DELIVERABLE`, on `DEFERRED`, or when the matched
 action throws. (Originally worded around `accept(...)` returning normally. The amendment below changes which method
-a bridge calls and when the report happens, not this acknowledgement rule.)
+a source calls and when the report happens, not this acknowledgement rule.)
 
 This refines a shape that has not shipped rather than breaking a released one, since `PushObserver` is still in the
 unreleased section of `changelog.md`, so its existing entry absorbs the outcome contract instead of a migration note
 being needed. [#848](https://github.com/johanhaleby/occurrent/issues/848) owns the change and has to be done before
-the consume bridges in #415 and #417, which are what need the contract.
+the sources in #415 and #417, which are what need the contract.
 
 #848 owns a second prerequisite too, the live match decision 5 needs on `DomainEventFeed`. Those two are the only
 changes this design needs outside the three broker modules, and both are prerequisites rather than improvements, so
 neither belongs at the end of an implementation plan.
 
-**The bridge therefore holds the `PushSubscriptionModel` rather than a bare `Pushable`.** `acceptRedeliverable(...)`
-is a method on the model, and the readiness accessors are not reachable through `Pushable` either. The bridge
+**The source therefore holds the `PushSubscriptionModel` rather than a bare `Pushable`.** `acceptRedeliverable(...)`
+is a method on the model, and the readiness accessors are not reachable through `Pushable` either. The source
 uses `isRunning(subscriptionId)` to decide when to start and stop consuming, which is a coarse lifecycle question
 where a small delay is harmless, and never to decide a single message. `hasSubscriptions()` would be the wrong
 question even there, because it stays true for a paused subscription while `route` skips exactly that registration.
-The bridge knows which id to ask about because ADR 90 gives it exactly one.
+The source knows which id to ask about because ADR 90 gives it exactly one.
 
 What remains is that a stopped model drops live events, which ADR 85 decided and ADR 104 deliberately kept, on the
-grounds that a stop is an operator act with a `start()` on the other side. A bridge stops consuming when its
+grounds that a stop is an operator act with a `start()` on the other side. A source stops consuming when its
 subscription stops, checked on a coarse poll rather than before every message, so it mostly does not feed a stopped
-model, not never: a `stop()` or `pauseSubscription(...)` called from inside a handler can still hand a bridge an
+model, not never: a `stop()` or `pauseSubscription(...)` called from inside a handler can still hand a source an
 `UNAVAILABLE` for a message already in flight before the next poll notices. The 2026-08-21 amendment's
-follow-up note below covers what a bridge does with that message. This ADR inherits ADR 85 and ADR 104's decision
+follow-up note below covers what a source does with that message. This ADR inherits ADR 85 and ADR 104's decision
 rather than accepting a new loss of its own.
 
-The bridge feeds the live `PushSubscriptionModel`. When a subscription needs history first, `CatchupThenPushSubscriptionModel`
+The source feeds the live `PushSubscriptionModel`. When a subscription needs history first, `CatchupThenPushSubscriptionModel`
 composes in front of it and takes that model as a constructor argument, so it is not itself the push target and a
-bridge does not hand events to it.
+source does not hand events to it.
 
 [ADR 90](0090-a-push-sink-feeds-one-consumer.md) decided that a push sink takes exactly one consumer, because one
-received message has one acknowledgement decision. So one bridge feeds one `PushSubscriptionModel` or one
+received message has one acknowledgement decision. So one source feeds one `PushSubscriptionModel` or one
 `DomainEventFeed`, and a deployment with three projections has three queues on RabbitMQ or three consumer groups on
 Kafka.
 
@@ -293,9 +293,9 @@ So a consumer filtering on any of those can decide differently on the live path 
 catch-up replay over the stored events, and a deployment with one uses `CloudEventForwarder`, where nothing is
 regenerated because nothing is converted.
 
-On the consume side there is no such delegation. The domain bridge reads the message body with the application's
+On the consume side there is no such delegation. The domain source reads the message body with the application's
 converter and the extension headers into an `EventMetadata`, then calls `DomainEventFeed.accept(metadata, event)`.
-Routing it through the CloudEvent bridge instead would decode the body into a CloudEvent and then decode it again into
+Routing it through the CloudEvent source instead would decode the body into a CloudEvent and then decode it again into
 a domain event, which is exactly the double conversion ADR 62 added the domain feed to avoid.
 
 ### 4. The Occurrent extensions are written as message headers, at both levels and in both directions
@@ -322,7 +322,7 @@ So the RabbitMQ module defines that mapping, and it is fixed here rather than pe
 1.0 binding so it is recognisable. Each CloudEvent attribute becomes an entry in `BasicProperties.headers` under its
 name prefixed with `cloudEvents_`, which is the separator the AMQP binding recommends and the one that avoids the
 colon form's awkwardness in a header name. `datacontenttype` becomes `BasicProperties.contentType`. The event data is
-the message body unchanged. One class owns this mapping in both directions, so the bridge that reads it and the sink
+the message body unchanged. One class owns this mapping in both directions, so the source that reads it and the sink
 that writes it cannot drift apart.
 
 Decision 8 covers the binding mode itself.
@@ -364,20 +364,20 @@ the broker.
 Where that final decision is made differs between the two levels, and the difference is stated here because it is not
 obvious and getting it wrong delivers events a filter excluded.
 
-**At the CloudEvent level the bridge does not evaluate a filter of its own.** `RegisteringSubscribable.subscribe`
+**At the CloudEvent level the source does not evaluate a filter of its own.** `RegisteringSubscribable.subscribe`
 already builds the predicate from the filter it was given and `route` applies it before calling the handler, so a
-bridge that filtered as well would need a second copy of the filter, configured separately from the subscription's.
+source that filtered as well would need a second copy of the filter, configured separately from the subscription's.
 Two copies that nothing compares is the problem this ADR opened by describing.
 
-**At the domain level the bridge is the only thing that can decide, so it applies the filter itself.**
+**At the domain level the source is the only thing that can decide, so it applies the filter itself.**
 `DomainEventFeed.accept(metadata, event)` hands the event to the registered projection unconditionally, and the
 `Filter` given to `register` reaches `CatchupProjectionFeed` as the replay filter, so it selects what the catch-up
-reads out of the event store and has no effect on the live path. A domain bridge that trusted a coarse binding would
+reads out of the event store and has no effect on the live path. A domain source that trusted a coarse binding would
 therefore deliver events the subscription excluded. This is not the duplicate filter refused above, because at this
 level there is no other evaluation to disagree with.
 
-**Giving the bridge its own filter would lose events, so the feed does the matching and the domain bridge does not
-ship until it can.** A bridge filter narrower than the one the registration was made with makes the bridge treat an
+**Giving the source its own filter would lose events, so the feed does the matching and the domain source does not
+ship until it can.** A source filter narrower than the one the registration was made with makes the source treat an
 event as not matching and acknowledge it, while the projection's replay contract says that event was one of its own.
 That is a loss rather than two rules disagreeing, so `AGENTS.md` settles it and no judgement about how likely the
 misconfiguration is comes into it.
@@ -385,15 +385,15 @@ misconfiguration is comes into it.
 It cannot be closed from inside a broker module. `RegisteringSubscribable` keeps only the derived
 `Predicate<CloudEvent>` and not the `SubscriptionFilter` it was built from, `DomainEventFeed` exposes neither its
 filter nor a live match, and `ProjectionAnnotationRegistrar` derives the filter and calls `register` itself for
-`@Projection(source = PUSH)`, which decision 9 relies on continuing to work. Making the bridge own registration would
+`@Projection(source = PUSH)`, which decision 9 relies on continuing to work. Making the source own registration would
 break that annotation path, so this ADR does not do it.
 
-So [#848](https://github.com/johanhaleby/occurrent/issues/848) is a **prerequisite** for the domain bridge rather than
+So [#848](https://github.com/johanhaleby/occurrent/issues/848) is a **prerequisite** for the domain source rather than
 an improvement to it, on the same footing as the outcome decision 1 needs.
 
-**What that gives the feed is the same shape `routeReportingMatch` already has one level up.** The bridge rebuilds a
+**What that gives the feed is the same shape `routeReportingMatch` already has one level up.** The source rebuilds a
 CloudEvent from the message and hands it over, and the feed matches, decodes with its own converter, delivers, and
-reports which outcome happened. The bridge acknowledges on that outcome exactly as the CloudEvent bridge
+reports which outcome happened. The source acknowledges on that outcome exactly as the CloudEvent source
 does, and the two levels become one mechanism described twice rather than two designs. (`DomainEventFeed.acceptCloudEvent`
 never actually returns `NOT_DELIVERABLE` in what shipped: only `FILTERED`, `DELIVERED` and `DEFERRED`, or a thrown
 exception for an unregistered feed or a permanently failed catch-up. See changelog.md's own correction and #893.)
@@ -403,8 +403,8 @@ event plus an `EventMetadata` of extensions cannot answer a condition on subject
 is what makes the rebuild cheap, because binary mode puts every attribute in the headers, so nothing is decoded to
 find out whether it matches and a non-matching event is never decoded at all.
 
-**Everything about building that matcher belongs to the feed, not to the bridge**, since the feed is what owns the
-filter now. That covers three things the bridge would otherwise have had to hold. `register` takes a plain `Filter`
+**Everything about building that matcher belongs to the feed, not to the source**, since the feed is what owns the
+filter now. That covers three things the source would otherwise have had to hold. `register` takes a plain `Filter`
 while `matcherFor` takes a `SubscriptionFilter`, so the wrapping happens there. A `DcbSubscriptionFilter` holds a
 `DcbCriteria` rather than a `Filter`, so it cannot drive this path and is refused, which ADR 62 already does for a
 catch-up replay on the same grounds. And a filter with a payload condition needs a `DataFieldReader`, because the
@@ -413,14 +413,14 @@ reader is supplied to the feed alongside the filter and a payload filter without
 what the subscribe path already does.
 
 **Bindings default to `catchAllDestination()`, and narrowing them is something an application asks for.** At the
-CloudEvent level a bridge has no way to read the filter its subscription was registered with. `ProjectionRunner`
+CloudEvent level a source has no way to read the filter its subscription was registered with. `ProjectionRunner`
 derives that filter internally for `@Projection(source = PUSH)`, `PushSubscriptionModel` exposes neither it nor its
-matcher, and `PushObserver` reports per-event outcomes rather than the filter behind them. So a bridge that claimed to
+matcher, and `PushObserver` reports per-event outcomes rather than the filter behind them. So a source that claimed to
 derive bindings from the subscription's filter would be describing something it cannot reach.
 
 Taking the catch-all as the default is the right answer rather than a concession. Bindings are a topology decision and
 the filter is a delivery decision, and this ADR only ever promised that the first narrows and the second decides.
-Binding everything narrows nothing, which is always safe. An application that wants the narrowing hands the bridge a
+Binding everything narrows nothing, which is always safe. An application that wants the narrowing hands the source a
 filter for that purpose, and then `destinationsFor` derives the bindings from it.
 
 **A binding filter supplied that way has to be at least as inclusive as the subscription's**, since a narrower one
@@ -431,13 +431,13 @@ A filter whose type part cannot be derived returns an empty `Optional`, and the 
 `catchAllDestination()` too. Guessing narrower would drop an event the filter would have matched, so the imprecise
 answer has to be the inclusive one.
 
-A CloudEvent bridge sees whether each event it consumed matched from the outcome `acceptRedeliverable(...)` returns,
+A CloudEvent source sees whether each event it consumed matched from the outcome `acceptRedeliverable(...)` returns,
 `FILTERED` for one the filter declined.
 
-**The catch-all is a third method on the resolver rather than something the bridge works out**, because an empty
+**The catch-all is a third method on the resolver rather than something the source works out**, because an empty
 `Optional` says only that the filter could not be narrowed and says nothing about where to listen instead. RabbitMQ
 needs the exchange to put a `#` binding on, Kafka needs a pattern narrow enough to avoid consuming unrelated topics,
-and a custom resolver knows both while the bridge cannot ask it by downcasting. Since the resolver is already the one
+and a custom resolver knows both while the source cannot ask it by downcasting. Since the resolver is already the one
 place that knows this deployment's topology, it is also the only honest place to answer this. A resolver that routes
 everything through one exchange returns that exchange with `#`, and one that spreads events over a topic per context
 returns the pattern covering them.
@@ -450,8 +450,8 @@ entirely, which #415 already says has to stay possible.
 | Directory | Artifact | Contents |
 |---|---|---|
 | `broker/api/blocking` | `occurrent-broker-api-blocking` | `EventDestination`, `DestinationResolver`, `CloudEventSink`, `DomainEventSink`, `CloudEventForwarder`, `DomainEventForwarder`, the shared settings |
-| `broker/rabbitmq/blocking` | `occurrent-broker-rabbitmq-blocking` | `RabbitMqDestination`, resolver, sinks, bridges, both levels |
-| `broker/kafka/blocking` | `occurrent-broker-kafka-blocking` | `KafkaDestination`, resolver, sinks, bridges, both levels |
+| `broker/rabbitmq/blocking` | `occurrent-broker-rabbitmq-blocking` | `RabbitMqDestination`, resolver, sinks, sources, both levels |
+| `broker/kafka/blocking` | `occurrent-broker-kafka-blocking` | `KafkaDestination`, resolver, sinks, sources, both levels |
 
 `occurrent-subscription-api-blocking` is the template for the naming, and `broker/api/blocking` mirrors
 `subscription/api/blocking` in layout as well as in name.
@@ -531,20 +531,20 @@ have failed.
 **A domain sink is built from a CloudEvent sink and a converter, through the same factory name on both transports.**
 `RabbitMqDomainEventSink.using(cloudEventSink, cloudEventConverter)` and its Kafka twin.
 
-**What a bridge does after a failed `accept(...)` is fixed in one respect and configurable in another.** The fixed
+**What a source does after a failed `accept(...)` is fixed in one respect and configurable in another.** The fixed
 part is that it never plainly acknowledges the message, because that is the loss ADR 104 named. Everything else is the
 application's to configure, and #415 already requires it, since always requeueing keeps a message that fails every
 time in a redelivery loop forever and takes the operator's own policy away from them.
 
-So each bridge takes a `DeliveryFailurePolicy`, a shared enum in `occurrent-broker-api-blocking` rather than two
+So each source takes a `DeliveryFailurePolicy`, a shared enum in `occurrent-broker-api-blocking` rather than two
 transport enums that happen to line up, with two constants. `REDELIVER` puts the message back for another attempt.
-`PARK` routes it to a holding destination nobody consumes from, so an operator can look at what failed. Both bridges
+`PARK` routes it to a holding destination nobody consumes from, so an operator can look at what failed. Both sources
 take it through a builder method named `onDeliveryFailure(DeliveryFailurePolicy)`, and `REDELIVER` is the default
 because it is the choice that cannot lose a message on a transient failure.
 
 `PARK` also needs somewhere to park, so choosing it requires a parking destination of that transport's own
 `EventDestination` type, a `RabbitMqDestination` or a `KafkaDestination`, given through
-`parkingDestination(D)` on the same builder. A bridge configured with `PARK` and no parking destination refuses to
+`parkingDestination(D)` on the same builder. A source configured with `PARK` and no parking destination refuses to
 start. Without that the two modules would each invent a default, and a default holding destination is precisely the
 thing an operator has to know the name of.
 
@@ -552,24 +552,24 @@ thing an operator has to know the name of.
 does not invent a third behaviour. RabbitMQ has a per-message negative acknowledgement, so it calls `basicNack` with
 requeue and the broker redelivers. Kafka has none, so it declines to commit the offset and seeks back to it.
 
-**Seeking only works if nothing else commits, so the Kafka bridge requires `enable.auto.commit=false` and refuses to
-start otherwise.** Auto-commit is Kafka's default, and it advances the offset on a timer regardless of what the bridge
-decided, so a bridge that seeks back while auto-commit is on will still commit past the failed record. This is the
+**Seeking only works if nothing else commits, so the Kafka source requires `enable.auto.commit=false` and refuses to
+start otherwise.** Auto-commit is Kafka's default, and it advances the offset on a timer regardless of what the source
+decided, so a source that seeks back while auto-commit is on will still commit past the failed record. This is the
 consume-side twin of the `acks=all` rule above, and it fails at startup for the same reason, that afterwards the
 mistake is invisible.
 
-**After a seek the bridge stops processing that partition's remaining polled records.** A poll returns a batch, so
+**After a seek the source stops processing that partition's remaining polled records.** A poll returns a batch, so
 continuing through it after a failure means committing a higher offset for the same partition and skipping the record
 that failed, which is the same loss by a slower route. Other partitions in the same poll are unaffected, since their
 offsets are independent.
 
-**The bridge commits an explicit offset per partition and never the no-argument form.** `poll()` advances the
+**The source commits an explicit offset per partition and never the no-argument form.** `poll()` advances the
 consumer's own position across the whole returned batch, so `commitSync()` with no arguments after the first
-successful `accept(...)` commits every record the poll returned, including ones nothing has processed yet. The bridge
+successful `accept(...)` commits every record the poll returned, including ones nothing has processed yet. The source
 therefore commits `record.offset() + 1` for that record's partition, and only once that record has succeeded. Turning
 auto-commit off does not cover this on its own, which is why both are written down.
 
-**`PARK` is a publish the bridge does itself, waits for, and only then acknowledges the original.** It is the same
+**`PARK` is a publish the source does itself, waits for, and only then acknowledges the original.** It is the same
 sequence on both transports, which is worth stating because the shortcut differs on each and both shortcuts lose
 messages.
 
@@ -577,13 +577,13 @@ Handing the message to RabbitMQ's own dead-lettering is the shortcut there, and 
 the broker feature where a rejected message goes to a dead-letter exchange named on the queue, which then routes it
 onward. `basicNack(requeue = false)` throws the message away outright when no such exchange is configured, and even
 with one the broker republishes the message without publisher confirms, so an unavailable or unbound target can still
-drop it. So the bridge publishes to the parking exchange itself, with confirms, and acknowledges the original
+drop it. So the source publishes to the parking exchange itself, with confirms, and acknowledges the original
 only once that confirm arrives. Kafka's shortcut is committing the offset before the parking record is acknowledged,
 which loses the original the same way, so it waits for that acknowledgement first too.
 
 In both cases a failed parking publish leaves the original unacknowledged, which means it is redelivered rather than
 lost. That is the rule the whole ADR runs on, that nothing is acknowledged until the event is somewhere it can be read
-from again. What neither bridge may do is acknowledge or commit after logging the failure.
+from again. What neither source may do is acknowledge or commit after logging the failure.
 
 **The Kafka resolver uses the stream id as the message key by default, and a null key when there is no stream id.**
 Kafka only orders within a partition, and a projection reading one stream needs that stream's events in order, so
@@ -614,16 +614,16 @@ consumer outside Occurrent implements `CloudEventSink`, which is what that inter
 takes nothing back later, because adding a structured writer changes neither `EventDestination`, nor
 `DestinationResolver`, nor either sink interface.
 
-### 9. Spring Boot auto-configuration is #846, and it comes after both consume bridges
+### 9. Spring Boot auto-configuration is #846, and it comes after both sources
 
 No `occurrent-spring-boot-starter-broker-*` module is built as part of this work.
 [#846](https://github.com/johanhaleby/occurrent/issues/846) builds it, in the same 0.34.0 milestone but after both
-transport modules and both consume bridges exist.
+transport modules and both sources exist.
 
 Auto-configuration fixes property names and bean names, and doing that before anyone has wired these three interface
 families by hand fixes them against a guess. The manual wiring is also small already, since `@Projection(source =
 PUSH)` resolves a push feed bean without any broker knowledge, so what an application declares by hand is a sink bean
-and a bridge bean per consumer.
+and a source bean per consumer.
 
 The `@RabbitSaga` and `@KafkaSaga` ideas on #415 and #417 are not part of #846 either. They are the shape a later
 Spring Boot layer may take, and putting them into the first auto-configuration would decide that layer before either
@@ -646,7 +646,7 @@ evidence, which is what #414 asked for.
 ## Consequences
 
 An application stops writing the publish and consume ends of a broker integration and declares them instead. What it
-declares is a resolver, a sink bean per publisher and a bridge bean per consumer, plus one queue or consumer group per
+declares is a resolver, a sink bean per publisher and a source bean per consumer, plus one queue or consumer group per
 projection or saga because ADR 90 requires it.
 
 An application that already has its own publisher wrapper replaces `CloudEventSink` or `DomainEventSink` and keeps
@@ -659,7 +659,7 @@ Delivery guarantees are unchanged from ADR 62. Steady-state delivery is at-least
 the same event twice has to reach the same state as one that received it once. Ordering follows the transport, which
 is why decision 7 keys Kafka messages by stream id rather than leaving partitioning to chance.
 
-The reactor variants repeat less than the module names suggest. The sinks and the bridges are stack-typed, because
+The reactor variants repeat less than the module names suggest. The sinks and the sources are stack-typed, because
 `PushSubscriptionModel` and `DomainEventFeed` already exist once per stack and a blocking sink returns `void` where a
 reactor one returns a `Mono`. `EventDestination` and `DestinationResolver` are not, since they name only `CloudEvent`
 and `SubscriptionFilter`, and `SubscriptionFilter` already lives in the stack-neutral `occurrent-subscription-core`. So
@@ -691,8 +691,8 @@ That took the string-only rule further than decision 7 actually asks for, and th
 `ConditionMatcher.valuesEqual` compares two `Number`s by value, but falls back to `Objects.equals` for anything else,
 and its own comment names this exact case. A rebuilt `streamversion` header comes back as the string `"3"`, so
 `Filter.streamVersion(eq(3))`, whose operand is a `Long`, evaluates through `Objects.equals("3", 3L)` instead of by
-value, and never matches. On the broker consume bridges (#415), a live match that should have succeeded instead
-reports `RoutingOutcome.FILTERED`, and both bridges acknowledge a `FILTERED` delivery. An event a filter should have
+value, and never matches. On the broker sources (#415), a live match that should have succeeded instead
+reports `RoutingOutcome.FILTERED`, and both sources acknowledge a `FILTERED` delivery. An event a filter should have
 accepted is acknowledged and discarded rather than delivered. That is silent event loss, not a cosmetic type wobble.
 
 `toCloudEvent` now restores `streamversion` and `position` as the `Long` `OccurrentCloudEventExtension` itself
@@ -758,7 +758,7 @@ I asked for whatever is best long-term according to the principles of `AGENTS.md
 answer. `KafkaSharedTopicDestinationResolver` is the new shipped default.
 `KafkaCloudEventSink` and `KafkaDomainEventSink`'s own documentation leads with it. It publishes every event to
 one topic given to its constructor, no default name invented, the same reasoning this decision already gives for
-refusing a parking bridge with no `parkingDestination` of its own, that a default destination name is precisely
+refusing a parking source with no `parkingDestination` of its own, that a default destination name is precisely
 the thing an operator has to know. It keys by stream id when present and `null` otherwise, unchanged from what
 decision 7 already specifies. That guarantee also assumes the topic's partition count is chosen before producing
 to it and stays there. Kafka hashes a key against the topic's current partition count, so growing that count
@@ -776,22 +776,22 @@ narrower guarantee.
 
 Decision 1 says `CatchupThenPushSubscriptionModel` keeps the shape it has, and that `PushObserver` and the outcome
 `routeReportingMatch` reports to it are the one exception. That was accurate for the single acknowledgement decision
-a CloudEvent-level bridge had, whether the routing evaluation reported `DELIVERED`. It stopped being accurate once a
-bridge feeds a `PushSubscriptionModel` that a `CatchupThenPushSubscriptionModel` wraps.
+a CloudEvent-level source had, whether the routing evaluation reported `DELIVERED`. It stopped being accurate once a
+source feeds a `PushSubscriptionModel` that a `CatchupThenPushSubscriptionModel` wraps.
 
-The wrapper registers on the live model before its own replay finishes, so a message the bridge pulls off the broker
+The wrapper registers on the live model before its own replay finishes, so a message the source pulls off the broker
 during that window reaches `routeReportingMatch`, gets reported `DELIVERED`, and is only buffered by the wrapper's
 `BlockingHandover`, not yet applied to the projection. `RoutingOutcome` alone cannot tell the two apart, because the
-bridge holds only the live `PushSubscriptionModel`, never the wrapper, unchanged from decision 1. A crash before the
+source holds only the live `PushSubscriptionModel`, never the wrapper, unchanged from decision 1. A crash before the
 buffer drains loses that event for good, and it is not recoverable from the local event store, since a consume
-bridge exists precisely to receive an event another service published, one this store never had a copy of to replay
-back. The safety constraint this amendment adds is that a bridge must never acknowledge or commit a message for a
+source exists precisely to receive an event another service published, one this store never had a copy of to replay
+back. The safety constraint this amendment adds is that a source must never acknowledge or commit a message for a
 subscription still in catch-up replay, because the broker's own copy is the only copy of that message anywhere.
 
 `CatchupThenPushSubscriptionModel` gains `isReadyForLiveDelivery(String)`, delegating to the specific subscription's
 `BlockingHandover`, the component that actually owns the buffer, true only once that subscription's catch-up has
-reached live. `RabbitMqCloudEventBridge` and `KafkaCloudEventBridge` each gain an optional
-`readinessSource(Predicate<String>)` on their builders, `true` for every id by default so a bridge fed a bare
+reached live. `RabbitMqCloudEventSource` and `KafkaCloudEventSource` each gain an optional
+`readinessSource(Predicate<String>)` on their builders, `true` for every id by default so a source fed a bare
 `PushSubscriptionModel` with no catch-up wrapper is unaffected, and AND it into the same coarse consume/fetch poll
 decision 1 already describes for the running and paused check. `@Projection(source = PUSH)` and
 `@Saga(source = PUSH)` publish the `CatchupThenPushSubscriptionModel` each builds internally as a Spring bean named
@@ -804,9 +804,9 @@ independently reachable as a named bean rather than staying private to the regis
 additive. Nothing about `subscribe`, the catch-up-then-live handover, or the rest of the class's existing contract
 changed, and a caller that never touches `readinessSource` sees identical behavior to before this amendment.
 
-This closes the gap for the blocking stack's CloudEvent-level bridges only. The reactor stack has no equivalent yet.
+This closes the gap for the blocking stack's CloudEvent-level sources only. The reactor stack has no equivalent yet.
 `ReactiveHandover` has no `isReadyForLiveDelivery()`, the reactor `DomainEventFeed` never received the domain-level
-version of this fix either, and no reactor broker bridge exists yet to need one. A design that has the bridge hold
+version of this fix either, and no reactor broker source exists yet to need one. A design that has the source hold
 the `CatchupThenPushSubscriptionModel` itself, giving it a `Pushable` shape so readiness reaches the per-message
 `RoutingOutcome` the way `DomainEventFeed.acceptCloudEvent` already does, was considered and rejected for this
 change, since it would falsify decision 1's "not itself a push target" rationale outright rather than adding a
@@ -819,7 +819,7 @@ further.
 The readiness-gate amendment above turned out to be unsound. It closed the acknowledgement gap by narrowing a race
 rather than removing it. A `cancelSubscription` immediately followed by a `subscribe` under the same id attaches a
 fresh registration to a still-replaying `CatchupThenPushSubscriptionModel` before the coarse readiness poll or
-`isRunning` check next runs, and a message the bridge pulls off the broker in that window still gets reported
+`isRunning` check next runs, and a message the source pulls off the broker in that window still gets reported
 `DELIVERED` and buffered rather than applied, the exact loss this amendment set out to prevent. A fresh-context
 adversarial verify falsified it with a deterministic test reproducing that interleaving.
 
@@ -850,31 +850,31 @@ buffer a payload offered while not live, `acceptIfLive` refuses it outright, rep
 touching the buffer. `PushSubscriptionModel.accept(..)` is unchanged and keeps buffering. An in-memory store listener
 calls it through `accept(Iterable<CloudEvent>)` after the store has kept the event, so refusing would only make the
 write call throw, without protecting anything. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
-is for a caller that can redeliver, a broker bridge, and routes to `acceptIfLive` instead. It refuses rather than
+is for a caller that can redeliver, a broker source, and routes to `acceptIfLive` instead. It refuses rather than
 buffers, returns `DEFERRED`, and lets the caller ask again. It returns every outcome routing decides, a refusal made
-before dispatch included, and throws only for a filter or handler failure, so a bridge decides on the returned value
+before dispatch included, and throws only for a filter or handler failure, so a source decides on the returned value
 alone. `CatchupThenPushSubscriptionModel`'s own public surface,
 every constructor and `subscribe`, does not change at all. Only which method its internal registration calls on the
 underlying handover does, chosen by which public entry point the caller used.
 
-`RabbitMqCloudEventBridge` and `KafkaCloudEventBridge`, and their domain-event equivalents, route
+`RabbitMqCloudEventSource` and `KafkaCloudEventSource`, and their domain-event equivalents, route
 `RoutingOutcome.DEFERRED` around `DeliveryFailurePolicy` entirely rather than through it. RabbitMQ holds the message
 unacknowledged and negatively acknowledges it with requeue on its next poll, Kafka seeks back reusing the same per-partition throttle the earlier readiness gate
 already relied on, and neither ever parks. Nothing here is broken or wrong, so parking it would be the exact
 avoidable dead-lettering `DEFERRED` exists to rule out.
 
 `isReadyForLiveDelivery(String)` and `readinessSource(Predicate<String>)` stay, but nothing about correctness
-depends on them any more. `DEFERRED` is what keeps a bridge correct with no `readinessSource` configured at all,
+depends on them any more. `DEFERRED` is what keeps a source correct with no `readinessSource` configured at all,
 refusing and redelivering safely until catch-up finishes, and `readinessSource` only cuts down on how often that
 refuse-and-redeliver round trip happens. The RabbitMQ and Kafka Spring Boot starters now wire it
-automatically, deferring to whichever `CatchupThenPushSubscriptionModel` bean, if any, owns a bridge's subscription
+automatically, deferring to whichever `CatchupThenPushSubscriptionModel` bean, if any, owns a source's subscription
 id, so a zero-config Spring application gets the quiet path during a replay without naming `readinessSource` itself.
 
 At the time this amendment was first written, it closed the gap for the blocking stack only, CloudEvent-level and
 domain-level alike. The reactor stack carried the identical shape of defect in its own
 `RegisteringSubscribable.routeReportingMatch` and `DomainEventFeed.acceptCloudEvent`, worse in one respect: the
 reactor `DomainEventFeed` had never received even the readiness-gate half-fix this amendment replaces, so it
-reported `DELIVERED` for a buffered-not-applied event unconditionally. No reactor broker bridge existed yet to need
+reported `DELIVERED` for a buffered-not-applied event unconditionally. No reactor broker source existed yet to need
 the `DeliveryFailurePolicy` bypass half of this fix, but the correctness half did not depend on one existing, and
 was tracked as a follow-up in this same epic. See below: that follow-up has since landed.
 
@@ -894,52 +894,52 @@ a payload outright rather than buffering it while not live, behind a dedicated
 registered projection is live, through that same `acceptIfLive`, closing the gap this amendment left open for the
 reactor `DomainEventFeed`.
 
-## Amendment (2026-08-21): a permanent catch-up refusal stops a bridge, and a lifecycle `NOT_DELIVERABLE` is paced, not failed
+## Amendment (2026-08-21): a permanent catch-up refusal stops a source, and a lifecycle `NOT_DELIVERABLE` is paced, not failed
 
-A fixpoint review of the blocking bridges found two gaps this ADR's design left open, both on the same four bridges
-(`RabbitMqCloudEventBridge`, `KafkaCloudEventBridge`, `RabbitMqDomainEventBridge`, `KafkaDomainEventBridge`).
+A fixpoint review of the blocking sources found two gaps this ADR's design left open, both on the same four sources
+(`RabbitMqCloudEventSource`, `KafkaCloudEventSource`, `RabbitMqDomainEventSource`, `KafkaDomainEventSource`).
 
 **A permanently failed catch-up was routed through `DeliveryFailurePolicy` like an ordinary failure.**
 `BlockingHandover.acceptIfLive`/`acceptReportingDelivery` throw `PreDispatchRefusalException`, unwrapped, once
-`catchUpFailure` is set, and that field is never cleared. A bridge's generic `catch (RuntimeException | AssertionError)`
+`catchUpFailure` is set, and that field is never cleared. A source's generic `catch (RuntimeException | AssertionError)`
 caught it indistinguishably from a handler that merely threw once, so under `DeliveryFailurePolicy.PARK` every later
 message parked and acknowledged, forever, the exact loss decision 1's "never acknowledge a message nothing
-consumed" rests on. Each bridge now catches `BlockingHandover.PreDispatchRefusalException` by type ahead of the
+consumed" rests on. Each source now catches `BlockingHandover.PreDispatchRefusalException` by type ahead of the
 generic branch and treats it as permanent, the same shape `UnreadableLiveFilterException` already gets: log at
 error once, stop consuming, and negatively acknowledge (RabbitMQ) or seek back leaving the offset uncommitted
 (Kafka) rather than ever parking or committing into the same refusal. `BlockingHandover` is an internal type. A
-bridge importing it for this one `catch` is judged acceptable, narrower than either matching on the exception's
+source importing it for this one `catch` is judged acceptable, narrower than either matching on the exception's
 message or treating every `NOT_DELIVERABLE`-shaped failure as potentially permanent.
 
-**`NOT_DELIVERABLE` conflates a failure with a lifecycle state, and the coarse poll can hand a bridge one mid-batch.**
+**`NOT_DELIVERABLE` conflates a failure with a lifecycle state, and the coarse poll can hand a source one mid-batch.**
 `routeReportingMatch` reports `NOT_DELIVERABLE` with no exception for a paused subscription or a model that is not
-running, indistinguishable at the bridge from `NOT_DELIVERABLE` with no exception for... nothing else, in fact:
+running, which the source cannot tell apart from `NOT_DELIVERABLE` with no exception for... nothing else, in fact:
 every other `NOT_DELIVERABLE` case comes with a thrown exception (the matcher failing, or the refusal above), so a
 normal-return `NOT_DELIVERABLE` is *always* a lifecycle state today, never a failure. The coarse poll only notices a
 `pauseSubscription`/`stop()` called from inside a handler up to one `pollInterval`/`pollTimeout` later, so a message
-already queued behind that call can still reach the bridge before the poll cancels consumption. Routed through
+already queued behind that call can still reach the source before the poll cancels consumption. Routed through
 `DeliveryFailurePolicy` as it was, `PARK` would park and acknowledge a message nothing is actually wrong with. Each
-CloudEvent-level bridge bypasses `DeliveryFailurePolicy` the same way `DEFERRED` already does: Kafka seeks back and
+CloudEvent-level source bypasses `DeliveryFailurePolicy` the same way `DEFERRED` already does: Kafka seeks back and
 throttles the partition, reusing the mechanism it already has. *(RabbitMQ's own fix here, a re-read plus an
 immediate consumer cancel, is superseded by the amendment below. This sentence is kept only as the historical record
-of what shipped first.)* The domain bridges need no equivalent change: `DomainEventFeed.acceptCloudEvent` has no
+of what shipped first.)* The domain sources need no equivalent change: `DomainEventFeed.acceptCloudEvent` has no
 pause concept and never returns `NOT_DELIVERABLE` at all (see the amendment above).
 
 *(Done by the 2026-08-22 amendment below, which adds `UNAVAILABLE` and `REFUSED`. The paragraph is kept as the
 record of why it was deferred at the time.)* **The cleaner long-term shape is a distinct `RoutingOutcome` value for a lifecycle refusal**, the same reasoning
 that gave `DEFERRED` its own value rather than overloading it onto `NOT_DELIVERABLE` in the first amendment above:
-one value, one meaning, and a bridge that does not have to re-derive a state `routeReportingMatch` already decided
+one value, one meaning, and a source that does not have to re-derive a state `routeReportingMatch` already decided
 and then discarded. That was not done here. It is a wider, three-module change (a new public `RoutingOutcome`
 constant, threaded through `RegisteringSubscribable`, `PushObserver`, and every existing caller that switches on the
-enum) for a defect fully closed by a narrower, bridge-local re-read using API `RegisteringSubscribable` already
+enum) for a defect fully closed by a narrower, source-local re-read using API `RegisteringSubscribable` already
 exposes publicly (`subscriptionIds()`, `isRunning(String)`). The narrower fix ships the correctness fix now without
 reopening a settled outcome shape. Widening the enum is tracked as a follow-up rather than bundled in.
 
 ## Amendment (2026-08-22): the RabbitMQ lifecycle re-read above is itself removed, held tags carry their own generation, and a permanent stop closes the channel
 
 A Copilot review of the fixpoint round above found the RabbitMQ-specific fix in the previous amendment traded one
-race for another, plus two smaller defects on the same bridges. All four apply to `RabbitMqCloudEventBridge` and
-`RabbitMqDomainEventBridge`. The third also touches both starters' `CatchupThenPushReadiness`.
+race for another, plus two smaller defects on the same sources. All four apply to `RabbitMqCloudEventSource` and
+`RabbitMqDomainEventSource`. The third also touches both starters' `CatchupThenPushReadiness`.
 
 **The lifecycle re-read raced `stopPermanently()` for the same delivery tag.** The previous amendment's RabbitMQ fix
 re-read the model's running state after a `NOT_DELIVERABLE` report and, when it was the lifecycle case, cancelled
@@ -951,7 +951,7 @@ message can now sit unacknowledged for up to one `pollInterval` instead of being
 paid, and accepted, everywhere `DEFERRED` itself applies. `isLifecycleNotDeliverable()` and the RabbitMQ-only
 `cancelConsumingNow()` are removed as dead code.
 
-**A held delivery tag's `channelGeneration` was checked once, at hold time, not again at release.** Both bridges
+**A held delivery tag's `channelGeneration` was checked once, at hold time, not again at release.** Both sources
 already tracked a generation counter, bumped on an automatic connection recovery or a consumer shutdown, to stop a
 stale tag from being acknowledged after the channel that tag belonged to is gone. The check ran when a tag was
 first captured, not when it was later acted on, so a bump landing between the two left a window where a stale tag
@@ -959,7 +959,7 @@ could still be acted on. Each held-tag deque now stores a `HeldDelivery(delivery
 a bare `long`, and every release revalidates the tag's own generation against the current one immediately before
 acting, dropping rather than redelivering a mismatch (the dead channel it belonged to already redelivered it by
 itself). `channelGeneration`'s own bump, and every immediate acknowledgement, negative acknowledgement or park this
-bridge issues, now take the same lock, so the bump can never land inside that window either.
+source issues, now take the same lock, so the bump can never land inside that window either.
 
 **A permanent stop left an already-held tag stuck until an operator called `close()`.** `stopPermanently()` cancelled
 the consumer and stopped the poll for good, but left the channel open with no way for a tag already held (from
@@ -972,8 +972,8 @@ acknowledgement the previous amendment described for that case is no longer need
 channel throws the latter.
 
 **`CatchupThenPushReadiness.memoized(...)`'s cache could lock in a wrong answer taken before the framework registrar
-had published anything for this bridge's own live feed.** The registrar publishes its shared identity-registry bean
-lazily, on its first registration, so a bridge's own poll can run before that bean exists at all, and separately,
+had published anything for this source's own live feed.** The registrar publishes its shared identity-registry bean
+lazily, on its first registration, so a source's own poll can run before that bean exists at all, and separately,
 before this specific live feed's own entry lands in it once it does. Either "not found yet" answer used to fall
 through to an id-only scan across every wrapper bean in the context and, if that scan found an unrelated wrapper
 sharing the subscription id (ADR 102 permits exactly that), cached it as if it were the true identity match, forever.
@@ -981,11 +981,11 @@ The fix separates the two. The id-scan fallback runs only when the registry bean
 outright, and once the bean exists, only a positive identity match from it is ever cached. "Not (yet) wrapped"
 re-resolves fresh, from one cheap map lookup, on every later poll instead.
 
-**Parking and redelivering a genuine failure both logged twice.** A bridge's own generic failure branch logged the
+**Parking and redelivering a genuine failure both logged twice.** A source's own generic failure branch logged the
 cause at `warn` before routing to `DeliveryFailurePolicy`, and `RabbitMqDeliveryFailureAction`/`KafkaDeliveryFailureAction`
 also logged their own `park`/`redeliver` outcome, two lines for one event under `PARK`, and, once `redeliver` gained
-its own log line here too, under `REDELIVER` as well. The bridge-side cause logs move to `debug`. The action's own
-`park`/`redeliver` log is the one `warn` line an operator sees, in all four bridges and both actions. A permanent
+its own log line here too, under `REDELIVER` as well. The source-side cause logs move to `debug`. The action's own
+`park`/`redeliver` log is the one `warn` line an operator sees, in all four sources and both actions. A permanent
 stop stays logged at `error`, unaffected, since it is a distinct, more serious event than an ordinary delivery
 failure.
 
@@ -996,8 +996,8 @@ value for a lifecycle refusal, is done here, along with a second value that the 
 for the split to be worth anything. The epic's own fixpoint round found three more defects on the shared
 catch-up-then-live files, which are in the same change because they are the same code paths.
 
-**`NOT_DELIVERABLE` meant three different things, and a bridge told them apart by whether an exception came with
-the outcome.** That rule was true, but it was written down in two bridge class javadocs and in the amendment above,
+**`NOT_DELIVERABLE` meant three different things, and a source told them apart by whether an exception came with
+the outcome.** That rule was true, but it was written down in two source class javadocs and in the amendment above,
 describing another module's control flow, and nothing in the type said it. The enum now has six values.
 `UNAVAILABLE` is the lifecycle answer, nothing registered, the model not running, or the sole subscription paused,
 and it never comes with an exception. `NOT_DELIVERABLE` narrows to two things, both of which do come with one from
@@ -1006,21 +1006,21 @@ The filter itself failing to answer is one. A registered action refusing before 
 promising that refusing is permanent, is the other, which is what a full live buffer during a replay gets.
 `REFUSED` is the same kind of refusal with that promise attached.
 
-**A bridge cannot decide on `REFUSED` alone unless the action says whether refusing is permanent.** A
+**A source cannot decide on `REFUSED` alone unless the action says whether refusing is permanent.** A
 catch-up-then-live engine refuses for two reasons. Its catch-up has failed, which never clears, and its live buffer
 is full while a replay is still running, which clears when the replay drains. Both used to arrive as the same
 exception type. `RoutingAction.Refusal` now records the action's own promise, and the two push models set it from
 their engine, so a full buffer reports `NOT_DELIVERABLE` and goes through `DeliveryFailurePolicy` while a failed
-catch-up reports `REFUSED` and stops the bridge.
+catch-up reports `REFUSED` and stops the source.
 
-That is what lets all four bridges stop importing `BlockingHandover` from its `internal` package. The amendment
-above judged that import acceptable for one `catch`. It is no longer needed. The two CloudEvent bridges read the
-outcome, and the two domain bridges ask their feed, since `DomainEventFeed.acceptCloudEvent` delivers inline and
+That is what lets all four sources stop importing `BlockingHandover` from its `internal` package. The amendment
+above judged that import acceptable for one `catch`. It is no longer needed. The two CloudEvent sources read the
+outcome, and the two domain sources ask their feed, since `DomainEventFeed.acceptCloudEvent` delivers inline and
 reports no routing outcome of its own. `DomainEventFeed.refusesPermanently()` is the accessor for that, and it only
 ever goes from false to true, which is what makes it safe to read after catching a refusal rather than at the
 moment the refusal was thrown.
 
-**A refusal that escaped a handler stopped a healthy bridge.** A handler that reaches into a second engine whose
+**A refusal that escaped a handler stopped a healthy source.** A handler that reaches into a second engine whose
 catch-up has failed lets that engine's refusal out through the first. Both throw the same type, so the first
 engine wrapped it as its own refusal and reported a handler that genuinely ran as not having run. The refusal now
 records the engine that threw it, and each engine compares identity before claiming it.
@@ -1150,8 +1150,8 @@ changing this one step.
 
 ## Amendment (2026-08-22): the RabbitMQ channel-generation fence is removed, because the client already refuses to act on a stale delivery tag
 
-The fence the first 2026-08-22 amendment above describes is gone from `RabbitMqCloudEventBridge` and
-`RabbitMqDomainEventBridge`. That paragraph stays as the record of what was built and why it looked right at the
+The fence the first 2026-08-22 amendment above describes is gone from `RabbitMqCloudEventSource` and
+`RabbitMqDomainEventSource`. That paragraph stays as the record of what was built and why it looked right at the
 time. This amendment records why it had to go.
 
 **It caused the failure it was written to prevent.** amqp-client re-issues `basic.consume` inside its own
@@ -1159,7 +1159,7 @@ time. This amendment records why it had to go.
 consumer the requeued message before any `RecoveryListener` has run, `handleDelivery` reads the generation from
 before the bump, and the bump happens while that delivery is still being processed. Both drop sites then abandoned
 the delivery unacknowledged, `handleDelivery` with a `warn` and `releaseHeldDeferredDelivery` with nothing at all.
-At the default `prefetchCount` of 1 the broker sends nothing more on that consumer, so the bridge stopped consuming
+At the default `prefetchCount` of 1 the broker sends nothing more on that consumer, so the source stopped consuming
 and stayed stopped until someone closed it. That is
 [#922](https://github.com/johanhaleby/occurrent/issues/922), seen four times in CI before it was understood.
 
@@ -1173,7 +1173,7 @@ already a no-op inside the client, decided by the one component that knows the o
 recovery turned off gets a plain `ChannelN` that nothing ever replaces, so no delivery can arrive on it once it
 dies and there is no stale tag there either.
 
-**What the bridges do now.** A held or in-flight delivery tag is acknowledged or negatively acknowledged like any
+**What the sources do now.** A held or in-flight delivery tag is acknowledged or negatively acknowledged like any
 other, whatever happened to the connection underneath it, and no delivery is ever abandoned unacknowledged. The
 generation counter, the `RecoveryListener` registration, the consumer shutdown callback, `isStaleGeneration`,
 `logStaleGeneration` and the generation field of `HeldDelivery` are all gone, and both held-tag deques hold plain
@@ -1181,24 +1181,24 @@ tags again.
 
 **One duplicate is the price, under `PARK` only.** A delivery that fails while the connection is recovering is
 published to the parking destination, and the acknowledgement that normally follows the park does nothing, so
-RabbitMQ requeues the message as well. The result is a parked copy plus a copy still on the source queue. That sits
-inside the at-least-once delivery these bridges promise everywhere else, and the alternative was keeping the whole
+RabbitMQ requeues the message as well. The result is a parked copy plus a copy still on the original queue. That sits
+inside the at-least-once delivery these sources promise everywhere else, and the alternative was keeping the whole
 counter, its listener and its lock coupling alive for one branch, to remove a duplicate nothing else here offers.
 
 The unit tests that asserted the drop,
 `a_tag_from_a_generation_that_has_since_moved_on_is_dropped_rather_than_redelivered` in both
-`RabbitMqCloudEventBridgeReleaseHeldDeferredDeliveryTest` and its domain twin, are deleted rather than replaced.
+`RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest` and its domain twin, are deleted rather than replaced.
 Nothing in this repository decides whether a stale tag is safe any more, the client does, so no test with a stubbed
-release call can check it. `RabbitMqCloudEventBridgeConnectionRecoveryTest` and the new
-`RabbitMqDomainEventBridgeConnectionRecoveryTest` are what cover the behaviour now. Each has a test that delays
+release call can check it. `RabbitMqCloudEventSourceConnectionRecoveryTest` and the new
+`RabbitMqDomainEventSourceConnectionRecoveryTest` are what cover the behaviour now. Each has a test that delays
 every recovery listener on the connection past the first delivery after the recovery, against a real broker. Both
-fail against the fence and pass without it, and the domain one is there so that restoring the fence in one bridge
+fail against the fence and pass without it, and the domain one is there so that restoring the fence in one source
 alone cannot leave the suite green.
 
 ## Amendment (2026-09-09): the binding filter and the subscription's filter stay two declarations, because nothing hands the subscription's filter back
 
 A design review since 0.33.0 asked about the gap decision 5 already names, which is that a binding filter handed to a
-bridge and the filter its subscription registered with are two separate declarations, and nothing compares them. A
+source and the filter its subscription registered with are two separate declarations, and nothing compares them. A
 binding narrower than the subscription's filter stops events reaching a matcher that would have accepted them, and by
 `AGENTS.md` that is a loss rather than a misconfiguration to warn about.
 
@@ -1218,13 +1218,13 @@ with.
 `RegisteringSubscribable` builds a `Predicate<CloudEvent>` in `doSubscribe` and keeps that in its `Registration`
 record, so the `SubscriptionFilter` is gone by the time anything could ask. `PushSubscriptionModel` exposes neither.
 `ProjectionAnnotationRegistrar` derives the filter for `@Projection(source = PUSH)` and calls `register` itself, so
-the filter never passes through the bridge at all. Adding an accessor for it means putting a new member on the
-subscription API that every model has to answer, for one consumer, and a bridge is not the caller that justifies
+the filter never passes through the source at all. Adding an accessor for it means putting a new member on the
+subscription API that every model has to answer, for one consumer, and a source is not the caller that justifies
 that.
 
 **The catch-all topology is what is safe, rather than the absence of a binding filter.** Bindings are a topology
 decision and the filter is a delivery decision, and the bindings default to `catchAllDestination()`, which narrows
-nothing. A deployment that keeps that default cannot reach this gap. What reaches it is any narrowing the bridge
+nothing. A deployment that keeps that default cannot reach this gap. What reaches it is any narrowing the source
 cannot compare against the subscription's filter, and there are three ways to ask for one. A `bindingFilter` is the
 one decision 5 describes. An explicit `bindings(...)` set is a second, and `RabbitMqTopology.destinationsToBind` and
 `KafkaTopology.topicsToSubscribe` both return that set as given, without a resolver and without looking at any filter.
@@ -1235,57 +1235,57 @@ All three hold the same rule and none of them is checked, which is that whatever
 ends up matching is at least as inclusive as the subscription's filter. That is the open half.
 
 **The path to closing it is the one the domain level already took.** The same unchecked rule sat one level down,
-where a domain bridge that filtered on its own would acknowledge an event the projection's replay contract says was
-its own. Decision 5 held the domain bridge until
+where a domain source that filtered on its own would acknowledge an event the projection's replay contract says was
+its own. Decision 5 held the domain source until
 [#848](https://github.com/johanhaleby/occurrent/issues/848) removed the need for it to filter at all, and that is
-done, so `RoutingOutcome.FILTERED` reports a non-match and both domain bridges ship with `DomainEventFeed` doing the
+done, so `RoutingOutcome.FILTERED` reports a non-match and both domain sources ship with `DomainEventFeed` doing the
 matching. The domain half is closed and the CloudEvent half is not, so the CloudEvent half no longer waits on that
 work and needs its own.
 
 Recording the gap is the whole of what this amendment does about it. A later ADR that adds the accessor is what would
 close it.
 
-## Amendment (2026-09-15): each RabbitMQ bridge handles its deliveries on a thread of its own
+## Amendment (2026-09-15): each RabbitMQ source handles its deliveries on a thread of its own
 
-A second design review since 0.33.0 found that giving each bridge its own channel and its own acknowledgements does
-not stop one bridge from holding up another. amqp-client calls every consumer on a connection from one shared pool,
+A second design review since 0.33.0 found that giving each source its own channel and its own acknowledgements does
+not stop one source from holding up another. amqp-client calls every consumer on a connection from one shared pool,
 `Math.max(1, availableProcessors)` threads in 5.33.1 unless the `ConnectionFactory` was given an executor of its own.
-Both bridges ran the whole delivery inside that callback, including the model or the feed, the handler and the
+Both sources ran the whole delivery inside that callback, including the model or the feed, the handler and the
 acknowledgement. A handler waiting on a store that is down therefore kept one of those threads for as long as it
-waited, and with one available processor a single such handler stopped every other bridge on the same `Connection`
-from receiving anything. Both starters hand every bridge the one `Connection` bean, so that is the default
+waited, and with one available processor a single such handler stopped every other source on the same `Connection`
+from receiving anything. Both starters hand every source the one `Connection` bean, so that is the default
 deployment. `AGENTS.md` does not allow one consumer to be blocked by another being faulty, so this is a defect
 rather than a tuning question. See [#1045](https://github.com/johanhaleby/occurrent/issues/1045).
 
-**What the bridges do now.** Each bridge owns one worker thread, through `RabbitMqDeliveryWorker`. The client
+**What the sources do now.** Each source owns one worker thread, through `RabbitMqDeliveryWorker`. The client
 callback hands the delivery to that thread and returns. The worker runs what the callback used to run, unchanged, so
 the outcome routing, the held-tag pacing and the permanent stop behave as before. An acknowledgement or negative
 acknowledgement from the worker takes `consumeLock` like every other call on the consume channel, the same lock the
 poll thread already took when it released a held tag.
 
-Anything escaping that call stops the bridge and closes its channel, which puts the delivery back on the queue. That
-is an `Error` a handler threw, a checked exception it threw, or an acknowledgement the bridge could not issue, since
+Anything escaping that call stops the source and closes its channel, which puts the delivery back on the queue. That
+is an `Error` a handler threw, a checked exception it threw, or an acknowledgement the source could not issue, since
 a handler's own `RuntimeException` and `AssertionError` go through the delivery failure policy instead. The client
 used to do the same, because the delivery ran on its callback thread and its exception handler closes a channel for
 anything that escapes. Without it the delivery would sit unacknowledged on a consumer the broker sends nothing
-further to at the default `prefetchCount` of one, which is a bridge that has stopped without saying so.
+further to at the default `prefetchCount` of one, which is a source that has stopped without saying so.
 
 The checked exception is why the worker's own catch is `Throwable` rather than the types javac allows a `Runnable` to
 throw. Java will not throw one out of `handleDelivery`, and a handler written in Kotlin has no checked exception to
-declare, so it throws one straight through the Java interface the bridge calls it behind. `SagaExecution` catches
+declare, so it throws one straight through the Java interface the source calls it behind. `SagaExecution` catches
 `Throwable`, and when it does not quarantine the instance the checked exception can come back out of it, so a saga is
-one way it arrives. Caught, it stops the bridge like an `Error`.
-Uncaught, it ended the worker's task with the delivery unacknowledged on a bridge that still counted itself as
+one way it arrives. Caught, it stops the source like an `Error`.
+Uncaught, it ended the worker's task with the delivery unacknowledged on a source that still counted itself as
 running, which is the state this catch exists to prevent, reached without a log line. See
 [#1086](https://github.com/johanhaleby/occurrent/issues/1086). Routing it through the delivery failure policy was the
-other option and is not what happened, because both Kafka bridges catch `RuntimeException | AssertionError` around
+other option and is not what happened, because both Kafka sources catch `RuntimeException | AssertionError` around
 their own handler call too, and widening what the policy covers in one transport and not the other means the four
-bridges no longer agree about which failures a configured `REDELIVER` or `PARK` applies to.
+sources no longer agree about which failures a configured `REDELIVER` or `PARK` applies to.
 
-The lifecycle poll in both bridges catches `Throwable` for the same reason and a different consequence. It used to
-catch `IOException | RuntimeException`, and anything else cancelled the scheduled task for good, so the bridge never
+The lifecycle poll in both sources catches `Throwable` for the same reason and a different consequence. It used to
+catch `IOException | RuntimeException`, and anything else cancelled the scheduled task for good, so the source never
 started or cancelled a consumer again and never released a held delivery. Two things reach that. A `readinessSource`
-written in Kotlin throws a checked exception through the `Predicate` the CloudEvent bridge calls it behind, and an
+written in Kotlin throws a checked exception through the `Predicate` the CloudEvent source calls it behind, and an
 `Error` out of anything either poll calls does the same. An `OutOfMemoryError` is caught with the rest, which is what
 `SagaExecution.pollTimers` already does around its own scheduled work, since a poll that keeps running and logs is
 worth more here than handing a failure to a scheduled task that does nothing with it.
@@ -1297,70 +1297,70 @@ the next tick with nothing left to release that delivery, and at the default `pr
 that consumer nothing further. The restore is for any `Throwable` now, so the tag goes back at the front and the next
 poll retries it, which is what the `RuntimeException` case already had.
 
-Stopping or closing a bridge has to end in a channel close whatever throws before it, since the close is what puts a
+Stopping or closing a source has to end in a channel close whatever throws before it, since the close is what puts a
 held delivery back on the queue and the release in front of it only does that sooner. `stopPermanently()` and
 `close()` released each held delivery inside a catch for `RuntimeException`, with a comment saying the channel close
 that followed requeues whatever the release could not. An `Error` out of `basicNack` skipped that close, and so did an
 `Error` out of the consumer cancel before it, which `close()` caught only as an `IOException`. The held deliveries then
 stayed unacknowledged on a channel nobody closed, and RabbitMQ redelivers them only once that channel or its
 connection goes away. See [#1090](https://github.com/johanhaleby/occurrent/issues/1090). The channel close now runs in
-a `finally` in both methods of both bridges, and so does what follows it, the parking publisher's close in `close()`
+a `finally` in both methods of both sources, and so does what follows it, the parking publisher's close in `close()`
 and the shutdown of the poll and the worker in `stopPermanently()`. The `Error` still propagates once that is done,
 unless something in that teardown throws too, such as the channel close or the parking publisher's close, since what a
 `finally` throws replaces what was propagating.
 Nothing is caught that was not caught before, so whether to exempt an `OutOfMemoryError`, which the poll and the saga
 timer poller each had to decide, does not come up.
 
-A failed acknowledgement is not always the bridge failing, though. A handler that finishes after the connection has
+A failed acknowledgement is not always the source failing, though. A handler that finishes after the connection has
 dropped, and before its recovery has started, acknowledges on a closed channel, and `basicAck` throws
 `AlreadyClosedException`. Stopping for that closed the channel, and closing an `AutorecoveringChannel` takes it out
-of the connection's recovery for good. The connection came back and every other bridge on it kept consuming, but the
-bridge that stopped never consumed again. See [#1060](https://github.com/johanhaleby/occurrent/issues/1060). So the
-worker does not stop the bridge when `RabbitMqDeliveryFailureAction.isLostToConnectionRecovery` says the client is
+of the connection's recovery for good. The connection came back and every other source on it kept consuming, but the
+source that stopped never consumed again. See [#1060](https://github.com/johanhaleby/occurrent/issues/1060). So the
+worker does not stop the source when `RabbitMqDeliveryFailureAction.isLostToConnectionRecovery` says the client is
 going to recover the connection under it. That is a `ShutdownSignalException` for the whole connection that the
 client's default recovery condition recovers from, or an `IOException` from writing to the socket, which makes a
-recovering connection close and recover itself. The bridge logs it at `warn` and keeps its channel, and RabbitMQ,
+recovering connection close and recover itself. The source logs it at `warn` and keeps its channel, and RabbitMQ,
 which put the delivery back on the queue when the connection dropped, delivers it again on the recovered channel once
 the recovery has registered the consumer on it. That takes topology recovery, which a `ConnectionFactory` has on by
 default and the client gives no way to check. With it turned off nothing registers the consumer again, after this or
-any other recovery, so the bridge stops consuming whether or not a handler was running. A connection without
-automatic recovery never comes back, so a failure on one of those still stops the bridge, the same as an `Error`
+any other recovery, so the source stops consuming whether or not a handler was running. A connection without
+automatic recovery never comes back, so a failure on one of those still stops the source, the same as an `Error`
 other than an `AssertionError`, a channel the broker closed on its own, or a connection the application closed.
 
 The decision sits in the worker's wrapper rather than in `ack` and `redeliver`. Those two keep throwing, so a caller
-never logs a park as acknowledged when it was not, and a bridge on a connection without recovery still stops. A
+never logs a park as acknowledged when it was not, and a source on a connection without recovery still stops. A
 `ConnectionFactory` given its own recovery condition is judged by the client's default one, since the connection does
 not expose the condition it was built with.
 
-One thread per bridge keeps deliveries handled one at a time and in the order the broker sent them, which is what the
+One thread per source keeps deliveries handled one at a time and in the order the broker sent them, which is what the
 callback gave each channel before. The worker's queue holds at most `prefetchCount` deliveries from the current
 channel. The broker sends no more than that many unacknowledged deliveries to one consumer, but it counts them per
-consumer, and a bridge cancels its consumer and starts a new one whenever the subscription pauses and resumes. So a
-bridge starts a new consumer only once the worker has finished everything the previous one sent. A recovery drops the
+consumer, and a source cancels its consumer and starts a new one whenever the subscription pauses and resumes. So a
+source starts a new consumer only once the worker has finished everything the previous one sent. A recovery drops the
 rest, as described below. The count behind that is of deliveries handed to the worker, so one the client has taken
 but not yet handed over does not hold a consumer back, and the queue can hold a little more than `prefetchCount` for
 as long as that takes.
 
 **Shutdown.** `close()` cancels the consumer, then stops the worker without starting any delivery still queued for
 it, and waits up to a new `closeTimeout(Duration)` on both builders for the one being handled. Thirty seconds is the
-default, the same as the Kafka bridges, and both starters set it from `occurrent.broker.rabbitmq.bridge.close-timeout`.
+default, the same as the Kafka sources, and both starters set it from `occurrent.broker.rabbitmq.source.close-timeout`.
 A handler still running after that is interrupted and logged at `warn`. The deadline itself is what fences the
 acknowledgement, published before `close()` starts waiting and read under `consumeLock`, so a handler finishing
 around it either acknowledges before it or does not acknowledge at all, rather than racing a flag `close()` would
 set afterwards. Closing the channel then puts that delivery back on the queue. A park or acknowledgement already
 under way at the deadline still finishes, since the handler had returned before it started.
 Closing the channel under it gives at worst a parked copy plus the original back on the queue. Every step of
-`close()` shares that one deadline, since the worker holds the bridge's lock while a park waits up to five seconds for
+`close()` shares that one deadline, since the worker holds the source's lock while a park waits up to five seconds for
 its confirm, and closing the channel cancels the consumer and requeues whatever a skipped step would have released.
 The deadline bounds the waiting rather than the method, since closing the channel and the parking sink happens after
 it. A handler that ignores its interrupt also keeps running after `close()` returns, so whatever it writes is written
-whenever it finishes, which for a bridge built again on the same queue in the same process can be after events that
-later bridge has already handled. A permanent stop runs on the worker itself, so it stops the worker the same way but
+whenever it finishes, which for a source built again on the same queue in the same process can be after events that
+later source has already handled. A permanent stop runs on the worker itself, so it stops the worker the same way but
 without waiting.
 
 **A connection recovery drops what the dead channel left waiting.** The amendment above that removed the
 channel-generation fence still holds, and the fence stays gone. The client ignores an acknowledgement for a tag from a
-dead channel, so the bridges act on every tag they handle. What the worker adds is a queue of deliveries not yet
+dead channel, so the sources act on every tag they handle. What the worker adds is a queue of deliveries not yet
 handled, and RabbitMQ puts every one of them back on the queue when their channel dies. Left alone, a handler blocked
 across several recoveries would find a copy of the same message waiting for it from each one. So once a recovery of
 the consume channel starts, the worker starts no delivery from the dead channel.
@@ -1374,40 +1374,40 @@ only runs later, and nothing from the replacement is ever dropped. That getter i
 after a recovery, so for such a channel the worker drops nothing at all. This is where it differs from
 the fence, which bumped its counter from `handleRecovery`, after the consumer was already back, and so dropped a
 delivery from the new channel in [#922](https://github.com/johanhaleby/occurrent/issues/922). The delivery being
-handled when the connection drops still finishes and is delivered once more, the one duplicate the bridges already
+handled when the connection drops still finishes and is delivered once more, the one duplicate the sources already
 had.
 
-**Two alternatives were not taken.** A `Connection` per bridge would isolate the bridges too, but it changes both
+**Two alternatives were not taken.** A `Connection` per source would isolate the sources too, but it changes both
 builders to take a `ConnectionFactory` instead of a `Connection`, multiplies the connections every application opens
 against the broker, and still lets an executor the user shares between factories bring the problem back. Documenting
-that the `Connection` needs an executor with at least one thread per bridge was the other option. The bridge cannot
+that the `Connection` needs an executor with at least one thread per source was the other option. The source cannot
 check that anyone followed it, so isolation would rest on a setting nobody finds out about until it fails.
 
-`RabbitMqCloudEventBridgeWorkerThreadTest` and `RabbitMqDomainEventBridgeWorkerThreadTest` build two bridges on a
-connection whose shared executor has one thread, block the handler in one bridge, and assert that the other bridge's
-event arrives before the block is released. Both fail against the old callback, where the healthy bridge never
-receives its event. `RabbitMqCloudEventBridgeConnectionRecoveryTest` blocks a handler across two forced recoveries and
-asserts the message is handled twice rather than three times, and `RabbitMqDomainEventBridgeRecoveryDiscardTest` calls
-the domain bridge's recovery listener by hand to check the same thing, including a callback from the dead channel that
-arrives after the recovery started. `RabbitMqCloudEventBridgeWorkerThreadTest` also checks that under `PARK` a
+`RabbitMqCloudEventSourceWorkerThreadTest` and `RabbitMqDomainEventSourceWorkerThreadTest` build two sources on a
+connection whose shared executor has one thread, block the handler in one source, and assert that the other source's
+event arrives before the block is released. Both fail against the old callback, where the healthy source never
+receives its event. `RabbitMqCloudEventSourceConnectionRecoveryTest` blocks a handler across two forced recoveries and
+asserts the message is handled twice rather than three times, and `RabbitMqDomainEventSourceRecoveryDiscardTest` calls
+the domain source's recovery listener by hand to check the same thing, including a callback from the dead channel that
+arrives after the recovery started. `RabbitMqCloudEventSourceWorkerThreadTest` also checks that under `PARK` a
 delivery whose handler `close()` interrupted is neither parked nor acknowledged.
-`RabbitMqCloudEventBridgeConnectionRecoveryTest` and `RabbitMqDomainEventBridgeConnectionRecoveryTest` each give a
+`RabbitMqCloudEventSourceConnectionRecoveryTest` and `RabbitMqDomainEventSourceConnectionRecoveryTest` each give a
 connection a recovery interval of five seconds, let a handler finish after the connection drops and before the
 recovery starts, and assert that a message published after the recovery is still handled. Both fail when a failed
-acknowledgement stops the bridge.
+acknowledgement stops the source.
 
 Both worker-thread tests also throw a checked exception from a handler and assert that both published messages are
 back on the queue, which only a closed channel does, next to the `Error` test each already had. All four wait for the
-handler to fail before reading the queue, since both messages are ready on it until the bridge takes the first one,
+handler to fail before reading the queue, since both messages are ready on it until the source takes the first one,
 and a count of two read before that is the state before anything happened. Against a catch of
 `RuntimeException | Error` the checked-exception ones find one message rather than two, the first held unacknowledged
 by a worker whose task ended and the second never sent to that consumer.
-For the poll, `RabbitMqCloudEventBridgeReadinessTest` gives a bridge a `readinessSource` that throws a checked
+For the poll, `RabbitMqCloudEventSourceReadinessTest` gives a source a `readinessSource` that throws a checked
 exception on its first tick and an `Error` on its second, then answers true, and asserts the message is handled, and
-`RabbitMqDomainEventBridgePollFailureTest` throws an `Error` from a mocked feed's `isReadyForLiveDelivery` on the
+`RabbitMqDomainEventSourcePollFailureTest` throws an `Error` from a mocked feed's `isReadyForLiveDelivery` on the
 first tick and asserts the consumer still starts. Both release-helper tests have a release that fails with an
 `Error` and assert the tag is back at the front of the deque. Each fails against the catch it was written for.
-`RabbitMqCloudEventBridgeTeardownTest` and `RabbitMqDomainEventBridgeTeardownTest` throw an `Error` against a mocked
+`RabbitMqCloudEventSourceTeardownTest` and `RabbitMqDomainEventSourceTeardownTest` throw an `Error` against a mocked
 `Channel` from each step ahead of a close, both releases on a permanent stop and on `close()`, the consumer cancel on
 `close()`, and the consume channel's own close ahead of the parking publisher's, and assert that the close still
 happens. One more gives `close()` a `closeTimeout` of 300 years, which the builder accepts and which overflows the
@@ -1437,7 +1437,7 @@ There is no reactive in-memory event store. The reactor push model can be fed fr
 only by a listener that subscribes to the `Mono` from `accept(..)` and waits for it, since that `Mono` does nothing
 until something subscribes. `new InMemoryEventStore(reactorPushModel::accept)` compiles but delivers nothing.
 
-The RabbitMQ and Kafka bridges call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter configures a push
+The RabbitMQ and Kafka sources call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter configures a push
 model fed from a write path.
 
 So Occurrent narrows what it supports instead of changing the engine. Feeding `accept(..)` from a write path is
