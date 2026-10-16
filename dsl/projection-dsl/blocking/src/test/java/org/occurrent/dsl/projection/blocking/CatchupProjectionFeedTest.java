@@ -225,6 +225,24 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
+    @SuppressWarnings("removal")
+    void the_deprecated_accept_waits_for_the_catch_up_and_folds_the_event_instead_of_deferring_it() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
+        FutureTask<Void> plain = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("early")));
+        FutureTask<Void> withMetadata = feedWaitingForTheCatchUp(() -> feed.accept(metadata("early-stream", 7L), new Counted("early-with-metadata")));
+
+        feed.catchUp();
+
+        assertThat(plain).succeedsWithin(Duration.ofSeconds(5));
+        assertThat(withMetadata).succeedsWithin(Duration.ofSeconds(5));
+        assertThat(repo.get("counter")).as("the replayed event and both events accepted before the feed was live").isEqualTo(3);
+    }
+
+    @Test
     void a_stopped_catch_up_forwards_replay_abandoned_to_a_replay_aware_view_instead_of_replay_completed() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();

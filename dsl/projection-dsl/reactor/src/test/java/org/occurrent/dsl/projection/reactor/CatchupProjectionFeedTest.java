@@ -607,6 +607,32 @@ class CatchupProjectionFeedTest {
                 .then(Mono.fromRunnable(() -> folded.add(event.eventId())));
     }
 
+    // The fold carries on when its acceptOrDefer(..) for "n" errors. "3" is accepted from outside afterwards, and
+    // being folded with no "n" before it shows "n" was never queued.
+    private void assertThatAcceptOrDeferFromTheFoldIsRefused(boolean live, Function<CatchupProjectionFeed<Counted>, Mono<RoutingOutcome>> acceptOrDefer) {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        List<RoutingOutcome> outcomes = new CopyOnWriteArrayList<>();
+        List<Throwable> errors = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                feedingBackOn(live ? "2" : "1", feedRef, folded, self -> acceptOrDefer.apply(self)
+                        .doOnNext(outcomes::add).doOnError(errors::add).onErrorComplete().then()),
+                Filter.all(), live ? reader("1") : reader("1", "2"), countedConverter(), Counted::eventId, null);
+        feedRef.set(feed);
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+        if (live) {
+            StepVerifier.create(feed.acceptAndWait(new Counted("2"))).expectComplete().verify(ofSeconds(5));
+        }
+
+        StepVerifier.create(feed.acceptAndWait(new Counted("3"))).expectComplete().verify(ofSeconds(5));
+
+        assertThat(outcomes).isEmpty();
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0)).isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.acceptedOrDeferredFromOwnDelivery("projection feed"));
+        assertThat(folded).containsExactly("1", "2", "3");
+    }
+
     // goLive() subscribes its wait from the one task it schedules, and the marker read ahead of that wait is
     // synchronous, so once that task has run the call is waiting, or has completed, which the caller then catches
     private static CompletableFuture<Void> goLiveWaitingForTheReplay(CatchupProjectionFeed<Counted> feed) {
@@ -1108,6 +1134,40 @@ class CatchupProjectionFeedTest {
         StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
 
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "n"));
+    }
+
+    @Test
+    void accept_or_defer_from_the_feeds_own_live_fold_errors_and_the_event_is_never_folded() {
+        assertThatAcceptOrDeferFromTheFoldIsRefused(true, self -> self.acceptOrDefer(new Counted("n")));
+    }
+
+    @Test
+    void accept_or_defer_with_metadata_from_the_feeds_own_live_fold_errors_and_the_event_is_never_folded() {
+        assertThatAcceptOrDeferFromTheFoldIsRefused(true, self -> self.acceptOrDefer(EventMetadata.empty(), new Counted("n")));
+    }
+
+    @Test
+    void accept_or_defer_from_the_feeds_own_replayed_fold_errors_and_the_event_is_never_folded() {
+        assertThatAcceptOrDeferFromTheFoldIsRefused(false, self -> self.acceptOrDefer(new Counted("n")));
+    }
+
+    @Test
+    @SuppressWarnings("removal")
+    void the_deprecated_accept_waits_for_the_feed_to_go_live_and_folds_the_event_instead_of_deferring_it() throws Exception {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                (Counted e) -> Mono.fromRunnable(() -> folded.add(e.eventId())),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        CompletableFuture<Void> plain = feed.accept(new Counted("early")).toFuture();
+        CompletableFuture<Void> withMetadata = feed.accept(EventMetadata.empty(), new Counted("early-with-metadata")).toFuture();
+
+        assertThat(plain).as("accept(..) before the feed is live").isNotDone();
+        assertThat(withMetadata).as("accept(metadata, ..) before the feed is live").isNotDone();
+        feed.catchUp().block(ofSeconds(5));
+
+        plain.get(5, TimeUnit.SECONDS);
+        withMetadata.get(5, TimeUnit.SECONDS);
+        assertThat(folded).containsExactly("1", "early", "early-with-metadata");
     }
 
     // The fold of "2" returns catchUp() as part of its own Mono, and that catch-up replays "1", which cannot start

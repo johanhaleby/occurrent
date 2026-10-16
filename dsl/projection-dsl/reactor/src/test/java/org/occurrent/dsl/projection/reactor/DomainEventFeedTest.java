@@ -645,6 +645,25 @@ class DomainEventFeedTest {
 
     @Test
     @SuppressWarnings("removal")
+    void the_deprecated_accept_waits_for_the_projection_to_go_live_and_folds_the_event_instead_of_deferring_it() throws Exception {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        CompletableFuture<Void> plain = feed.accept(new Counted("early")).toFuture();
+        CompletableFuture<Void> withMetadata = feed.accept(EventMetadata.empty(), new Counted("early-with-metadata")).toFuture();
+
+        assertThat(plain).as("accept(..) before the projection is live").isNotDone();
+        assertThat(withMetadata).as("accept(metadata, ..) before the projection is live").isNotDone();
+        feed.catchUpAll().block(Duration.ofSeconds(5));
+
+        plain.get(5, TimeUnit.SECONDS);
+        withMetadata.get(5, TimeUnit.SECONDS);
+        assertThat(repo.get("counter")).isEqualTo(2);
+    }
+
+    @Test
+    @SuppressWarnings("removal")
     void the_deprecated_accept_forwards_to_accept_and_wait_and_folds_the_event_live() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
@@ -819,13 +838,43 @@ class DomainEventFeedTest {
         assertThat(answers).containsExactly("queued");
     }
 
-    // The same live-or-not decision any caller gets, answered once "n" is queued rather than once it is folded
     @Test
-    void accept_or_defer_cloud_event_from_the_registered_fold_completes_delivered_once_queued_and_the_event_is_folded_after_that_fold() {
-        List<Object> answers = assertThatAFeedBackFromTheLiveFoldIsFoldedAfterIt((feed, converter) ->
-                feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("n"))).map(outcome -> outcome));
+    void accept_or_defer_from_the_registered_live_fold_errors_and_the_event_is_never_folded() {
+        assertThatAcceptOrDeferFromTheFoldIsRefused(true, (feed, converter) -> feed.acceptOrDefer(new Counted("n")));
+    }
 
-        assertThat(answers).containsExactly(RoutingOutcome.DELIVERED);
+    @Test
+    void accept_or_defer_from_the_registered_replayed_fold_errors_and_the_event_is_never_folded() {
+        assertThatAcceptOrDeferFromTheFoldIsRefused(false, (feed, converter) -> feed.acceptOrDefer(new Counted("n")));
+    }
+
+    @Test
+    void accept_or_defer_cloud_event_from_the_registered_live_fold_errors_and_the_event_is_never_folded() {
+        assertThatAcceptOrDeferFromTheFoldIsRefused(true, (feed, converter) -> feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("n"))));
+    }
+
+    @Test
+    void accept_or_defer_cloud_event_from_the_registered_replayed_fold_errors_and_the_event_is_never_folded() {
+        assertThatAcceptOrDeferFromTheFoldIsRefused(false, (feed, converter) -> feed.acceptOrDeferCloudEvent(converter.toCloudEvent(new Counted("n"))));
+    }
+
+    @Test
+    void accept_or_defer_cloud_event_not_matching_the_registered_filter_from_the_registered_fold_still_completes_with_filtered() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1"), converter, Counted::eventId);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        List<RoutingOutcome> outcomes = new CopyOnWriteArrayList<>();
+        CloudEvent nonMatching = CloudEventBuilder.v1().withId("x").withSource(SOURCE).withType("SomethingElseHappened").build();
+        feed.register("counter", event -> (event.eventId().equals("2")
+                ? feed.acceptOrDeferCloudEvent(nonMatching).doOnNext(outcomes::add).then()
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> folded.add(event.eventId()))), Filter.type(converter.getCloudEventType(Counted.class)));
+        StepVerifier.create(feed.catchUp("counter")).expectComplete().verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(feed.acceptAndWait(new Counted("2"))).expectComplete().verify(Duration.ofSeconds(5));
+
+        assertThat(outcomes).containsExactly(RoutingOutcome.FILTERED);
+        assertThat(folded).containsExactly("1", "2");
     }
 
     private static List<Object> assertThatAFeedBackFromTheLiveFoldIsFoldedAfterIt(BiFunction<DomainEventFeed<Counted>, CloudEventConverter<Counted>, Mono<Object>> feedBack) {
@@ -843,6 +892,34 @@ class DomainEventFeedTest {
 
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "n"));
         return answers;
+    }
+
+    // The fold carries on when its acceptOrDefer(..) for "n" errors. "3" is accepted from outside afterwards, and
+    // being folded with no "n" before it shows "n" was never queued.
+    private static void assertThatAcceptOrDeferFromTheFoldIsRefused(boolean live,
+                                                                    BiFunction<DomainEventFeed<Counted>, CloudEventConverter<Counted>, Mono<RoutingOutcome>> acceptOrDefer) {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(live ? reader("1") : reader("1", "2"), converter, Counted::eventId);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        List<RoutingOutcome> outcomes = new CopyOnWriteArrayList<>();
+        List<Throwable> errors = new CopyOnWriteArrayList<>();
+        String callingEventId = live ? "2" : "1";
+        feed.register("counter", event -> (event.eventId().equals(callingEventId)
+                ? acceptOrDefer.apply(feed, converter).doOnNext(outcomes::add).doOnError(errors::add).onErrorComplete().then()
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> folded.add(event.eventId()))), Filter.all());
+        StepVerifier.create(feed.catchUp("counter")).expectComplete().verify(Duration.ofSeconds(5));
+        if (live) {
+            StepVerifier.create(feed.acceptAndWait(new Counted("2"))).expectComplete().verify(Duration.ofSeconds(5));
+        }
+
+        StepVerifier.create(feed.acceptAndWait(new Counted("3"))).expectComplete().verify(Duration.ofSeconds(5));
+
+        assertThat(outcomes).isEmpty();
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0)).isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.acceptedOrDeferredFromOwnDelivery("projection feed"));
+        assertThat(folded).containsExactly("1", "2", "3");
     }
 
     // goLive(id) subscribes its wait from the one task it schedules, and the marker read ahead of that wait is

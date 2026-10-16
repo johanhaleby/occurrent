@@ -1008,16 +1008,16 @@ class CatchupThenPushSubscriptionModelTest {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "n1"));
     }
 
-    // The live-or-replay decision is the one any caller gets. Only the answer comes before n1 is applied.
     @Test
-    void accept_or_defer_from_a_live_handler_returns_delivered_once_queued_and_the_event_is_applied_after_it() {
+    void accept_or_defer_from_a_live_handler_is_not_deliverable_and_the_event_is_never_applied() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         List<String> delivered = new CopyOnWriteArrayList<>();
         List<RoutingOutcome> nestedOutcomes = new CopyOnWriteArrayList<>();
+        List<Throwable> nestedErrors = new CopyOnWriteArrayList<>();
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> (ce.getId().equals("2")
-                ? feed.acceptOrDefer(cloudEvent("n1", "Created")).doOnNext(nestedOutcomes::add).then()
+                ? feed.acceptOrDefer(cloudEvent("n1", "Created")).doOnNext(nestedOutcomes::add).doOnError(nestedErrors::add).then()
                 : Mono.<Void>empty())
                 .then(Mono.fromRunnable(() -> delivered.add(ce.getId())))).waitUntilStarted().block();
 
@@ -1025,9 +1025,32 @@ class CatchupThenPushSubscriptionModelTest {
                 .expectNext(RoutingOutcome.DELIVERED)
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
+        StepVerifier.create(feed.accept(cloudEvent("3", "Updated"))).expectComplete().verify(Duration.ofSeconds(5));
 
-        assertThat(nestedOutcomes).containsExactly(RoutingOutcome.DELIVERED);
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "n1"));
+        assertThat(nestedOutcomes).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(nestedErrors).isEmpty();
+        assertThat(delivered).as("n1 is not applied, and 3 after it shows nothing was queued ahead of 3").containsExactly("1", "2", "3");
+    }
+
+    @Test
+    void accept_or_defer_from_a_replayed_handler_is_not_deliverable_and_the_event_is_never_applied() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        List<RoutingOutcome> nestedOutcomes = new CopyOnWriteArrayList<>();
+        List<Throwable> nestedErrors = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created"), cloudEvent("2", "Updated")), 2);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> (ce.getId().equals("1")
+                ? feed.acceptOrDefer(cloudEvent("n1", "Created")).doOnNext(nestedOutcomes::add).doOnError(nestedErrors::add).then()
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> delivered.add(ce.getId()))));
+
+        StepVerifier.create(subscription.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(5));
+        StepVerifier.create(feed.accept(cloudEvent("3", "Updated"))).expectComplete().verify(Duration.ofSeconds(5));
+
+        assertThat(nestedOutcomes).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(nestedErrors).isEmpty();
+        assertThat(delivered).as("n1 is not applied, and 3 after it shows nothing was queued ahead of 3").containsExactly("1", "2", "3");
     }
 
     // The scenario from the review of #1149. "bad" is in the store but was never applied, and the marker says the

@@ -919,6 +919,22 @@ class DomainEventFeedTest {
 
     @Test
     @SuppressWarnings("removal")
+    void the_deprecated_accept_waits_for_the_catch_up_and_folds_the_event_instead_of_deferring_it() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(new InMemoryEventStore(), counterConverter(), Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        FutureTask<Void> plain = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("early")));
+        FutureTask<Void> withMetadata = feedWaitingForTheCatchUp(() -> feed.accept(metadata("early-stream", 7L), new Counted("early-with-metadata")));
+
+        feed.catchUpAll();
+
+        assertThat(plain).succeedsWithin(Duration.ofSeconds(5));
+        assertThat(withMetadata).succeedsWithin(Duration.ofSeconds(5));
+        assertThat(repo.get("counter")).as("both events accepted before the projection was live").isEqualTo(2);
+    }
+
+    @Test
+    @SuppressWarnings("removal")
     void the_deprecated_accept_throws_like_accept_and_wait_before_a_projection_is_registered() {
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(new InMemoryEventStore(), counterConverter(), Counted::eventId);
 

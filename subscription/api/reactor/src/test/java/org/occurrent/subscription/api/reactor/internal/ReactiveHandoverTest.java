@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.api.reactor.internal;
 
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -2724,33 +2725,68 @@ class ReactiveHandoverTest {
     }
 
     @Test
-    void accept_if_live_from_a_live_fold_completes_true_once_queued_and_its_payload_is_delivered_after_that_fold() {
+    void accept_if_live_from_a_live_fold_is_refused_and_its_payload_is_never_delivered() {
         List<String> log = new CopyOnWriteArrayList<>();
-        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("L1", self ->
-                self.acceptIfLive("N1").doOnNext(answers::add)));
+                self.acceptIfLive("N1").doOnError(refusals::add).onErrorComplete()));
         StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
 
         StepVerifier.create(handover.accept("L1")).expectComplete().verify(Duration.ofSeconds(5));
+        StepVerifier.create(handover.accept("L2")).expectComplete().verify(Duration.ofSeconds(5));
 
-        assertThat(answers).containsExactly(true);
-        awaitSize(log, 2);
-        assertThat(log).containsExactly("L1", "N1");
+        assertThat(refusals).singleElement(InstanceOfAssertFactories.THROWABLE)
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.acceptedOrDeferredFromOwnDelivery("test payload"));
+        assertThat(log).containsExactly("L1", "L2");
     }
 
-    // The handover is not live while it replays, so the fold gets the answer a caller from anywhere else would get.
+    // The handover is not live while it replays, and a fold still gets the refusal rather than an answer for either.
     @Test
-    void accept_if_live_from_a_replayed_fold_is_answered_not_live_and_takes_nothing_in() {
+    void accept_if_live_from_a_replayed_fold_is_refused_and_its_payload_is_never_delivered() {
         List<String> log = new CopyOnWriteArrayList<>();
-        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("R1", self ->
-                self.acceptIfLive("N1").doOnNext(answers::add)));
+                self.acceptIfLive("N1").doOnError(refusals::add).onErrorComplete()));
 
         StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).expectComplete().verify(Duration.ofSeconds(5));
         StepVerifier.create(handover.accept("L1")).expectComplete().verify(Duration.ofSeconds(5));
 
-        assertThat(answers).containsExactly(false);
+        assertThat(refusals).singleElement(InstanceOfAssertFactories.THROWABLE)
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.acceptedOrDeferredFromOwnDelivery("test payload"));
         assertThat(log).containsExactly("R1", "L1");
+    }
+
+    @Test
+    void a_refused_accept_if_live_from_a_live_fold_leaves_the_handover_serving_and_a_later_call_from_outside_answers_true_once_delivered() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("L1", self ->
+                self.acceptIfLive("N1").doOnError(refusals::add).onErrorComplete()));
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+
+        StepVerifier.create(handover.accept("L1")).expectComplete().verify(Duration.ofSeconds(5));
+        StepVerifier.create(handover.acceptIfLive("L2")).expectNext(true).verifyComplete();
+
+        assertThat(refusals).hasSize(1);
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(log).as("L2 is delivered by the time it is answered, N1 never is").containsExactly("L1", "L2");
+    }
+
+    @Test
+    void a_refused_accept_if_live_from_a_replayed_fold_leaves_the_handover_serving_and_a_later_call_from_outside_answers_true_once_delivered() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("R1", self ->
+                self.acceptIfLive("N1").doOnError(refusals::add).onErrorComplete()));
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).expectComplete().verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(handover.acceptIfLive("L1")).expectNext(true).verifyComplete();
+
+        assertThat(refusals).hasSize(1);
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(log).as("L1 is delivered by the time it is answered, N1 never is").containsExactly("R1", "L1");
     }
 
     // bad1 and Y were both answered once queued, so Y is delivered although bad1 failed, and only then does the
