@@ -100,8 +100,8 @@ returns normally in all three.
 
 **The acknowledgement decision comes from the routing outcome, not from a check taken before or after the push.**
 `PushSubscriptionModel` decides it in `routeReportingMatch`, which evaluates the sole registration's eligibility
-once. The source gets that outcome as the return value of `acceptRedeliverable(...)`, and a `PushObserver` the
-application configured is told the same one. (The 2026-08-21 amendment below adds `acceptRedeliverable(...)` and moves
+once. The source gets that outcome as the return value of `acceptOrDefer(...)`, and a `PushObserver` the
+application configured is told the same one. (The 2026-08-21 amendment below adds `acceptOrDefer(...)` and moves
 the report to after the matched action runs, replacing the mechanism this paragraph originally described. The
 decision itself, one evaluation shared between the match and the report, is unchanged.)
 
@@ -134,7 +134,7 @@ the sources in #415 and #417, which are what need the contract.
 changes this design needs outside the three broker modules, and both are prerequisites rather than improvements, so
 neither belongs at the end of an implementation plan.
 
-**The source therefore holds the `PushSubscriptionModel` rather than a bare `Pushable`.** `acceptRedeliverable(...)`
+**The source therefore holds the `PushSubscriptionModel` rather than a bare `Pushable`.** `acceptOrDefer(...)`
 is a method on the model, and the readiness accessors are not reachable through `Pushable` either. The source
 uses `isRunning(subscriptionId)` to decide when to start and stop consuming, which is a coarse lifecycle question
 where a small delay is harmless, and never to decide a single message. `hasSubscriptions()` would be the wrong
@@ -394,7 +394,7 @@ an improvement to it, on the same footing as the outcome decision 1 needs.
 **What that gives the feed is the same shape `routeReportingMatch` already has one level up.** The source rebuilds a
 CloudEvent from the message and hands it over, and the feed matches, decodes with its own converter, delivers, and
 reports which outcome happened. The source acknowledges on that outcome exactly as the CloudEvent source
-does, and the two levels become one mechanism described twice rather than two designs. (`DomainEventFeed.acceptCloudEvent`
+does, and the two levels become one mechanism described twice rather than two designs. (`DomainEventFeed.acceptOrDeferCloudEvent`
 never actually returns `NOT_DELIVERABLE` in what shipped: only `FILTERED`, `DELIVERED` and `DEFERRED`, or a thrown
 exception for an unregistered feed or a permanently failed catch-up. See changelog.md's own correction and #893.)
 
@@ -431,7 +431,7 @@ A filter whose type part cannot be derived returns an empty `Optional`, and the 
 `catchAllDestination()` too. Guessing narrower would drop an event the filter would have matched, so the imprecise
 answer has to be the inclusive one.
 
-A CloudEvent source sees whether each event it consumed matched from the outcome `acceptRedeliverable(...)` returns,
+A CloudEvent source sees whether each event it consumed matched from the outcome `acceptOrDefer(...)` returns,
 `FILTERED` for one the filter declined.
 
 **The catch-all is a third method on the resolver rather than something the source works out**, because an empty
@@ -673,9 +673,9 @@ already does." [#848](https://github.com/johanhaleby/occurrent/issues/848) imple
 found "startup" cannot mean `DomainEventFeed.register(..)` without breaking released code. That overload shipped in
 0.33.0 with no `DataFieldReader` dependency at all, since a payload condition on the replay filter has always been
 evaluated by the event store during the replay itself. Refusing it inside `register` would newly fail an existing
-caller that has never called `acceptCloudEvent`.
+caller that has never called `acceptOrDeferCloudEvent`.
 
-The refusal happens on `acceptCloudEvent`'s first call instead, the first moment a filter is actually asked to answer
+The refusal happens on `acceptOrDeferCloudEvent`'s first call instead, the first moment a filter is actually asked to answer
 live rather than during replay, and it is permanent for that registration from then on. The first call builds and
 caches an `UnreadableLiveFilterException`, and every later call throws that same instance without rebuilding the
 matcher, so a caller cannot retry its way past a configuration error that cannot change without a new registration.
@@ -808,7 +808,7 @@ This closes the gap for the blocking stack's CloudEvent-level sources only. The 
 `ReactiveHandover` has no `isReadyForLiveDelivery()`, the reactor `DomainEventFeed` never received the domain-level
 version of this fix either, and no reactor broker source exists yet to need one. A design that has the source hold
 the `CatchupThenPushSubscriptionModel` itself, giving it a `Pushable` shape so readiness reaches the per-message
-`RoutingOutcome` the way `DomainEventFeed.acceptCloudEvent` already does, was considered and rejected for this
+`RoutingOutcome` the way `DomainEventFeed.acceptOrDeferCloudEvent` already does, was considered and rejected for this
 change, since it would falsify decision 1's "not itself a push target" rationale outright rather than adding a
 narrow exception beside it. That alternative is tracked as
 [#885](https://github.com/johanhaleby/occurrent/issues/885), pending its own decision on whether to amend decision 1
@@ -849,7 +849,7 @@ to resolve on its own, and it is safe to redeliver arbitrarily many times.
 buffer a payload offered while not live, `acceptIfLive` refuses it outright, reporting `false` without ever
 touching the buffer. `PushSubscriptionModel.accept(..)` is unchanged and keeps buffering. An in-memory store listener
 calls it through `accept(Iterable<CloudEvent>)` after the store has kept the event, so refusing would only make the
-write call throw, without protecting anything. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
+write call throw, without protecting anything. A new `PushSubscriptionModel.acceptOrDefer(CloudEvent)`
 is for a caller that can redeliver, a broker source, and routes to `acceptIfLive` instead. It refuses rather than
 buffers, returns `DEFERRED`, and lets the caller ask again. It returns every outcome routing decides, a refusal made
 before dispatch included, and throws only for a filter or handler failure, so a source decides on the returned value
@@ -872,7 +872,7 @@ id, so a zero-config Spring application gets the quiet path during a replay with
 
 At the time this amendment was first written, it closed the gap for the blocking stack only, CloudEvent-level and
 domain-level alike. The reactor stack carried the identical shape of defect in its own
-`RegisteringSubscribable.routeReportingMatch` and `DomainEventFeed.acceptCloudEvent`, worse in one respect: the
+`RegisteringSubscribable.routeReportingMatch` and `DomainEventFeed.acceptOrDeferCloudEvent`, worse in one respect: the
 reactor `DomainEventFeed` had never received even the readiness-gate half-fix this amendment replaces, so it
 reported `DELIVERED` for a buffered-not-applied event unconditionally. No reactor broker source existed yet to need
 the `DeliveryFailurePolicy` bypass half of this fix, but the correctness half did not depend on one existing, and
@@ -889,10 +889,16 @@ now reports from a new `Mono<Boolean>`-returning `RoutingAction`, run before the
 `subscribe(...)` keeps its released `Function<CloudEvent, Mono<Void>>` signature by wrapping every event it delivers
 as `DELIVERED`. `ReactiveHandover` gains `acceptIfLive(T)` beside `accept(T)`/`acceptReportingDelivery(T)`, refusing
 a payload outright rather than buffering it while not live, behind a dedicated
-`ReactiveHandover.PreDispatchRefusalException` mirroring the blocking one. `DomainEventFeed.acceptCloudEvent` and
-`CatchupProjectionFeed` report `DEFERRED` instead of `NOT_DELIVERABLE` for an event that arrives before the
-registered projection is live, through that same `acceptIfLive`, closing the gap this amendment left open for the
+`ReactiveHandover.PreDispatchRefusalException` mirroring the blocking one. `DomainEventFeed.acceptOrDeferCloudEvent` and
+`CatchupProjectionFeed.acceptOrDefer` report `DEFERRED` instead of `NOT_DELIVERABLE` for an event that arrives before
+the registered projection is live, through that same `acceptIfLive`, closing the gap this amendment left open for the
 reactor `DomainEventFeed`.
+
+Both projection feeds, on both stacks, make that refusal public as `acceptOrDefer(E)` and
+`acceptOrDefer(EventMetadata, E)`, which return `DELIVERED` or `DEFERRED` without waiting for a catch-up. The
+`accept` they shipped with in 0.33.0 is renamed `acceptAndWait`, which waits for the catch-up instead, and `accept`
+stays as a deprecated method that calls it. The push models' method has the same name, so a broker source calls
+`acceptOrDefer` whichever of these types it feeds.
 
 ## Amendment (2026-08-21): a permanent catch-up refusal stops a source, and a lifecycle `NOT_DELIVERABLE` is paced, not failed
 
@@ -922,7 +928,7 @@ already queued behind that call can still reach the source before the poll cance
 CloudEvent-level source bypasses `DeliveryFailurePolicy` the same way `DEFERRED` already does: Kafka seeks back and
 throttles the partition, reusing the mechanism it already has. *(RabbitMQ's own fix here, a re-read plus an
 immediate consumer cancel, is superseded by the amendment below. This sentence is kept only as the historical record
-of what shipped first.)* The domain sources need no equivalent change: `DomainEventFeed.acceptCloudEvent` has no
+of what shipped first.)* The domain sources need no equivalent change: `DomainEventFeed.acceptOrDeferCloudEvent` has no
 pause concept and never returns `NOT_DELIVERABLE` at all (see the amendment above).
 
 *(Done by the 2026-08-22 amendment below, which adds `UNAVAILABLE` and `REFUSED`. The paragraph is kept as the
@@ -1001,7 +1007,7 @@ the outcome.** That rule was true, but it was written down in two source class j
 describing another module's control flow, and nothing in the type said it. The enum now has six values.
 `UNAVAILABLE` is the lifecycle answer, nothing registered, the model not running, or the sole subscription paused,
 and it never comes with an exception. `NOT_DELIVERABLE` narrows to two things, both of which do come with one from
-`accept(...)`. `acceptRedeliverable(...)` returns a refusal without throwing, so there only the filter's failure does.
+`accept(...)`. `acceptOrDefer(...)` returns a refusal without throwing, so there only the filter's failure does.
 The filter itself failing to answer is one. A registered action refusing before it attempted any dispatch, without
 promising that refusing is permanent, is the other, which is what a full live buffer during a replay gets.
 `REFUSED` is the same kind of refusal with that promise attached.
@@ -1015,7 +1021,7 @@ catch-up reports `REFUSED` and stops the source.
 
 That is what lets all four sources stop importing `BlockingHandover` from its `internal` package. The amendment
 above judged that import acceptable for one `catch`. It is no longer needed. The two CloudEvent sources read the
-outcome, and the two domain sources ask their feed, since `DomainEventFeed.acceptCloudEvent` delivers inline and
+outcome, and the two domain sources ask their feed, since `DomainEventFeed.acceptOrDeferCloudEvent` delivers inline and
 reports no routing outcome of its own. `DomainEventFeed.refusesPermanently()` is the accessor for that, and it only
 ever goes from false to true, which is what makes it safe to read after catching a refusal rather than at the
 moment the refusal was thrown.
@@ -1437,13 +1443,13 @@ There is no reactive in-memory event store. The reactor push model can be fed fr
 only by a listener that subscribes to the `Mono` from `accept(..)` and waits for it, since that `Mono` does nothing
 until something subscribes. `new InMemoryEventStore(reactorPushModel::accept)` compiles but delivers nothing.
 
-The RabbitMQ and Kafka sources call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter configures a push
+The RabbitMQ and Kafka sources call `acceptOrDefer(CloudEvent)`, and no Spring Boot starter configures a push
 model fed from a write path.
 
 So Occurrent narrows what it supports instead of changing the engine. Feeding `accept(..)` from a write path is
 supported only for the in-memory event store. A durable event store uses a durable subscription, which records the
 position it has handled and resumes from it, or forwards its events to a broker whose listener calls
-`acceptRedeliverable(CloudEvent)`. The reactor marker order and the shared marker storage only lose an event in a setup
+`acceptOrDefer(CloudEvent)`. The reactor marker order and the shared marker storage only lose an event in a setup
 that is no longer supported, so neither changes.
 
 This narrows a released contract. Up to 0.33.0 the javadoc of both push models named a RabbitMQ or Kafka listener, a

@@ -103,7 +103,7 @@ at `hasSubscriptions()`, which is the ask-first answer available to a broker lis
 > subscription fed from a durable store's write path can miss an event when the application crashes after the write
 > has committed but before the handler has run. `accept(..)` is now supported from the write path of the in-memory
 > event store only, which is not durable and loses the event in the same crash. There refusing would still only fail
-> the write call, which is why `accept(..)` still does not refuse. A broker listener calls `acceptRedeliverable(..)`
+> the write call, which is why `accept(..)` still does not refuse. A broker listener calls `acceptOrDefer(..)`
 > and acknowledges on the outcome it returns, as ADR 133 decided.
 
 The first draft of this change did refuse on both, on a symmetry argument. The evidence killed it. Symmetry
