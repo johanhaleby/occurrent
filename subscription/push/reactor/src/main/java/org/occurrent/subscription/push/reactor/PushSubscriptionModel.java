@@ -42,7 +42,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * It exists so a projection can be driven from any transport that already forwards Occurrent cloud events. The
  * application registers handlers through the projection DSL. A source that can deliver the event again, such as a
  * RabbitMQ or Kafka listener, or an HTTP endpoint whose caller retries a failed request, hands each received event to
- * {@link #acceptRedeliverable(CloudEvent)}. Only a listener on the blocking {@code InMemoryEventStore} should hand
+ * {@link #acceptOrDefer(CloudEvent)}. Only a listener on the blocking {@code InMemoryEventStore} should hand
  * its events to {@link #accept(Iterable)} instead, and wait for the {@link Mono} it returns, as described below.
  * Both route each event to the
  * handler if its {@link SubscriptionFilter} matches, and a handler error propagates through the returned {@link Mono}.
@@ -63,9 +63,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * missed. Without a crash the event stays in the store, where a later read of the store can still find it. With a
  * durable event store, such as MongoDB, the subscription never sees an event when the application crashes after the
  * write has committed but before the handler has run. Use a durable subscription there, or forward the events to a
- * broker whose listener calls {@link #acceptRedeliverable(CloudEvent)}. The amendment to ADR 133 records why.
+ * broker whose listener calls {@link #acceptOrDefer(CloudEvent)}. The amendment to ADR 133 records why.
  * <p>
- * Fed from a broker, call {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when its
+ * Fed from a broker, call {@link #acceptOrDefer(CloudEvent)} and acknowledge the message only when its
  * {@link Mono} completes with {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}. That method says
  * what each of the other outcomes asks for, {@link RoutingOutcome#REFUSED} being the one that means stop consuming.
  * <p>
@@ -124,7 +124,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * <p>
      * <strong>An event fed before any subscription is registered is dropped, and the returned {@link Mono} completes
      * normally.</strong> A listener that acknowledges on completion therefore acknowledges an event nothing consumed,
-     * so a broker listener calls {@link #acceptRedeliverable(CloudEvent)} instead, which reports
+     * so a broker listener calls {@link #acceptOrDefer(CloudEvent)} instead, which reports
      * {@link RoutingOutcome#UNAVAILABLE} for that event. This
      * method cannot refuse the event on your behalf, because this model is also fed from the in-memory event store's
      * write path, through {@link #accept(Iterable)}, which routes each event the same way, by a listener that waits
@@ -198,7 +198,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * @return A {@link Mono} that completes with the event's {@link RoutingOutcome}, which decides whether to
      * acknowledge the message.
      */
-    public Mono<RoutingOutcome> acceptRedeliverable(CloudEvent cloudEvent) {
+    public Mono<RoutingOutcome> acceptOrDefer(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         return Mono.defer(() -> {
             AtomicReference<@Nullable RoutingOutcome> reported = new AtomicReference<>();

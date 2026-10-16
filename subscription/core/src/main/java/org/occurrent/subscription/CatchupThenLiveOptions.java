@@ -34,7 +34,7 @@ package org.occurrent.subscription;
  * What that costs depends on what feeds the buffer. A broker listener that calls a {@code CatchupProjectionFeed}'s
  * {@code accept} and does not acknowledge the message when it throws gets the message delivered again. A
  * {@code CatchupThenPushSubscriptionModel}'s buffer is fed only by {@code accept(..)}, since
- * {@code acceptRedeliverable(..)} refuses rather than buffers, and {@code accept(..)} is supported only from the
+ * {@code acceptOrDefer(..)} refuses rather than buffers, and {@code accept(..)} is supported only from the
  * in-memory event store's write path. There the write call throws although the store has kept the event. The push
  * model's {@code accept(Iterable)} stops at that event, so it routes none of the write's later events either, and
  * the subscription can miss all of them.

@@ -39,7 +39,7 @@ import org.occurrent.subscription.RoutingOutcome;
  * {@link RoutingOutcome#UNAVAILABLE} when there was no running, unpaused subscription for the event to reach at
  * all, whether because nothing is registered, the model is stopped, or the subscription is paused.
  * <p>
- * A broker listener acknowledges on the outcome {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}
+ * A broker listener acknowledges on the outcome {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)}
  * returns, never on what this observer is told for {@code accept(...)}. Behind a
  * {@link CatchupThenPushSubscriptionModel}, {@code accept(...)} reports {@link RoutingOutcome#DELIVERED} for an
  * event that model has only buffered, and an action that threw is reported {@link RoutingOutcome#DELIVERED} too.
@@ -51,9 +51,9 @@ import org.occurrent.subscription.RoutingOutcome;
  * <p>
  * <strong>A broker source feeding this model from outside the process, rather than the in-memory event store's
  * write path that {@code accept(..)} serves, should call
- * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} instead.</strong> When this model is wrapped in a
+ * {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} instead.</strong> When this model is wrapped in a
  * {@link CatchupThenPushSubscriptionModel} that has not reached live yet,
- * {@code acceptRedeliverable(...)} refuses such an event outright rather than buffering it, reported
+ * {@code acceptOrDefer(...)} refuses such an event outright rather than buffering it, reported
  * {@link RoutingOutcome#DEFERRED}, safe to redeliver and never a reason to acknowledge. It also returns the outcome
  * it reports here, so a broker listener needs no observer to decide. {@code RabbitMqCloudEventSource}
  * and {@code KafkaCloudEventSource} do exactly this, and are correct with no further configuration:
