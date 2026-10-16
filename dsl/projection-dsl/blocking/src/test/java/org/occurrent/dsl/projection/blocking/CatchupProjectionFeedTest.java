@@ -606,6 +606,55 @@ class CatchupProjectionFeedTest {
         }
     }
 
+    // The fold of "2" calls catchUp() during acceptOrDefer. Its replay of "1" runs on a thread of its own, which is held
+    // here, so acceptOrDefer returning at all shows it did not wait for the replay or run it.
+    @Test
+    void accept_or_defer_returns_delivered_before_a_catch_up_its_fold_asked_for_replays_on_another_thread() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<String> replayThread = new AtomicReference<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        MaterializedView<Counted> view = event -> {
+            folded.add(event.eventId());
+            if (event.eventId().equals("2")) {
+                feedRef.get().catchUp();
+            } else if (event.eventId().equals("1")) {
+                replayThread.set(Thread.currentThread().getName());
+                replaying.countDown();
+                try {
+                    releaseReplay.await(30, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", view, Filter.all(), store, converter, Counted::eventId, null);
+        feedRef.set(feed);
+        feed.goLive();
+        FutureTask<RoutingOutcome> accepting = new FutureTask<>(() -> feed.acceptOrDefer(new Counted("2")));
+        Thread thread = new Thread(accepting, "accept-or-defer-caller");
+
+        try {
+            thread.start();
+
+            assertThat(accepting).as("acceptOrDefer while the replay of 1 is held")
+                    .succeedsWithin(Duration.ofSeconds(5)).isEqualTo(RoutingOutcome.DELIVERED);
+            assertThat(replaying.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(replayThread.get()).isNotEqualTo("accept-or-defer-caller");
+            releaseReplay.countDown();
+            feed.acceptAndWait(new Counted("3"));
+            assertThat(folded).containsExactly("2", "1", "3");
+        } finally {
+            releaseReplay.countDown();
+            thread.interrupt();
+        }
+    }
+
     // The fold of "1" stops the running replay and then asks for a catch-up. The replay stops before "2" without
     // writing the marker, and the catch-up the fold asked for replays the whole history once the fold returns.
     @Test
