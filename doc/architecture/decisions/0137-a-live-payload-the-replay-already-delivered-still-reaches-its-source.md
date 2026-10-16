@@ -203,8 +203,10 @@ delivery waited forever, live and during a replay. The engine's own code here is
 `goLive()` above.
 
 So a payload that code feeds the reactive engine is queued, answered once it is queued, and delivered after the code
-that fed it, in the order it was fed. That holds for `accept`, `acceptIfLive` and `acceptReportingDelivery`, and
-`acceptIfLive` decides whether the handover is live the same way it does for any other caller. This is what a
+that fed it, in the order it was fed. That holds for `accept` and `acceptReportingDelivery`. `acceptIfLive` answers
+`true` only for a payload that has been delivered, so called from that code it refuses the payload with a
+`PreDispatchRefusalException` instead, live or not, and queues nothing.
+[ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md) says why. This is what a
 subscription handler gets when it writes to the in-memory event store, or calls `accept` and subscribes to it without
 waiting.
 
