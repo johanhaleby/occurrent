@@ -31,9 +31,12 @@ package org.occurrent.subscription;
  * <p>
  * {@code maxBufferedEvents} is a fail-loud cap, not a throttle. On the blocking stack it caps the live events waiting
  * while the handover is not live, before a catch-up has taken it live and while a replay runs. On the reactor stack it
- * caps every live event taken in and not yet delivered, so it also applies once the handover is live, when delivery
- * falls behind the live feed. Reaching it refuses the next live event rather than letting the buffer grow without
- * bound. On the blocking stack the call that reached it throws.
+ * caps every live event taken in whose delivery has not ended, the one being delivered included, and the events a
+ * replay's folds fed until they are delivered. So it also applies once the handover is live, when delivery falls
+ * behind the live feed. Reaching it refuses the next live event rather than letting the buffer grow without bound. On
+ * the blocking stack the call that reached it throws. On the reactor stack the same number also caps events fed from
+ * folds of events that were themselves fed from a fold. An event fed more than this many levels below an event fed
+ * from outside or replayed is refused.
  * <p>
  * Which calls reach the cap differs by stack. On the blocking stack only the calls that wait or buffer reach it,
  * {@code accept(..)} and {@code acceptAndWait(..)}, since {@code acceptOrDefer(..)} returns {@code DEFERRED} while the
@@ -54,7 +57,8 @@ package org.occurrent.subscription;
  * @param dedupCacheSize    Recently delivered event ids retained to de-duplicate the replay-to-live overlap, per
  *                          cache, of which a handover keeps two.
  * @param maxBufferedEvents Cap on live events waiting to be delivered before failing loud. On the blocking stack it
- *                          applies while the handover is not live, and on the reactor stack also once it is live.
+ *                          applies while the handover is not live, and on the reactor stack also once it is live,
+ *                          where it counts the event being delivered too.
  */
 public record CatchupThenLiveOptions(int dedupCacheSize, int maxBufferedEvents) {
 

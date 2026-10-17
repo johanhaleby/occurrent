@@ -208,13 +208,33 @@ delivery waited forever, live and during a replay. The engine's own code here is
 So a payload that code feeds the reactive engine is queued, answered once it is queued, and delivered after the code
 that fed it, in the order it was fed. That holds for `accept` and `acceptReportingDelivery`. `acceptIfLive` answers
 `true` only for a payload that has been delivered, so called from that code it refuses the payload with a
-`PreDispatchRefusalException` instead, live or not, and queues nothing.
+`PreDispatchRefusalException` instead, live or not, and queues nothing. That refusal goes to that call only. The
+payload whose fold made the call is not failed with it, and a catch-up fails only when the fold passes it on.
 [ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md) says why. This is what a
 subscription handler gets when it writes to the in-memory event store, or calls `accept` and subscribes to it without
 waiting.
 
-Nobody waits for such a payload once it is queued, so when its delivery fails there is no caller left to tell. The
-handover then starts failing. A failed catch-up starts it failing the same way, whether the replay, the marker read or
+The call that fed such a payload is answered once the payload is queued, so the outcome of its delivery goes to whatever
+waits for the code that made the call. A payload counts as fed from the fold of a payload E when it is offered on the thread running E's fold, or its `Mono` is
+part of the `Mono` that fold returns. One offered on that thread and subscribed on another counts too, as long as E's
+answer is still open, or for a replayed E, until the catch-up has delivered what its replay fed. A payload fed from the fold of a payload fed from E's fold counts as fed from E's fold as well. One
+offered on another thread after the fold has handed its work off is a call from outside, answered to whatever
+subscribed it.
+
+* When E came from outside, E's answer waits for every payload fed from E's fold. The first failure or refusal among
+  them errors E's answer, and E's key is not recorded, so offering E again delivers it again. A payload fed more than
+  `maxBufferedEvents` levels below E is refused, which errors E's answer too. `acceptIfLive` never waits for a replay,
+  so it answers `false` when a replay holds back a payload fed from E's fold. E's key is still recorded once those
+  are delivered.
+* When E was replayed, or the payload was fed from `replayStarted`, `replayCompleted` or the `historyDone` of a
+  catch-up that replays, the payload is delivered after `historyDone` and before the marker. When one of them fails or
+  is refused, even when the fold that fed it swallowed the error, the rest are still delivered and then the catch-up
+  fails. No marker is written, and the next catch-up replays the history that fed it. A replay that is stopped or
+  fails before that hands them to the live sink.
+* Nobody waits for a payload fed from any other callback, such as `replayAbandoned`, or from the fold of a payload fed
+  from there. When its delivery fails there is no caller left to tell, and the handover starts failing.
+
+A failed catch-up starts the handover failing the same way, whether the replay, the marker read or
 the marker write failed, because a payload its own code queued before that failure was answered too. The handover
 first tells the source whose catch-up failed and the source whose catch-up delivers live to forget the catch-up
 marker, so a caller that sees a refusal and starts a new catch-up gets a replay. A forget that errors is retried 3 times, and after that
@@ -228,9 +248,10 @@ as described further down. A later failure is logged while the rest are still de
 
 So every payload the handover answered once it was queued gets its delivery attempt before the handover fails for
 good, whatever made it fail. Once the marker is gone, the catch-up of the subscription or feed that replaces it
-replays the history, and with it every failed event the store holds. A payload that no replay can bring back is lost
-only when its own delivery failed. In 0.33.0 that failure went to a `Mono` the feeding code had subscribed and not
-waited for, so the payload was lost there too.
+replays the history, and with it every failed event the store holds. A payload that no replay can bring back and
+nobody waits for is lost when its delivery fails, or when the process stops before it is delivered. In 0.33.0 the
+failure of a payload fed from the engine's own code went to a `Mono` the feeding code had subscribed and not waited
+for, so that payload was lost there too.
 
 The engine recognizes these calls when their `Mono` is subscribed, the way it recognizes a `goLive()`. A view that
 blocks on the call from a thread it switched to is not recognized either, and it waits for a delivery that cannot

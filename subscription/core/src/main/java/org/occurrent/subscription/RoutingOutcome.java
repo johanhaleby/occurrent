@@ -84,6 +84,9 @@ public enum RoutingOutcome {
      * running, say. That refusal clears on its own once the replay drains, so it is a failure to report rather than
      * a reason to stop. A refusal the action does promise is permanent reports {@link #REFUSED} instead. A push
      * model's {@code acceptOrDefer(..)} returns this refusal without throwing its cause.
+     * <p>
+     * On the reactor stack a catch-up-then-live engine also reports this outcome after its handler has run, when it
+     * refused an event that handler fed back into the same engine while handling the reported event.
      */
     NOT_DELIVERABLE,
 
@@ -94,6 +97,11 @@ public enum RoutingOutcome {
      * arbitrarily many times, though a target that is stopped rather than merely replaying needs an operator to
      * restart it, redelivery alone will not resolve that case. Each attempt is evaluated fresh and the underlying
      * engine skips what it has already applied.
+     * <p>
+     * On the reactor stack a catch-up-then-live engine also reports this outcome after its handler has run, when a
+     * replay holds back an event that handler fed back into the same engine while handling the reported event. The
+     * engine records the reported event as applied once the events fed back are applied, so a redelivery after that
+     * does not run the handler again.
      */
     DEFERRED,
 
@@ -118,6 +126,10 @@ public enum RoutingOutcome {
      * parking, discarding or redelivering. Recovery is a lifecycle action, cancelling the subscription and
      * subscribing again, or building a new projection feed. A refusal that can clear on its own reports
      * {@link #NOT_DELIVERABLE} instead, so this outcome alone is enough to decide on.
+     * <p>
+     * On the reactor stack a catch-up-then-live engine also reports this outcome after its handler has run, when it
+     * refused an event that handler fed back into the same engine while handling the reported event, and its refusal
+     * is permanent.
      */
     REFUSED;
 

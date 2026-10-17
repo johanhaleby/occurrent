@@ -63,7 +63,8 @@ import java.util.function.Predicate;
  * {@link RoutingOutcome#DEFERRED}, the listener does not acknowledge the message and has the broker deliver it again,
  * as {@link RoutingOutcome.Disposition#HOLD} describes. Not acknowledging is not enough on its own. Once the projection
  * is live, {@link #acceptOrDefer(Object)} errors rather than completing with {@link RoutingOutcome#DEFERRED} when the
- * queue of live events waiting for the fold is full, see {@link CatchupProjectionFeed#acceptOrDefer(Object)}.
+ * live events taken in and not yet folded, the one being folded included, reach
+ * {@link CatchupThenLiveOptions#maxBufferedEvents()}, see {@link CatchupProjectionFeed#acceptOrDefer(Object)}.
  * <p>
  * <strong>One feed feeds one projection</strong>, and a second {@link #register} is refused. The acknowledgement is
  * what forces it: the listener has exactly one decision per received message, so several projections on one feed would
@@ -203,11 +204,13 @@ public final class DomainEventFeed<E> {
 
     /**
      * Feed a live domain event to the registered projection. Called by a listener, the returned {@link Mono} completes
-     * once the projection has handled it, so the listener can acknowledge after processing. Before the projection goes
-     * live it completes only once the catch-up has folded the event, and errors when it does not fold it, a stopped or
-     * failed catch-up say. Called from inside the registered projection's fold or a callback this feed runs, it
-     * completes once the event is queued, before the event is folded, so that completion is no point to acknowledge at,
-     * see {@link CatchupProjectionFeed#acceptAndWait(Object)}.
+     * once the projection has folded it, and every event fed from its fold, so the listener can acknowledge after
+     * processing. It errors when one of those fails or is refused. {@link CatchupProjectionFeed#acceptAndWait(Object)}
+     * says which events count as fed from the fold. Before the projection goes live it completes only once the
+     * catch-up has folded the event, and errors when it does not fold it, a stopped or failed catch-up say. Called from
+     * inside the registered projection's fold or a callback this feed runs, it completes once the event is queued,
+     * before the event is folded, so that completion is no point to acknowledge at, see
+     * {@link CatchupProjectionFeed#acceptAndWait(Object)}.
      * <p>
      * The returned {@link Mono} fails with an {@link IllegalStateException} when no projection is registered. Refused
      * rather than completed empty, because the listener acknowledges on completion and the broker discards what it
@@ -235,15 +238,17 @@ public final class DomainEventFeed<E> {
 
     /**
      * Feed a live domain event to the registered projection without waiting for its catch-up. The returned
-     * {@link Mono} completes with {@link RoutingOutcome#DELIVERED} once the event is folded, and with
-     * {@link RoutingOutcome#DEFERRED} right away while the projection is not live, without keeping the event anywhere.
-     * It never waits for a replay, see {@link CatchupProjectionFeed#acceptOrDefer(Object)}. Acknowledge the message on
-     * {@link RoutingOutcome#DELIVERED}. On {@link RoutingOutcome#DEFERRED}, have the broker deliver it again, as
-     * {@link RoutingOutcome.Disposition#HOLD} describes. No {@link Filter} is applied, the same as for
-     * {@link #acceptAndWait(Object)}.
+     * {@link Mono} completes with {@link RoutingOutcome#DELIVERED} once the event is folded, and every event fed from
+     * its fold, and with {@link RoutingOutcome#DEFERRED} right away while the projection is not live, without keeping
+     * the event anywhere. It never waits for a replay, so it also completes with {@link RoutingOutcome#DEFERRED} when a
+     * replay holds back an event fed from the fold, see {@link CatchupProjectionFeed#acceptOrDefer(Object)}.
+     * Acknowledge the message on {@link RoutingOutcome#DELIVERED}. On {@link RoutingOutcome#DEFERRED}, have the broker
+     * deliver it again, as {@link RoutingOutcome.Disposition#HOLD} describes. No {@link Filter} is applied, the same
+     * as for {@link #acceptAndWait(Object)}.
      * <p>
      * Once the projection is live the returned {@link Mono} can error with an {@link IllegalStateException} when the
-     * queue of live events waiting for the fold is full. It also errors when the projection's catch-up has failed, and
+     * live events taken in and not yet folded, the one being folded included, reach
+     * {@link CatchupThenLiveOptions#maxBufferedEvents()}. It also errors when the projection's catch-up has failed, and
      * when no projection is registered, for the reason {@link #acceptAndWait(Object)} gives. Do not acknowledge the
      * message on any of these errors, and have the broker deliver it again, as {@link RoutingOutcome.Disposition#HOLD}
      * describes. Called from inside the registered projection's fold or a callback this feed runs, it errors with an
@@ -326,9 +331,12 @@ public final class DomainEventFeed<E> {
      * the returned {@link Mono} completes with {@link RoutingOutcome#DEFERRED} right away, never waiting on a
      * replay or a drain that might resolve it only much later. A replay that starts while the event is being handed
      * over, or after it was queued and before its fold started, makes it complete with
-     * {@link RoutingOutcome#DEFERRED} too, and the event is not kept. Redelivering a {@link RoutingOutcome#DEFERRED} event is always safe. The
-     * attempt that reported it was never accepted in the first place, nothing here folded it, so retrying is safe
-     * until it completes with {@link RoutingOutcome#DELIVERED}, the same way a caller with nowhere else to
+     * {@link RoutingOutcome#DEFERRED} too, and the event is not kept. So does a replay that holds back an event fed
+     * from the fold of a matching event that was already folded. Redelivering a {@link RoutingOutcome#DEFERRED} event
+     * is always safe. The attempt that reported it either folded nothing or folded an event whose id this feed records
+     * once the events fed from its fold are folded, so a redelivery after that completes with
+     * {@link RoutingOutcome#DELIVERED} without folding it again. Retrying is safe until it completes with
+     * {@link RoutingOutcome#DELIVERED}, the same way a caller with nowhere else to
      * redeliver from, {@link #goLive(String)} exists precisely for a registration whose events are not in the local
      * store, gets the same outcome either way, since this feed has no way to know in advance which kind of
      * registration it is fielding an event for. That safety does not extend past a genuine
@@ -353,7 +361,8 @@ public final class DomainEventFeed<E> {
      * {@link #acceptAndWait(Object)} and {@link #acceptAndWait(EventMetadata, Object)}.
      * <p>
      * Fails with an {@link IllegalStateException} for a matching event when the projection's catch-up has failed, and,
-     * once the projection is live, when the queue of live events waiting for the fold is full, see
+     * once the projection is live, when the live events taken in and not yet folded, the one being folded included,
+     * reach {@link CatchupThenLiveOptions#maxBufferedEvents()}, see
      * {@link CatchupProjectionFeed#acceptOrDefer(Object)}. Do not acknowledge the message then, and have the broker
      * deliver it again, as {@link RoutingOutcome.Disposition#HOLD} describes.
      * <p>
@@ -503,7 +512,8 @@ public final class DomainEventFeed<E> {
      * An error on the returned {@link Mono} is terminal for this feed, so let it reach the caller and do not start the
      * application. The projection rejects every later event afterwards. Unlike a subscription model, the feed does not
      * drop it: the application asked for this projection, so running on without it is worse than not running. Fix the
-     * cause and build a new feed.
+     * cause and build a new feed. It also errors when an event the projection fed during the replay fails or is
+     * refused, as {@link CatchupProjectionFeed#catchUp()} describes.
      * <p>
      * A call the projection makes while this feed is calling it completes once the catch-up has been asked for,
      * without waiting for the replay. {@link CatchupProjectionFeed#catchUp()} says which calls those are, and what a

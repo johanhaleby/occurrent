@@ -642,11 +642,14 @@ public class OccurrentProperties {
              * A fail-loud ceiling on events from the push feed that wait to be delivered, not a throttle. Defaults to
              * 100000. On the blocking stack it counts the events buffered while the subscription is not live, before
              * its catch-up has taken it live and while a replay runs. On the reactor stack it counts every event taken
-             * in and not yet delivered, so it also applies once the subscription is live, when delivery falls behind
-             * the feed. Reaching it reports the overflow rather than dropping events or letting the buffer grow
-             * without bound. The blocking stack throws from the failing feed call. On the reactor stack the Mono
-             * that {@code accept(..)} returned for that event errors, and the one from {@code acceptOrDefer(..)}
-             * completes with {@code NOT_DELIVERABLE}. Raise it for a large history behind a busy feed.
+             * in whose delivery has not ended, the one being delivered included, so it also applies once the
+             * subscription is live, when delivery falls behind the feed. There it also refuses an event a handler
+             * writes more than this many levels below an event from outside or a replayed event, each level written
+             * by the handler of the one above. Reaching it reports the overflow rather than dropping events or
+             * letting the buffer grow without bound. The blocking stack throws from the failing feed call. On the
+             * reactor stack the Mono that {@code accept(..)} returned for that event errors, and the one from
+             * {@code acceptOrDefer(..)} completes with {@code NOT_DELIVERABLE}. Raise it for a large history behind a
+             * busy feed.
              */
             private Integer maxBufferedEvents;
 

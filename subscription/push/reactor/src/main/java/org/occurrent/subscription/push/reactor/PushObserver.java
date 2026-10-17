@@ -39,7 +39,10 @@ import org.occurrent.subscription.RoutingOutcome;
  * completes or errors, apart from the {@link Error} named above, which reports nothing at all. With a
  * {@link CatchupThenPushSubscriptionModel} in front, an event written from inside its handler is reported
  * {@link RoutingOutcome#DELIVERED} once it is queued, before the handler has run for it. It is queued behind that
- * handler, or behind the whole replay when a replayed event's handler wrote it.
+ * handler. When a replayed event's handler wrote it and the replay reads the whole history, it is applied after the
+ * rest of the history and before the catch-up writes its marker. When that model refuses an event the handler wrote,
+ * the event the handler was running for is reported {@link RoutingOutcome#NOT_DELIVERABLE} or
+ * {@link RoutingOutcome#REFUSED}, although its action ran.
  * It is {@link RoutingOutcome#FILTERED} when that
  * same subscription evaluated the event and declined it, and {@link RoutingOutcome#UNAVAILABLE} when there was
  * no running, unpaused subscription for the event to reach at all, whether because nothing is registered, the model

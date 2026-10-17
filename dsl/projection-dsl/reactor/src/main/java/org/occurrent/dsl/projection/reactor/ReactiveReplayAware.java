@@ -45,8 +45,10 @@ public interface ReactiveReplayAware {
 
     /**
      * The replay finished delivering every event; anything buffered since {@link #replayStarted()} must be written
-     * before the returned {@link Mono} completes, because the driver records the catch-up complete immediately
-     * afterwards.
+     * before the returned {@link Mono} completes, because the driver records the catch-up complete afterwards. Before
+     * it does, it folds the events this call, {@link #replayStarted()} and the replayed folds fed it. When one of
+     * those fails or is refused, the catch-up fails and is not recorded complete, see
+     * {@link CatchupProjectionFeed#catchUp()}.
      */
     Mono<Void> replayCompleted();
 

@@ -902,11 +902,18 @@ stays as a deprecated method that calls it. The push models' method has the same
 `acceptOrDefer` does, or `FILTERED` for an event the registered filter does not match.
 
 `DELIVERED` from either feed means the event's fold, the projection function that applies it, has completed before the
-answer, in this call or in an earlier delivery of the same event. On the reactor stack a call from inside the
-projection's own fold could only answer once the event is queued, because the feed folds one event at a time.
-`ReactiveHandover.acceptIfLive` therefore refuses any call from its own code with
+answer, in this call or in an earlier delivery of the same event. On the reactor stack it also means every event fed
+from that fold has been folded, which
+[ADR 137](0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md) defines. When a replay holds one
+of those back, the call reports `DEFERRED` instead of waiting, and the event is recorded as folded once they are. When
+one of them fails or is refused, the call errors, or on the reactor `CatchupThenPushSubscriptionModel` reports the
+refusal as `NOT_DELIVERABLE` or `REFUSED`, even though the event's own handler ran.
+
+On the reactor stack a call from inside the projection's own fold could only answer once the event is queued, because
+the feed folds one event at a time. `ReactiveHandover.acceptIfLive` therefore refuses any call from its own code with
 `ReactiveHandover.PreDispatchRefusalException`, live or not, and the reactor `CatchupThenPushSubscriptionModel` reports
-that refusal as `NOT_DELIVERABLE`. `refusesPermanently()` stays false, so neither a source that stops on `REFUSED` nor a
+that refusal as `NOT_DELIVERABLE`. The refusal goes to that call only, and the event whose fold made the call is not
+failed with it. `refusesPermanently()` stays false, so neither a source that stops on `REFUSED` nor a
 domain source that stops on a feed refusing permanently stops for it. The blocking feed folds such a call on the calling
 thread before it returns, so it needs no refusal.
 
