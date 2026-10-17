@@ -49,6 +49,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -1471,6 +1472,44 @@ class ReactiveHandoverTest {
         handover.stopIfNotCatchingUp();
 
         assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with once the handover stopped")
+                .cause()
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+        assertThat(delivered).isEmpty();
+    }
+
+    // The source throws a checked exception it does not declare, as a source written in Kotlin can. The catch-up that
+    // threw has to give its count back all the same, or the stop finds a catch-up still running and leaves the payload
+    // to it.
+    @Test
+    void a_stop_after_a_catch_up_whose_source_threw_a_checked_exception_when_asked_whether_it_is_caught_up_errors_a_waiting_accept() {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        IOException thrown = new IOException("marker unreadable");
+        ReactiveHandover.Source<String> source = new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown);
+                return Mono.just(false);
+            }
+
+            @Override
+            public Flux<String> replay() {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                return Mono.empty();
+            }
+        };
+        CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+        assertThat(catchThrowable(() -> handover.catchUp(source))).as("what the catch-up threw").isSameAs(thrown);
+
+        handover.stopIfNotCatchingUp();
+
+        assertThat(catchThrowable(() -> accepted.get(5, TimeUnit.SECONDS))).as("what accept(..) ended with once the handover stopped")
+                .isInstanceOf(ExecutionException.class)
                 .cause()
                 .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
                 .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
@@ -3201,6 +3240,57 @@ class ReactiveHandoverTest {
         assertThatALaterPayloadIsRefusedFor(handover, "bad3");
     }
 
+    // The drain of the second catch-up counts L0, which is being folded, and L1, which waits behind it. The third
+    // catch-up holds live delivery back once L0 is folded and fails to fold bad1, and that failure claims L1, which ends
+    // the drain. Its liveDrained() throws a checked exception it does not declare, as a source written in Kotlin can,
+    // and L1 and the failed catch-up still have to be answered.
+    @Test
+    void a_source_whose_live_drained_throws_a_checked_exception_when_a_failing_catch_up_claims_the_payloads_it_buffered_leaves_none_of_them_unanswered() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingL0 = new CountDownLatch(1);
+        CountDownLatch releaseL0 = new CountDownLatch(1);
+        IOException thrown = new IOException("live drained failed");
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("L0", self -> Mono.fromRunnable(() -> {
+            foldingL0.countDown();
+            awaitQuietly(releaseL0);
+        })));
+        try {
+            StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+            CompletableFuture<Void> l0 = handover.accept("L0").subscribeOn(Schedulers.boundedElastic()).toFuture();
+            assertThat(foldingL0.await(5, TimeUnit.SECONDS)).isTrue();
+            CompletableFuture<Void> l1 = handover.accept("L1").toFuture();
+            CountDownLatch told = new CountDownLatch(1);
+            FakeSource buffering = source(List.of(), true);
+            buffering.onLiveDrained = () -> {
+                told.countDown();
+                ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown);
+            };
+            StepVerifier.create(handover.catchUp(buffering)).expectNext(true).verifyComplete();
+            CountDownLatch replayWaiting = new CountDownLatch(1);
+            FakeSource failing = source(List.of("bad1"), false);
+            failing.onCaughtUpChecked = replayWaiting::countDown;
+            CompletableFuture<Boolean> failedCatchUp = handover.catchUp(failing).toFuture();
+            assertThat(replayWaiting.await(5, TimeUnit.SECONDS)).isTrue();
+
+            releaseL0.countDown();
+
+            assertThat(told.await(5, TimeUnit.SECONDS)).as("the source was told its buffer drained").isTrue();
+            assertThat(catchThrowable(() -> failedCatchUp.get(5, TimeUnit.SECONDS))).as("what the failing catch-up ended with")
+                    .isInstanceOf(ExecutionException.class)
+                    .hasRootCauseMessage("fold failed for bad1");
+            assertThat(catchThrowable(() -> l1.get(5, TimeUnit.SECONDS))).as("what accept(L1) ended with")
+                    .isInstanceOf(ExecutionException.class)
+                    .cause()
+                    .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                    .hasMessage(HandoverMessages.catchUpFailed("test payload"))
+                    .hasRootCauseMessage("fold failed for bad1");
+            l0.get(5, TimeUnit.SECONDS);
+            assertThat(log).containsExactly("L0");
+        } finally {
+            releaseL0.countDown();
+        }
+    }
+
     // The marker read fails while L1's fold, which fed N1, is still running, so N1 is queued when the handover starts
     // failing. The marker is forgotten, so the catch-up of whatever replaces the handover replays the history.
     @Test
@@ -3979,6 +4069,37 @@ class ReactiveHandoverTest {
         assertThatTheCatchUpFailedWith(outcome, thrown);
     }
 
+    // Reactor rethrows a JVM-fatal error from a key function rather than signal it, so the failure recorded for the
+    // catch-up is what keeps it from writing its marker, and what K is answered with.
+    @Test
+    void a_payload_a_replayed_fold_feeds_and_subscribes_elsewhere_whose_key_function_throws_a_no_class_def_found_error_fails_the_catch_up_and_writes_no_marker() {
+        NoClassDefFoundError thrown = new NoClassDefFoundError("Lcom/example/KeyClass;");
+
+        JvmFatalKeyFailureOutcome outcome = catchUpOfAFoldFeedingAPayloadWhoseKeyFunctionThrowsAJvmFatalError(thrown, true);
+
+        assertThat(outcome.catchUp().getThrowable()).as("what the catch-up ended with").isSameAs(thrown);
+        assertThat(outcome.source().markCaughtUpCallCount()).as("the marker for a replay that fed a payload never folded").isZero();
+        assertThat(outcome.log()).as("what was folded").containsExactly("R1");
+        assertThat(catchThrowable(() -> outcome.fed().get(5, TimeUnit.SECONDS))).as("what accept(K) ended with once the catch-up failed")
+                .isInstanceOf(ExecutionException.class)
+                .cause()
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.catchUpFailed("test payload"))
+                .hasRootCause(thrown);
+    }
+
+    @Test
+    void a_payload_a_replayed_fold_feeds_and_subscribes_on_its_own_thread_whose_key_function_throws_an_initializer_error_fails_the_catch_up_although_the_fold_swallows_it() {
+        ExceptionInInitializerError thrown = new ExceptionInInitializerError("static initializer failed");
+
+        JvmFatalKeyFailureOutcome outcome = catchUpOfAFoldFeedingAPayloadWhoseKeyFunctionThrowsAJvmFatalError(thrown, false);
+
+        assertThat(outcome.swallowed()).as("what feeding K threw at the fold").containsExactly(thrown);
+        assertThat(outcome.catchUp().getThrowable()).as("what the catch-up ended with").isSameAs(thrown);
+        assertThat(outcome.source().markCaughtUpCallCount()).as("the marker for a replay that fed a payload never folded").isZero();
+        assertThat(outcome.log()).as("what was folded").containsExactly("R1");
+    }
+
     // The key function of K returns only after the catch-up has logged that it waits for it, and then a while longer,
     // so a warning repeated on every look of the catch-up would show up as more than one. K is still folded and the
     // marker written when the key function returns.
@@ -4223,6 +4344,53 @@ class ReactiveHandoverTest {
         Signal<Boolean> catchUp = handover.catchUp(source).materialize().block(Duration.ofSeconds(10));
 
         return new KeyFailureOutcome(catchUp, refusals, log, source);
+    }
+
+    private record JvmFatalKeyFailureOutcome(Signal<Boolean> catchUp, CompletableFuture<Void> fed, List<Throwable> swallowed,
+                                             List<String> log, FakeSource source) {
+    }
+
+    // The fold of R1 feeds K, whose key function throws a JVM-fatal error, and swallows whatever feeding K throws at it.
+    // It waits a bounded while for K to be answered and goes on without it, since that answer may never come.
+    private static JvmFatalKeyFailureOutcome catchUpOfAFoldFeedingAPayloadWhoseKeyFunctionThrowsAJvmFatalError(Throwable thrown, boolean subscribedElsewhere) {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Throwable> swallowed = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> fed = new CompletableFuture<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.defer(() -> switch (payload) {
+            case "R1" -> Mono.fromRunnable(() -> {
+                CountDownLatch answered = new CountDownLatch(1);
+                Mono<Void> feeding = self.get().accept("K");
+                if (subscribedElsewhere) {
+                    feeding = feeding.subscribeOn(Schedulers.boundedElastic());
+                }
+                try {
+                    feeding.subscribe(queued -> {}, error -> {
+                        fed.completeExceptionally(error);
+                        answered.countDown();
+                    }, () -> {
+                        fed.complete(null);
+                        answered.countDown();
+                    });
+                } catch (Throwable fatal) {
+                    swallowed.add(fatal);
+                }
+                countsDownWithin(answered, Duration.ofSeconds(1));
+                log.add("R1");
+            });
+            default -> Mono.fromRunnable(() -> log.add(payload));
+        }), payload -> {
+            if (payload.equals("K")) {
+                ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown);
+            }
+            return payload;
+        }, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        FakeSource source = source(List.of("R1"), false);
+
+        Signal<Boolean> catchUp = handover.catchUp(source).materialize().block(Duration.ofSeconds(10));
+
+        return new JvmFatalKeyFailureOutcome(catchUp, fed, swallowed, log, source);
     }
 
     private static void assertThatTheCatchUpFailedWith(KeyFailureOutcome outcome, Throwable thrown) {

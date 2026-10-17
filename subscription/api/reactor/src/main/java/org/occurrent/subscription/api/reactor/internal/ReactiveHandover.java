@@ -818,6 +818,12 @@ public final class ReactiveHandover<T, K> {
         } catch (Throwable keyFailure) {
             // Throwable, because a key function written in Kotlin can throw a checked exception without declaring it,
             // and an error that got past here was never recorded on the replay feed the payload came from
+            if (owner instanceof ReplayFold fold) {
+                // Recorded before a JVM-fatal error leaves, since the fold can swallow what it throws, and the catch-up
+                // would then write its marker for a payload that was never folded. The answer is not sent, because
+                // Reactor throws a JVM-fatal error rather than signal it, and the catch-up failing answers it.
+                fold.feed().failed(keyFailure);
+            }
             Exceptions.throwIfJvmFatal(keyFailure);
             refuse(ack, keyFailure, owner);
             return;
@@ -1018,13 +1024,16 @@ public final class ReactiveHandover<T, K> {
 
     // Nothing a source does here reaches the caller whose payload ended the drain. Its acknowledgement is still owed
     // and the offers behind it still have to be taken to the sink, and on the delivery path the pipeline drops what
-    // is thrown from a doFinally anyway, so a throwing callback is logged rather than carried out of here. The turn
-    // goes back either way.
+    // is thrown from a doFinally anyway, so a throwing callback is logged rather than carried out of here, unless what
+    // it threw is JVM-fatal. The turn goes back either way.
     private void tellDrainedSources(List<Drain<T>> exhausted) {
         for (Drain<T> drain : exhausted) {
             try {
                 runAsOwnCode(drain.source()::liveDrained);
-            } catch (RuntimeException | Error e) {
+            } catch (Throwable e) {
+                // Throwable, because a source written in Kotlin can throw a checked exception without declaring it,
+                // and one that got past here left the acknowledgements already claimed unanswered
+                Exceptions.throwIfJvmFatal(e);
                 log.error("The catch-up-then-live handover for this {} failed while telling a source that the live "
                         + "payloads buffered during its catch-up had been delivered. They were delivered, and the "
                         + "handover goes on running.", noun, e);
@@ -1213,10 +1222,12 @@ public final class ReactiveHandover<T, K> {
         }
         try {
             return startCountedCatchUp(source, failedForGoodBefore, counted);
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
+            // Throwable, because a source written in Kotlin can throw a checked exception without declaring it, and
+            // one that got past here kept this catch-up counted, so no later stop took effect
             try {
                 catchUpThrew(counted, stoppedWhenCounted);
-            } catch (RuntimeException | Error answering) {
+            } catch (Throwable answering) {
                 e.addSuppressed(answering);
             }
             throw e;
