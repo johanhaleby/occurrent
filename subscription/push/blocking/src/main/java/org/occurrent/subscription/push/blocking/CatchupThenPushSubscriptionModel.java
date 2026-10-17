@@ -91,7 +91,8 @@ import java.util.stream.Stream;
  *         <li>Fed from a broker, the listener calls {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} and
  *             acknowledges the message only when the outcome it returns is
  *             {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
- *             {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. During the replay it refuses the event instead of buffering it, so the broker delivers it again, and a delivery
+ *             {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. During the replay it refuses the event instead of buffering it, so the listener has the broker deliver it
+ *             again, as {@link org.occurrent.subscription.RoutingOutcome.Disposition#HOLD} describes, and a delivery
  *             after this model has gone live applies it. Once the catch-up has failed it returns
  *             {@link org.occurrent.subscription.RoutingOutcome#REFUSED} for every event, and the listener stops.
  *             Delivery is at-least-once, so applying the same event twice

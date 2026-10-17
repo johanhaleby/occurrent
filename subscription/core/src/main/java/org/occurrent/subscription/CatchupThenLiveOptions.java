@@ -29,19 +29,32 @@ package org.occurrent.subscription;
  * twice what the number alone suggests
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
  * <p>
- * {@code maxBufferedEvents} is a fail-loud cap, not a throttle. Reaching it means the replay is not keeping up with the
- * live feed at all, so the next live event is refused with an exception rather than the buffer growing without bound.
- * What that costs depends on what feeds the buffer. A broker listener that calls a {@code CatchupProjectionFeed}'s
- * {@code accept} and does not acknowledge the message when it throws gets the message delivered again. A
- * {@code CatchupThenPushSubscriptionModel}'s buffer is fed only by {@code accept(..)}, since
- * {@code acceptOrDefer(..)} refuses rather than buffers, and {@code accept(..)} is supported only from the
- * in-memory event store's write path. There the write call throws although the store has kept the event. The push
- * model's {@code accept(Iterable)} stops at that event, so it routes none of the write's later events either, and
- * the subscription can miss all of them.
+ * {@code maxBufferedEvents} is a fail-loud cap, not a throttle. On the blocking stack it caps the live events waiting
+ * while the handover is not live, before a catch-up has taken it live and while a replay runs. On the reactor stack it
+ * caps every live event taken in and not yet delivered, so it also applies once the handover is live, when delivery
+ * falls behind the live feed. Reaching it refuses the next live event rather than letting the buffer grow without
+ * bound. On the blocking stack the call that reached it throws.
+ * <p>
+ * Which calls reach the cap differs by stack. On the blocking stack only the calls that wait or buffer reach it,
+ * {@code accept(..)} and {@code acceptAndWait(..)}, since {@code acceptOrDefer(..)} returns {@code DEFERRED} while the
+ * handover is not live and buffers nothing. On the reactor stack {@code acceptOrDefer(..)} returns {@code DEFERRED}
+ * only while the handover is not live or is paused for a replay. Once the handover is live, its events count toward
+ * the cap like any other live event. Reaching the cap errors the returned {@code Mono}, except that a push model's
+ * {@code acceptOrDefer(..)} completes it with {@code NOT_DELIVERABLE} instead.
+ * <p>
+ * What reaching it costs depends on who made the call. A broker listener does not acknowledge the message when its
+ * call throws or its {@code Mono} errors, and has the broker deliver it again, as
+ * {@link RoutingOutcome.Disposition#HOLD} describes. A push model's
+ * {@code NOT_DELIVERABLE} goes to the listener's own failure policy instead. A
+ * {@code CatchupThenPushSubscriptionModel}'s {@code accept(..)} is supported only from the in-memory event store's
+ * write path. There the write call throws although the store has kept the event. The push model's
+ * {@code accept(Iterable)} stops at that event, so it routes none of the write's later events either, and the
+ * subscription can miss all of them.
  *
  * @param dedupCacheSize    Recently delivered event ids retained to de-duplicate the replay-to-live overlap, per
  *                          cache, of which a handover keeps two.
- * @param maxBufferedEvents Cap on events buffered from the live feed during the catch-up replay before failing loud.
+ * @param maxBufferedEvents Cap on live events waiting to be delivered before failing loud. On the blocking stack it
+ *                          applies while the handover is not live, and on the reactor stack also once it is live.
  */
 public record CatchupThenLiveOptions(int dedupCacheSize, int maxBufferedEvents) {
 

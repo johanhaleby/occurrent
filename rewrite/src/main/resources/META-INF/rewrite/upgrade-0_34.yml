@@ -55,7 +55,7 @@ description: >-
   and its fix. See section 3 of doc/migration/upgrading-to-0.34.0.md for the manual steps.
   Also renames accept(..) to acceptAndWait(..) on the blocking and reactor DomainEventFeed and
   CatchupProjectionFeed. The deprecated accept(..) forwards to acceptAndWait(..), so code that called accept(..) runs the
-  same as before. A listener whose broker delivers an unacknowledged message again can call acceptOrDefer(..) instead,
+  same as before. A listener that can have the broker deliver a message again can call acceptOrDefer(..) instead,
   which section 12 of doc/migration/upgrading-to-0.34.0.md describes.
 recipeList:
   - org.occurrent.MigrateSagaJoinToStepCondition_0_34

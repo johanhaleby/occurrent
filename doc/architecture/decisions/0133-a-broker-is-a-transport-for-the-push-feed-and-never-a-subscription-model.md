@@ -910,14 +910,14 @@ that refusal as `NOT_DELIVERABLE`. `refusesPermanently()` stays false, so neithe
 domain source that stops on a feed refusing permanently stops for it. The blocking feed folds such a call on the calling
 thread before it returns, so it needs no refusal.
 
-Without waiting means the call never waits for a replay and never runs one on the calling thread. A replay can start between
+Without waiting means the call never waits for a replay and never runs one itself. A replay can start between
 the reactor live check and the hand-over, or after the event was queued and before its fold started. The reactor
 handover checks for a replay under the same lock it queues under, and a replay that starts takes every event from
 `acceptIfLive` that is not being folded yet back out of the queue and answers it as not live, so the call reports
 `DEFERRED`. The replay then runs on a scheduler thread, and does not start on the thread that folded an event inline for
 the call until that inline fold has returned. On the blocking stack a fold that asks for a catch-up during `acceptIfLive`
-used to have that replay run on the calling thread before the call returned. That replay now runs on a virtual thread
-the call starts before it returns, or on the thread that asked for it first, when that is another thread.
+used to have that replay run on the calling thread before the call returned. That call no longer runs it.
+`BlockingHandover.catchUp` says which thread runs it instead, and when it does not run at all.
 
 ## Amendment (2026-08-21): a permanent catch-up refusal stops a source, and a lifecycle `NOT_DELIVERABLE` is paced, not failed
 

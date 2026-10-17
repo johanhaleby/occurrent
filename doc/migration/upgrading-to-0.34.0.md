@@ -1152,8 +1152,10 @@ Run the catch-up on a thread of its own, or feed the event once the catch-up has
 
 In 0.33.0 a stopped feed and a second delivery of an event still being applied both returned normally, so the
 listener acknowledged an event that nothing had applied. Do not acknowledge the message when `acceptAndWait(..)` throws,
-and the broker delivers it again. A listener that acknowledges only after `acceptAndWait(..)` returns, and lets an
-exception reach the broker client, needs no change.
+and have the broker deliver it again. Not acknowledging is not enough on its own, and the javadoc of
+`RoutingOutcome.Disposition.HOLD` says what RabbitMQ and Kafka need instead. A listener that acknowledges only after
+`acceptAndWait(..)` returns needs no change when its broker client already has the message delivered again on an
+exception.
 
 In 0.33.0 an event fed while the feed was not live from inside the projection, a view or another callback of the
 same feed was buffered and applied once a catch-up took the feed live. Now it is refused. Thrown while the catch-up replays history into the projection or a view,
@@ -1180,7 +1182,8 @@ waited. It completed once
 a catch-up started after the stop applied the event, and never completed when no catch-up came, as in an application
 shutting down. A catch-up started after the stop no longer applies those events, so they come back only when the
 broker delivers them again. A consumer that discards a message after a set number of redeliveries can discard such
-an event, where 0.33.0 applied it. Do not acknowledge the message when the `Mono` errors.
+an event, where 0.33.0 applied it. Do not acknowledge the message when the `Mono` errors, and have the broker deliver
+it again.
 
 A catch-up counts as running from the `CatchupProjectionFeed.catchUp()` or `goLive()` call, and from the
 subscription to the `Mono` that `DomainEventFeed.catchUpAll()`, `catchUp(id)` or `goLive(id)` returned, until the
@@ -1188,18 +1191,20 @@ feed goes live, its replay notices a stop, or it fails. A replay notices a stop 
 projection, so one with no event left to hand over goes live as if there had been no stop.
 
 `acceptOrDefer(..)` never waits for a catch-up, so a Kafka consumer that calls it keeps polling through a long replay.
-Nor does it run one on the calling thread. A catch-up the fold asks for while the call applies the event replays on a
-virtual thread that call starts, or on the thread that asked for it first, when that is another thread. Once
+Nor does it run one itself. On the blocking stack, `CatchupProjectionFeed.catchUp()` says on which thread a catch-up
+the fold asks for while the call applies the event replays, and when it does not replay at all. Once
 the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`, so `DELIVERED`
 means the event has been applied. Before that, during a catch-up, and after a `stopCatchUp()` that stopped a replay
-before the feed went live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Leave the message
-unacknowledged then, and the broker delivers it again. A stop that ends a replay on a feed that was already live keeps
+before the feed went live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Do not acknowledge the
+message then, and have the broker deliver it again, as the javadoc of `RoutingOutcome.Disposition.HOLD` describes.
+A stop that ends a replay on a feed that was already live keeps
 it live, so the call applies the event and returns `DELIVERED` again. The blocking `acceptOrDefer(..)` also returns
 `DEFERRED` while another thread is still applying the same event. It throws an `IllegalStateException` once the catch-up
 has failed, and on the reactor stack its `Mono` errors with one instead. On the reactor stack the `Mono` also errors
 with an `IllegalStateException` when the code that applies an event to the feed, the `fold` you passed it, calls it.
 Section 15 says why. That `Mono` also errors when the queue of live events waiting to be applied is full, at the size
-`CatchupThenLiveOptions.maxBufferedEvents()` sets. Do not acknowledge the message on any of these errors.
+`CatchupThenLiveOptions.maxBufferedEvents()` sets. Do not acknowledge the message on any of these errors, and have the
+broker deliver it again.
 `DomainEventFeed.acceptOrDeferCloudEvent(..)`, which the Kafka and RabbitMQ sources call, gives the same outcomes for a
 `CloudEvent`, and `FILTERED` for one that does not match the filter given to `register(..)`.
 

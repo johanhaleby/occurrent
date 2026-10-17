@@ -164,8 +164,9 @@ handover that ran the view's code on that thread returns. When that call is `acc
 for the replay instead and returns without waiting. An ask from any thread before that replay takes its turn asks
 for the same replay, so a call on another thread can return before the replay has run. That replay stops only for a stop
 that came after every ask it stands for. A catch-up failure refuses only the asks made before it, and only when it comes
-before the replay starts or finds the history caught up already, so a failure while the replay runs refuses none of
-them. A replay whose every ask was refused does not run. `true` means the catch-up was asked for, not that it has run. A
+before the replay starts or, when the history turns out to be caught up already, before the handover goes live, so a
+failure while the replay runs refuses none of them. A replay whose every ask was refused does not run.
+`true` means the catch-up was asked for, not that it has run. A
 later replay can answer it, one that started after the call and has gone live by the time the catch-up's turn comes, and
 the catch-up then replays nothing. It can still be stopped, or refused because another catch-up failed, and a failure of
 its replay makes the handover fail the way any failed catch-up does. The reactive engine makes no exception for an

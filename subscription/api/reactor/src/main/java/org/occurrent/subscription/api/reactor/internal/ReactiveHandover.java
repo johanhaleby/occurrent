@@ -428,7 +428,8 @@ public final class ReactiveHandover<T, K> {
      * went live, which errors every payload it held, a {@link #stopIfNotCatchingUp()} that stopped the handover, which
      * errors every payload waiting for a catch-up, a payload fed while this handover is stopped, and a failed
      * catch-up, which refuses every payload from then on. Recovery is the caller's to choose, not this engine's
-     * (ADR 104), and for a broker listener it means not acknowledging, so the broker delivers the payload again.
+     * (ADR 104), and for a broker listener it means not acknowledging and having the broker deliver the payload
+     * again, as {@link org.occurrent.subscription.RoutingOutcome.Disposition#HOLD} describes.
      * <p>
      * Called from this handover's own code, it completes once the payload is queued, as
      * {@link #acceptReportingDelivery(Object)} describes.
