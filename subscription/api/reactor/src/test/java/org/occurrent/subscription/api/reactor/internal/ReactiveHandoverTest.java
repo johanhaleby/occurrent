@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -2895,14 +2896,33 @@ class ReactiveHandoverTest {
         assertThat(log).containsExactly("L1");
     }
 
-    // Nobody waits for a payload a Source callback feeds, so its failure is not handed to a caller and the handover
-    // starts failing like it does for a payload a replayed fold feeds.
+    // Nobody waits for a payload liveDrained() feeds, so its failure is not handed to a caller and the handover starts
+    // failing.
     @Test
     void a_payload_a_source_callback_feeds_that_fails_makes_the_handover_start_failing() {
         List<String> log = new CopyOnWriteArrayList<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
         FakeSource source = source(List.of("R1"), false);
-        source.onReplayStarted = () -> handover.accept("bad1").subscribe();
+        source.onLiveDrained = () -> handover.accept("bad1").subscribe();
+
+        StepVerifier.create(handover.catchUp(source)).expectNext(true).verifyComplete();
+
+        await().atMost(Duration.ofSeconds(5)).until(handover::refusesPermanently);
+        StepVerifier.create(handover.accept("L2"))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .hasMessage(HandoverMessages.queuedEventFailed("test payload"))
+                        .hasRootCauseMessage("fold failed for bad1"))
+                .verify(Duration.ofSeconds(5));
+        assertThat(source.forgetCaughtUpCallCount()).isEqualTo(1);
+    }
+
+    // A catch-up that replays nothing runs historyDone() beside live delivery, so what it feeds goes to the live sink.
+    @Test
+    void a_payload_history_done_feeds_when_nothing_is_replayed_and_that_fails_makes_the_handover_start_failing() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
+        FakeSource source = source(List.of(), true);
+        source.onHistoryDone = () -> handover.accept("bad1").subscribe();
 
         StepVerifier.create(handover.catchUp(source)).expectNext(true).verifyComplete();
 
@@ -2987,7 +3007,7 @@ class ReactiveHandoverTest {
         List<String> log = new CopyOnWriteArrayList<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
         FakeSource source = source(List.of("R1"), false);
-        source.onReplayStarted = () -> {
+        source.onLiveDrained = () -> {
             handover.accept("bad1").subscribe();
             handover.accept("Y").subscribe();
         };
@@ -3004,7 +3024,7 @@ class ReactiveHandoverTest {
         List<String> log = new CopyOnWriteArrayList<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("Y", self -> self.accept("Z")));
         FakeSource source = source(List.of("R1"), false);
-        source.onReplayStarted = () -> {
+        source.onLiveDrained = () -> {
             handover.accept("bad1").subscribe();
             handover.accept("Y").subscribe();
         };
@@ -3020,7 +3040,7 @@ class ReactiveHandoverTest {
         List<String> log = new CopyOnWriteArrayList<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
         FakeSource source = source(List.of("R1"), false);
-        source.onReplayStarted = () -> {
+        source.onLiveDrained = () -> {
             handover.accept("bad1").subscribe();
             handover.accept("bad2").subscribe();
             handover.accept("Y").subscribe();
@@ -3044,7 +3064,7 @@ class ReactiveHandoverTest {
             awaitQuietly(releaseY);
         }).subscribeOn(Schedulers.boundedElastic())));
         FakeSource source = source(List.of("R1"), false);
-        source.onReplayStarted = () -> {
+        source.onLiveDrained = () -> {
             handover.accept("bad1").subscribe();
             handover.accept("Y").subscribe();
         };
@@ -3105,7 +3125,7 @@ class ReactiveHandoverTest {
         AtomicReference<CompletableFuture<Void>> fromOutside = new AtomicReference<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
         FakeSource source = source(List.of("R1"), false);
-        source.onReplayStarted = () -> {
+        source.onLiveDrained = () -> {
             handover.accept("bad1").subscribe();
             fromOutside.set(offeredFromOutside(() -> handover.accept("E")));
         };
@@ -3217,7 +3237,7 @@ class ReactiveHandoverTest {
             awaitQuietly(releaseY);
         }).subscribeOn(Schedulers.boundedElastic())));
         FakeSource first = source(List.of("R1"), false);
-        first.onReplayStarted = () -> {
+        first.onLiveDrained = () -> {
             handover.accept("bad1").subscribe();
             handover.accept("Y").subscribe();
         };
@@ -3288,7 +3308,7 @@ class ReactiveHandoverTest {
         List<String> log = new CopyOnWriteArrayList<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
         FakeSource source = source(List.of("R1"), false);
-        source.onReplayStarted = () -> {
+        source.onLiveDrained = () -> {
             handover.accept("bad1").subscribe();
             handover.accept("Y").subscribe();
         };
@@ -3368,7 +3388,7 @@ class ReactiveHandoverTest {
         List<String> log = new CopyOnWriteArrayList<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
         FakeSource source = source(List.of("R1"), false);
-        source.onReplayStarted = () -> handover.accept("bad1").subscribe();
+        source.onLiveDrained = () -> handover.accept("bad1").subscribe();
         StepVerifier.create(handover.catchUp(source)).expectNext(true).verifyComplete();
 
         await().atMost(Duration.ofSeconds(5)).until(handover::refusesPermanently);
@@ -3725,6 +3745,124 @@ class ReactiveHandoverTest {
         assertThat(source.markCaughtUpCallCount()).isZero();
     }
 
+    // The callback runs as part of the replay, so what it feeds is folded before the marker and a crash after the
+    // marker cannot lose it.
+    @Test
+    void a_payload_replay_started_feeds_is_folded_before_the_marker_is_written() throws Exception {
+        assertThatAPayloadACallbackFeedsIsFoldedBeforeTheMarker((source, handover) ->
+                source.onReplayStarted = () -> handover.accept("N1").subscribe());
+    }
+
+    @Test
+    void a_payload_replay_completed_feeds_is_folded_before_the_marker_is_written() throws Exception {
+        assertThatAPayloadACallbackFeedsIsFoldedBeforeTheMarker((source, handover) ->
+                source.onReplayCompleted = () -> handover.accept("N1").subscribe());
+    }
+
+    @Test
+    void a_payload_history_done_feeds_is_folded_before_the_marker_is_written() throws Exception {
+        assertThatAPayloadACallbackFeedsIsFoldedBeforeTheMarker((source, handover) ->
+                source.onHistoryDone = () -> handover.accept("N1").subscribe());
+    }
+
+    // The Mono replayCompleted() returns waits for the call, which is answered once N1 is queued and not once it is
+    // folded, so the replay does not wait for a fold that only runs after replayCompleted() has ended.
+    @Test
+    void a_replay_completed_that_waits_for_the_payload_it_feeds_does_not_deadlock_and_the_payload_is_folded_before_the_marker() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
+        FakeSource source = source(List.of("R1"), false);
+        source.replayCompletedWaitsFor = () -> handover.accept("N1");
+        source.onMarkCaughtUp = () -> log.add("marker");
+
+        StepVerifier.create(handover.catchUp(source)).expectNext(true).expectComplete().verify(Duration.ofSeconds(5));
+
+        assertThat(log).containsExactly("R1", "N1", "marker");
+    }
+
+    // N1 is fed by historyDone() and each fold feeds the next payload. The chain ends at N100 so that a handover
+    // without the cap fails the assertion instead of running out of memory.
+    @Test
+    void a_chain_of_payloads_history_done_feeds_longer_than_the_live_buffer_fails_the_catch_up_with_the_cap() {
+        ReactiveHandover<String, String> handover = handoverFolding(new CatchupThenLiveOptions(10, 3), (self, payload) -> {
+            if (payload.equals("R1")) {
+                return Mono.empty();
+            }
+            int next = Integer.parseInt(payload.substring(1)) + 1;
+            return next > 100 ? Mono.empty() : self.accept("N" + next);
+        });
+        FakeSource source = source(List.of("R1"), false);
+        source.onHistoryDone = () -> handover.accept("N1").subscribe();
+
+        StepVerifier.create(handover.catchUp(source))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasMessage(HandoverMessages.fedChainTooLong("test payload", 3)))
+                .verify(Duration.ofSeconds(5));
+
+        assertThat(source.markCaughtUpCallCount()).isZero();
+    }
+
+    // The fold swallows the refusal of N2, so the catch-up is the only one left to report that N2 was never taken in.
+    // Without the failure the marker would be written and no later replay would feed N2 again. The live counterpart
+    // is a_fed_payload_refused_for_a_full_buffer_fails_the_answer_of_the_payload_that_fed_it.
+    @Test
+    void a_payload_a_replayed_fold_feeds_that_is_refused_for_a_full_buffer_fails_the_catch_up_although_the_fold_swallows_it() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverFolding(new CatchupThenLiveOptions(10, 1), (self, payload) -> switch (payload) {
+            case "R1" -> Mono.fromRunnable(() -> {
+                self.accept("N1").subscribe(queued -> {}, error -> {});
+                self.accept("N2").subscribe(queued -> {}, error -> {});
+            }).then(Mono.fromRunnable(() -> log.add("R1")));
+            default -> Mono.fromRunnable(() -> log.add(payload));
+        });
+        FakeSource source = source(List.of("R1"), false);
+
+        StepVerifier.create(handover.catchUp(source))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasMessage(HandoverMessages.bufferOverflow(1)))
+                .verify(Duration.ofSeconds(5));
+
+        assertThat(log).containsExactly("R1", "N1");
+        assertThat(source.markCaughtUpCallCount()).isZero();
+        assertThat(source.forgetCaughtUpCallCount()).isEqualTo(1);
+    }
+
+    // Each fold subscribes the next payload and swallows what it gets back, so the refusal at the end of the chain
+    // reaches nobody but the catch-up.
+    @Test
+    void a_chain_of_payloads_a_replayed_fold_feeds_longer_than_the_live_buffer_fails_the_catch_up_although_the_folds_swallow_the_refusal() {
+        ReactiveHandover<String, String> handover = handoverFolding(new CatchupThenLiveOptions(10, 3), (self, payload) -> {
+            int next = payload.equals("R1") ? 1 : Integer.parseInt(payload.substring(1)) + 1;
+            return next > 100 ? Mono.empty() : Mono.fromRunnable(() -> self.accept("N" + next).subscribe(queued -> {}, error -> {}));
+        });
+        FakeSource source = source(List.of("R1"), false);
+
+        StepVerifier.create(handover.catchUp(source))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasMessage(HandoverMessages.fedChainTooLong("test payload", 3)))
+                .verify(Duration.ofSeconds(5));
+
+        assertThat(source.markCaughtUpCallCount()).isZero();
+    }
+
+    @Test
+    void a_chain_of_payloads_a_live_fold_feeds_longer_than_the_live_buffer_fails_the_answer_to_the_payload_that_started_it_although_the_folds_swallow_the_refusal() {
+        ReactiveHandover<String, String> handover = handoverFolding(new CatchupThenLiveOptions(10, 3), (self, payload) -> {
+            int next = payload.equals("L1") ? 1 : Integer.parseInt(payload.substring(1)) + 1;
+            return next > 100 ? Mono.empty() : Mono.fromRunnable(() -> self.accept("N" + next).subscribe(queued -> {}, error -> {}));
+        });
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+
+        StepVerifier.create(handover.accept("L1"))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasMessage(HandoverMessages.fedChainTooLong("test payload", 3)))
+                .verify(Duration.ofSeconds(5));
+    }
+
     // A live L1 whose fold feeds bad1 and then Y: Y is folded although bad1 failed, and the answer to L1 comes after it.
     @Test
     void a_payload_fed_after_one_that_failed_is_still_folded_before_the_answer_to_the_payload_that_fed_both() {
@@ -3742,6 +3880,38 @@ class ReactiveHandoverTest {
 
         assertThat(loggedWhenAnswered.get()).containsExactly("L1", "Y");
         assertThat(handover.refusesPermanently()).isFalse();
+    }
+
+    // N1 is fed from a Source callback of a catch-up that replays R1, and its fold is held. The marker must wait for it.
+    private static void assertThatAPayloadACallbackFeedsIsFoldedBeforeTheMarker(
+            BiConsumer<FakeSource, ReactiveHandover<String, String>> feedsN1) throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingN1 = new CountDownLatch(1);
+        CountDownLatch releaseN1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = handoverFolding(CatchupThenLiveOptions.defaults(), (self, payload) -> switch (payload) {
+            case "N1" -> Mono.fromRunnable(() -> {
+                foldingN1.countDown();
+                awaitQuietly(releaseN1);
+                log.add("N1");
+            });
+            default -> Mono.fromRunnable(() -> log.add(payload));
+        });
+        FakeSource source = source(List.of("R1"), false);
+        feedsN1.accept(source, handover);
+        source.onMarkCaughtUp = () -> log.add("marker");
+        try {
+            CompletableFuture<Boolean> catchUp = handover.catchUp(source).toFuture();
+            assertThat(foldingN1.await(5, TimeUnit.SECONDS)).isTrue();
+
+            assertThat(source.markCaughtUpCallCount()).as("the marker while N1 is unfolded").isZero();
+            assertThat(catchUp).isNotDone();
+            releaseN1.countDown();
+
+            assertThat(catchUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(log).containsExactly("R1", "N1", "marker");
+        } finally {
+            releaseN1.countDown();
+        }
     }
 
     // Offers a payload from outside once the caller has waited for the handover to deliver what it took in and fail.
@@ -4289,6 +4459,7 @@ class ReactiveHandoverTest {
         private Runnable onMarkCaughtUp;
         private Runnable onReplayStarted;
         private Runnable onReplayCompleted;
+        private Supplier<Mono<?>> replayCompletedWaitsFor;
         private Runnable onReplayAbandoned;
         private Runnable onAlreadyDeliveredByReplay;
         private Runnable onHistoryDone;
@@ -4397,6 +4568,9 @@ class ReactiveHandoverTest {
         @Override
         public Mono<Void> replayCompleted() {
             replayCompletedCallCount++;
+            if (replayCompletedWaitsFor != null) {
+                return Mono.defer(() -> replayCompletedWaitsFor.get()).then();
+            }
             return Mono.fromRunnable(() -> {
                 if (onReplayCompleted != null) {
                     onReplayCompleted.run();

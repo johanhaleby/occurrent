@@ -1500,6 +1500,55 @@ class CatchupProjectionFeedTest {
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "bad"));
     }
 
+    // The view feeds "bad" from replayCompleted(), which runs before the marker, so the marker waits for its fold. That
+    // fold fails once, which fails the catch-up, so no marker says the history was read and a new feed replays it.
+    @Test
+    void after_an_event_a_view_fed_from_replay_completed_fails_a_new_feed_replays_the_history_and_the_view_feeds_it_again() {
+        CheckpointStorage marker = new InMemoryCheckpointStorage();
+        AtomicBoolean badFails = new AtomicBoolean(true);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        final class FeedsFromReplayCompleted implements java.util.function.BiFunction<EventMetadata, Counted, Mono<Void>>, ReactiveReplayAware {
+            @Override
+            public Mono<Void> apply(EventMetadata metadata, Counted event) {
+                if (event.eventId().equals("bad") && badFails.getAndSet(false)) {
+                    return Mono.error(new IllegalStateException("fold failed for bad"));
+                }
+                return Mono.fromRunnable(() -> folded.add(event.eventId()));
+            }
+
+            @Override
+            public void replayStarted() {
+            }
+
+            @Override
+            public Mono<Void> replayCompleted() {
+                return Mono.defer(() -> feedRef.get().acceptAndWait(new Counted("bad")));
+            }
+
+            @Override
+            public void replayAbandoned() {
+            }
+        }
+        CatchupProjectionFeed<Counted> failed = CatchupProjectionFeed.create(
+                "counter", new FeedsFromReplayCompleted(), Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, marker);
+        feedRef.set(failed);
+        StepVerifier.create(failed.catchUp())
+                .expectErrorSatisfies(error -> assertThat(error).hasMessage("fold failed for bad"))
+                .verify(ofSeconds(5));
+        assertThat(folded).containsExactly("1", "2");
+        assertThat(marker.read("counter").blockOptional()).isEmpty();
+
+        folded.clear();
+        CatchupProjectionFeed<Counted> rebuilt = CatchupProjectionFeed.create(
+                "counter", new FeedsFromReplayCompleted(), Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, marker);
+        feedRef.set(rebuilt);
+        StepVerifier.create(rebuilt.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        assertThat(folded).containsExactly("1", "2", "bad");
+        assertThat(marker.read("counter").blockOptional()).isPresent();
+    }
+
     @Test
     void a_reader_that_does_not_write_positions_fails_fast_at_construction() {
         CloudEventConverter<Counted> converter = countedConverter();
