@@ -52,6 +52,11 @@ import java.util.function.Predicate;
  * {@link RoutingOutcome#DEFERRED} while the projection is not live. See the blocking {@code DomainEventFeed} for the
  * full contract.
  * <p>
+ * A listener that can wait for a catch-up calls {@link #acceptAndWait(Object)} and acknowledges the message once the
+ * returned {@link Mono} completes. A listener that should not wait for one calls {@link #acceptOrDefer(Object)}
+ * instead, as long as its broker delivers a message again when it is not acknowledged. That listener acknowledges the
+ * message on {@link RoutingOutcome#DELIVERED} and leaves it unacknowledged on {@link RoutingOutcome#DEFERRED}.
+ * <p>
  * <strong>One feed feeds one projection</strong>, and a second {@link #register} is refused. The acknowledgement is
  * what forces it: the listener has exactly one decision per received message, so several projections on one feed would
  * share it, and a projection that keeps failing would hold up every projection behind it. Declare one feed per

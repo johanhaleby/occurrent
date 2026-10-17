@@ -232,10 +232,10 @@ public final class CatchupProjectionFeed<E> {
      * Called from inside this feed's fold once the feed is live, it folds the event on that same thread, before this
      * returns. Before the feed is live it returns {@link RoutingOutcome#DEFERRED} there too.
      * <p>
-     * Unlike {@link #acceptAndWait(Object)}, this never waits for a replay and never runs one on the calling thread, so
-     * a Kafka consumer keeps polling while the catch-up runs. A catch-up the view asks for while this call runs its
-     * code replays on a virtual thread this call starts before it returns, or on the thread that asked for it first,
-     * when that is another thread, see {@link #catchUp()}. It folds with no metadata, see {@link #acceptOrDefer(EventMetadata, Object)}.
+     * Unlike {@link #acceptAndWait(Object)}, this never waits for a replay and never runs one itself, so a Kafka
+     * consumer keeps polling while the catch-up runs. A catch-up the view asks for while this call runs its code
+     * replays on another thread, or on this thread after this call has returned, see {@link #catchUp()}. It folds with
+     * no metadata, see {@link #acceptOrDefer(EventMetadata, Object)}.
      *
      * @param event The domain event received from the external source.
      * @return {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#DEFERRED}.

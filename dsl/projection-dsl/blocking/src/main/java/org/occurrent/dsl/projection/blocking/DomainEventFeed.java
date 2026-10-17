@@ -51,13 +51,19 @@ import java.util.function.Predicate;
  * decides whether a call waits until the event is folded or returns {@link RoutingOutcome#DEFERRED} while the
  * projection is not live, whichever kind of event the listener holds.
  * <p>
- * The application declares it as a bean carrying the domain-specific {@code eventId} function (the catch-up de-dup key)
+ * The application declares it as a bean with the domain-specific {@code eventId} function (the catch-up de-dup key)
  * plus the CloudEvent-layer collaborators (the store {@link PositionOrderedReader}, the {@link CloudEventConverter} used
  * only to decode replayed history, and an optional {@link CheckpointStorage} catch-up marker), registers a projection on
- * it (directly, or through {@code @Projection(source = PUSH)}), and feeds each received domain event to
- * {@link #acceptAndWait(Object)} from its listener. The registration is a {@link CatchupProjectionFeed}, which owns the
- * contract: the broker decides where the live feed resumes, an event can arrive more than once so the fold has to be
- * safe to repeat, and the buffer holding live events during the replay has a fixed size.
+ * it (directly, or through {@code @Projection(source = PUSH)}), and feeds each received domain event to it from its
+ * listener. The registration is a {@link CatchupProjectionFeed}, which owns the contract: the broker decides where the
+ * live feed resumes, an event can arrive more than once so the fold has to be safe to repeat, and the buffer holding
+ * live events during the replay has a fixed size.
+ * <p>
+ * A listener that can wait for a catch-up calls {@link #acceptAndWait(Object)} and acknowledges the message once it
+ * returns. A long replay keeps it waiting, and {@link CatchupProjectionFeed#acceptAndWait(Object)} says what that
+ * does to a Kafka consumer. A listener that should not wait for one calls {@link #acceptOrDefer(Object)} instead, as
+ * long as its broker delivers a message again when it is not acknowledged. That listener acknowledges the message on
+ * {@link RoutingOutcome#DELIVERED} and leaves it unacknowledged on {@link RoutingOutcome#DEFERRED}.
  * <p>
  * <strong>One feed feeds one projection</strong>, and a second {@link #register} is refused. The acknowledgement is
  * what forces it: the listener has exactly one decision per received message, so several projections on one feed would
@@ -223,8 +229,8 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Feed a live domain event to the registered projection. Call this from the broker listener, acknowledging the
-     * message only once it returns.
+     * Feed a live domain event to the registered projection. Call this from a broker listener that can wait for the
+     * catch-up, acknowledging the message only once it returns.
      * <p>
      * Once the projection is live the event is folded on the calling thread, and an exception from the projection
      * propagates. Before the projection goes live, and while a catch-up runs on a projection that already went live,

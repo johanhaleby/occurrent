@@ -478,9 +478,8 @@ public final class BlockingHandover<T, K> {
      * A payload fed while this handover is stopped is refused the same way, for the same reason: nothing is
      * currently draining a buffer for it to wait in.
      * <p>
-     * This never waits for a replay and never runs one on the calling thread. A catch-up that this handover's own code
-     * asked for runs on a virtual thread this call starts before it returns, or on the thread that asked for it first,
-     * when that is another thread.
+     * This never waits for a replay and never runs one itself. A catch-up that this handover's own code asks for during
+     * this call replays on another thread, or on this thread after this call has returned.
      *
      * @return {@code true} once the payload has genuinely landed: delivered live just now, or already delivered by
      *         an earlier attempt. {@code false} whenever this call did not deliver it, whether because this
