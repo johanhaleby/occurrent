@@ -45,9 +45,12 @@ import java.util.function.Predicate;
 /**
  * The reactor counterpart of the blocking {@code DomainEventFeed}: a register-only sink the application owns and feeds
  * with <strong>domain events</strong>, giving one projection a catch-up and then a live feed, without any CloudEvent
- * conversion on the live path, through {@link #accept(Object)} and {@link #accept(EventMetadata, Object)}.
- * {@link #acceptCloudEvent(CloudEvent)} is the one exception, for a listener that has a {@link CloudEvent} to
- * rebuild rather than an already-decoded domain event. See the blocking {@code DomainEventFeed} for the full contract.
+ * conversion on the live path, through {@link #acceptAndWait(Object)} and {@link #acceptOrDefer(Object)}.
+ * {@link #acceptAndWaitCloudEvent(CloudEvent)} and {@link #acceptOrDeferCloudEvent(CloudEvent)} are the exception, for
+ * a listener that has a {@link CloudEvent} to rebuild rather than an already-decoded domain event. The method name
+ * decides whether the returned {@link Mono} waits until the event is folded or completes with
+ * {@link RoutingOutcome#DEFERRED} while the projection is not live. See the blocking {@code DomainEventFeed} for the
+ * full contract.
  * <p>
  * <strong>One feed feeds one projection</strong>, and a second {@link #register} is refused. The acknowledgement is
  * what forces it: the listener has exactly one decision per received message, so several projections on one feed would
@@ -67,7 +70,7 @@ public final class DomainEventFeed<E> {
     private final CatchupThenLiveOptions options;
     private final DataFieldReader dataFieldReader;
     // The one projection registered on this feed, or null while it is free. Paired with the Filter it was
-    // registered with, so acceptCloudEvent always reads the two together.
+    // registered with, so the CloudEvent accept methods always read the two together.
     private final AtomicReference<@Nullable Registered<E>> feed = new AtomicReference<>();
 
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
@@ -88,8 +91,9 @@ public final class DomainEventFeed<E> {
     /**
      * As {@link #DomainEventFeed(PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage, CatchupThenLiveOptions)},
      * additionally answering a {@code data} payload condition on a registration's replay filter by reading it
-     * through {@code dataFieldReader} instead of refusing it. Only {@link #acceptCloudEvent(CloudEvent)} consults this, since
-     * that is the one entry point that evaluates a filter live rather than only during the replay.
+     * through {@code dataFieldReader} instead of refusing it. Only {@link #acceptAndWaitCloudEvent(CloudEvent)} and
+     * {@link #acceptOrDeferCloudEvent(CloudEvent)} consult this, since they are the entry points that evaluate a filter
+     * live rather than only during the replay.
      */
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
                            Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker,
@@ -130,15 +134,16 @@ public final class DomainEventFeed<E> {
      * {@code Projections.reactiveUpdate(materializedView)}) replaying stored events matching {@code replayFilter}. The
      * reactor analog of the blocking {@code register(id, MaterializedView, Filter)}.
      * <p>
-     * {@code replayFilter} is also what {@link #acceptCloudEvent(CloudEvent)} matches live events against, wrapped as an
+     * {@code replayFilter} is also what {@link #acceptAndWaitCloudEvent(CloudEvent)} and
+     * {@link #acceptOrDeferCloudEvent(CloudEvent)} match live events against, wrapped as an
      * {@link AgnosticSubscriptionFilter}. The one filter given here is the only one this feed ever holds, so the
      * replay and the live path can never disagree about which events are this projection's. This does not build that
-     * matcher, or otherwise change what {@code replayFilter} was already accepted for before
-     * {@link #acceptCloudEvent} existed. The store still evaluates it during the replay however it always has,
-     * including a {@code data} payload condition this feed has no {@link DataFieldReader} for, since that evaluation
-     * has nothing to do with this feed's own {@link DataFieldReader}. {@link #acceptCloudEvent} is what needs one,
-     * and only refuses such a filter there, the first time it is called, permanently, so a caller that never
-     * touches the live CloudEvent path keeps registering exactly the filters it always could.
+     * matcher, or otherwise change which {@code replayFilter} this method accepts. The store still evaluates it during
+     * the replay however it always has, including a {@code data} payload condition this feed has no
+     * {@link DataFieldReader} for, since that evaluation has nothing to do with this feed's own
+     * {@link DataFieldReader}. The two CloudEvent methods are what need one, and only refuse such a filter there, the
+     * first time either is called, permanently, so a caller that never touches the live CloudEvent path keeps
+     * registering exactly the filters it always could.
      *
      * @throws IllegalArgumentException if a projection is already registered on this feed
      */
@@ -150,9 +155,10 @@ public final class DomainEventFeed<E> {
     /**
      * Register the projection this feed drives, as a metadata-aware reactive {@code fold}, the form that can key or
      * fold on the event's {@link EventMetadata}. The replay always supplies the metadata it decoded from the
-     * CloudEvent, and the live path supplies whatever the source passed to {@link #accept(EventMetadata, Object)}.
+     * CloudEvent, and the live path supplies whatever the source passed to {@link #acceptAndWait(EventMetadata, Object)}.
      * <p>
-     * {@code replayFilter} is also what {@link #acceptCloudEvent(CloudEvent)} matches live events against, for the reason
+     * {@code replayFilter} is also what {@link #acceptAndWaitCloudEvent(CloudEvent)} and
+     * {@link #acceptOrDeferCloudEvent(CloudEvent)} match live events against, for the reason
      * {@link #register(String, Function, Filter)} gives.
      *
      * @throws IllegalArgumentException if a projection is already registered on this feed
@@ -175,7 +181,7 @@ public final class DomainEventFeed<E> {
 
     /**
      * Whether a projection is registered on this feed, so a listener can ask before it feeds one rather than finding
-     * out from {@link #accept(Object)}. The feed's answer to {@code RegisteringSubscribable.hasSubscriptions()} on the
+     * out from {@link #acceptAndWait(Object)}. The feed's answer to {@code RegisteringSubscribable.hasSubscriptions()} on the
      * push subscription model.
      */
     public boolean hasProjection() {
@@ -187,30 +193,83 @@ public final class DomainEventFeed<E> {
      * has handled it, so the listener can acknowledge after processing. Before the projection goes live it completes
      * only once the catch-up has folded the event, and errors when it does not fold it, a stopped or failed catch-up
      * say. Called from inside the registered projection's fold, it completes once the event is queued, see
-     * {@link CatchupProjectionFeed#accept(Object)}.
+     * {@link CatchupProjectionFeed#acceptAndWait(Object)}.
      * <p>
      * The returned {@link Mono} fails with an {@link IllegalStateException} when no projection is registered. Refused
      * rather than completed empty, because the listener acknowledges on completion and the broker discards what it
      * acknowledges, so completing would lose the event. See ADR 104.
      */
-    public Mono<Void> accept(E event) {
+    public Mono<Void> acceptAndWait(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        return registeredProjection().flatMap(registered -> registered.catchupFeed().accept(event));
+        return registeredProjection().flatMap(registered -> registered.catchupFeed().acceptAndWait(event));
     }
 
     /**
      * Feed a live domain event to the registered projection together with the {@link EventMetadata} the source knows
      * about it, so a projection keyed on the stream id, version or position works on the live path and not only during
      * the catch-up replay. Use this when the broker message carries those values and your listener can read them.
-     * Otherwise call {@link #accept(Object)}, which folds with {@link EventMetadata#empty()}.
+     * Otherwise call {@link #acceptAndWait(Object)}, which folds with {@link EventMetadata#empty()}.
      * <p>
      * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
-     * {@link #accept(Object)} gives.
+     * {@link #acceptAndWait(Object)} gives.
      */
-    public Mono<Void> accept(EventMetadata metadata, E event) {
+    public Mono<Void> acceptAndWait(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
         Objects.requireNonNull(event, "event cannot be null");
-        return registeredProjection().flatMap(registered -> registered.catchupFeed().accept(metadata, event));
+        return registeredProjection().flatMap(registered -> registered.catchupFeed().acceptAndWait(metadata, event));
+    }
+
+    /**
+     * Feed a live domain event to the registered projection without waiting for its catch-up. The returned
+     * {@link Mono} completes with {@link RoutingOutcome#DELIVERED} once the event is folded, and with
+     * {@link RoutingOutcome#DEFERRED} right away while the projection is not live, without keeping the event anywhere.
+     * It never waits for a replay, see {@link CatchupProjectionFeed#acceptOrDefer(Object)}. Acknowledge the message on {@link RoutingOutcome#DELIVERED} and leave it unacknowledged on
+     * {@link RoutingOutcome#DEFERRED}, so the broker delivers it again. No {@link Filter} is applied, the same as for
+     * {@link #acceptAndWait(Object)}.
+     * <p>
+     * Once the projection is live the returned {@link Mono} can error with an {@link IllegalStateException} when the
+     * queue of live events waiting for the fold is full. It also errors when the projection's catch-up has failed, and
+     * when no projection is registered, for the reason {@link #acceptAndWait(Object)} gives. Leave the message
+     * unacknowledged on any of these errors. Called from inside the registered projection's fold, it errors with an
+     * {@link IllegalStateException} as well, since the event could only be queued by then, not folded.
+     * {@link CatchupProjectionFeed#acceptOrDefer(Object)} has the details.
+     */
+    public Mono<RoutingOutcome> acceptOrDefer(E event) {
+        Objects.requireNonNull(event, "event cannot be null");
+        return registeredProjection().flatMap(registered -> registered.catchupFeed().acceptOrDefer(event));
+    }
+
+    /**
+     * As {@link #acceptOrDefer(Object)}, together with the {@link EventMetadata} the source knows about the event, for
+     * the reason {@link #acceptAndWait(EventMetadata, Object)} gives. Completes and errors for the reasons
+     * {@link #acceptOrDefer(Object)} gives.
+     */
+    public Mono<RoutingOutcome> acceptOrDefer(EventMetadata metadata, E event) {
+        Objects.requireNonNull(metadata, "metadata cannot be null");
+        Objects.requireNonNull(event, "event cannot be null");
+        return registeredProjection().flatMap(registered -> registered.catchupFeed().acceptOrDefer(metadata, event));
+    }
+
+    /**
+     * Feed a live event as a {@link CloudEvent}, the {@link CloudEvent} counterpart of
+     * {@link #acceptAndWait(EventMetadata, Object)}. It matches {@code cloudEvent} against the {@link Filter}
+     * {@link #register} was called with, and decodes only a match with this feed's {@link CloudEventConverter}, the
+     * same way {@link #acceptOrDeferCloudEvent(CloudEvent)} does. For an event that does not match, the returned
+     * {@link Mono} completes without the event being decoded or folded. A matching event is folded with the
+     * {@link EventMetadata} from {@link EventMetadata#from(CloudEvent)}, and the returned {@link Mono} completes once
+     * it is folded and errors when it is not, the way {@link #acceptAndWait(Object)} does, rather than completing with
+     * {@link RoutingOutcome#DEFERRED}. Acknowledge the message once it completes, whether the event matched or not.
+     * Called from inside the registered projection's fold, it completes once a matching event is queued, see
+     * {@link CatchupProjectionFeed#acceptAndWait(Object)}.
+     * <p>
+     * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
+     * {@link #acceptAndWait(Object)} gives, and with {@link UnreadableLiveFilterException} for the reasons
+     * {@link #acceptOrDeferCloudEvent(CloudEvent)} gives.
+     */
+    public Mono<Void> acceptAndWaitCloudEvent(CloudEvent cloudEvent) {
+        Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
+        return decodeIfMatching(cloudEvent, Mono.empty(),
+                (catchupFeed, event) -> catchupFeed.acceptAndWait(EventMetadata.from(cloudEvent), event));
     }
 
     /**
@@ -222,7 +281,7 @@ public final class DomainEventFeed<E> {
      * {@link Mono} completes, and on {@link RoutingOutcome#FILTERED}, where redelivering would loop forever against
      * this same registration, since the event is not this projection's under the {@link Filter} currently
      * registered. Redeliver instead on {@link RoutingOutcome#DEFERRED}, safe arbitrarily many times, and never
-     * acknowledge it. Named distinctly from {@link #accept(Object)} rather than
+     * acknowledge it. Named distinctly from {@link #acceptOrDefer(Object)} rather than
      * overloaded onto it, since a {@code DomainEventFeed<CloudEvent>} would otherwise let the compiler silently pick
      * between two overloads with different behavior for the same argument.
      * <p>
@@ -243,12 +302,13 @@ public final class DomainEventFeed<E> {
      * Completes with {@link RoutingOutcome#DEFERRED} rather than {@link RoutingOutcome#DELIVERED} for a matching
      * event that arrives while the registered projection is not live yet. That covers an event fed before
      * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has been called at all, one fed
-     * while a replay is still running, and one fed after {@link #stopCatchUp()} interrupted a replay in flight. The
+     * while a replay is still running, and one fed after {@link #stopCatchUp()} interrupted a replay before the
+     * projection went live. The
      * underlying {@code ReactiveHandover.acceptIfLive} refuses such an event outright rather than buffering it, so
      * the returned {@link Mono} completes with {@link RoutingOutcome#DEFERRED} right away, never waiting on a
-     * replay or a drain that might resolve it only much later. One evaluation decides both the live check and the
-     * hand-over together, so there is no window between "is it live" and "hand it over" for a concurrent
-     * {@link #goLive(String)} to land in. Redelivering a {@link RoutingOutcome#DEFERRED} event is always safe. The
+     * replay or a drain that might resolve it only much later. A replay that starts while the event is being handed
+     * over, or after it was queued and before its fold started, makes it complete with
+     * {@link RoutingOutcome#DEFERRED} too, and the event is not kept. Redelivering a {@link RoutingOutcome#DEFERRED} event is always safe. The
      * attempt that reported it was never accepted in the first place, nothing here folded it, so retrying is safe
      * until it completes with {@link RoutingOutcome#DELIVERED}, the same way a caller with nowhere else to
      * redeliver from, {@link #goLive(String)} exists precisely for a registration whose events are not in the local
@@ -265,14 +325,19 @@ public final class DomainEventFeed<E> {
      * the caller's own source, the broker or listener feeding this method, actually redelivers it. Losing it there
      * is a caller-side loss, not this feed's.
      * <p>
-     * Called from inside the registered projection's fold, it decides between {@link RoutingOutcome#DELIVERED} and
-     * {@link RoutingOutcome#DEFERRED} the same way, and completes with {@link RoutingOutcome#DELIVERED} once the event
-     * is queued rather than once it is folded, see {@link CatchupProjectionFeed#accept(Object)}.
+     * Called from inside the registered projection's fold, it errors with an {@link IllegalStateException} for a
+     * matching event, see {@link CatchupProjectionFeed#acceptOrDefer(Object)}. Call
+     * {@link #acceptAndWaitCloudEvent(CloudEvent)} from there instead.
      * <p>
      * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
-     * {@link #accept(Object)} gives, rather than completing with {@link RoutingOutcome#NOT_DELIVERABLE}. This feed,
+     * {@link #acceptAndWait(Object)} gives, rather than completing with {@link RoutingOutcome#NOT_DELIVERABLE}. This feed,
      * unlike a push subscription model, has no write path to protect, and ADR 104 already refuses here for
-     * {@link #accept(Object)} and {@link #accept(EventMetadata, Object)}.
+     * {@link #acceptAndWait(Object)} and {@link #acceptAndWait(EventMetadata, Object)}.
+     * <p>
+     * Fails with an {@link IllegalStateException} for a matching event when the projection's catch-up has failed, and,
+     * once the projection is live, when the queue of live events waiting for the fold is full, see
+     * {@link CatchupProjectionFeed#acceptOrDefer(Object)}. Leave the message unacknowledged then, so the broker
+     * delivers it again.
      * <p>
      * Fails with {@link UnreadableLiveFilterException} the first time this is called on a registration whose
      * {@link Filter} references a {@code data} field this feed's {@link DataFieldReader} cannot read, and again with
@@ -282,19 +347,48 @@ public final class DomainEventFeed<E> {
      * {@code DomainEventFeed} with a {@link Filter} that does not reference the field, or with a
      * {@link DataFieldReader} that can read it.
      */
-    public Mono<RoutingOutcome> acceptCloudEvent(CloudEvent cloudEvent) {
+    public Mono<RoutingOutcome> acceptOrDeferCloudEvent(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
+        return decodeIfMatching(cloudEvent, Mono.just(RoutingOutcome.FILTERED),
+                (catchupFeed, event) -> catchupFeed.acceptOrDefer(EventMetadata.from(cloudEvent), event));
+    }
+
+    /**
+     * Forwards to {@link #acceptAndWait(Object)}.
+     *
+     * @deprecated Use {@link #acceptAndWait(Object)}, which completes once the event is folded, or
+     *             {@link #acceptOrDefer(Object)}, which completes with {@link RoutingOutcome#DEFERRED} instead of
+     *             waiting.
+     */
+    @Deprecated(since = "0.34.0", forRemoval = true)
+    public Mono<Void> accept(E event) {
+        return acceptAndWait(event);
+    }
+
+    /**
+     * Forwards to {@link #acceptAndWait(EventMetadata, Object)}.
+     *
+     * @deprecated Use {@link #acceptAndWait(EventMetadata, Object)}, which completes once the event is folded, or
+     *             {@link #acceptOrDefer(EventMetadata, Object)}, which completes with {@link RoutingOutcome#DEFERRED}
+     *             instead of waiting.
+     */
+    @Deprecated(since = "0.34.0", forRemoval = true)
+    public Mono<Void> accept(EventMetadata metadata, E event) {
+        return acceptAndWait(metadata, event);
+    }
+
+    // A non-matching event completes with filtered and is never decoded.
+    private <R> Mono<R> decodeIfMatching(CloudEvent cloudEvent, Mono<R> filtered,
+                                         BiFunction<CatchupProjectionFeed<E>, E, Mono<R>> matched) {
         return registeredProjection().flatMap(registered -> {
             LiveMatcher liveMatcher = liveMatcherFor(registered);
             if (liveMatcher.refusal() != null) {
                 return Mono.error(liveMatcher.refusal());
             }
             if (!liveMatcher.matcher().test(cloudEvent)) {
-                return Mono.just(RoutingOutcome.FILTERED);
+                return filtered;
             }
-            E event = converter.toDomainEvent(cloudEvent);
-            return registered.catchupFeed().acceptIfLive(EventMetadata.from(cloudEvent), event)
-                    .map(delivered -> delivered ? RoutingOutcome.DELIVERED : RoutingOutcome.DEFERRED);
+            return matched.apply(registered.catchupFeed(), converter.toDomainEvent(cloudEvent));
         });
     }
 
@@ -310,7 +404,7 @@ public final class DomainEventFeed<E> {
         });
     }
 
-    // Builds the live matcher for a registration on the first acceptCloudEvent call, then reuses it, whether that
+    // Builds the live matcher for a registration on the first CloudEvent accept call, then reuses it, whether that
     // build succeeded or refused. A benign race between two concurrent first calls can build it twice, but
     // matcherFor is pure for the same Filter and DataFieldReader, so the loser's copy, success or refusal, is just
     // discarded work: every caller ends up with the same winner, which is what makes a cached refusal always the
@@ -334,7 +428,7 @@ public final class DomainEventFeed<E> {
         return registered.liveMatcher.get();
     }
 
-    // The outcome of the first acceptCloudEvent call for one registration: either a working matcher, or the
+    // The outcome of the first CloudEvent accept call for one registration, either a working matcher or the
     // permanent refusal every later call on that same registration replays instead of rebuilding.
     private static final class LiveMatcher {
         private final @Nullable Predicate<CloudEvent> matcher;
@@ -362,8 +456,8 @@ public final class DomainEventFeed<E> {
         }
     }
 
-    // Pairs a registration with the Filter it was registered with, so acceptCloudEvent always matches against the
-    // one filter this feed was actually given. See the Filter-taking register(..) overloads' javadoc for why there
+    // Pairs a registration with the Filter it was registered with, so the CloudEvent accept methods always match
+    // against the one filter this feed was actually given. See the Filter-taking register(..) overloads' javadoc for why there
     // is only ever one filter here, and its own javadoc for why it is not turned into a matcher until then.
     // liveMatcher caches the outcome of that first build, one cache per registration since a new register() call
     // creates a new Registered with a fresh, empty cache.
@@ -406,14 +500,14 @@ public final class DomainEventFeed<E> {
     /**
      * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
      * a store that is closing with it. The replay notices at its next event and unwinds without recording the
-     * completion marker, so the next start replays the whole history again. The {@link Mono} {@link #accept(Object)}
+     * completion marker, so the next start replays the whole history again. The {@link Mono} {@link #acceptAndWait(Object)}
      * returned for an event waiting on a replay that started before the feed went live errors rather than completing
      * when that replay notices the stop, so its listener does not acknowledge the event. A replay with no event left
      * to hand to the projection does not notice it, see {@link CatchupProjectionFeed#stopCatchUp()}, and the feed goes
      * live and folds the event. One waiting on a replay started after {@link #goLive(String)} completes once the event
      * is folded, since the feed still applies the events that arrived while that replay ran.
      * <p>
-     * A feed with no catch-up running that has not gone live stops too. The {@link Mono} {@link #accept(Object)}
+     * A feed with no catch-up running that has not gone live stops too. The {@link Mono} {@link #acceptAndWait(Object)}
      * returned for an event fed before the stop, or after it and before the next catch-up or {@link #goLive(String)},
      * errors, and a catch-up started after the stop does not fold that event. When this method finds no catch-up
      * running and stops the feed, the error handling of each event still waiting runs on the calling thread, unless
@@ -421,7 +515,7 @@ public final class DomainEventFeed<E> {
      * {@link #catchUpAll()}, {@link #catchUp(String)} or {@link #goLive(String)} returned, not from the call, until the
      * feed goes live, its replay notices a stop, or it fails. A stop that comes during a catch-up whose {@link Mono}
      * then errors, for example because reading the catch-up marker threw, still errors the {@link Mono}
-     * {@link #accept(Object)} returned for each waiting event, unless another catch-up takes the feed live and applies
+     * {@link #acceptAndWait(Object)} returned for each waiting event, unless another catch-up takes the feed live and applies
      * that event. That error handling runs where the last of the catch-ups running then ends, on the thread that
      * subscribed to the {@link Mono} that errored or on a thread that runs another catch-up.
      * <p>
@@ -471,7 +565,7 @@ public final class DomainEventFeed<E> {
      * that matches nothing fails the {@link Mono} with an {@link IllegalArgumentException} rather than throwing here.
      * <p>
      * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection completes only
-     * once the replay has ended, so {@link #acceptCloudEvent(CloudEvent)} completes with
+     * once the replay has ended, so {@link #acceptOrDeferCloudEvent(CloudEvent)} completes with
      * {@link RoutingOutcome#DELIVERED} for a matching event after that, unless another replay has started since. When a
      * catch-up of that projection failed while it waited, the {@link Mono} errors with an {@link IllegalStateException}
      * whose cause is a catch-up failure recorded while it waited. A call the view makes while this feed is calling it,

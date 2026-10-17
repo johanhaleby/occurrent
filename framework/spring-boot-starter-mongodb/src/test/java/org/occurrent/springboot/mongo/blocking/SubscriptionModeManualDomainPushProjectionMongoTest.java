@@ -103,7 +103,7 @@ class SubscriptionModeManualDomainPushProjectionMongoTest {
         // be dropped silently, which meant a listener acknowledged it and the source discarded an event no projection
         // ever received. Refusing is what makes manual mode withhold rather than lose, because the source is the only
         // thing holding a backlog and it only holds one while nobody acknowledges (ADR 104).
-        assertThatThrownBy(() -> ordersFeed.accept(new OrderPlaced("refused-before-start")))
+        assertThatThrownBy(() -> ordersFeed.acceptAndWait(new OrderPlaced("refused-before-start")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("has no projection registered");
         await().during(ofSeconds(2)).atMost(ofSeconds(10)).until(() -> orderCountStore.countFor("orders") == 0);
@@ -115,7 +115,7 @@ class SubscriptionModeManualDomainPushProjectionMongoTest {
                 assertThat(orderCountStore.countFor("orders")).isEqualTo(2));
         assertThat(manualStartProjections.pendingIds()).doesNotContain(PROJECTION_ID);
 
-        ordersFeed.accept(new OrderPlaced("live"));
+        ordersFeed.acceptAndWait(new OrderPlaced("live"));
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.countFor("orders")).isEqualTo(3));
 

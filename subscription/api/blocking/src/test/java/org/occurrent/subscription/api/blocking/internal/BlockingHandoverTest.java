@@ -2948,7 +2948,7 @@ class BlockingHandoverTest {
         FutureTask<Void> second = new FutureTask<>(() -> handover.accept("L2"), null);
         FutureTask<Boolean> interrupted = new FutureTask<>(() -> {
             Thread.currentThread().interrupt();
-            return handover.acceptIfLive("L3");
+            return handover.acceptReportingDelivery("L3");
         });
         Thread firstThread = new Thread(first, "first");
         Thread secondThread = new Thread(second, "second");
@@ -3074,7 +3074,7 @@ class BlockingHandoverTest {
         FutureTask<Void> other = new FutureTask<>(() -> handover.accept("L0"), null);
         FutureTask<Void> first = new FutureTask<>(() -> handover.accept("L1"), null);
         FutureTask<Void> second = new FutureTask<>(() -> handover.accept("L2"), null);
-        FutureTask<Boolean> takeOver = new FutureTask<>(() -> handover.acceptIfLive("L3"));
+        FutureTask<Boolean> takeOver = new FutureTask<>(() -> handover.acceptReportingDelivery("L3"));
         Thread otherThread = new Thread(other, "other");
         Thread firstThread = new Thread(first, "first");
         Thread secondThread = new Thread(second, "second");
@@ -3099,6 +3099,129 @@ class BlockingHandoverTest {
         } finally {
             releaseOther.countDown();
             firstReturned.countDown();
+            otherThread.interrupt();
+            firstThread.interrupt();
+            secondThread.interrupt();
+        }
+    }
+
+    // The fold of L1 asks for a catch-up while acceptIfLive runs. The caller is not made to wait for it, and its fold of
+    // R1 runs on a thread of its own, held here until acceptIfLive has returned.
+    @Test
+    void acceptIfLive_returns_while_the_catch_up_its_fold_asked_for_replays_on_another_thread() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        AtomicReference<String> replayThread = new AtomicReference<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        CountDownLatch marked = new CountDownLatch(1);
+        FakeSource asked = source(List.of("R1"), false);
+        asked.onMarkCaughtUp = marked::countDown;
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(asked);
+            } else if (payload.equals("R1")) {
+                replayThread.set(Thread.currentThread().getName());
+                foldingR1.countDown();
+                holdQuietly(releaseR1);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Boolean> accepting = new FutureTask<>(() -> handover.acceptIfLive("L1"));
+        Thread caller = new Thread(accepting, "accept-if-live-caller");
+
+        try {
+            caller.start();
+
+            assertThat(accepting).as("acceptIfLive while R1 is held").succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            awaitOrFail(foldingR1);
+            assertThat(replayThread.get()).isNotEqualTo("accept-if-live-caller");
+            assertThat(handover.isReadyForLiveDelivery()).as("while the replay is held").isFalse();
+            releaseR1.countDown();
+            awaitOrFail(marked);
+            awaitReady(handover);
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(handover.acceptIfLive("L2")).isTrue();
+            assertThat(log).containsExactly("L1", "R1", "L2");
+        } finally {
+            releaseR1.countDown();
+            caller.interrupt();
+        }
+    }
+
+    // The ask of the second thread is left unowned while its fold still runs. acceptIfLive finds it and hands it to a
+    // thread of its own rather than running it, though that replay waits for the folds of L0 and L2. The replay runs
+    // once they end.
+    @Test
+    void acceptIfLive_hands_a_left_ask_to_another_thread_and_returns_before_it_replays() throws Exception {
+        FakeSource askedFirst = source(List.of("R1"), false);
+        FakeSource askedBySecond = source(List.of("R2"), false);
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        CountDownLatch otherFolding = new CountDownLatch(1);
+        CountDownLatch releaseOther = new CountDownLatch(1);
+        CountDownLatch takeOverReturned = new CountDownLatch(1);
+        CountDownLatch marked = new CountDownLatch(1);
+        AtomicReference<String> replayThread = new AtomicReference<>();
+        AtomicInteger lookups = new AtomicInteger();
+        askedBySecond.onIsAlreadyCaughtUp = () -> {
+            if (lookups.incrementAndGet() == 2) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        askedBySecond.onMarkCaughtUp = marked::countDown;
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("L0")) {
+                otherFolding.countDown();
+                holdQuietly(releaseOther);
+            } else if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedFirst);
+                firstAsked.countDown();
+                awaitOrFail(secondAsked);
+            } else if (payload.equals("L2")) {
+                awaitOrFail(firstAsked);
+                handoverRef.get().catchUp(askedBySecond);
+                secondAsked.countDown();
+                holdQuietly(takeOverReturned);
+            } else if (payload.equals("R2")) {
+                replayThread.set(Thread.currentThread().getName());
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Void> other = new FutureTask<>(() -> handover.accept("L0"), null);
+        FutureTask<Void> first = new FutureTask<>(() -> handover.accept("L1"), null);
+        FutureTask<Void> second = new FutureTask<>(() -> handover.accept("L2"), null);
+        FutureTask<Boolean> takeOver = new FutureTask<>(() -> handover.acceptIfLive("L3"));
+        Thread otherThread = new Thread(other, "other");
+        Thread firstThread = new Thread(first, "first");
+        Thread secondThread = new Thread(second, "second");
+        Thread takingOverThread = new Thread(takeOver, "taking over");
+        otherThread.start();
+        awaitOrFail(otherFolding);
+        firstThread.start();
+        secondThread.start();
+
+        try {
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            takingOverThread.start();
+            assertThat(takeOver).as("acceptIfLive while L0 and L2 are folded").succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            int replaysWhenItReturned = askedBySecond.replayCallCount;
+            takeOverReturned.countDown();
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            releaseOther.countDown();
+            awaitOrFail(marked);
+            awaitReady(handover);
+
+            assertThat(replaysWhenItReturned).isZero();
+            assertThat(askedBySecond.replayCallCount).isEqualTo(1);
+            assertThat(replayThread.get()).isNotIn("taking over", "second", "first", "other");
+        } finally {
+            releaseOther.countDown();
+            takeOverReturned.countDown();
             otherThread.interrupt();
             firstThread.interrupt();
             secondThread.interrupt();
@@ -3529,6 +3652,25 @@ class BlockingHandoverTest {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
+        }
+    }
+
+    // Held for longer than any assertion waits, so a call that waits for the fold fails on its own assertion.
+    private static void holdQuietly(CountDownLatch latch) {
+        try {
+            latch.await(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void awaitReady(BlockingHandover<String, String> handover) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!handover.isReadyForLiveDelivery()) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("The handover did not become live");
+            }
+            Thread.onSpinWait();
         }
     }
 

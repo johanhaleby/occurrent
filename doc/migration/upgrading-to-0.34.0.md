@@ -53,10 +53,11 @@ differently, so read them first.
 
 - [Section 12](#12-a-projection-feeds-accept-waits-until-the-event-is-applied-and-fails-when-it-is-not). A projection
   feed's `accept(..)` no longer reports an event as handled when it wasn't applied. On the blocking stack it can now
-  wait during a catch-up.
+  wait during a catch-up. It is deprecated in favour of `acceptAndWait(..)`, and the new `acceptOrDefer(..)` never
+  waits.
 - [Section 13](#13-only-the-in-memory-event-stores-write-path-may-feed-a-push-models-accept). `accept(..)` on a
   `PushSubscriptionModel` is supported only from the listener of an `InMemoryEventStore`. A RabbitMQ or Kafka listener
-  uses `acceptRedeliverable(CloudEvent)`.
+  uses `acceptOrDefer(CloudEvent)`.
 - [Section 14](#14-a-projection-feeds-golive-waits-for-a-running-catch-up). A projection feed's `goLive()` waits for a
   running catch-up of the same projection, and fails if that catch-up failed.
 
@@ -1115,30 +1116,32 @@ runtime behavior, not a call site a rewrite could search for.
 ## 12. A projection feed's `accept(..)` waits until the event is applied, and fails when it is not
 
 This covers `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` on both stacks, fixed for
-[#1135](https://github.com/johanhaleby/occurrent/issues/1135). The reactor stack changes only where the feed is
-stopped, covered after the blocking cases. In 0.33.0 an event fed before the blocking feed went live was
+[#1135](https://github.com/johanhaleby/occurrent/issues/1135). Both are deprecated in 0.34.0 and forward to the new
+`acceptAndWait(..)`, which behaves as this section describes. `UpgradeToOccurrent_0_34` renames each call. A broker
+listener that should not wait for a catch-up can call the new `acceptOrDefer(..)` instead, covered at the end of this
+section. The reactor stack changes only where the feed is stopped, covered after the blocking cases. In 0.33.0 an event fed before the blocking feed went live was
 put in a buffer and `accept(..)` returned straight away. A listener acknowledges the message once `accept(..)`
 returns, so the broker discarded an event that was only held in memory, and a stop or a crash before the catch-up
 finished lost it.
 
-Before the feed goes live, and while a catch-up runs on a feed that already went live, `accept(..)` now waits until
+Before the feed goes live, and while a catch-up runs on a feed that already went live, `acceptAndWait(..)` waits until
 the catch-up has applied the event. In 0.33.0 a catch-up on a live feed did not hold live events back, so
 `accept(..)` applied the event on the calling thread and returned. When the feed is live and no catch-up runs, the
 event is still applied on the calling thread.
 
-It's important to keep in mind that you must never call `accept(..)` on the thread that later calls `catchUp()`,
+It's important to keep in mind that you must never call `acceptAndWait(..)` on the thread that later calls `catchUp()`,
 `catchUpAll()` or `goLive()`. That thread waits for a catch-up it never gets to start, until another thread runs the
 catch-up, takes the feed live, calls `stopCatchUp()` or interrupts it. A test or a startup routine that does this on
 one thread now hangs:
 
 ```java
-feed.accept(event);
+feed.acceptAndWait(event);
 feed.catchUp();
 ```
 
 Run the catch-up on a thread of its own, or feed the event once the catch-up has returned.
 
-`accept(..)` now throws an `IllegalStateException` whenever the event was not applied. It throws in these cases:
+`acceptAndWait(..)` throws an `IllegalStateException` whenever the event was not applied. It throws in these cases:
 
 - the catch-up was stopped before the feed went live, or the feed was stopped before any catch-up started
 - the catch-up failed
@@ -1148,8 +1151,8 @@ Run the catch-up on a thread of its own, or feed the event once the catch-up has
 - another delivery of the same event is still running on another thread
 
 In 0.33.0 a stopped feed and a second delivery of an event still being applied both returned normally, so the
-listener acknowledged an event that nothing had applied. Do not acknowledge the message when `accept(..)` throws,
-and the broker delivers it again. A listener that acknowledges only after `accept(..)` returns, and lets an
+listener acknowledged an event that nothing had applied. Do not acknowledge the message when `acceptAndWait(..)` throws,
+and the broker delivers it again. A listener that acknowledges only after `acceptAndWait(..)` returns, and lets an
 exception reach the broker client, needs no change.
 
 In 0.33.0 an event fed while the feed was not live from inside the projection, a view or another callback of the
@@ -1163,7 +1166,7 @@ reassigned. RabbitMQ closes the channel of a consumer that holds on to a message
 than `consumer_timeout`, 30 minutes by default, and delivers the message again. Both cost a redelivery, not the event.
 
 On the reactor stack, `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` already returned a `Mono`
-that completes once the event is applied. That `Mono` now errors with an `IllegalStateException` for an event fed
+that completes once the event is applied, and `acceptAndWait(..)` returns the same `Mono`. That `Mono` now errors with an `IllegalStateException` for an event fed
 while the feed is stopped, after a catch-up was stopped before the feed went live and before the next `catchUp()`
 or `goLive()`. A `goLive()` called before the stop and waiting for the stopped replay is the exception. It takes the
 feed live once that replay has ended, and the feed applies the events fed after that.
@@ -1184,10 +1187,25 @@ subscription to the `Mono` that `DomainEventFeed.catchUpAll()`, `catchUp(id)` or
 feed goes live, its replay notices a stop, or it fails. A replay notices a stop at the next event it hands to the
 projection, so one with no event left to hand over goes live as if there had been no stop.
 
-`DomainEventFeed.acceptCloudEvent(..)`, which the Kafka and RabbitMQ sources call, is unchanged.
+`acceptOrDefer(..)` never waits for a catch-up, so a Kafka consumer that calls it keeps polling through a long replay.
+Nor does it run one on the calling thread. A catch-up the fold asks for while the call applies the event replays on a
+virtual thread that call starts, or on the thread that asked for it first, when that is another thread. Once
+the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`, so `DELIVERED`
+means the event has been applied. Before that, during a catch-up, and after a `stopCatchUp()` that stopped a replay
+before the feed went live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Leave the message
+unacknowledged then, and the broker delivers it again. A stop that ends a replay on a feed that was already live keeps
+it live, so the call applies the event and returns `DELIVERED` again. The blocking `acceptOrDefer(..)` also returns
+`DEFERRED` while another thread is still applying the same event. It throws an `IllegalStateException` once the catch-up
+has failed, and on the reactor stack its `Mono` errors with one instead. On the reactor stack the `Mono` also errors
+with an `IllegalStateException` when the code that applies an event to the feed, the `fold` you passed it, calls it.
+Section 15 says why. That `Mono` also errors when the queue of live events waiting to be applied is full, at the size
+`CatchupThenLiveOptions.maxBufferedEvents()` sets. Do not acknowledge the message on any of these errors.
+`DomainEventFeed.acceptOrDeferCloudEvent(..)`, which the Kafka and RabbitMQ sources call, gives the same outcomes for a
+`CloudEvent`, and `FILTERED` for one that does not match the filter given to `register(..)`.
 
-There is no recipe for this change. Which thread calls `accept(..)` and what a listener does when it throws are
-runtime behavior that a rewrite of the source cannot see.
+`UpgradeToOccurrent_0_34` renames `accept(..)` to `acceptAndWait(..)` on both feeds and both stacks, which changes
+nothing at runtime. Which thread calls `acceptAndWait(..)` and what a listener does when it throws are runtime
+behavior that a rewrite of the source cannot see, so that part has no recipe.
 
 ## 13. Only the in-memory event store's write path may feed a push model's `accept(..)`
 
@@ -1202,11 +1220,11 @@ run. The in-memory event store loses the event in that crash too, which is why i
 
 What to use instead depends on where the events come from:
 
-- A RabbitMQ or Kafka listener calls `acceptRedeliverable(CloudEvent)` and acknowledges the message only when the
+- A RabbitMQ or Kafka listener calls `acceptOrDefer(CloudEvent)` and acknowledges the message only when the
   outcome is `DELIVERED` or `FILTERED`. `RabbitMqCloudEventSource` and `KafkaCloudEventSource` already call it.
   Under `DeliveryFailurePolicy.PARK` they also acknowledge a failed message, once its republish to the parking
   destination is confirmed.
-- An HTTP endpoint whose caller retries a failed request calls `acceptRedeliverable(CloudEvent)` too, and answers
+- An HTTP endpoint whose caller retries a failed request calls `acceptOrDefer(CloudEvent)` too, and answers
   by the outcome's `disposition()`. `ACKNOWLEDGE`, for `DELIVERED` and `FILTERED`, is a success. `HOLD`, for
   `DEFERRED` and `UNAVAILABLE`, is an error the caller retries later, a 503 say. `FAIL`, for `NOT_DELIVERABLE`, and
   an exception out of the call go to the endpoint's own failure policy. `STOP`, for `REFUSED`, is an error the
@@ -1214,7 +1232,7 @@ What to use instead depends on where the events come from:
   subscribed again.
 - A listener on the write path of a durable event store, such as MongoDB, is replaced by a durable subscription,
   which records the position it has handled and resumes from it after a restart. Forwarding the events to a broker
-  whose listener calls `acceptRedeliverable(CloudEvent)` works as well.
+  whose listener calls `acceptOrDefer(CloudEvent)` works as well.
 - A Spring application event is delivered once, in memory, so it cannot deliver an event again after a crash either.
   If the application publishes it for an event a durable event store has already committed, subscribe to that store
   with a durable subscription instead. If the event is in an `InMemoryEventStore`, feed `accept(..)` from that
@@ -1280,14 +1298,16 @@ its `Mono`.
 Now the call completes once the event is queued. The event is applied once the handler or fold has returned, in the
 order it was fed, and an event fed during the replay once the subscription or feed has gone live. A replay that ends
 before that writes no catch-up marker, so the next replay hands the handler or fold the same history again. That holds
-for `PushSubscriptionModel.accept(..)` and `acceptRedeliverable(..)` called from the handler, and for
-`CatchupProjectionFeed.accept(..)`, `DomainEventFeed.accept(..)` and `DomainEventFeed.acceptCloudEvent(..)` called from
-the fold.
+for `PushSubscriptionModel.accept(..)` called from the handler, and for `acceptAndWait(..)` on `CatchupProjectionFeed`
+and `DomainEventFeed` and `DomainEventFeed.acceptAndWaitCloudEvent(..)` called from the fold. A handler or fold that
+used the call's completion or its error to learn that the event was applied now learns only that it was queued.
 
-`acceptRedeliverable(..)` and `acceptCloudEvent(..)` decide between `DELIVERED` and `DEFERRED` the same way they do
-for any other caller. During a replay that is `DEFERRED`. When live they report `DELIVERED` once the event is queued.
-A handler or fold that used the call's completion, its error or its `DELIVERED` to learn that the event was applied
-now learns only that it was queued.
+`acceptOrDefer(..)` and `acceptOrDeferCloudEvent(..)` report `DELIVERED` only for an event that has been applied, and
+an event fed from the handler or fold cannot be applied before that code returns. So called from the fold, live or
+not, `acceptOrDefer(..)` on either feed, and `acceptOrDeferCloudEvent(..)` for an event that matches the filter, error
+with an `IllegalStateException` and queue nothing. Call `acceptAndWait(..)` or `acceptAndWaitCloudEvent(..)` there
+instead. `PushSubscriptionModel.acceptOrDefer(..)` called from the handler reports `NOT_DELIVERABLE` for that
+handler's own subscription and queues nothing for it. None of these calls existed in 0.33.0.
 
 When applying one of these events fails, nobody is waiting for it any more. The subscription or feed then starts
 failing. It deletes its catch-up marker, refuses every later event from anywhere else with that failure, applies the

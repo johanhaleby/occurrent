@@ -146,6 +146,23 @@ public final class HandoverMessages {
     }
 
     /**
+     * Refuses a live event fed through {@code acceptOrDefer(..)} from inside one of the reactive handover's own
+     * deliveries or callbacks. That delivery cannot start before the code that fed it returns, so the call could only
+     * answer before the event is applied. A projection feed's fold is pointed at {@code acceptAndWait(..)}, and
+     * anything else at code it does not run.
+     *
+     * @param noun The noun describing what was fed, e.g. {@code "projection feed"} or {@code "subscription"}.
+     */
+    public static String acceptedOrDeferredFromOwnDelivery(String noun) {
+        String instead = "projection feed".equals(noun)
+                ? "From inside its fold, call acceptAndWait(..) instead."
+                : "Feed the event from code this " + noun + " does not run.";
+        return "acceptOrDefer(..) was called on this " + noun + " from inside one of its own deliveries or callbacks. "
+                + "The event cannot be applied before that code returns, so this call cannot report it as applied, "
+                + "and it is refused. " + instead;
+    }
+
+    /**
      * Rejects a null replay-to-live de-dup key. The key function is caller-supplied and declared non-null, but nothing
      * enforces that at runtime, and a null reaches {@code BoundedIdCache} as a null element for its eviction queue,
      * which throws a bare {@link NullPointerException} from inside the cache. On the live path that happens after the

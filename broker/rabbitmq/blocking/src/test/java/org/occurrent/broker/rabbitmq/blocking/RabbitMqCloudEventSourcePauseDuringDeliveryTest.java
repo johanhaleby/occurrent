@@ -40,7 +40,7 @@ import static org.awaitility.Awaitility.await;
  * arrive one at a time) hands the source {@code RoutingOutcome.UNAVAILABLE} for the next message. Nothing about that
  * message is broken, so it must never be parked and acknowledged under {@link DeliveryFailurePolicy#PARK}. Only a
  * {@code NOT_DELIVERABLE} outcome, or a {@code RuntimeException} or {@code AssertionError} thrown out of
- * {@code acceptRedeliverable(..)}, goes through the failure policy.
+ * {@code acceptOrDefer(..)}, goes through the failure policy.
  * <p>
  * {@code UNAVAILABLE} is paced exactly like {@code DEFERRED}, held without being acknowledged rather than acted on
  * immediately, so with {@code prefetchCount == 1} the broker sends nothing further on this consumer until the next

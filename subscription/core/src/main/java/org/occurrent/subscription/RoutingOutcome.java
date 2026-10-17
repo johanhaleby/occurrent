@@ -37,12 +37,12 @@ package org.occurrent.subscription;
  * </ul>
  * <p>
  * Two of the six always come with an exception propagating to the caller as well, {@link #NOT_DELIVERABLE} and
- * {@link #REFUSED}, with one exception. A push model's {@code acceptRedeliverable(..)} returns a refusal as its
+ * {@link #REFUSED}, with one exception. A push model's {@code acceptOrDefer(..)} returns a refusal as its
  * outcome without throwing, so only a filter's own failure propagates from it. {@link #DELIVERED} may come with an
  * exception, since a handler that ran and threw is still a handler that ran, and its exception propagates after this
  * outcome has been reported. {@link #FILTERED}, {@link #DEFERRED} and {@link #UNAVAILABLE} never do.
  * <p>
- * So outside {@code acceptRedeliverable(..)}, an outcome that arrives on its own, with nothing thrown, is one of
+ * So outside {@code acceptOrDefer(..)}, an outcome that arrives on its own, with nothing thrown, is one of
  * those three, and a caller can tell an event
  * nothing was able to receive from an event something tried to receive and failed on without reading any state a
  * concurrent lifecycle call could have changed in the meantime.
@@ -83,7 +83,7 @@ public enum RoutingOutcome {
      * refusal is permanent, a catch-up-then-live engine whose live buffer is full while its replay is still
      * running, say. That refusal clears on its own once the replay drains, so it is a failure to report rather than
      * a reason to stop. A refusal the action does promise is permanent reports {@link #REFUSED} instead. A push
-     * model's {@code acceptRedeliverable(..)} returns this refusal without throwing its cause.
+     * model's {@code acceptOrDefer(..)} returns this refusal without throwing its cause.
      */
     NOT_DELIVERABLE,
 
@@ -111,7 +111,7 @@ public enum RoutingOutcome {
     /**
      * A registered action refused the event before attempting any dispatch, and promised that refusing is permanent
      * for that registration. A catch-up-then-live engine whose replay has failed is the case this exists for. The
-     * refusal's own cause propagates to the caller as well, except from a push model's {@code acceptRedeliverable(..)},
+     * refusal's own cause propagates to the caller as well, except from a push model's {@code acceptOrDefer(..)},
      * which returns this outcome without throwing.
      * <p>
      * Offering the same event to the same registration again gets the same answer, so a caller stops rather than

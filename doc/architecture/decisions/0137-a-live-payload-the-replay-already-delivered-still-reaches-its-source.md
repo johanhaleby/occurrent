@@ -160,7 +160,8 @@ that blocks on the call from a thread it switched to, while a replay holds live 
 cannot end while the view blocks. Both engines answer a `catchUp()` they recognize this way `true` without waiting,
 whether it has anything to replay or not, and its replay does not start before the view's code returns. The blocking
 engine runs that replay once the view's code has returned, on the thread that asked first, before the call into the
-handover that ran the view's code on that thread returns. An ask from any thread before that replay takes its turn asks
+handover that ran the view's code on that thread returns. When that call is `acceptIfLive`, it starts a virtual thread
+for the replay instead and returns without waiting. An ask from any thread before that replay takes its turn asks
 for the same replay, so a call on another thread can return before the replay has run. That replay stops only for a stop
 that came after every ask it stands for. A catch-up failure refuses only the asks made before it, and only when it comes
 before the replay starts or finds the history caught up already, so a failure while the replay runs refuses none of
@@ -192,7 +193,8 @@ is interrupted where the replay would wait, it gives up the asks made on it and 
 an interrupted thread, the thread puts back every ask the replay stands for and logs a warning. The asks it puts back,
 and the asks of other threads when it gives up, stay, and their replay runs on the thread of a later call into the
 handover, such as a catch-up or a live delivery made outside the handover's own code, before that call returns. That
-call can be interrupted too, and then gives up or puts back the asks again. So a `catchUp()` on a thread where the view
+call can be interrupted too, and then gives up or puts back the asks again. An `acceptIfLive` starts a virtual thread
+for these asks instead and returns without waiting. So a `catchUp()` on a thread where the view
 never asked can throw the failure of that replay. Asks left this way run only when a later call comes, so if none comes,
 their replay does not run. A view that waits for a `catchUp()` that replays from a thread it switched to is not
 recognized, so it still waits for a replay that cannot start while the view waits.
@@ -203,8 +205,10 @@ delivery waited forever, live and during a replay. The engine's own code here is
 `goLive()` above.
 
 So a payload that code feeds the reactive engine is queued, answered once it is queued, and delivered after the code
-that fed it, in the order it was fed. That holds for `accept`, `acceptIfLive` and `acceptReportingDelivery`, and
-`acceptIfLive` decides whether the handover is live the same way it does for any other caller. This is what a
+that fed it, in the order it was fed. That holds for `accept` and `acceptReportingDelivery`. `acceptIfLive` answers
+`true` only for a payload that has been delivered, so called from that code it refuses the payload with a
+`PreDispatchRefusalException` instead, live or not, and queues nothing.
+[ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md) says why. This is what a
 subscription handler gets when it writes to the in-memory event store, or calls `accept` and subscribes to it without
 waiting.
 
@@ -216,7 +220,8 @@ marker, so a caller that sees a refusal and starts a new catch-up gets a replay.
 the handover logs an error that says to delete the marker by hand before replacing the subscription or feed.
 
 While it is failing, the handover refuses every later payload from any other code with that failure, and refuses a
-new catch-up. It delivers every payload it has already taken in and every payload its own code feeds it meanwhile.
+new catch-up. It delivers every payload it has already taken in and every payload its own code feeds it meanwhile
+through `accept` or `acceptReportingDelivery`. One its own code feeds through `acceptIfLive` is refused, as above.
 A failed catch-up also answers each payload from other code still waiting with its failure and does not deliver it,
 as described further down. A later failure is logged while the rest are still delivered. Once none is left, it fails for good with the first failure.
 

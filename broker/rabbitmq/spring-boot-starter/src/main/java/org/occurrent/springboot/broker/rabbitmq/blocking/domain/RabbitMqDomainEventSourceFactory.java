@@ -34,7 +34,7 @@ public interface RabbitMqDomainEventSourceFactory {
     /**
      * @param queue The queue this source consumes from, and declares unless
      *              {@code occurrent.broker.rabbitmq.source.declare-topology} is {@code false}.
-     * @param feed  The feed this source calls {@code acceptCloudEvent(...)} on.
+     * @param feed  The feed this source calls {@code acceptOrDeferCloudEvent(...)} on.
      */
     <E> RabbitMqDomainEventSource.Builder<E> forQueue(String queue, DomainEventFeed<E> feed);
 }

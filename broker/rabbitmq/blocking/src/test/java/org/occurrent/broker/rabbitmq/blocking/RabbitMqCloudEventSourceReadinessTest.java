@@ -45,7 +45,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} reporting {@link RoutingOutcome#DEFERRED} is what
+ * {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} reporting {@link RoutingOutcome#DEFERRED} is what
  * closes the catch-up acknowledgement hole on its own, with no {@code readinessSource} configured at all.
  * {@link RabbitMqCloudEventSource.Builder#readinessSource(java.util.function.Predicate)} is a pacing hint on top of
  * that, proven here against a real broker rather than against {@code CatchupThenPushSubscriptionModel} itself,

@@ -88,9 +88,10 @@ import java.util.function.Supplier;
  * live. A replay that ends before that writes no catch-up marker, so the next replay hands the handler the same
  * history again. The model recognizes the write when the handler returns it as part of the {@link Mono} it returns,
  * or subscribes it, blocking or not, on the thread it was called on. A handler that blocks on the write from a thread
- * it switched to still waits for itself. The same holds for {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} called
- * from the handler, which decides live or not as for any caller, and reports
- * {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} once the event is queued.
+ * it switched to still waits for itself. {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} called from the
+ * handler, recognized the same way, is refused for this subscription instead, live or not, and reported as
+ * {@link org.occurrent.subscription.RoutingOutcome#NOT_DELIVERABLE}, since it could only report the event as queued
+ * rather than applied.
  * <p>
  * When applying an event written that way fails, the write has already returned. The subscription then starts
  * failing, and a failed catch-up starts it failing the same way. It deletes its catch-up marker, refuses every later
@@ -107,7 +108,7 @@ import java.util.function.Supplier;
  * subscription missed. With a durable event store, such as MongoDB, use a durable subscription, or a broker as
  * described below. The amendment to ADR 133 records why.
  * <p>
- * Fed from a broker, call {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and acknowledge the message
+ * Fed from a broker, call {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} and acknowledge the message
  * only when its {@link Mono} completes with {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
  * {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. It refuses an event arriving during the replay instead of
  * buffering it, so the broker delivers that event again, and a delivery after this model has gone live applies it.
@@ -219,7 +220,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
         // Register on the live feed first, so events committing during the replay are buffered in the sink, not
         // lost. PushSubscriptionModel.accept(..), the write path, buffers through acceptReportingDelivery(..).
-        // PushSubscriptionModel.acceptRedeliverable(..), a broker path that can redeliver, uses acceptIfLive(..)
+        // PushSubscriptionModel.acceptOrDefer(..), a broker path that can redeliver, uses acceptIfLive(..)
         // instead, which refuses a payload arriving before the handover is live rather than buffering it, reported
         // as RoutingOutcome.DEFERRED. Only the dedicated pre-dispatch exception is wrapped as a Refusal, so
         // routeReportingMatch reports NOT_DELIVERABLE or REFUSED for it, whichever handover.refusesPermanently()

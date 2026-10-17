@@ -33,7 +33,7 @@ public interface KafkaDomainEventSourceFactory {
 
     /**
      * @param groupId This consumer's Kafka {@code group.id}, one per projection or saga per ADR 90.
-     * @param feed    The feed this source calls {@code acceptCloudEvent(...)} on.
+     * @param feed    The feed this source calls {@code acceptOrDeferCloudEvent(...)} on.
      */
     <E> KafkaDomainEventSource.Builder<E> forGroup(String groupId, DomainEventFeed<E> feed);
 }

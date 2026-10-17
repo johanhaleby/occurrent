@@ -46,7 +46,7 @@ import org.occurrent.subscription.RoutingOutcome;
  * is stopped, or the subscription is paused.
  * <p>
  * A broker listener acknowledges on the outcome the {@link reactor.core.publisher.Mono} from
- * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} completes with, never on what this observer is told
+ * {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} completes with, never on what this observer is told
  * for {@code accept(...)}, which reports {@link RoutingOutcome#DELIVERED} for an action that errored too.
  * {@link RoutingOutcome}'s values are kept apart rather than collapsed back into a single flag. Read that enum for
  * what each of them asks a caller to do next, since offering the event again, applying a failure policy and

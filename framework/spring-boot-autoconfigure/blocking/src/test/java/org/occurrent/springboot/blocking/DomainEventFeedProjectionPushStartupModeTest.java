@@ -135,17 +135,17 @@ class DomainEventFeedProjectionPushStartupModeTest {
                     DomainEventFeed<TestEvent> feed = context.getBean(DomainEventFeed.class);
                     // Offered while the replay still holds the event, so the source is told to offer it again rather
                     // than acknowledge it.
-                    assertThat(feed.acceptCloudEvent(historyEvent()))
+                    assertThat(feed.acceptOrDeferCloudEvent(historyEvent()))
                             .as("the copy offered during the replay")
                             .isEqualTo(RoutingOutcome.DEFERRED);
 
                     RELEASE_REPLAY[0].countDown();
 
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                    RoutingOutcome outcome = feed.acceptCloudEvent(historyEvent());
+                    RoutingOutcome outcome = feed.acceptOrDeferCloudEvent(historyEvent());
                     while (outcome != RoutingOutcome.DELIVERED && System.nanoTime() < deadline) {
                         Thread.sleep(20);
-                        outcome = feed.acceptCloudEvent(historyEvent());
+                        outcome = feed.acceptOrDeferCloudEvent(historyEvent());
                     }
 
                     assertThat(outcome).as("the copy offered again once the feed is live").isEqualTo(RoutingOutcome.DELIVERED);

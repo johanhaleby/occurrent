@@ -88,7 +88,7 @@ import java.util.stream.Stream;
  *   <li><strong>Live resume</strong> is not Occurrent's job. This model persists no live position, so what becomes of
  *       an event nothing handled depends on what feeds the {@link PushSubscriptionModel}.
  *       <ul>
- *         <li>Fed from a broker, the listener calls {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and
+ *         <li>Fed from a broker, the listener calls {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} and
  *             acknowledges the message only when the outcome it returns is
  *             {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
  *             {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. During the replay it refuses the event instead of buffering it, so the broker delivers it again, and a delivery
@@ -265,7 +265,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * @param reader          Reads the projection's history in position order for the catch-up replay.
      * @param liveFeed        The push model this model wraps. The in-memory event store's listener feeds it through
      *                        {@code accept(...)}, and a broker listener through
-     *                        {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}.
+     *                        {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)}.
      * @param catchupMarker Records that the one-time catch-up finished so a restart skips it, or {@code null} to
      *                        catch up on every subscribe.
      */
@@ -341,7 +341,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live. Registers a delivery-reporting action rather than
         // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) still buffers
-        // exactly as before, while PushSubscriptionModel.acceptRedeliverable(..) (a broker path that can redeliver,
+        // exactly as before, while PushSubscriptionModel.acceptOrDefer(..) (a broker path that can redeliver,
         // bufferIfNotLive false) refuses instead of buffering, reported as RoutingOutcome.DEFERRED. Both branches
         // wrap only a BlockingHandover.PreDispatchRefusalException as RoutingAction.Refusal, never every
         // IllegalStateException the call could throw, since the handler itself can throw one too (deliverOutsideLock
@@ -349,7 +349,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // NOT_DELIVERABLE, whatever it threw. Route (unobserved) and routeReportingMatch (observed) both unwrap
         // Refusal back to the original cause before it ever reaches a caller, so accept(..) still throws the plain
         // IllegalStateException a catch-up failure always has, whether or not a PushObserver is configured.
-        // acceptRedeliverable(..) goes through routeRedeliverable, which returns the refusal's outcome instead,
+        // acceptOrDefer(..) goes through routeRedeliverable, which returns the refusal's outcome instead,
         // REFUSED for a failed catch-up.
         RoutingSubscribeAction routingAction = (cloudEvent, bufferIfNotLive) -> {
                     try {
@@ -403,7 +403,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * {@code false} forever after a catch-up failure on a thread that was not interrupted.
      * <p>
      * A CloudEvent-level broker source that feeds the live {@link PushSubscriptionModel} this model wraps through
-     * {@link PushSubscriptionModel#acceptRedeliverable(io.cloudevents.CloudEvent)} needs no call to this method to
+     * {@link PushSubscriptionModel#acceptOrDefer(io.cloudevents.CloudEvent)} needs no call to this method to
      * decide whether to acknowledge. That call already refuses, rather than buffers, a message this catch-up would
      * only have buffered, reported {@link org.occurrent.subscription.RoutingOutcome#DEFERRED} so the source
      * redelivers it instead of acknowledging. This method exists only for a source that wants to pace itself,

@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.api.reactor.internal;
 
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -2724,33 +2725,68 @@ class ReactiveHandoverTest {
     }
 
     @Test
-    void accept_if_live_from_a_live_fold_completes_true_once_queued_and_its_payload_is_delivered_after_that_fold() {
+    void accept_if_live_from_a_live_fold_is_refused_and_its_payload_is_never_delivered() {
         List<String> log = new CopyOnWriteArrayList<>();
-        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("L1", self ->
-                self.acceptIfLive("N1").doOnNext(answers::add)));
+                self.acceptIfLive("N1").doOnError(refusals::add).onErrorComplete()));
         StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
 
         StepVerifier.create(handover.accept("L1")).expectComplete().verify(Duration.ofSeconds(5));
+        StepVerifier.create(handover.accept("L2")).expectComplete().verify(Duration.ofSeconds(5));
 
-        assertThat(answers).containsExactly(true);
-        awaitSize(log, 2);
-        assertThat(log).containsExactly("L1", "N1");
+        assertThat(refusals).singleElement(InstanceOfAssertFactories.THROWABLE)
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.acceptedOrDeferredFromOwnDelivery("test payload"));
+        assertThat(log).containsExactly("L1", "L2");
     }
 
-    // The handover is not live while it replays, so the fold gets the answer a caller from anywhere else would get.
+    // The handover is not live while it replays, and a fold still gets the refusal rather than an answer for either.
     @Test
-    void accept_if_live_from_a_replayed_fold_is_answered_not_live_and_takes_nothing_in() {
+    void accept_if_live_from_a_replayed_fold_is_refused_and_its_payload_is_never_delivered() {
         List<String> log = new CopyOnWriteArrayList<>();
-        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("R1", self ->
-                self.acceptIfLive("N1").doOnNext(answers::add)));
+                self.acceptIfLive("N1").doOnError(refusals::add).onErrorComplete()));
 
         StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).expectComplete().verify(Duration.ofSeconds(5));
         StepVerifier.create(handover.accept("L1")).expectComplete().verify(Duration.ofSeconds(5));
 
-        assertThat(answers).containsExactly(false);
+        assertThat(refusals).singleElement(InstanceOfAssertFactories.THROWABLE)
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.acceptedOrDeferredFromOwnDelivery("test payload"));
         assertThat(log).containsExactly("R1", "L1");
+    }
+
+    @Test
+    void a_refused_accept_if_live_from_a_live_fold_leaves_the_handover_serving_and_a_later_call_from_outside_answers_true_once_delivered() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("L1", self ->
+                self.acceptIfLive("N1").doOnError(refusals::add).onErrorComplete()));
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+
+        StepVerifier.create(handover.accept("L1")).expectComplete().verify(Duration.ofSeconds(5));
+        StepVerifier.create(handover.acceptIfLive("L2")).expectNext(true).verifyComplete();
+
+        assertThat(refusals).hasSize(1);
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(log).as("L2 is delivered by the time it is answered, N1 never is").containsExactly("L1", "L2");
+    }
+
+    @Test
+    void a_refused_accept_if_live_from_a_replayed_fold_leaves_the_handover_serving_and_a_later_call_from_outside_answers_true_once_delivered() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("R1", self ->
+                self.acceptIfLive("N1").doOnError(refusals::add).onErrorComplete()));
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).expectComplete().verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(handover.acceptIfLive("L1")).expectNext(true).verifyComplete();
+
+        assertThat(refusals).hasSize(1);
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(log).as("L1 is delivered by the time it is answered, N1 never is").containsExactly("R1", "L1");
     }
 
     // bad1 and Y were both answered once queued, so Y is delivered although bad1 failed, and only then does the
@@ -3491,6 +3527,130 @@ class ReactiveHandoverTest {
         assertThat(answers.get(0).get(5, TimeUnit.SECONDS)).isFalse();
         Mono.delay(Duration.ofMillis(300)).block();
         assertThat(log).containsExactly("R1");
+    }
+
+    // The dedup key is read after the payload is registered and before it is queued, so the pause lands with L1
+    // registered and not yet queued. The replay still holds the pause when L1 is answered.
+    @Test
+    void acceptIfLive_registered_but_not_yet_queued_when_a_replay_pauses_live_delivery_is_answered_false_and_never_delivered() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch readingKeyOfL1 = new CountDownLatch(1);
+        CountDownLatch releaseKeyOfL1 = new CountDownLatch(1);
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(
+                holdingAt("R1", log, foldingR1, releaseR1, null), payload -> {
+                    if (payload.equals("L1")) {
+                        readingKeyOfL1.countDown();
+                        awaitLatchQuietly(releaseKeyOfL1);
+                    }
+                    return payload;
+                }, CatchupThenLiveOptions.defaults(), "test payload");
+        try {
+            StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+            CompletableFuture<Boolean> l1 = handover.acceptIfLive("L1").subscribeOn(Schedulers.boundedElastic()).toFuture();
+            assertThat(readingKeyOfL1.await(5, TimeUnit.SECONDS)).isTrue();
+
+            CompletableFuture<Boolean> replaying = handover.catchUp(source(List.of("R1"), false)).toFuture();
+            assertThat(foldingR1.await(5, TimeUnit.SECONDS)).isTrue();
+
+            assertThat(l1).as("L1 while the replay folds R1").succeedsWithin(Duration.ofSeconds(5)).isEqualTo(false);
+            releaseKeyOfL1.countDown();
+            releaseR1.countDown();
+            assertThat(replaying).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(handover.acceptIfLive("L2").block(Duration.ofSeconds(5))).as("the barrier behind L1").isTrue();
+            assertThat(log).containsExactly("R1", "L2");
+        } finally {
+            releaseKeyOfL1.countDown();
+            releaseR1.countDown();
+        }
+    }
+
+    // L2 is queued behind L1's fold when the replay pauses live delivery. L1 is being folded, so the replay waits for it
+    // and L1 answers true. L2 has not started, so it is answered false at once and taken out of the queue.
+    @Test
+    void acceptIfLive_queued_behind_a_live_fold_is_answered_false_when_a_replay_pauses_live_delivery_and_never_delivered() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(
+                holdingAt("L1", log, foldingL1, releaseL1, null), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        try {
+            StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+            CompletableFuture<Boolean> l1 = handover.acceptIfLive("L1").subscribeOn(Schedulers.boundedElastic()).toFuture();
+            assertThat(foldingL1.await(5, TimeUnit.SECONDS)).isTrue();
+            CompletableFuture<Boolean> l2 = offeredFromOutside(() -> handover.acceptIfLive("L2"));
+            assertThat(l2).as("L2 queued behind L1").isNotDone();
+
+            CompletableFuture<Boolean> replaying = handover.catchUp(source(List.of("R1"), false)).toFuture();
+
+            assertThat(l2).as("L2 before L1 is released").succeedsWithin(Duration.ofSeconds(5)).isEqualTo(false);
+            assertThat(l1).as("L1 while its fold is held").isNotDone();
+            assertThat(replaying).as("the replay while L1 is folded").isNotDone();
+            releaseL1.countDown();
+            assertThat(l1).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(replaying).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(handover.acceptIfLive("L3").block(Duration.ofSeconds(5))).as("the barrier behind L2").isTrue();
+            assertThat(log).containsExactly("L1", "R1", "L3");
+        } finally {
+            releaseL1.countDown();
+        }
+    }
+
+    // L1 is delivered inline on the thread that subscribed to it, and that thread ends the live delivery the replay
+    // waits for. The replay must not continue there, or block() cannot return until the replay is done.
+    @Test
+    void a_replay_that_waited_for_an_inline_live_delivery_runs_on_another_thread_than_the_caller_of_acceptIfLive() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        AtomicReference<String> replayThread = new AtomicReference<>();
+        CountDownLatch foldingL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("L1")) {
+                foldingL1.countDown();
+                awaitLatchQuietly(releaseL1);
+            }
+            if (payload.equals("R1")) {
+                replayThread.set(Thread.currentThread().getName());
+                foldingR1.countDown();
+                awaitLatchQuietly(releaseR1);
+            }
+            log.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        CompletableFuture<Boolean> blocked = new CompletableFuture<>();
+        Thread caller = new Thread(() -> {
+            try {
+                blocked.complete(handover.acceptIfLive("L1").block(Duration.ofSeconds(10)));
+            } catch (Throwable t) {
+                blocked.completeExceptionally(t);
+            }
+        }, "accept-if-live-caller");
+        try {
+            StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+            caller.start();
+            assertThat(foldingL1.await(5, TimeUnit.SECONDS)).isTrue();
+            CountDownLatch replayWaiting = new CountDownLatch(1);
+            FakeSource history = source(List.of("R1"), false);
+            history.onCaughtUpChecked = replayWaiting::countDown;
+            CompletableFuture<Boolean> replaying = handover.catchUp(history).toFuture();
+            assertThat(replayWaiting.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(history.replayCallCount).as("the replay waits for L1's fold").isZero();
+
+            releaseL1.countDown();
+
+            assertThat(foldingR1.await(5, TimeUnit.SECONDS)).as("R1 is folded").isTrue();
+            assertThat(replayThread.get()).isNotEqualTo("accept-if-live-caller");
+            assertThat(blocked).as("block() while R1 is held").succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            releaseR1.countDown();
+            assertThat(replaying).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(log).containsExactly("L1", "R1");
+        } finally {
+            releaseL1.countDown();
+            releaseR1.countDown();
+            caller.join(TimeUnit.SECONDS.toMillis(15));
+        }
     }
 
     @Test

@@ -61,11 +61,11 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 /**
  * Feeds a Kafka topic into a {@link DomainEventFeed}, the domain-level consume side ADR 133 decision 5 describes.
  * Rebuilds each record as a {@link CloudEvent} through {@link KafkaCloudEventMapper} and calls
- * {@link DomainEventFeed#acceptCloudEvent(CloudEvent)}, which is where the matching, the decoding and the delivery
+ * {@link DomainEventFeed#acceptOrDeferCloudEvent(CloudEvent)}, which is where the matching, the decoding and the delivery
  * all happen. This source does no filtering of its own, since the feed is the only thing that can decide per ADR 133
  * decision 5.
  * <p>
- * <strong>Acknowledgement</strong> follows the {@link RoutingOutcome} {@code acceptCloudEvent(...)} returns, exactly
+ * <strong>Acknowledgement</strong> follows the {@link RoutingOutcome} {@code acceptOrDeferCloudEvent(...)} returns, exactly
  * as {@code KafkaCloudEventSource} follows the one its own model reports, and by reading the same
  * {@link RoutingOutcome#disposition()} that source reads. {@link RoutingOutcome.Disposition#ACKNOWLEDGE} stages
  * this record's offset for the next commit. {@link RoutingOutcome.Disposition#FAIL} and a thrown exception both
@@ -141,11 +141,11 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * only once a projection is registered and its catch-up-then-live transition has actually reached live, not merely
  * started. This exists for the same reason {@code RabbitMqDomainEventSource} polls the same two methods. Without
  * the registration half, a record arriving before the application registers its projection would hit
- * {@code acceptCloudEvent(...)}'s {@link IllegalStateException} refusal on every delivery, and under
+ * {@code acceptOrDeferCloudEvent(...)}'s {@link IllegalStateException} refusal on every delivery, and under
  * {@link DeliveryFailurePolicy#REDELIVER} that is an instant seek-and-redeliver loop, not a wait. Without the
  * readiness half, a record arriving before the application calls {@code catchUpAll()}/{@code catchUp(...)} or
  * {@code goLive(...)}, or while a replay is still actively running, would only ever buffer with nothing behind it,
- * which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#DEFERRED} for exactly that reason (see its
+ * which {@code acceptOrDeferCloudEvent(...)} answers with {@link RoutingOutcome#DEFERRED} for exactly that reason (see its
  * own javadoc): refused outright rather than buffered, bypassing {@link DeliveryFailurePolicy} regardless of what
  * this source is configured with, so {@code PARK} can never fire for a record that only needs the replay to catch
  * up. {@code poll()} still runs while paused, for the same heartbeat and
@@ -215,7 +215,7 @@ public final class KafkaDomainEventSource<E> implements AutoCloseable {
      *                       {@code Consumer}. Refused when {@code group.id} is absent, and when
      *                       {@code enable.auto.commit} is anything other than exactly {@code "false"}, per ADR 133,
      *                       since seeking only works if nothing else commits.
-     * @param feed           The feed this source calls {@link DomainEventFeed#acceptCloudEvent(CloudEvent)} on.
+     * @param feed           The feed this source calls {@link DomainEventFeed#acceptOrDeferCloudEvent(CloudEvent)} on.
      */
     public static <E> Builder<E> builder(Map<String, Object> consumerConfig, DomainEventFeed<E> feed) {
         return new Builder<>(consumerConfig, feed);
@@ -550,7 +550,7 @@ public final class KafkaDomainEventSource<E> implements AutoCloseable {
 
         RoutingOutcome outcome;
         try {
-            outcome = feed.acceptCloudEvent(cloudEvent);
+            outcome = feed.acceptOrDeferCloudEvent(cloudEvent);
         } catch (UnreadableLiveFilterException e) {
             log.error("The registration on this feed has a data payload filter this feed cannot answer live. This " +
                     "is a permanent configuration error; stopping this source and leaving its consumer group " +
@@ -589,12 +589,12 @@ public final class KafkaDomainEventSource<E> implements AutoCloseable {
                 // Bypasses DeliveryFailurePolicy (and any parking) entirely, since nothing here is broken, only
                 // not ready yet. REDELIVER, without ever calling failureAction.apply(record), reuses the same
                 // seek-back and throttledUntilNanos pacing processBatch(..) already applies for a partition it
-                // stops early. DomainEventFeed#acceptCloudEvent reports DEFERRED for this today, not UNAVAILABLE, per
+                // stops early. DomainEventFeed#acceptOrDeferCloudEvent reports DEFERRED for this today, not UNAVAILABLE, per
                 // its own javadoc, and both share this disposition either way.
                 yield HandleResult.REDELIVER;
             }
             case FAIL -> {
-                // DomainEventFeed#acceptCloudEvent does not report NOT_DELIVERABLE today, per its own javadoc, so
+                // DomainEventFeed#acceptOrDeferCloudEvent does not report NOT_DELIVERABLE today, per its own javadoc, so
                 // this branch is what a later one would reach rather than a path a shipped feed takes.
                 log.debug("A record on topic \"{}\" partition {} offset {} could not be delivered. Routing it " +
                         "through the configured delivery failure policy.",

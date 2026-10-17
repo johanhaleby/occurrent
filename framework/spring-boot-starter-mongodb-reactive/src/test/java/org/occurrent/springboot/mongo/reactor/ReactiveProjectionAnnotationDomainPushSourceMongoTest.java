@@ -97,7 +97,7 @@ class ReactiveProjectionAnnotationDomainPushSourceMongoTest {
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(2)));
 
-        ordersFeed.accept(new OrderPlaced("live")).block();
+        ordersFeed.acceptAndWait(new OrderPlaced("live")).block();
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(3)));
     }

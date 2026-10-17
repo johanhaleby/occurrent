@@ -58,14 +58,14 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 /**
  * Feeds a Kafka topic into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
  * describes. Rebuilds each record as a {@link CloudEvent} through {@link KafkaCloudEventMapper}, hands it to
- * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}, and commits only once the {@link RoutingOutcome}
+ * {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)}, and commits only once the {@link RoutingOutcome}
  * that call returns says the event was actually consumed.
  * <p>
  * <strong>Holds a {@link PushSubscriptionModel}, never a {@link CatchupThenPushSubscriptionModel}</strong>, for the
  * same reason {@code RabbitMqCloudEventSource} does. ADR 133 decision 1 is explicit that a source feeds the live
  * model, not the catch-up wrapper in front of it.
  * <p>
- * <strong>Acknowledgement.</strong> A record for which {@code acceptRedeliverable(...)} throws (a handler
+ * <strong>Acknowledgement.</strong> A record for which {@code acceptOrDefer(...)} throws (a handler
  * exception, or a subscription filter that failed to evaluate) goes through the failure policy below, and its offset
  * is committed only once a {@link DeliveryFailurePolicy#PARK} of it is confirmed. A normal return is decided by
  * {@link RoutingOutcome#disposition()} alone, so this source stages a record's offset for the next commit exactly
@@ -162,7 +162,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <strong>A permanently failed catch-up stops this source, it does not commit or redeliver into it.</strong> A
  * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} whose replay has permanently failed refuses every
  * later live event before attempting any dispatch, and promises that refusing is permanent, which
- * {@code acceptRedeliverable(...)} returns as {@link RoutingOutcome#REFUSED}. That outcome is returned for nothing
+ * {@code acceptOrDefer(...)} returns as {@link RoutingOutcome#REFUSED}. That outcome is returned for nothing
  * else, so this source decides on it alone. A handler that reached into some other permanently failed engine throws
  * instead, and goes through {@link DeliveryFailurePolicy} like any other handler failure.
  * <p>
@@ -568,7 +568,7 @@ public final class KafkaCloudEventSource implements AutoCloseable {
         }
         RoutingOutcome outcome;
         try {
-            outcome = model.acceptRedeliverable(cloudEvent);
+            outcome = model.acceptOrDefer(cloudEvent);
         } catch (RuntimeException | AssertionError e) {
             // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
             // would leave the loop thread dead with the partition never advancing past this record. Only a filter

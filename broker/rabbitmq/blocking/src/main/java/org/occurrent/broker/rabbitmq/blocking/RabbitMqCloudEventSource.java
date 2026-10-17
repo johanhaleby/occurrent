@@ -55,7 +55,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * Feeds a RabbitMQ queue into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
  * describes. Rebuilds each message as a {@link CloudEvent} through {@link RabbitMqCloudEventMapper}, hands it to
- * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}, and acknowledges only once the {@link RoutingOutcome}
+ * {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)}, and acknowledges only once the {@link RoutingOutcome}
  * that call returns says the event was actually consumed.
  * <p>
  * <strong>Holds a {@link PushSubscriptionModel}, never a {@link CatchupThenPushSubscriptionModel}.</strong> ADR 133
@@ -64,7 +64,7 @@ import static java.util.Objects.requireNonNull;
  * as a constructor argument and replays history through it before handing over. An application that wants catch-up
  * builds one from the same {@link PushSubscriptionModel} this source is given, in front of it, not instead of it.
  * <p>
- * <strong>Acknowledgement.</strong> A message for which {@code acceptRedeliverable(...)} throws (a handler
+ * <strong>Acknowledgement.</strong> A message for which {@code acceptOrDefer(...)} throws (a handler
  * exception, or a subscription filter that failed to evaluate) goes through the failure policy below, and is
  * acknowledged only once a {@link DeliveryFailurePolicy#PARK} of it is confirmed. A normal return is decided by
  * {@link RoutingOutcome#disposition()} alone, so this source acknowledges an outcome exactly when
@@ -87,7 +87,7 @@ import static java.util.Objects.requireNonNull;
  * or else to {@link DestinationResolver#catchAllDestination()} outright. {@link Builder#declareTopology(boolean)
  * declareTopology(false)} skips all of this for a deployment whose platform team owns the queue and its bindings
  * itself, per #415. A binding only narrows what arrives. A {@link SubscriptionFilter} on anything other than the
- * event type is invisible to it, and {@code acceptRedeliverable(...)} still applies the subscription's own filter
+ * event type is invisible to it, and {@code acceptOrDefer(...)} still applies the subscription's own filter
  * regardless of what was bound.
  * <p>
  * <strong>{@link Builder#build()} retries a broker briefly unreachable, per #867, on the {@code Connection} it was
@@ -141,7 +141,7 @@ import static java.util.Objects.requireNonNull;
  * <strong>A permanently failed catch-up stops this source, it does not park or redeliver into it.</strong> A
  * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} whose replay has permanently failed refuses
  * every later live event before attempting any dispatch, and promises that refusing is permanent, which
- * {@code acceptRedeliverable(...)} returns as {@link RoutingOutcome#REFUSED}. That outcome is returned for nothing
+ * {@code acceptOrDefer(...)} returns as {@link RoutingOutcome#REFUSED}. That outcome is returned for nothing
  * else, so this source decides on it alone. A handler that reached into some other permanently failed engine throws
  * instead, and goes through {@link DeliveryFailurePolicy} like any other handler failure.
  * <p>
@@ -431,7 +431,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         }
         RoutingOutcome outcome;
         try {
-            outcome = model.acceptRedeliverable(cloudEvent);
+            outcome = model.acceptOrDefer(cloudEvent);
         } catch (RuntimeException | AssertionError e) {
             // Catches AssertionError too, since a filter or the handler can throw one, and it belongs in the failure
             // policy like any other handler failure. Any other Error stops this source instead, see

@@ -776,9 +776,9 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     // accept(..) buffers an event arriving during the replay and completes once it is applied. A broker can deliver
-    // it again, so acceptRedeliverable(..) refuses it instead and the handler never sees this delivery.
+    // it again, so acceptOrDefer(..) refuses it instead and the handler never sees this delivery.
     @Test
-    void accept_redeliverable_during_the_replay_returns_deferred_and_the_handler_never_sees_the_event() {
+    void accept_or_defer_during_the_replay_returns_deferred_and_the_handler_never_sees_the_event() {
         List<RoutingOutcome> outcomes = new CopyOnWriteArrayList<>();
         PushSubscriptionModel feed = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
@@ -798,7 +798,7 @@ class CatchupThenPushSubscriptionModelTest {
         List<RoutingOutcome> emitted = new CopyOnWriteArrayList<>();
         List<Throwable> errors = new CopyOnWriteArrayList<>();
         // Subscribed rather than blocked on, since a buffering call would wait for the replay this test holds open
-        feed.acceptRedeliverable(cloudEvent("2", "Updated")).subscribe(emitted::add, errors::add);
+        feed.acceptOrDefer(cloudEvent("2", "Updated")).subscribe(emitted::add, errors::add);
         releaseReplay.countDown();
         subscription.waitUntilStarted().block(Duration.ofSeconds(5));
 
@@ -810,7 +810,7 @@ class CatchupThenPushSubscriptionModelTest {
 
     // stop() stops the live feed too, so the event reaches no subscription at all
     @Test
-    void accept_redeliverable_after_a_stop_before_the_replay_finished_returns_unavailable() {
+    void accept_or_defer_after_a_stop_before_the_replay_finished_returns_unavailable() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         CountDownLatch replayReached = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
@@ -828,7 +828,7 @@ class CatchupThenPushSubscriptionModelTest {
 
         List<RoutingOutcome> emitted = new CopyOnWriteArrayList<>();
         List<Throwable> errors = new CopyOnWriteArrayList<>();
-        feed.acceptRedeliverable(cloudEvent("2", "Updated")).subscribe(emitted::add, errors::add);
+        feed.acceptOrDefer(cloudEvent("2", "Updated")).subscribe(emitted::add, errors::add);
         releaseReplay.countDown();
         StepVerifier.create(subscription.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(5));
 
@@ -838,14 +838,14 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
-    void accept_redeliverable_returns_delivered_once_the_live_event_has_been_handled() {
+    void accept_or_defer_returns_delivered_once_the_live_event_has_been_handled() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         List<String> delivered = new CopyOnWriteArrayList<>();
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(delivered)).waitUntilStarted().block();
 
-        StepVerifier.create(feed.acceptRedeliverable(cloudEvent("2", "Updated")))
+        StepVerifier.create(feed.acceptOrDefer(cloudEvent("2", "Updated")))
                 .expectNext(RoutingOutcome.DELIVERED)
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
@@ -854,14 +854,14 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
-    void accept_redeliverable_returns_delivered_for_a_live_copy_of_an_event_the_replay_already_applied() {
+    void accept_or_defer_returns_delivered_for_a_live_copy_of_an_event_the_replay_already_applied() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         List<String> delivered = new CopyOnWriteArrayList<>();
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(delivered)).waitUntilStarted().block();
 
-        StepVerifier.create(feed.acceptRedeliverable(cloudEvent("1", "Created")))
+        StepVerifier.create(feed.acceptOrDefer(cloudEvent("1", "Created")))
                 .expectNext(RoutingOutcome.DELIVERED)
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
@@ -871,7 +871,7 @@ class CatchupThenPushSubscriptionModelTest {
 
     // REFUSED is how a listener learns to stop, so it arrives as the outcome rather than as an error
     @Test
-    void accept_redeliverable_after_a_failed_catch_up_returns_refused() {
+    void accept_or_defer_after_a_failed_catch_up_returns_refused() {
         List<RoutingOutcome> outcomes = new CopyOnWriteArrayList<>();
         PushSubscriptionModel feed = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
@@ -879,7 +879,7 @@ class CatchupThenPushSubscriptionModelTest {
         Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
         assertThat(catchThrowable(() -> subscription.waitUntilStarted().block())).hasMessageContaining("replay boom");
 
-        StepVerifier.create(feed.acceptRedeliverable(cloudEvent("1", "Created")))
+        StepVerifier.create(feed.acceptOrDefer(cloudEvent("1", "Created")))
                 .expectNext(RoutingOutcome.REFUSED)
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
@@ -888,7 +888,7 @@ class CatchupThenPushSubscriptionModelTest {
 
     // A full live buffer may drain, so this refusal is not permanent and goes to the listener's failure policy
     @Test
-    void accept_redeliverable_returns_not_deliverable_when_the_live_buffer_is_full() throws Exception {
+    void accept_or_defer_returns_not_deliverable_when_the_live_buffer_is_full() throws Exception {
         int cap = 2;
         CountDownLatch slowEntered = new CountDownLatch(1);
         CountDownLatch releaseSlow = new CountDownLatch(1);
@@ -906,14 +906,14 @@ class CatchupThenPushSubscriptionModelTest {
 
         // Holds the live pipeline, so nothing offered below reaches the handler until it is released
         List<RoutingOutcome> slowOutcome = new CopyOnWriteArrayList<>();
-        Thread slow = Thread.ofVirtual().start(() -> feed.acceptRedeliverable(cloudEvent("slow", "Created")).subscribe(slowOutcome::add));
+        Thread slow = Thread.ofVirtual().start(() -> feed.acceptOrDefer(cloudEvent("slow", "Created")).subscribe(slowOutcome::add));
         awaitLatch(slowEntered);
 
         List<RoutingOutcome> queuedOutcome = new CopyOnWriteArrayList<>();
-        feed.acceptRedeliverable(cloudEvent("queued", "Created")).subscribe(queuedOutcome::add);
+        feed.acceptOrDefer(cloudEvent("queued", "Created")).subscribe(queuedOutcome::add);
         List<RoutingOutcome> overflowOutcome = new CopyOnWriteArrayList<>();
         List<Throwable> overflowErrors = new CopyOnWriteArrayList<>();
-        feed.acceptRedeliverable(cloudEvent("overflow", "Created")).subscribe(overflowOutcome::add, overflowErrors::add);
+        feed.acceptOrDefer(cloudEvent("overflow", "Created")).subscribe(overflowOutcome::add, overflowErrors::add);
 
         assertThat(overflowOutcome).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
         assertThat(overflowErrors).isEmpty();
@@ -928,7 +928,7 @@ class CatchupThenPushSubscriptionModelTest {
 
     // With a catch-up model in front, a second copy of an event waits for the first rather than running the handler again
     @Test
-    void accept_redeliverable_waits_behind_an_earlier_delivery_of_the_same_event() throws Exception {
+    void accept_or_defer_waits_behind_an_earlier_delivery_of_the_same_event() throws Exception {
         CountDownLatch firstEntered = new CountDownLatch(1);
         CountDownLatch releaseFirst = new CountDownLatch(1);
         List<String> delivered = new CopyOnWriteArrayList<>();
@@ -941,11 +941,11 @@ class CatchupThenPushSubscriptionModelTest {
         })).waitUntilStarted().block(Duration.ofSeconds(5));
 
         List<RoutingOutcome> firstOutcome = new CopyOnWriteArrayList<>();
-        Thread first = Thread.ofVirtual().start(() -> feed.acceptRedeliverable(cloudEvent("2", "Updated")).subscribe(firstOutcome::add));
+        Thread first = Thread.ofVirtual().start(() -> feed.acceptOrDefer(cloudEvent("2", "Updated")).subscribe(firstOutcome::add));
         awaitLatch(firstEntered);
 
         List<RoutingOutcome> secondOutcome = new CopyOnWriteArrayList<>();
-        feed.acceptRedeliverable(cloudEvent("2", "Updated")).subscribe(secondOutcome::add);
+        feed.acceptOrDefer(cloudEvent("2", "Updated")).subscribe(secondOutcome::add);
         assertThat(secondOutcome).as("the second copy must not be answered while the first is still running").isEmpty();
 
         releaseFirst.countDown();
@@ -1008,26 +1008,49 @@ class CatchupThenPushSubscriptionModelTest {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "n1"));
     }
 
-    // The live-or-replay decision is the one any caller gets. Only the answer comes before n1 is applied.
     @Test
-    void accept_redeliverable_from_a_live_handler_returns_delivered_once_queued_and_the_event_is_applied_after_it() {
+    void accept_or_defer_from_a_live_handler_is_not_deliverable_and_the_event_is_never_applied() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         List<String> delivered = new CopyOnWriteArrayList<>();
         List<RoutingOutcome> nestedOutcomes = new CopyOnWriteArrayList<>();
+        List<Throwable> nestedErrors = new CopyOnWriteArrayList<>();
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> (ce.getId().equals("2")
-                ? feed.acceptRedeliverable(cloudEvent("n1", "Created")).doOnNext(nestedOutcomes::add).then()
+                ? feed.acceptOrDefer(cloudEvent("n1", "Created")).doOnNext(nestedOutcomes::add).doOnError(nestedErrors::add).then()
                 : Mono.<Void>empty())
                 .then(Mono.fromRunnable(() -> delivered.add(ce.getId())))).waitUntilStarted().block();
 
-        StepVerifier.create(feed.acceptRedeliverable(cloudEvent("2", "Updated")))
+        StepVerifier.create(feed.acceptOrDefer(cloudEvent("2", "Updated")))
                 .expectNext(RoutingOutcome.DELIVERED)
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
+        StepVerifier.create(feed.accept(cloudEvent("3", "Updated"))).expectComplete().verify(Duration.ofSeconds(5));
 
-        assertThat(nestedOutcomes).containsExactly(RoutingOutcome.DELIVERED);
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "n1"));
+        assertThat(nestedOutcomes).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(nestedErrors).isEmpty();
+        assertThat(delivered).as("n1 is not applied, and 3 after it shows nothing was queued ahead of 3").containsExactly("1", "2", "3");
+    }
+
+    @Test
+    void accept_or_defer_from_a_replayed_handler_is_not_deliverable_and_the_event_is_never_applied() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        List<RoutingOutcome> nestedOutcomes = new CopyOnWriteArrayList<>();
+        List<Throwable> nestedErrors = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created"), cloudEvent("2", "Updated")), 2);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> (ce.getId().equals("1")
+                ? feed.acceptOrDefer(cloudEvent("n1", "Created")).doOnNext(nestedOutcomes::add).doOnError(nestedErrors::add).then()
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> delivered.add(ce.getId()))));
+
+        StepVerifier.create(subscription.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(5));
+        StepVerifier.create(feed.accept(cloudEvent("3", "Updated"))).expectComplete().verify(Duration.ofSeconds(5));
+
+        assertThat(nestedOutcomes).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(nestedErrors).isEmpty();
+        assertThat(delivered).as("n1 is not applied, and 3 after it shows nothing was queued ahead of 3").containsExactly("1", "2", "3");
     }
 
     // The scenario from the review of #1149. "bad" is in the store but was never applied, and the marker says the
@@ -1054,7 +1077,7 @@ class CatchupThenPushSubscriptionModelTest {
 
         StepVerifier.create(written(store, feed, cloudEvent("2", "Updated"))).expectComplete().verify(Duration.ofSeconds(5));
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-                assertThat(feed.acceptRedeliverable(cloudEvent("3", "Updated")).block(Duration.ofSeconds(5))).isEqualTo(RoutingOutcome.REFUSED));
+                assertThat(feed.acceptOrDefer(cloudEvent("3", "Updated")).block(Duration.ofSeconds(5))).isEqualTo(RoutingOutcome.REFUSED));
         assertThat(delivered).containsExactly("1", "2", "after");
 
         model.cancelSubscription("proj");

@@ -753,7 +753,7 @@ class ProjectionAnnotationRegistrar {
             }
         } else {
             // register(...) alone puts the feed into buffering mode immediately, so deferring only the catch-up would
-            // let accept(...) buffer into a bounded buffer rather than fold, and eventually overflow it. Defer both
+            // let acceptAndWait(...) buffer into a bounded buffer rather than fold, and eventually overflow it. Defer both
             // together, so nothing about this projection reaches the feed until the application starts it, and
             // running the deferred work leaves the feed in the same state registering it under auto mode would.
             applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {

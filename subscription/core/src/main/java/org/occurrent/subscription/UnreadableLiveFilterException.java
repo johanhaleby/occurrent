@@ -22,7 +22,7 @@ import org.occurrent.filtermatching.DataFieldReader;
 /**
  * A live CloudEvent match was asked to evaluate a {@link Filter} that references a {@code data} field, against a
  * {@link DataFieldReader} that cannot read one. Thrown the first time a registration's live match runs into this,
- * for example {@code DomainEventFeed.acceptCloudEvent(CloudEvent)}.
+ * for example {@code DomainEventFeed.acceptOrDeferCloudEvent(CloudEvent)}.
  * <p>
  * This is a permanent configuration error for the registration that raised it, not a transient failure. Nothing
  * about a later call changes the answer, since the {@link Filter} and the {@link DataFieldReader} the registration

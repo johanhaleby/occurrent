@@ -152,7 +152,7 @@ class LateRegistrationOnANonBlockingThreadTest {
             awaitUntil(() -> readModel.get("a") != null && readModel.get("b") != null);
             assertThat(readModel).containsEntry("a", 1).containsEntry("b", 1);
 
-            domainFeed(context, "feedA").accept(new TestEvent("live")).block(Duration.ofSeconds(5));
+            domainFeed(context, "feedA").acceptAndWait(new TestEvent("live")).block(Duration.ofSeconds(5));
             assertThat(readModel).containsEntry("a", 2);
         });
     }
@@ -163,7 +163,7 @@ class LateRegistrationOnANonBlockingThreadTest {
             assertThat(context).hasNotFailed();
 
             assertThat(resolvedOnAParallelThread(context, "domainFeedWithoutCatchUpHolder")).isInstanceOf(DomainFeedWithoutCatchUpHolder.class);
-            domainFeed(context, "feedA").accept(new TestEvent("live")).block(Duration.ofSeconds(5));
+            domainFeed(context, "feedA").acceptAndWait(new TestEvent("live")).block(Duration.ofSeconds(5));
 
             Map<String, Integer> readModel = readModel(context);
             awaitUntil(() -> readModel.get("a") != null);

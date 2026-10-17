@@ -42,7 +42,7 @@ import java.util.function.Consumer;
  * {@link #subscribe(String, SubscriptionFilter, org.occurrent.subscription.StartAt, Consumer) subscribe} (directly, or
  * through the projection DSL). A source that can deliver the event again, such as a RabbitMQ or Kafka listener, or an
  * HTTP endpoint whose caller retries a failed request, hands each received event to
- * {@link #acceptRedeliverable(CloudEvent)}. Only the listener of an {@code InMemoryEventStore} should hand its
+ * {@link #acceptOrDefer(CloudEvent)}. Only the listener of an {@code InMemoryEventStore} should hand its
  * events to {@link #accept(Iterable)} instead. Both route each event to the
  * handler if its {@link SubscriptionFilter} matches, on the calling thread. A handler exception propagates to the
  * caller.
@@ -54,10 +54,10 @@ import java.util.function.Consumer;
  * event the subscription missed. Without a crash the event stays in the store, where a catch-up replay that runs later
  * can still read it. With a durable event store, such as MongoDB, the subscription never sees an
  * event when the application crashes after the write has committed but before the handler has run. Use a durable
- * subscription there, or forward the events to a broker whose listener calls {@link #acceptRedeliverable(CloudEvent)}.
+ * subscription there, or forward the events to a broker whose listener calls {@link #acceptOrDefer(CloudEvent)}.
  * The amendment to ADR 133 records why.
  * <p>
- * Fed from a broker, call {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when the
+ * Fed from a broker, call {@link #acceptOrDefer(CloudEvent)} and acknowledge the message only when the
  * {@link RoutingOutcome} it returns is {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}.
  * <p>
  * <strong>One model feeds one subscription</strong>, and a second {@code subscribe} is refused. The acknowledgement is
@@ -124,7 +124,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * <p>
      * <strong>An event fed before any subscription is registered is dropped, and this returns normally.</strong> A
      * listener that acknowledges once this returns therefore acknowledges an event nothing consumed. A broker
-     * listener calls {@link #acceptRedeliverable(CloudEvent)} instead and acknowledges on the outcome it returns.
+     * listener calls {@link #acceptOrDefer(CloudEvent)} instead and acknowledges on the outcome it returns.
      * This method cannot refuse the event on your behalf, because this model is also fed from the in-memory event
      * store's write path, through {@link #accept(Iterable)} as an {@code InMemoryEventStore} listener, which routes
      * each event the same way. The store has already kept the event by then, so refusing
@@ -182,7 +182,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * @param cloudEvent The event received from the external source, which the caller can redeliver if this refuses it.
      * @return The event's {@link RoutingOutcome}, which decides whether to acknowledge the message.
      */
-    public RoutingOutcome acceptRedeliverable(CloudEvent cloudEvent) {
+    public RoutingOutcome acceptOrDefer(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         AtomicReference<@Nullable RoutingOutcome> reported = new AtomicReference<>();
         routeRedeliverable(cloudEvent, (event, outcome) -> {

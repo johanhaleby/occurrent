@@ -37,6 +37,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -79,8 +80,166 @@ class CatchupProjectionFeedTest {
         assertThat(repo.get("counter")).isEqualTo(2);
 
         // A live domain event is folded directly, no CloudEvent involved.
-        feed.accept(new Counted("3"));
+        feed.acceptAndWait(new Counted("3"));
         assertThat(repo.get("counter")).isEqualTo(3);
+    }
+
+    @Test
+    void accept_or_defer_returns_deferred_before_the_feed_is_live_and_never_folds_the_event_afterwards() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
+
+        RoutingOutcome plain = feed.acceptOrDefer(new Counted("early"));
+        RoutingOutcome withMetadata = feed.acceptOrDefer(metadata("early-stream", 7L), new Counted("early-with-metadata"));
+
+        assertThat(plain).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(withMetadata).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(repo).isEmpty();
+
+        feed.catchUp();
+
+        assertThat(repo.get("counter")).as("only the stored event, the deferred ones were not kept").isEqualTo(1);
+    }
+
+    @Test
+    void accept_or_defer_returns_delivered_once_the_feed_is_live_and_the_event_is_folded() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
+        feed.catchUp();
+
+        RoutingOutcome outcome = feed.acceptOrDefer(new Counted("3"));
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(repo.get("counter")).isEqualTo(3);
+    }
+
+    @Test
+    void accept_or_defer_with_metadata_hands_the_metadata_to_the_fold_and_returns_delivered_once_live() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        Projection<Long, Counted, String> projection = Projection.<Long, Counted, String>builder(0L)
+                .id((metadata, event) -> metadata.getStreamId())
+                .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
+                .build();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "positions", projection, repository, store, converter, Counted::eventId, null);
+        feed.catchUp();
+
+        RoutingOutcome outcome = feed.acceptOrDefer(metadata("live-stream", 99L), new Counted("3"));
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(repo.get("live-stream")).isEqualTo(99L);
+    }
+
+    @Test
+    void accept_or_defer_returns_deferred_after_the_catch_up_was_stopped_before_the_feed_went_live() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, countedConverter(), repo, null);
+
+        feed.stopCatchUp();
+        RoutingOutcome outcome = feed.acceptOrDefer(new Counted("after-stop"));
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(repo).isEmpty();
+    }
+
+    @Test
+    void accept_or_defer_throws_after_a_catch_up_failure_instead_of_returning_an_outcome() {
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", projection(), repository, failingReader(), countedConverter(), Counted::eventId, null);
+        Throwable replayFailure = catchThrowable(feed::catchUp);
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        Throwable plain = catchThrowable(() -> feed.acceptOrDefer(new Counted("x")));
+        Throwable withMetadata = catchThrowable(() -> feed.acceptOrDefer(EventMetadata.empty(), new Counted("y")));
+
+        assertThat(plain).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(withMetadata).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+    }
+
+    @Test
+    @SuppressWarnings("removal")
+    void the_deprecated_accept_forwards_to_accept_and_wait_and_folds_the_event_live() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
+        feed.catchUp();
+
+        feed.accept(new Counted("2"));
+
+        assertThat(repo.get("counter")).isEqualTo(2);
+    }
+
+    @Test
+    @SuppressWarnings("removal")
+    void the_deprecated_accept_with_metadata_forwards_the_metadata_to_the_fold() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        Projection<Long, Counted, String> projection = Projection.<Long, Counted, String>builder(0L)
+                .id((metadata, event) -> metadata.getStreamId())
+                .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
+                .build();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "positions", projection, repository, store, converter, Counted::eventId, null);
+        feed.catchUp();
+
+        feed.accept(metadata("live-stream", 99L), new Counted("2"));
+
+        assertThat(repo.get("live-stream")).isEqualTo(99L);
+    }
+
+    @Test
+    @SuppressWarnings("removal")
+    void the_deprecated_accept_throws_like_accept_and_wait_when_the_feed_is_stopped_before_the_event_is_folded() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, countedConverter(), repo, null);
+        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("live")));
+
+        feed.stopCatchUp();
+
+        Throwable thrown = catchThrowable(() -> fed.get(5, TimeUnit.SECONDS));
+        assertThat(thrown).as("what the deprecated accept(..) threw once the feed stopped")
+                .isInstanceOf(ExecutionException.class)
+                .cause()
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
+        assertThat(repo).isEmpty();
+    }
+
+    @Test
+    @SuppressWarnings("removal")
+    void the_deprecated_accept_waits_for_the_catch_up_and_folds_the_event_instead_of_deferring_it() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
+        FutureTask<Void> plain = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("early")));
+        FutureTask<Void> withMetadata = feedWaitingForTheCatchUp(() -> feed.accept(metadata("early-stream", 7L), new Counted("early-with-metadata")));
+
+        feed.catchUp();
+
+        assertThat(plain).succeedsWithin(Duration.ofSeconds(5));
+        assertThat(withMetadata).succeedsWithin(Duration.ofSeconds(5));
+        assertThat(repo.get("counter")).as("the replayed event and both events accepted before the feed was live").isEqualTo(3);
     }
 
     @Test
@@ -138,7 +297,7 @@ class CatchupProjectionFeedTest {
         ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
         ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
         // Keyed by the stream id from the metadata and folding the global position, same shape as issue 389's
-        // headline bug: catches up correctly, then a live event supplies its own metadata via accept(metadata, event).
+        // headline bug: catches up correctly, then a live event supplies its own metadata via acceptAndWait(metadata, event).
         Projection<Long, Counted, String> projection = Projection.<Long, Counted, String>builder(0L)
                 .id((metadata, event) -> metadata.getStreamId())
                 .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
@@ -147,7 +306,7 @@ class CatchupProjectionFeedTest {
                 "positions", projection, repository, store, converter, Counted::eventId, null);
         feed.catchUp();
 
-        feed.accept(metadata("live-stream", 99L), new Counted("3"));
+        feed.acceptAndWait(metadata("live-stream", 99L), new Counted("3"));
 
         assertThat(repo).containsKey("live-stream");
         assertThat(repo.get("live-stream")).isEqualTo(99L);
@@ -171,7 +330,7 @@ class CatchupProjectionFeedTest {
                 "positions-key", projection, repository, store, converter, Counted::eventId, null);
         feed.catchUp();
 
-        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("2")));
+        Throwable thrown = catchThrowable(() -> feed.acceptAndWait(new Counted("2")));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("would have been skipped silently");
@@ -194,7 +353,7 @@ class CatchupProjectionFeedTest {
                 "ignoring-metadata", projection, repository, store, converter, Counted::eventId, null);
         feed.catchUp();
 
-        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("live-1")));
+        Throwable thrown = catchThrowable(() -> feed.acceptAndWait(new Counted("live-1")));
 
         assertThat(thrown).isNull();
         assertThat(repo.get("live-1")).isEqualTo(1);
@@ -217,15 +376,15 @@ class CatchupProjectionFeedTest {
                 "skip-null-id", projection, repository, store, converter, Counted::eventId, null);
         feed.catchUp();
 
-        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("skip-me")));
-        feed.accept(new Counted("keep-me"));
+        Throwable thrown = catchThrowable(() -> feed.acceptAndWait(new Counted("skip-me")));
+        feed.acceptAndWait(new Counted("keep-me"));
 
         assertThat(thrown).isNull();
         assertThat(repo.get("counter")).isEqualTo(1);
     }
 
     @Test
-    void a_hand_written_materialized_view_gets_the_one_argument_form_for_accept_event_and_the_metadata_form_for_accept_metadata_event() {
+    void a_hand_written_materialized_view_gets_the_one_argument_form_for_accept_and_wait_event_and_the_metadata_form_for_accept_and_wait_metadata_event() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         List<String> callsReceived = new CopyOnWriteArrayList<>();
@@ -234,8 +393,8 @@ class CatchupProjectionFeedTest {
                 "split-overload", view, Filter.all(), store, converter, Counted::eventId, null);
         feed.catchUp();
 
-        feed.accept(new Counted("plain"));
-        feed.accept(metadata("s", 1L), new Counted("with-metadata"));
+        feed.acceptAndWait(new Counted("plain"));
+        feed.acceptAndWait(metadata("s", 1L), new Counted("with-metadata"));
 
         assertThat(callsReceived).containsExactly("event-only:plain", "metadata:with-metadata");
     }
@@ -269,7 +428,7 @@ class CatchupProjectionFeedTest {
         CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
 
         // "2" also arrives live before the catch-up completes (the replay-to-live overlap).
-        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("2")));
+        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(new Counted("2")));
         feed.catchUp();
 
         assertThat(fed).succeedsWithin(Duration.ofSeconds(5));
@@ -297,7 +456,7 @@ class CatchupProjectionFeedTest {
 
         // "2" also arrives live before the catch-up completes, carrying the metadata a broker source reads off the
         // message rather than the no-metadata overload the test above uses.
-        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(metadataOf(store, "2"), new Counted("2")));
+        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(metadataOf(store, "2"), new Counted("2")));
         feed.catchUp();
 
         assertThat(fed).succeedsWithin(Duration.ofSeconds(5));
@@ -323,9 +482,9 @@ class CatchupProjectionFeedTest {
                 "counter", view, Filter.all(), store, converter, Counted::eventId, null);
 
         // One copy buffers during the catch-up and one arrives after it, the two moments a copy can be suppressed.
-        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(metadataOf(store, "1"), new Counted("1")));
+        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(metadataOf(store, "1"), new Counted("1")));
         feed.catchUp();
-        feed.accept(metadataOf(store, "1"), new Counted("1"));
+        feed.acceptAndWait(metadataOf(store, "1"), new Counted("1"));
 
         assertThat(fed).succeedsWithin(Duration.ofSeconds(5));
         assertThat(repo).isEmpty();
@@ -357,7 +516,7 @@ class CatchupProjectionFeedTest {
         assertThat(repo).isEmpty();
 
         feed.goLive();
-        feed.accept(metadataOf(store, "1"), new Counted("1"));
+        feed.acceptAndWait(metadataOf(store, "1"), new Counted("1"));
 
         assertThat(repo.get("counter")).isEqualTo(1);
         assertThat(appliedAppends.hasApplied("counter", appendId)).isTrue();
@@ -382,7 +541,7 @@ class CatchupProjectionFeedTest {
 
         feed.catchUp();
         feed.goLive();
-        feed.accept(metadataOf(store, "2"), new Counted("2"));
+        feed.acceptAndWait(metadataOf(store, "2"), new Counted("2"));
 
         assertThat(repo.get("counter")).isEqualTo(2);
         assertThat(appliedAppends.hasApplied("counter", appendId)).isTrue();
@@ -433,16 +592,65 @@ class CatchupProjectionFeedTest {
                 "counter", view, Filter.all(), store, converter, Counted::eventId, null);
         feedRef.set(feed);
         feed.goLive();
-        FutureTask<Void> accepting = new FutureTask<>(() -> feed.accept(new Counted("2")), null);
+        FutureTask<Void> accepting = new FutureTask<>(() -> feed.acceptAndWait(new Counted("2")), null);
         Thread thread = new Thread(accepting, "live-delivery");
         thread.start();
 
         try {
             assertThat(accepting).succeedsWithin(Duration.ofSeconds(5));
             assertThat(folded).containsExactly("2", "1");
-            feed.accept(new Counted("3"));
+            feed.acceptAndWait(new Counted("3"));
             assertThat(folded).containsExactly("2", "1", "3");
         } finally {
+            thread.interrupt();
+        }
+    }
+
+    // The fold of "2" calls catchUp() during acceptOrDefer. Its replay of "1" runs on a thread of its own, which is held
+    // here, so acceptOrDefer returning at all shows it did not wait for the replay or run it.
+    @Test
+    void accept_or_defer_returns_delivered_before_a_catch_up_its_fold_asked_for_replays_on_another_thread() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<String> replayThread = new AtomicReference<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        MaterializedView<Counted> view = event -> {
+            folded.add(event.eventId());
+            if (event.eventId().equals("2")) {
+                feedRef.get().catchUp();
+            } else if (event.eventId().equals("1")) {
+                replayThread.set(Thread.currentThread().getName());
+                replaying.countDown();
+                try {
+                    releaseReplay.await(30, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", view, Filter.all(), store, converter, Counted::eventId, null);
+        feedRef.set(feed);
+        feed.goLive();
+        FutureTask<RoutingOutcome> accepting = new FutureTask<>(() -> feed.acceptOrDefer(new Counted("2")));
+        Thread thread = new Thread(accepting, "accept-or-defer-caller");
+
+        try {
+            thread.start();
+
+            assertThat(accepting).as("acceptOrDefer while the replay of 1 is held")
+                    .succeedsWithin(Duration.ofSeconds(5)).isEqualTo(RoutingOutcome.DELIVERED);
+            assertThat(replaying.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(replayThread.get()).isNotEqualTo("accept-or-defer-caller");
+            releaseReplay.countDown();
+            feed.acceptAndWait(new Counted("3"));
+            assertThat(folded).containsExactly("2", "1", "3");
+        } finally {
+            releaseReplay.countDown();
             thread.interrupt();
         }
     }
@@ -504,7 +712,7 @@ class CatchupProjectionFeedTest {
         feedRef.set(feed);
         feed.goLive();
 
-        feed.accept(new Counted("3"));
+        feed.acceptAndWait(new Counted("3"));
 
         assertThat(folded).containsExactly("3");
         assertThat(marker.exists("counter")).isFalse();
@@ -533,7 +741,7 @@ class CatchupProjectionFeedTest {
         feedRef.set(feed);
         feed.goLive();
 
-        feed.accept(new Counted("3"));
+        feed.acceptAndWait(new Counted("3"));
 
         assertThat(folded).containsExactly("3");
         assertThat(marker.exists("counter")).isFalse();
@@ -566,7 +774,7 @@ class CatchupProjectionFeedTest {
         feedRef.set(feed);
         feed.goLive();
 
-        feed.accept(new Counted("3"));
+        feed.acceptAndWait(new Counted("3"));
 
         assertThat(folded).containsExactly("3", "1", "2");
         assertThat(marker.exists("counter")).isTrue();
@@ -604,8 +812,8 @@ class CatchupProjectionFeedTest {
                 "counter", view, Filter.all(), store, converter, Counted::eventId, marker);
         feedRef.set(feed);
         feed.goLive();
-        FutureTask<Void> first = new FutureTask<>(() -> feed.accept(new Counted("3")), null);
-        FutureTask<Void> second = new FutureTask<>(() -> feed.accept(new Counted("4")), null);
+        FutureTask<Void> first = new FutureTask<>(() -> feed.acceptAndWait(new Counted("3")), null);
+        FutureTask<Void> second = new FutureTask<>(() -> feed.acceptAndWait(new Counted("4")), null);
         Thread firstThread = new Thread(first, "fold-3");
         Thread secondThread = new Thread(second, "fold-4");
         firstThread.start();
@@ -661,8 +869,8 @@ class CatchupProjectionFeedTest {
                 "counter", view, Filter.all(), store, converter, Counted::eventId, marker);
         feedRef.set(feed);
         feed.goLive();
-        FutureTask<Void> first = new FutureTask<>(() -> feed.accept(new Counted("3")), null);
-        FutureTask<Void> second = new FutureTask<>(() -> feed.accept(new Counted("4")), null);
+        FutureTask<Void> first = new FutureTask<>(() -> feed.acceptAndWait(new Counted("3")), null);
+        FutureTask<Void> second = new FutureTask<>(() -> feed.acceptAndWait(new Counted("4")), null);
         Thread firstThread = new Thread(first, "fold-3");
         Thread secondThread = new Thread(second, "fold-4");
         firstThread.start();
@@ -702,7 +910,7 @@ class CatchupProjectionFeedTest {
         feedRef.set(feed);
         feed.goLive();
 
-        feed.accept(new Counted("3"));
+        feed.acceptAndWait(new Counted("3"));
 
         assertThat(folded).containsExactly("3");
         assertThat(marker.exists("counter")).isFalse();
@@ -727,7 +935,7 @@ class CatchupProjectionFeedTest {
         CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
 
         // "3" is not in history but arrives live during catch-up; it must not be lost.
-        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("3")));
+        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(new Counted("3")));
         feed.catchUp();
 
         assertThat(fed).succeedsWithin(Duration.ofSeconds(5));
@@ -735,7 +943,7 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    void accept_during_the_catch_up_returns_only_once_the_event_is_folded() throws InterruptedException {
+    void accept_and_wait_during_the_catch_up_returns_only_once_the_event_is_folded() throws InterruptedException {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
@@ -751,22 +959,22 @@ class CatchupProjectionFeedTest {
 
             AtomicReference<List<String>> foldedWhenAcceptReturned = new AtomicReference<>();
             FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> {
-                feed.accept(new Counted("live"));
+                feed.acceptAndWait(new Counted("live"));
                 foldedWhenAcceptReturned.set(List.copyOf(folded));
             });
 
-            assertThat(fed).as("accept(..) still waiting while the replay holds its event").isNotDone();
+            assertThat(fed).as("acceptAndWait(..) still waiting while the replay holds its event").isNotDone();
             releaseReplay.countDown();
             catchingUp.join(5_000);
             assertThat(fed).succeedsWithin(Duration.ofSeconds(5));
-            assertThat(foldedWhenAcceptReturned.get()).as("what was folded when accept(..) returned").containsExactly("1", "live");
+            assertThat(foldedWhenAcceptReturned.get()).as("what was folded when acceptAndWait(..) returned").containsExactly("1", "live");
         } finally {
             releaseReplay.countDown();
         }
     }
 
     @Test
-    void stopping_the_catch_up_while_accept_waits_makes_accept_throw_and_folds_nothing_live() throws InterruptedException {
+    void stopping_the_catch_up_while_accept_and_wait_waits_makes_accept_and_wait_throw_and_folds_nothing_live() throws InterruptedException {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
@@ -779,14 +987,14 @@ class CatchupProjectionFeedTest {
         catchingUp.start();
         try {
             awaitLatch(replaying);
-            FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("live")));
+            FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(new Counted("live")));
 
             feed.stopCatchUp();
             releaseReplay.countDown();
             catchingUp.join(5_000);
 
             Throwable thrownByAccept = catchThrowable(() -> fed.get(5, TimeUnit.SECONDS));
-            assertThat(thrownByAccept).as("what accept(..) threw once the catch-up stopped")
+            assertThat(thrownByAccept).as("what acceptAndWait(..) threw once the catch-up stopped")
                     .isInstanceOf(ExecutionException.class)
                     .cause()
                     .isInstanceOf(IllegalStateException.class)
@@ -798,7 +1006,7 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    void a_catch_up_failing_while_accept_waits_makes_accept_throw_the_failure() throws InterruptedException {
+    void a_catch_up_failing_while_accept_and_wait_waits_makes_accept_and_wait_throw_the_failure() throws InterruptedException {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
@@ -813,14 +1021,14 @@ class CatchupProjectionFeedTest {
         catchingUp.start();
         try {
             awaitLatch(replaying);
-            FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("live")));
+            FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(new Counted("live")));
 
             releaseReplay.countDown();
             catchingUp.join(5_000);
 
             assertThat(thrownByCatchUp.get()).isSameAs(foldFailure);
             Throwable thrownByAccept = catchThrowable(() -> fed.get(5, TimeUnit.SECONDS));
-            assertThat(thrownByAccept).as("what accept(..) threw once the catch-up failed")
+            assertThat(thrownByAccept).as("what acceptAndWait(..) threw once the catch-up failed")
                     .isInstanceOf(ExecutionException.class)
                     .cause()
                     .isInstanceOf(IllegalStateException.class)
@@ -853,7 +1061,7 @@ class CatchupProjectionFeedTest {
             assertThat(wentLive).as("goLive() while the replay is held").isNotDone();
             releaseReplay.countDown();
             wentLive.get(5, TimeUnit.SECONDS);
-            assertThat(feed.acceptIfLive(EventMetadata.empty(), new Counted("live"))).isTrue();
+            assertThat(feed.acceptOrDefer(EventMetadata.empty(), new Counted("live"))).isEqualTo(RoutingOutcome.DELIVERED);
             assertThat(folded).containsExactly("1", "live");
         } finally {
             releaseReplay.countDown();
@@ -894,16 +1102,16 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    void stopping_a_feed_whose_catch_up_never_started_makes_a_waiting_accept_throw() {
+    void stopping_a_feed_whose_catch_up_never_started_makes_a_waiting_accept_and_wait_throw() {
         InMemoryEventStore store = new InMemoryEventStore();
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         CatchupProjectionFeed<Counted> feed = feed("counter", store, countedConverter(), repo, null);
-        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("live")));
+        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(new Counted("live")));
 
         feed.stopCatchUp();
 
         Throwable thrownByAccept = catchThrowable(() -> fed.get(5, TimeUnit.SECONDS));
-        assertThat(thrownByAccept).as("what accept(..) threw once the feed stopped")
+        assertThat(thrownByAccept).as("what acceptAndWait(..) threw once the feed stopped")
                 .isInstanceOf(ExecutionException.class)
                 .cause()
                 .isInstanceOf(IllegalStateException.class)
@@ -954,7 +1162,7 @@ class CatchupProjectionFeedTest {
         restarted.catchUp();
         assertThat(repo.get("counter")).isEqualTo(2);
 
-        restarted.accept(new Counted("3"));
+        restarted.acceptAndWait(new Counted("3"));
         assertThat(repo.get("counter")).isEqualTo(3);
     }
 
@@ -968,9 +1176,9 @@ class CatchupProjectionFeedTest {
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
                 "counter", projection(), repository, store, converter, Counted::eventId, null, new CatchupThenLiveOptions(10, 2));
 
-        FutureTask<Void> first = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("l1")));
-        FutureTask<Void> second = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("l2")));
-        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("l3")));
+        FutureTask<Void> first = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(new Counted("l1")));
+        FutureTask<Void> second = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(new Counted("l2")));
+        Throwable thrown = catchThrowable(() -> feed.acceptAndWait(new Counted("l3")));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("buffer overflowed");
         feed.stopCatchUp();
@@ -990,7 +1198,7 @@ class CatchupProjectionFeedTest {
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
         feed.catchUp();
-        feed.accept(new Counted("2"));
+        feed.acceptAndWait(new Counted("2"));
 
         // The catch-up decodes the one replayed event; the live path does neither encode nor decode.
         assertThat(toDomainEventCalls.get()).isEqualTo(1);
@@ -1012,7 +1220,7 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    void a_catch_up_failure_makes_accept_fail_fast_instead_of_buffering() {
+    void a_catch_up_failure_makes_accept_and_wait_fail_fast_instead_of_buffering() {
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
         CloudEventConverter<Counted> converter = countedConverter();
@@ -1024,7 +1232,7 @@ class CatchupProjectionFeedTest {
         Throwable replayFailure = catchThrowable(feed::catchUp);
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
-        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("x")));
+        Throwable thrown = catchThrowable(() -> feed.acceptAndWait(new Counted("x")));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
     }
@@ -1037,13 +1245,13 @@ class CatchupProjectionFeedTest {
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
                 "counter", projection(), repository, failingReader(), countedConverter(), Counted::eventId, null);
 
-        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("1")));
+        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(new Counted("1")));
         feed.goLive();
 
         assertThat(fed).succeedsWithin(Duration.ofSeconds(5));
         assertThat(repo.get("counter")).isEqualTo(1);
 
-        feed.accept(new Counted("2"));
+        feed.acceptAndWait(new Counted("2"));
         assertThat(repo.get("counter")).isEqualTo(2);
     }
 
@@ -1070,9 +1278,9 @@ class CatchupProjectionFeedTest {
         CatchupProjectionFeed<Counted> feed = feed("counter", new InMemoryEventStore(), countedConverter(), repo, null);
 
         feed.goLive();
-        feed.accept(new Counted("1"));
+        feed.acceptAndWait(new Counted("1"));
         feed.goLive();
-        feed.accept(new Counted("2"));
+        feed.acceptAndWait(new Counted("2"));
 
         assertThat(repo.get("counter")).isEqualTo(2);
     }
@@ -1149,8 +1357,8 @@ class CatchupProjectionFeedTest {
         return Projection.<Integer, Counted, String>builder(0)
                 .id(event -> {
                     if (lookups.incrementAndGet() == 2) {
-                        fed.add(feedWaitingForTheCatchUp(() -> feed.get().accept(new Counted("1"))));
-                        fed.add(feedWaitingForTheCatchUp(() -> feed.get().accept(new Counted("live"))));
+                        fed.add(feedWaitingForTheCatchUp(() -> feed.get().acceptAndWait(new Counted("1"))));
+                        fed.add(feedWaitingForTheCatchUp(() -> feed.get().acceptAndWait(new Counted("live"))));
                         feed.get().stopCatchUp();
                     }
                     return "counter";
@@ -1159,11 +1367,11 @@ class CatchupProjectionFeedTest {
                 .build();
     }
 
-    // accept(..) returns only once the catch-up has folded the event, so an event fed ahead of the catch-up comes from
+    // acceptAndWait(..) returns only once the catch-up has folded the event, so an event fed ahead of the catch-up comes from
     // its own thread, already waiting in the buffer when this returns
-    // A waiting accept(..) parks in Object.wait()
+    // A waiting acceptAndWait(..) parks in Object.wait()
     private static FutureTask<Void> feedWaitingForTheCatchUp(Runnable accept) {
-        return startedAndWaiting(accept, "live-delivery", "accept(..)");
+        return startedAndWaiting(accept, "live-delivery", "acceptAndWait(..)");
     }
 
     // A goLive() waiting for the replay parks in Object.wait() too
