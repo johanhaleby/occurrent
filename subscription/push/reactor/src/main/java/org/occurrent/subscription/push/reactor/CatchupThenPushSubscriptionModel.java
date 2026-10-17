@@ -62,7 +62,8 @@ import java.util.function.Supplier;
  * The catch-up applies the replayed events first, then the events a replayed handler wrote, and then records the
  * catch-up-complete marker. A live event fed through {@code accept(..)} during the replay waits in a bounded unicast
  * sink until after that, unless the sink is full, and the overlap is de-duplicated by the CloudEvent id and source
- * together. A replay stopped before going live drops what the sink held.
+ * together. A replay stopped before going live drops the events fed from outside that the sink held, and keeps the
+ * events a replayed handler wrote, as described below.
  * <p>
  * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and runs once per subscription id, guarded
  * by an optional {@link CheckpointStorage} marker so a restart skips it. {@link #cancelSubscription(String)} deletes the
@@ -362,8 +363,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public Mono<Void> alreadyDeliveredByReplay(CloudEvent event) {
-                // fromRunnable rather than a plain call, so a listener that throws errors the payload's own
-                // acknowledgement instead of the pipeline that was about to acknowledge it. On boundedElastic
+                // fromRunnable rather than a plain call, so a listener that throws errors this Mono instead of the
+                // pipeline that was about to acknowledge the payload. On boundedElastic
                 // because a recording listener writes to a store, and a payload emitted into the live sink is
                 // delivered inline on whichever thread emitted it, which for a broker source is one that must not
                 // block.

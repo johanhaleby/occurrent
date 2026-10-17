@@ -196,9 +196,13 @@ public final class ReactiveHandover<T, K> {
          * A payload the replay never delivered, one suppressed because an earlier live delivery already handled it,
          * does not come here. That earlier delivery ran everything a delivery runs, so there is nothing left owing.
          * <p>
-         * An error signal from the returned {@link Mono} reaches the payload's own acknowledgement, the same way an
-         * error from the fold does, so the source offers the payload again rather than losing what it owed. Called
-         * again for every further copy of the same payload. The default emits nothing.
+         * For a payload fed from other code, an error signal from the returned {@link Mono} reaches the payload's own
+         * acknowledgement, the same way an error from the fold does, so the source offers the payload again rather
+         * than losing what it owed. A payload fed from a replayed fold, or from {@link #replayStarted()},
+         * {@link #replayCompleted()} or {@link #historyDone()} of a catch-up that replays, was answered once it was
+         * queued. While that catch-up folds it, an error signal here fails the catch-up instead, the same way an error
+         * from that payload's fold does. Called again for every further copy of the same payload. The default emits
+         * nothing.
          *
          * @param payload The live payload that was not delivered.
          */

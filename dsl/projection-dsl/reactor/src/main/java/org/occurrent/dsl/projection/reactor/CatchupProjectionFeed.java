@@ -233,7 +233,8 @@ public final class CatchupProjectionFeed<E> {
      *     <li>From the fold of an event a listener waits for, or from {@code alreadyDeliveredByReplay(..)} called for
      *     such an event, it errors that listener's {@link Mono}, as above.</li>
      *     <li>From the fold of a replayed event, or from {@code replayStarted()} or {@code replayCompleted()} of a
-     *     catch-up that replays, the event is folded after the history and before the catch-up writes its marker. A
+     *     catch-up that replays, or from {@code alreadyDeliveredByReplay(..)} called for an event fed from there, the
+     *     event is folded after the history and before the catch-up writes its marker. A
      *     failure or a refusal fails the catch-up, also when the fold that fed the event swallowed it, see
      *     {@link #catchUp()}. A replay that is stopped or fails before that hands such events to the live feed.
      *     After a stop they are folded once the feed is live, with no further catch-up when it already was, and after

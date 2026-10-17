@@ -72,8 +72,10 @@ public interface ReactiveReplayAware {
      * earlier live delivery already handled is not sent here, because that delivery did all of it. Sent again for
      * every further copy the feed is offered, so an implementation records rather than counts.
      * <p>
-     * A {@link Mono} that errors here errors the event's own acknowledgement rather than the catch-up, so the source
-     * offers the event again. The default emits nothing.
+     * For an event a listener fed, a {@link Mono} that errors here errors that event's own acknowledgement rather than
+     * the catch-up, so the source offers the event again. While the catch-up folds an event fed from the fold of a
+     * replayed event, or from {@link #replayStarted()} or {@link #replayCompleted()}, an error here for that event
+     * fails the catch-up instead, and no marker is written. The default emits nothing.
      *
      * @param metadata What the feed knows about the event that was not delivered a second time. Empty when the live
      *                 copy arrived through {@code acceptAndWait(E)} or {@code acceptOrDefer(E)}, which carry no
