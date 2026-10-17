@@ -29,8 +29,11 @@ package org.occurrent.subscription;
  * twice what the number alone suggests
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
  * <p>
- * {@code maxBufferedEvents} is a fail-loud cap, not a throttle. Reaching it means the replay is not keeping up with the
- * live feed at all, so the next live event is refused with an exception rather than the buffer growing without bound.
+ * {@code maxBufferedEvents} is a fail-loud cap, not a throttle. On the blocking stack it caps the live events waiting
+ * while the handover is not live, before a catch-up has taken it live and while a replay runs. On the reactor stack it
+ * caps every live event taken in and not yet delivered, so it also applies once the handover is live, when delivery
+ * falls behind the live feed. Reaching it refuses the next live event with an exception rather than letting the
+ * buffer grow without bound.
  * What that costs depends on what feeds the buffer. A broker listener that calls a {@code CatchupProjectionFeed}'s
  * {@code acceptAndWait} and does not acknowledge the message when that call throws, or when its {@code Mono} errors on
  * the reactor stack, gets the message delivered again. A

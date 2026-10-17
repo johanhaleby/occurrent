@@ -343,9 +343,10 @@ public final class CatchupProjectionFeed<E> {
      * A call the view makes while this feed is calling it, from its fold or from a callback such as
      * {@code replayStarted()}, returns without waiting for the replay, since that replay cannot start before the view's
      * code returns. Returning then means the catch-up was asked for, not that it has run. The replay runs once the
-     * view's code has returned, on the thread that asked first, and before the feed call that ran the view's code on
-     * that thread returns, such as the {@link #acceptAndWait(Object)} that delivered the event, unless an interrupt makes that
-     * thread give up or leave it as described below. When that feed call is {@link #acceptOrDefer(Object)}, the replay
+     * view's code has returned, on the thread that asked first, and before the feed call made on that thread from
+     * outside this feed's own code returns, such as the {@link #acceptAndWait(Object)} that delivered the event, unless
+     * an interrupt makes that thread give up or leave it as described below. When that feed call is
+     * {@link #acceptOrDefer(Object)}, the replay
      * runs on a virtual thread that call starts instead, before {@link #acceptOrDefer(Object)} returns without waiting
      * for it. A call from another thread that asks before that replay starts
      * asks for the same replay, and can return before it has run. A view that hands the call to another thread and

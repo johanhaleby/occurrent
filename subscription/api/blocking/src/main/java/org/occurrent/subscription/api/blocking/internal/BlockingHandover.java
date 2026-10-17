@@ -633,8 +633,9 @@ public final class BlockingHandover<T, K> {
      * a fold, live or replayed, and every {@link Source} callback. The {@code true} means the catch-up was asked for,
      * not that it has run. Its replay runs once that code has returned, on the thread of the first call that asked for
      * it, and replays like any other catch-up. On that thread it runs before the {@link #accept(Object)},
-     * {@link #acceptReportingDelivery(Object)} or {@code catchUp} call that ran the code returns, unless an interrupt
-     * makes that thread give up or leave it as described below. When that call is {@link #acceptIfLive(Object)}, the
+     * {@link #acceptReportingDelivery(Object)} or {@code catchUp} call made from outside this handover's own code
+     * returns, unless an interrupt makes that thread give up or leave it as described below. When that call is
+     * {@link #acceptIfLive(Object)}, the
      * replay runs on a virtual thread that call starts instead, before {@link #acceptIfLive(Object)} returns without
      * waiting for it. A call from any thread
      * that asks before that replay takes its turn asks for the same replay, so a call on another thread can return

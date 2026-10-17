@@ -1188,8 +1188,8 @@ feed goes live, its replay notices a stop, or it fails. A replay notices a stop 
 projection, so one with no event left to hand over goes live as if there had been no stop.
 
 `acceptOrDefer(..)` never waits for a catch-up, so a Kafka consumer that calls it keeps polling through a long replay.
-Nor does it run one on the calling thread. A catch-up the fold asks for while the call applies the event replays on a
-virtual thread that call starts, or on the thread that asked for it first, when that is another thread. Once
+Nor does it run one itself. On the blocking stack, a catch-up the fold asks for while the call applies the event
+replays on another thread, or on the calling thread after the call has returned. Once
 the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`, so `DELIVERED`
 means the event has been applied. Before that, during a catch-up, and after a `stopCatchUp()` that stopped a replay
 before the feed went live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Leave the message
