@@ -1053,9 +1053,9 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(delivered).as("n1 is not applied, and 3 after it shows nothing was queued ahead of 3").containsExactly("1", "2", "3");
     }
 
-    // The scenario from the review of #1149. "bad" is in the store but was never applied, and the marker says the
-    // history was read, so a new subscription would skip the replay that holds it unless the marker is forgotten.
-    // "after" was answered once queued behind "bad", so it is applied before the subscription fails for good.
+    // "bad" is in the store but was never applied. The handler of the replayed "1" wrote it, so it is applied after the
+    // replay and before the marker, and "after" behind it is applied too. The failure of "bad" fails the catch-up, so no
+    // marker is written and a new subscription replays the history that holds it.
     @Test
     void after_an_event_a_handler_wrote_fails_cancelling_and_subscribing_again_replays_it_and_what_followed_it() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
@@ -1075,9 +1075,11 @@ class CatchupThenPushSubscriptionModelTest {
                     : Mono.fromRunnable(() -> delivered.add("bad"));
             default -> Mono.fromRunnable(() -> delivered.add(ce.getId()));
         };
-        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), handler).waitUntilStarted().block(Duration.ofSeconds(5));
+        StepVerifier.create(model.subscribe("proj", null, StartAt.subscriptionModelDefault(), handler).waitUntilStarted())
+                .expectErrorSatisfies(error -> assertThat(error).hasMessage("handler failed for bad"))
+                .verify(Duration.ofSeconds(5));
 
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "after"));
+        assertThat(delivered).containsExactly("1", "after");
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                 assertThat(feed.acceptOrDefer(cloudEvent("3", "Updated")).block(Duration.ofSeconds(5))).isEqualTo(RoutingOutcome.REFUSED));
         assertThat(delivered).containsExactly("1", "after");

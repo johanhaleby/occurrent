@@ -1464,8 +1464,8 @@ class CatchupProjectionFeedTest {
         assertThat(repo.get("counter")).isEqualTo(3);
     }
 
-    // "bad" is in no store. The fold of "2" feeds it, the fold of "bad" fails once, and the marker says the history was
-    // read, so a new feed would skip the replay that feeds "bad" again unless the marker is forgotten.
+    // "bad" is in no store. The fold of the replayed "2" feeds it, and it is folded before the marker is written. Its
+    // fold fails once, which fails the catch-up, so no marker says the history was read and a new feed replays it.
     @Test
     void after_an_event_a_fold_fed_fails_a_new_feed_replays_the_history_and_the_fold_feeds_it_again() {
         CheckpointStorage marker = new InMemoryCheckpointStorage();
@@ -1482,11 +1482,14 @@ class CatchupProjectionFeedTest {
         CatchupProjectionFeed<Counted> failed = CatchupProjectionFeed.create(
                 "counter", fold, Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, marker);
         feedRef.set(failed);
-        StepVerifier.create(failed.catchUp()).expectComplete().verify(ofSeconds(5));
-        await().atMost(ofSeconds(5)).untilAsserted(() -> StepVerifier.create(failed.acceptAndWait(new Counted("3")))
+        StepVerifier.create(failed.catchUp())
+                .expectErrorSatisfies(error -> assertThat(error).hasMessage("fold failed for bad"))
+                .verify(ofSeconds(5));
+        StepVerifier.create(failed.acceptAndWait(new Counted("3")))
                 .expectErrorSatisfies(error -> assertThat(error).hasRootCauseMessage("fold failed for bad"))
-                .verify(ofSeconds(5)));
+                .verify(ofSeconds(5));
         assertThat(folded).containsExactly("1", "2");
+        assertThat(marker.read("counter").blockOptional()).isEmpty();
 
         folded.clear();
         CatchupProjectionFeed<Counted> rebuilt = CatchupProjectionFeed.create(
