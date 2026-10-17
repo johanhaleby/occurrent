@@ -429,7 +429,7 @@ public final class ReactiveHandover<T, K> {
      * errors every payload waiting for a catch-up, a payload fed while this handover is stopped, and a failed
      * catch-up, which refuses every payload from then on. Recovery is the caller's to choose, not this engine's
      * (ADR 104), and for a broker listener it means not acknowledging and having the broker deliver the payload
-     * again, with a nack or a reject with requeue on RabbitMQ, or a seek back with no offset commit on Kafka.
+     * again, as {@link org.occurrent.subscription.RoutingOutcome.Disposition#HOLD} describes.
      * <p>
      * Called from this handover's own code, it completes once the payload is queued, as
      * {@link #acceptReportingDelivery(Object)} describes.

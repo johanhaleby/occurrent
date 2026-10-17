@@ -345,7 +345,7 @@ public final class BlockingHandover<T, K> {
      * handover went live, the catch-up failed, the calling thread was interrupted, this handover is stopped, or
      * another delivery of the same payload was still running. Recovery is the caller's to choose, not this engine's
      * (ADR 104), and for a broker listener it means not acknowledging and having the broker deliver the payload
-     * again, with a nack or a reject with requeue on RabbitMQ, or a seek back with no offset commit on Kafka. A
+     * again, as {@link org.occurrent.subscription.RoutingOutcome.Disposition#HOLD} describes. A
      * payload fed after a failed catch-up is refused the same way, and stays refused.
      * <p>
      * A long replay can keep this call waiting for minutes. A Kafka consumer waiting past its
@@ -644,14 +644,15 @@ public final class BlockingHandover<T, K> {
      * {@link Source#keepReplaying()} with {@code true}, and makes every other call on the source of the call that asked
      * last.
      * <p>
-     * A call is refused when a catch-up on this handover failed after it asked and before its replay starts or finds
-     * the history caught up already. A replay whose every call was refused does not run, and another catch-up that
-     * fails while the replay runs refuses none of its calls. A call made on a handover that had already failed is not
-     * refused for that failure. Neither a stop nor a refusal is reported. A failure of its replay is handled like that
-     * of any other catch-up, so unless it failed on an interrupted thread, this handover refuses every later payload. A
-     * {@code catchUp} call that runs the replay throws that failure. An {@link #accept(Object)} or
-     * {@link #acceptReportingDelivery(Object)} that runs it, or the thread an {@link #acceptIfLive(Object)} started for
-     * it, logs the failure instead of throwing it, since the failure is not about the payload that was fed.
+     * A call can be refused when a catch-up on this handover fails after the call asked and before its replay starts,
+     * or, when the history turns out to be caught up already, before this handover goes live. A replay whose every
+     * call was refused does not run, and another catch-up that fails while the replay runs refuses none of its calls. A
+     * call made on a handover that had already failed is not refused for that failure. Neither a stop nor a refusal is
+     * reported. A failure of its replay is handled like that of any other catch-up, so unless it failed on an
+     * interrupted thread, this handover refuses every later payload. A {@code catchUp} call that runs the replay throws
+     * that failure. An {@link #accept(Object)} or {@link #acceptReportingDelivery(Object)} that runs it, or the thread
+     * an {@link #acceptIfLive(Object)} started for it, logs the failure instead of throwing it, since the failure is
+     * not about the payload that was fed.
      * <p>
      * An interrupt keeps the thread that runs such a replay from waiting. When that thread is interrupted where the
      * replay would wait, for the deliveries or for another replay, it gives up every call made on it that is still

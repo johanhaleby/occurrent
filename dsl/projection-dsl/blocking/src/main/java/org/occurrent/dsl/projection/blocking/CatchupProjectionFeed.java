@@ -70,10 +70,8 @@ import java.util.stream.Stream;
  * {@link RoutingOutcome#DEFERRED}, for a listener that can have the message delivered again.
  * <p>
  * A listener that gets an exception from {@link #acceptAndWait(Object)}, or {@link RoutingOutcome#DEFERRED} from
- * {@link #acceptOrDefer(Object)}, does not acknowledge the message and has the broker deliver it again. On RabbitMQ
- * that is a nack or a reject with requeue, and on Kafka it is leaving the offset uncommitted and seeking back to the
- * record. Not acknowledging is not enough on its own. On RabbitMQ the delivery stays outstanding while the channel is
- * open and counts against the prefetch, so the consumer can stop receiving messages.
+ * {@link #acceptOrDefer(Object)}, does not acknowledge the message and has the broker deliver it again, as
+ * {@link RoutingOutcome.Disposition#HOLD} describes. Not acknowledging is not enough on its own.
  * <p>
  * The catch-up-then-live coordination itself (the buffer, the de-dup cache, and the drain-then-mark ordering) is
  * delegated to {@link BlockingHandover}, shared with {@code CatchupThenPushSubscriptionModel}.
@@ -193,11 +191,11 @@ public final class CatchupProjectionFeed<E> {
      * @throws IllegalStateException if the event was not folded, because the catch-up was stopped before the feed
      *                               went live, the catch-up failed, the waiting thread was interrupted, the live
      *                               buffer is full, or another delivery of the same event was still running. The
-     *                               listener must not acknowledge it, and has the broker deliver it again, as the
-     *                               class javadoc describes. Also thrown
-     *                               when this is called while the feed is not live from inside the feed's own
-     *                               folds or callbacks, the projection's or a view's included, since the wait could
-     *                               only end once that same thread moved on.
+     *                               listener must not acknowledge it, and has the broker deliver it again, as
+     *                               {@link RoutingOutcome.Disposition#HOLD} describes. Also thrown when this is called
+     *                               while the feed is not live from inside the feed's own folds or callbacks, the
+     *                               projection's or a view's included, since the wait could only end once that same
+     *                               thread moved on.
      */
     public void acceptAndWait(E event) {
         Objects.requireNonNull(event, "event cannot be null");
@@ -227,9 +225,8 @@ public final class CatchupProjectionFeed<E> {
      * calling thread and this returns {@link RoutingOutcome#DELIVERED}. Before that it returns
      * {@link RoutingOutcome#DEFERRED} and the event is not kept anywhere. Call this from a listener that can have a
      * message delivered again. Acknowledge the message on {@link RoutingOutcome#DELIVERED}. On
-     * {@link RoutingOutcome#DEFERRED}, do not acknowledge it, and have the broker deliver it again with a nack or a
-     * reject with requeue on RabbitMQ, or on Kafka by leaving the offset uncommitted and seeking back to the record.
-     * Not acknowledging is not enough on its own, as the class javadoc explains.
+     * {@link RoutingOutcome#DEFERRED}, do not acknowledge it, and have the broker deliver it again, as
+     * {@link RoutingOutcome.Disposition#HOLD} describes.
      * <p>
      * {@link RoutingOutcome#DEFERRED} covers an event fed before {@link #catchUp()} or {@link #goLive()} has taken the
      * feed live, while a replay runs, after {@link #stopCatchUp()} stopped a replay before the feed went live, and while
@@ -362,13 +359,14 @@ public final class CatchupProjectionFeed<E> {
      * waits for it is not recognized, and waits for a replay that cannot start while it waits.
      * <p>
      * That replay can still be stopped by a {@link #stopCatchUp()} called after every call that asked for it, or
-     * refused because another catch-up on this feed failed after every such call and before the replay started or found
-     * the history caught up already. Another catch-up that fails while the replay runs does not refuse it. The view's
-     * code is not told, though a stopped replay calls {@code replayStarted()} and {@code replayAbandoned()} on a replay
-     * aware view like any other stopped replay. When the replay fails, this feed refuses every later event, the same as
-     * after any other failed catch-up, unless it failed on an interrupted thread. A {@code catchUp()} or
-     * {@link #goLive()} that runs the replay throws the failure, and an {@link #acceptAndWait(Object)} that runs it, or
-     * the thread an {@link #acceptOrDefer(Object)} started for it, logs the failure instead of throwing it.
+     * refused because another catch-up on this feed failed after every such call and before the replay started, or,
+     * when the history turned out to be caught up already, before this feed went live. Another catch-up that fails
+     * while the replay runs does not refuse it. The view's code is not told, though a stopped replay calls
+     * {@code replayStarted()} and {@code replayAbandoned()} on a replay aware view like any other stopped replay. When
+     * the replay fails, this feed refuses every later event, the same as after any other failed catch-up, unless it
+     * failed on an interrupted thread. A {@code catchUp()} or {@link #goLive()} that runs the replay throws the
+     * failure, and an {@link #acceptAndWait(Object)} that runs it, or the thread an {@link #acceptOrDefer(Object)}
+     * started for it, logs the failure instead of throwing it.
      * <p>
      * An interrupt keeps the thread that runs such a replay from waiting. When that thread is interrupted where the
      * replay would wait for another fold or replay, it gives up the calls made on it and logs a warning. When the
@@ -494,7 +492,7 @@ public final class CatchupProjectionFeed<E> {
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay
      * started. One that had not gone live drains nothing and does not go live, and {@link #acceptAndWait(Object)} throws both
      * for an event waiting on the replay and for one fed after the stop, so the listener has the broker deliver them
-     * again, as the class javadoc describes. One
+     * again, as {@link RoutingOutcome.Disposition#HOLD} describes. One
      * replaying after a {@link #goLive()} delivers what it held while the replay ran and goes on delivering, since
      * those events were accepted by a feed that was already live.
      * <p>

@@ -32,19 +32,19 @@ package org.occurrent.subscription;
  * {@code maxBufferedEvents} is a fail-loud cap, not a throttle. On the blocking stack it caps the live events waiting
  * while the handover is not live, before a catch-up has taken it live and while a replay runs. On the reactor stack it
  * caps every live event taken in and not yet delivered, so it also applies once the handover is live, when delivery
- * falls behind the live feed. Reaching it refuses the next live event with an exception rather than letting the
- * buffer grow without bound.
+ * falls behind the live feed. Reaching it refuses the next live event rather than letting the buffer grow without
+ * bound. On the blocking stack the call that reached it throws.
  * <p>
  * Which calls reach the cap differs by stack. On the blocking stack only the calls that wait or buffer reach it,
  * {@code accept(..)} and {@code acceptAndWait(..)}, since {@code acceptOrDefer(..)} returns {@code DEFERRED} while the
  * handover is not live and buffers nothing. On the reactor stack {@code acceptOrDefer(..)} returns {@code DEFERRED}
  * only while the handover is not live or is paused for a replay. Once the handover is live, its events count toward
- * the cap like any other live event. Reaching the cap errors a projection feed's {@code Mono}, and completes a push
- * model's {@code Mono} with {@code NOT_DELIVERABLE}.
+ * the cap like any other live event. Reaching the cap errors the returned {@code Mono}, except that a push model's
+ * {@code acceptOrDefer(..)} completes it with {@code NOT_DELIVERABLE} instead.
  * <p>
  * What reaching it costs depends on who made the call. A broker listener does not acknowledge the message when its
- * call throws or its {@code Mono} errors, and has the broker deliver it again, with a nack or a reject with requeue on
- * RabbitMQ, or by leaving the offset uncommitted and seeking back to the record on Kafka. A push model's
+ * call throws or its {@code Mono} errors, and has the broker deliver it again, as
+ * {@link RoutingOutcome.Disposition#HOLD} describes. A push model's
  * {@code NOT_DELIVERABLE} goes to the listener's own failure policy instead. A
  * {@code CatchupThenPushSubscriptionModel}'s {@code accept(..)} is supported only from the in-memory event store's
  * write path. There the write call throws although the store has kept the event. The push model's

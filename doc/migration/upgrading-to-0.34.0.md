@@ -1152,11 +1152,10 @@ Run the catch-up on a thread of its own, or feed the event once the catch-up has
 
 In 0.33.0 a stopped feed and a second delivery of an event still being applied both returned normally, so the
 listener acknowledged an event that nothing had applied. Do not acknowledge the message when `acceptAndWait(..)` throws,
-and have the broker deliver it again, with a nack or a reject with requeue on RabbitMQ, or on Kafka by leaving the
-offset uncommitted and seeking back to the record. Not acknowledging is not enough on its own. On RabbitMQ the
-delivery stays outstanding while the channel is open and counts against the prefetch, so the consumer can stop
-receiving messages. A listener that acknowledges only after `acceptAndWait(..)` returns needs no change when its broker
-client already has the message delivered again on an exception.
+and have the broker deliver it again. Not acknowledging is not enough on its own, and the javadoc of
+`RoutingOutcome.Disposition.HOLD` says what RabbitMQ and Kafka need instead. A listener that acknowledges only after
+`acceptAndWait(..)` returns needs no change when its broker client already has the message delivered again on an
+exception.
 
 In 0.33.0 an event fed while the feed was not live from inside the projection, a view or another callback of the
 same feed was buffered and applied once a catch-up took the feed live. Now it is refused. Thrown while the catch-up replays history into the projection or a view,
@@ -1197,8 +1196,8 @@ the fold asks for while the call applies the event replays, and when it does not
 the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`, so `DELIVERED`
 means the event has been applied. Before that, during a catch-up, and after a `stopCatchUp()` that stopped a replay
 before the feed went live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Do not acknowledge the
-message then, and have the broker deliver it again, with a nack or a reject with requeue on RabbitMQ, or a seek back
-to the record on Kafka. A stop that ends a replay on a feed that was already live keeps
+message then, and have the broker deliver it again, as the javadoc of `RoutingOutcome.Disposition.HOLD` describes.
+A stop that ends a replay on a feed that was already live keeps
 it live, so the call applies the event and returns `DELIVERED` again. The blocking `acceptOrDefer(..)` also returns
 `DEFERRED` while another thread is still applying the same event. It throws an `IllegalStateException` once the catch-up
 has failed, and on the reactor stack its `Mono` errors with one instead. On the reactor stack the `Mono` also errors

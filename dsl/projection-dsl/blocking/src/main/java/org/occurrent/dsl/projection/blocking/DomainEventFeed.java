@@ -65,12 +65,8 @@ import java.util.function.Predicate;
  * acknowledges the message on {@link RoutingOutcome#DELIVERED}.
  * <p>
  * When {@link #acceptAndWait(Object)} throws, or {@link #acceptOrDefer(Object)} returns
- * {@link RoutingOutcome#DEFERRED}, the listener does not acknowledge the message and has the broker deliver it again.
- * On RabbitMQ that is a nack or a reject with requeue, and on Kafka it is leaving the offset uncommitted and seeking
- * back to the record. Not acknowledging is not enough on its own. On RabbitMQ the delivery stays outstanding while the
- * channel is open and counts against the prefetch, so the consumer can stop receiving messages.
- * {@code RabbitMqDomainEventSource} and {@code KafkaDomainEventSource} already do this for
- * {@link RoutingOutcome#DEFERRED}.
+ * {@link RoutingOutcome#DEFERRED}, the listener does not acknowledge the message and has the broker deliver it again,
+ * as {@link RoutingOutcome.Disposition#HOLD} describes. Not acknowledging is not enough on its own.
  * <p>
  * <strong>One feed feeds one projection</strong>, and a second {@link #register} is refused. The acknowledgement is
  * what forces it: the listener has exactly one decision per received message, so several projections on one feed would
@@ -277,9 +273,9 @@ public final class DomainEventFeed<E> {
      * Feed a live domain event to the registered projection without waiting for its catch-up. Returns
      * {@link RoutingOutcome#DELIVERED} once the event is folded, and {@link RoutingOutcome#DEFERRED} while the
      * projection is not live, without keeping the event anywhere. Acknowledge the message on
-     * {@link RoutingOutcome#DELIVERED}. On {@link RoutingOutcome#DEFERRED}, have the broker deliver it again, as the
-     * class javadoc describes. {@link CatchupProjectionFeed#acceptOrDefer(Object)} has the details. No {@link Filter} is
-     * applied, the same as for {@link #acceptAndWait(Object)}.
+     * {@link RoutingOutcome#DELIVERED}. On {@link RoutingOutcome#DEFERRED}, have the broker deliver it again, as
+     * {@link RoutingOutcome.Disposition#HOLD} describes. {@link CatchupProjectionFeed#acceptOrDefer(Object)} has the
+     * details. No {@link Filter} is applied, the same as for {@link #acceptAndWait(Object)}.
      *
      * @throws IllegalStateException if no projection is registered on this feed, for the reason
      *                               {@link #acceptAndWait(Object)} gives, or for the reasons
@@ -339,8 +335,8 @@ public final class DomainEventFeed<E> {
      * hand. Acknowledge on {@link RoutingOutcome#DELIVERED}, once this has returned normally, and on
      * {@link RoutingOutcome#FILTERED}, where redelivering would loop forever against this same registration, since
      * the event is not this projection's under the {@link Filter} currently registered. On
-     * {@link RoutingOutcome#DEFERRED}, never acknowledge it, and have the broker deliver it again, as the class javadoc
-     * describes, which is safe arbitrarily many times. Named distinctly from
+     * {@link RoutingOutcome#DEFERRED}, never acknowledge it, and have the broker deliver it again, as
+     * {@link RoutingOutcome.Disposition#HOLD} describes, which is safe arbitrarily many times. Named distinctly from
      * {@link #acceptOrDefer(Object)} rather than overloaded onto it, since a {@code DomainEventFeed<CloudEvent>} would otherwise let the compiler silently pick between
      * two overloads with different behavior for the same argument.
      * <p>
