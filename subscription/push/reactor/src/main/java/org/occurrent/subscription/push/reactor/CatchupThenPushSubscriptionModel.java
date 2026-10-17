@@ -59,12 +59,10 @@ import java.util.function.Supplier;
  * history from the event store, then hands over to the live push feed, so a brand-new or rebuilt projection is
  * backfilled before it consumes the broker.
  * <p>
- * The replay, a catch-up-complete marker step, and the live feed are composed into one ordered pipeline with
- * {@link Flux#concat}: the replay is consumed first, then the marker is recorded, then the live feed. A live event
- * fed through {@code accept(..)} during the replay waits in a bounded unicast sink until the pipeline reaches it,
- * unless the sink is full, and the overlap is de-duplicated by the CloudEvent id and source together. A replay
- * stopped before going live drops what the sink held. Because the whole pipeline is serialized by
- * {@code concatMap}, the de-dup cache needs no locking.
+ * The catch-up applies the replayed events first, then the events a replayed handler wrote, and then records the
+ * catch-up-complete marker. A live event fed through {@code accept(..)} during the replay waits in a bounded unicast
+ * sink until after that, unless the sink is full, and the overlap is de-duplicated by the CloudEvent id and source
+ * together. A replay stopped before going live drops what the sink held.
  * <p>
  * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and runs once per subscription id, guarded
  * by an optional {@link CheckpointStorage} marker so a restart skips it. {@link #cancelSubscription(String)} deletes the
@@ -108,8 +106,8 @@ import java.util.function.Supplier;
  *     catch-up marker. When one of them fails or is refused, even when the handler swallowed the error, the rest
  *     are still applied, and then the catch-up fails, so {@code waitUntilStarted()} errors and no marker is
  *     written. A replay that is stopped or fails before that hands the written events to the live feed. After a
- *     stop they are applied once a later replay has gone live, and after a failure before the subscription fails
- *     for good.</li>
+ *     stop they are applied once the subscription is live, with no further replay when it already was, and after a
+ *     failure before the subscription fails for good.</li>
  *     <li>For an event nothing waits for, such as one a stopped replay left to the live feed, a failure to apply
  *     it starts the subscription failing.</li>
  * </ul>

@@ -49,11 +49,11 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
- * The shared reactive catch-up-then-live coordination: the replay is folded to completion, then the catch-up-complete
- * marker is recorded, then the live feed is delivered. Live payloads arriving during the replay are buffered in a
- * bounded unicast sink, and the replay-to-live overlap is de-duplicated by an id extracted from the payload. Each phase
- * is serialized by its own {@code concatMap} and the phases run one after another, so the de-dup cache is only ever
- * touched by one thread at a time. That is ordering, not visibility: an asynchronous fold completes on whichever
+ * The shared reactive catch-up-then-live coordination: the replay is folded to completion, then the payloads the
+ * replay fed, then the catch-up-complete marker is recorded, then the live feed is delivered. Live payloads arriving
+ * during the replay are buffered in a bounded unicast sink, and the replay-to-live overlap is de-duplicated by an id
+ * extracted from the payload. Each phase folds one payload at a time and the phases run one after another, so the
+ * de-dup cache is only ever touched by one thread at a time. That is ordering, not visibility: an asynchronous fold completes on whichever
  * thread ran it, so {@code BoundedIdCache} is synchronized and must stay that way. Extracted from (and mirrors exactly) the reactor projection
  * feed and the reactor push subscription model.
  * <p>
@@ -327,7 +327,8 @@ public final class ReactiveHandover<T, K> {
     // there never waits, since the replay, the pause or the delivery it would wait for is waiting for that code. Holds
     // the acknowledgement of the live payload being delivered, so a payload its fold feeds holds that answer back, the
     // ReplayFold of a replayed fold or of a callback around that replay, so a payload it feeds is folded before the
-    // marker is written, or NOBODY_WAITS for any other callback.
+    // marker is written, or NOBODY_WAITS for any other callback. alreadyDeliveredByReplay runs as the payload it was
+    // called for, so what it feeds counts as fed from that payload's fold.
     //
     // A payload counts as fed from a fold when the call is made on the thread running that fold, or when its Mono is
     // composed into the Mono the fold returns or subscribed on that thread. A call made on another thread after the
@@ -544,8 +545,9 @@ public final class ReactiveHandover<T, K> {
 
     /**
      * Feed a live payload. The returned {@link Mono} completes once the payload has been folded, and every payload its
-     * fold fed with it, or at once for a de-duplicated overlap. Payloads fed before or during the catch-up are buffered
-     * and delivered after the replay, and the {@link Mono} completes only then.
+     * fold fed with it. When the payload repeats one the replay delivered and is not folded again, it waits instead
+     * for {@link Source#alreadyDeliveredByReplay(Object)} and every payload fed from there. Payloads fed before or
+     * during the catch-up are buffered and delivered after the replay, and the {@link Mono} completes only then.
      * <p>
      * A payload fed from the fold of a live payload holds back the answer to that live payload. It counts as fed from
      * the fold when it is offered on the thread running that fold, or when its {@link Mono} is composed into the one
@@ -588,8 +590,8 @@ public final class ReactiveHandover<T, K> {
      * Called from this handover's own code, the code {@link #catchUp(Source)} recognizes as its own, it completes
      * {@code true} once the payload is queued instead, since that code has to return before the payload can be
      * delivered. The payload is delivered after the delivery or callback it came from, in the order it was queued,
-     * like a payload fed from anywhere else. A stop does not drop it, and the next catch-up that goes live delivers
-     * it.
+     * like a payload fed from anywhere else. A stop does not drop it, and it is delivered once this handover is live,
+     * with no further catch-up when it already was.
      * <p>
      * A payload fed from a replayed fold, or from {@link Source#replayStarted()}, {@link Source#replayCompleted()} or
      * {@link Source#historyDone()} of a catch-up that replays, is folded after {@link Source#historyDone()} and before
@@ -599,8 +601,12 @@ public final class ReactiveHandover<T, K> {
      * offered there and subscribed only once the catch-up has folded them goes to the live sink too, and is folded
      * after the marker.
      * <p>
-     * Nobody waits for a payload fed from any other {@link Source} callback once it is queued, so when its delivery
-     * fails this handover starts failing rather than go on without it. A failed {@link #catchUp(Source)} starts it
+     * A payload fed from {@link Source#alreadyDeliveredByReplay(Object)} counts as fed from the fold of the payload it
+     * was called for, so one called for a live payload from other code holds back that payload's answer. Nobody waits,
+     * once it is queued, for a payload fed from the other {@link Source} callbacks, such as {@link Source#liveDrained()},
+     * {@link Source#forgetCaughtUp()}, {@link Source#replayAbandoned()} or the {@link Source#historyDone()} of a
+     * catch-up that replays nothing, so when its delivery fails this handover starts failing rather than go on without
+     * it. A failed {@link #catchUp(Source)} starts it
      * failing the same way, whether the replay, the marker read or the marker write failed. It tells the source that
      * delivers live and the source whose catch-up failed to {@link Source#forgetCaughtUp() forget the marker}, then
      * refuses every payload that does not come from its own code with that failure, delivers every payload it has
@@ -1382,8 +1388,8 @@ public final class ReactiveHandover<T, K> {
                 // engine drains it, and before the drain boundary below, which counts only payloads the live sink
                 // delivers.
                 .then(Mono.defer(() -> replayRan.get() ? foldFedByReplay(replayFeed) : Mono.<Void>empty()))
-                // A stopped or failed catch-up leaves what was fed to it to the live sink, which a stop keeps for the
-                // next catch-up that goes live and a failure delivers before failing for good.
+                // A stopped or failed catch-up leaves what was fed to it to the live sink, which a stop keeps until this
+                // handover is live and a failure delivers before failing for good.
                 .onErrorResume(error -> {
                     fedByReplayToTheLiveSink(replayFeed);
                     return Mono.error(error);

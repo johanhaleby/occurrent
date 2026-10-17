@@ -48,10 +48,10 @@ import java.util.function.Function;
  * <p>
  * The live path is conversion-free: {@link #acceptAndWait(Object)} folds a domain event straight into the read model. Only the
  * catch-up reads the event store (CloudEvents) and decodes each replayed event once with the {@link CloudEventConverter}.
- * The replay, a catch-up-complete marker step, and the live feed are composed into one ordered pipeline with
- * {@link Flux#concat}: the replay is consumed first, then the marker is recorded, then live events buffered in a bounded
- * unicast sink during the replay flow through, de-duplicated by an event-id extracted from the <em>domain</em> event.
- * Because the pipeline is serialized by {@code concatMap}, the de-dup cache needs no locking.
+ * The catch-up folds the replayed events first, then the events a replayed fold, {@code replayStarted()} or
+ * {@code replayCompleted()} fed, and then records the catch-up-complete marker. Live events that arrive meanwhile wait
+ * in a bounded unicast sink and are folded after that, de-duplicated by an event id extracted from the
+ * <em>domain</em> event.
  * <p>
  * Contract (see ADR 62): catch-up is Occurrent's job, live-resume is the broker's. The {@link Mono} from
  * {@link #acceptAndWait(Object)} called by a listener completes only after the fold has run, and so has the fold of
@@ -199,9 +199,11 @@ public final class CatchupProjectionFeed<E> {
 
     /**
      * Feed a live domain event. Called by a listener, the returned {@link Mono} completes once the event has been
-     * folded, and so has every event fed from its fold, or immediately if it is a de-duplicated overlap, so the
-     * listener can acknowledge after processing. Events fed before or during the catch-up are buffered and delivered
-     * after the replay, and their {@link Mono} completes only then.
+     * folded, and so has every event fed from its fold, so the listener can acknowledge after processing. When the
+     * event repeats one the replay folded and is not folded again, the {@link Mono} waits instead for
+     * {@link ReactiveReplayAware#alreadyDeliveredByReplay(EventMetadata)} of a fold that implements it, and for every
+     * event fed from there. Events fed before or during the catch-up are buffered and delivered after the replay, and
+     * their {@link Mono} completes only then.
      * <p>
      * An event counts as fed from a fold when the fold calls this feed for it on the thread this feed called the fold
      * on, or returns the call's {@link Mono} as part of its own. One called there and subscribed on another thread
@@ -228,13 +230,14 @@ public final class CatchupProjectionFeed<E> {
      * was fed. When the {@code eventId} function throws for it, the call errors with what it threw, and that counts as
      * a refusal. What a failure or a refusal of such an event does depends on where it was fed from.
      * <ul>
-     *     <li>From the fold of an event a listener waits for, it errors that listener's {@link Mono}, as above.</li>
+     *     <li>From the fold of an event a listener waits for, or from {@code alreadyDeliveredByReplay(..)} called for
+     *     such an event, it errors that listener's {@link Mono}, as above.</li>
      *     <li>From the fold of a replayed event, or from {@code replayStarted()} or {@code replayCompleted()} of a
      *     catch-up that replays, the event is folded after the history and before the catch-up writes its marker. A
      *     failure or a refusal fails the catch-up, also when the fold that fed the event swallowed it, see
      *     {@link #catchUp()}. A replay that is stopped or fails before that hands such events to the live feed.
-     *     After a stop they are folded once a later catch-up has gone live, and after a failure before this feed
-     *     fails for good.</li>
+     *     After a stop they are folded once the feed is live, with no further catch-up when it already was, and after
+     *     a failure before this feed fails for good.</li>
      *     <li>From code nothing waits for, {@code replayAbandoned()} say, or the fold of an event fed from there, a
      *     failed fold makes this feed start failing.</li>
      * </ul>

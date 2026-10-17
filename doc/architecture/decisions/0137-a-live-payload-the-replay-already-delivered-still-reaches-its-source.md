@@ -231,8 +231,11 @@ subscribed it.
   is refused, even when the fold that fed it swallowed the error, the rest are still delivered and then the catch-up
   fails. No marker is written, and the next catch-up replays the history that fed it. A replay that is stopped or
   fails before that hands them to the live sink.
-* Nobody waits for a payload fed from any other callback, such as `replayAbandoned`, or from the fold of a payload fed
-  from there. When its delivery fails there is no caller left to tell, and the handover starts failing.
+* A payload fed from `alreadyDeliveredByReplay` counts as fed from the fold of the payload it was called for. When
+  that payload came from outside, the payload fed from `alreadyDeliveredByReplay` holds back its answer, as above.
+* Nobody waits for a payload fed from the other callbacks, such as `liveDrained`, `forgetCaughtUp`, `replayAbandoned`
+  or the `historyDone` of a catch-up that replays nothing, or from the fold of a payload fed from there. When its
+  delivery fails there is no caller left to tell, and the handover starts failing.
 
 A failed catch-up starts the handover failing the same way, whether the replay, the marker read or
 the marker write failed, because a payload its own code queued before that failure was answered too. The handover

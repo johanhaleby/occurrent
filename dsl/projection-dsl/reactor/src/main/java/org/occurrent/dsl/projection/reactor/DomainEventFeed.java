@@ -512,8 +512,8 @@ public final class DomainEventFeed<E> {
      * An error on the returned {@link Mono} is terminal for this feed, so let it reach the caller and do not start the
      * application. The projection rejects every later event afterwards. Unlike a subscription model, the feed does not
      * drop it: the application asked for this projection, so running on without it is worse than not running. Fix the
-     * cause and build a new feed. It also errors when an event the projection fed during the replay fails or is
-     * refused, as {@link CatchupProjectionFeed#catchUp()} describes.
+     * cause and build a new feed. It also errors when an event fed by a replayed fold, {@code replayStarted()} or
+     * {@code replayCompleted()} fails or is refused, as {@link CatchupProjectionFeed#catchUp()} describes.
      * <p>
      * A call the projection makes while this feed is calling it completes once the catch-up has been asked for,
      * without waiting for the replay. {@link CatchupProjectionFeed#catchUp()} says which calls those are, and what a
