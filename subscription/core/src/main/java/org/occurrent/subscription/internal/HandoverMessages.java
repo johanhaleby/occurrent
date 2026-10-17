@@ -85,7 +85,8 @@ public final class HandoverMessages {
 
     /**
      * The message a reactor catch-up-then-live caller shows once an event its own handler fed it failed to apply after
-     * the handler was told it was queued, with the caller's own noun substituted in. The caller refuses live events
+     * the handler was told it was queued and nobody waited for it, as for one fed during a replay, with the caller's
+     * own noun substituted in. The caller refuses live events
      * from then on, the same as after a failed catch-up, so the message names what failed instead.
      *
      * @param noun The noun describing what cannot accept live events, e.g. {@code "projection feed"} or
@@ -96,6 +97,21 @@ public final class HandoverMessages {
                 + "live events rather than acknowledging events that nothing folded, and the source keeps redelivering "
                 + "them. Fix the cause, then replace it: a subscription by cancelling it and subscribing again, a "
                 + "projection feed by building a new one.";
+    }
+
+    /**
+     * Refuses an event a reactor handler fed its own handover once the events before it form a chain as long as the
+     * live buffer cap, each fed from the handler of the one before. The answer to the event at the top of the chain
+     * waits for every event below it, so a handler that feeds without end would otherwise leave it waiting for good.
+     *
+     * @param noun The noun describing what was fed, e.g. {@code "projection feed"} or {@code "subscription"}.
+     * @param maxBufferedEvents The cap the chain reached.
+     */
+    public static String fedChainTooLong(String noun, int maxBufferedEvents) {
+        return "The handler of this " + noun + " fed it " + maxBufferedEvents + " events in a row, each from the "
+                + "handling of the one before, so it refuses the next one rather than wait for a chain that may not "
+                + "end. The event the chain started from is not acknowledged. Fix the handler so that what it feeds "
+                + "comes to an end.";
     }
 
     /**

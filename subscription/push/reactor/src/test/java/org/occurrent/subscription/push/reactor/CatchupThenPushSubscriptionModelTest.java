@@ -1053,9 +1053,9 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(delivered).as("n1 is not applied, and 3 after it shows nothing was queued ahead of 3").containsExactly("1", "2", "3");
     }
 
-    // The scenario from the review of #1149. "bad" is in the store but was never applied, and the marker says the
-    // history was read, so a new subscription would skip the replay that holds it unless the marker is forgotten.
-    // "after" was answered once queued behind "bad", so it is applied before the subscription fails for good.
+    // "bad" is in the store but was never applied. The handler of the replayed "1" wrote it, so it is applied after the
+    // replay and before the marker, and "after" behind it is applied too. The failure of "bad" fails the catch-up, so no
+    // marker is written and a new subscription replays the history that holds it.
     @Test
     void after_an_event_a_handler_wrote_fails_cancelling_and_subscribing_again_replays_it_and_what_followed_it() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
@@ -1063,28 +1063,65 @@ class CatchupThenPushSubscriptionModelTest {
         PositionOrderedReader reader = reader(() -> Flux.fromIterable(store), 1);
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, new InMemoryCheckpointStorage());
         AtomicBoolean badFails = new AtomicBoolean(true);
+        AtomicBoolean writes = new AtomicBoolean(true);
         List<String> delivered = new CopyOnWriteArrayList<>();
         Function<CloudEvent, Mono<Void>> handler = ce -> switch (ce.getId()) {
-            case "2" -> written(store, feed, cloudEvent("bad", "Created"))
-                    .then(written(store, feed, cloudEvent("after", "Created")))
-                    .then(Mono.fromRunnable(() -> delivered.add("2")));
+            case "1" -> Mono.defer(() -> writes.getAndSet(false)
+                            ? written(store, feed, cloudEvent("bad", "Created")).then(written(store, feed, cloudEvent("after", "Created")))
+                            : Mono.<Void>empty())
+                    .then(Mono.fromRunnable(() -> delivered.add("1")));
             case "bad" -> badFails.getAndSet(false)
+                    ? Mono.error(new IllegalStateException("handler failed for bad"))
+                    : Mono.fromRunnable(() -> delivered.add("bad"));
+            default -> Mono.fromRunnable(() -> delivered.add(ce.getId()));
+        };
+        StepVerifier.create(model.subscribe("proj", null, StartAt.subscriptionModelDefault(), handler).waitUntilStarted())
+                .expectErrorSatisfies(error -> assertThat(error).hasMessage("handler failed for bad"))
+                .verify(Duration.ofSeconds(5));
+
+        assertThat(delivered).containsExactly("1", "after");
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(feed.acceptOrDefer(cloudEvent("3", "Updated")).block(Duration.ofSeconds(5))).isEqualTo(RoutingOutcome.REFUSED));
+        assertThat(delivered).containsExactly("1", "after");
+
+        model.cancelSubscription("proj");
+        delivered.clear();
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), handler).waitUntilStarted().block(Duration.ofSeconds(5));
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "bad", "after"));
+    }
+
+    // Nobody waits for "bad" when a replayed handler writes it, but "2" is written from outside, so its caller does
+    // and gets the failure. "2" is not recorded as applied, so writing it again applies it and "bad".
+    @Test
+    void a_live_event_whose_handler_wrote_an_event_that_fails_gets_that_failure_and_applies_again_when_written_again() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<CloudEvent> store = new CopyOnWriteArrayList<>(List.of(cloudEvent("1", "Created")));
+        PositionOrderedReader reader = reader(() -> Flux.fromIterable(store), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, new InMemoryCheckpointStorage());
+        AtomicBoolean badFails = new AtomicBoolean(true);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        Function<CloudEvent, Mono<Void>> handler = ce -> switch (ce.getId()) {
+            case "2" -> written(store, feed, cloudEvent("bad", "Created")).then(Mono.fromRunnable(() -> delivered.add("2")));
+            case "bad" -> badFails.get()
                     ? Mono.error(new IllegalStateException("handler failed for bad"))
                     : Mono.fromRunnable(() -> delivered.add("bad"));
             default -> Mono.fromRunnable(() -> delivered.add(ce.getId()));
         };
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), handler).waitUntilStarted().block(Duration.ofSeconds(5));
 
-        StepVerifier.create(written(store, feed, cloudEvent("2", "Updated"))).expectComplete().verify(Duration.ofSeconds(5));
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-                assertThat(feed.acceptOrDefer(cloudEvent("3", "Updated")).block(Duration.ofSeconds(5))).isEqualTo(RoutingOutcome.REFUSED));
-        assertThat(delivered).containsExactly("1", "2", "after");
+        StepVerifier.create(feed.accept(cloudEvent("2", "Updated")))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage("handler failed for bad"))
+                .verify(Duration.ofSeconds(5));
 
-        model.cancelSubscription("proj");
-        delivered.clear();
-        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), handler).waitUntilStarted().block(Duration.ofSeconds(5));
+        assertThat(feed.acceptOrDefer(cloudEvent("3", "Updated")).block(Duration.ofSeconds(5))).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(delivered).containsExactly("1", "2", "3");
 
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "bad", "after"));
+        badFails.set(false);
+        StepVerifier.create(feed.accept(cloudEvent("2", "Updated"))).expectComplete().verify(Duration.ofSeconds(5));
+        assertThat(delivered).containsExactly("1", "2", "3", "2", "bad");
     }
 
     // --- helpers ---
