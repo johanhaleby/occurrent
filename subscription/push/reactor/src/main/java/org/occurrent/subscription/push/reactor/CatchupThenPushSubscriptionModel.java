@@ -111,7 +111,9 @@ import java.util.function.Supplier;
  * Fed from a broker, call {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} and acknowledge the message
  * only when its {@link Mono} completes with {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
  * {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. It refuses an event arriving during the replay instead of
- * buffering it, so the broker delivers that event again, and a delivery after this model has gone live applies it.
+ * buffering it, so the listener has the broker deliver that event again, as
+ * {@link org.occurrent.subscription.RoutingOutcome.Disposition#HOLD} describes, and a delivery after this model has
+ * gone live applies it.
  * Once the catch-up has failed, the {@link Mono} completes with
  * {@link org.occurrent.subscription.RoutingOutcome#REFUSED} for every event, and the listener stops.
  * Delivery is at-least-once, so

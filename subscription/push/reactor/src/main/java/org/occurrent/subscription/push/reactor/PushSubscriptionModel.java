@@ -151,7 +151,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     }
 
     /**
-     * Feed a single event from a broker, or from any other source that delivers the event again when it is not
+     * Feed a single event from a broker, or from any other source that can deliver the event again when it is not
      * acknowledged. As {@link #accept(CloudEvent)}, except an event that would only buffer, a
      * {@link CatchupThenPushSubscriptionModel} in front still replaying, say, is refused instead of buffered. An event
      * queued just before a replay starts on an already live catch-up model is refused the same way. The replay takes
@@ -171,10 +171,11 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      *     <li>{@link RoutingOutcome#DEFERRED} when a {@link CatchupThenPushSubscriptionModel} in front has not gone
      *     live, because its replay is still running, say, or starts a replay before its handler has started on the
      *     event, since this never waits for a replay. The handler never ran, so have the broker deliver it again
-     *     later.</li>
+     *     later, as {@link RoutingOutcome.Disposition#HOLD} describes.</li>
      *     <li>{@link RoutingOutcome#UNAVAILABLE} when no subscription is registered, this model is stopped, or the
      *     subscription is paused. Stopping a {@link CatchupThenPushSubscriptionModel} in front stops this model too,
-     *     whether or not its replay had finished. Have the broker deliver it again later.</li>
+     *     whether or not its replay had finished. Have the broker deliver it again later, as
+     *     {@link RoutingOutcome.Disposition#HOLD} describes.</li>
      *     <li>{@link RoutingOutcome#REFUSED} when the subscription is failing or has failed, which a failed catch-up
      *     in front or a failed event its handler wrote starts. No redelivery gets past that, so stop consuming.</li>
      *     <li>{@link RoutingOutcome#NOT_DELIVERABLE} for any other refusal decided before the handler would run, a
@@ -196,7 +197,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * A configured {@link PushObserver} is told the event's {@link RoutingOutcome} on the same terms as for
      * {@link #accept(CloudEvent)}.
      *
-     * @param cloudEvent The event received from the broker, which the broker delivers again if this refuses it.
+     * @param cloudEvent The event received from the broker, which the listener has delivered again when this refuses it.
      * @return A {@link Mono} that completes with the event's {@link RoutingOutcome}, which decides whether to
      * acknowledge the message.
      */

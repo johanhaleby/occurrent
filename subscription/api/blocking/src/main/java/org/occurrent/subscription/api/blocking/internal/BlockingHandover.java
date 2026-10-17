@@ -344,7 +344,8 @@ public final class BlockingHandover<T, K> {
      * Throws rather than returning when the payload was not applied, because the replay was stopped before the
      * handover went live, the catch-up failed, the calling thread was interrupted, this handover is stopped, or
      * another delivery of the same payload was still running. Recovery is the caller's to choose, not this engine's
-     * (ADR 104), and for a broker listener it means not acknowledging, so the broker delivers the payload again. A
+     * (ADR 104), and for a broker listener it means not acknowledging and having the broker deliver the payload
+     * again, with a nack or a reject with requeue on RabbitMQ, or a seek back with no offset commit on Kafka. A
      * payload fed after a failed catch-up is refused the same way, and stays refused.
      * <p>
      * A long replay can keep this call waiting for minutes. A Kafka consumer waiting past its
@@ -478,8 +479,8 @@ public final class BlockingHandover<T, K> {
      * A payload fed while this handover is stopped is refused the same way, for the same reason: nothing is
      * currently draining a buffer for it to wait in.
      * <p>
-     * This never waits for a replay and never runs one itself. A catch-up that this handover's own code asks for during
-     * this call replays on another thread, or on this thread after this call has returned.
+     * This never waits for a replay and never runs one itself. {@link #catchUp(Source)} says on which thread a
+     * catch-up that this handover's own code asks for during this call replays, and when it does not replay at all.
      *
      * @return {@code true} once the payload has genuinely landed: delivered live just now, or already delivered by
      *         an earlier attempt. {@code false} whenever this call did not deliver it, whether because this

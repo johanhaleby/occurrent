@@ -67,7 +67,13 @@ import java.util.stream.Stream;
  * acknowledges an event that is only held in memory. A replay stopped after a {@link #goLive()} drains the buffer
  * instead, and the call returns normally.
  * {@link #acceptOrDefer(Object)} never waits. It folds the event only once the feed is live and otherwise returns
- * {@link RoutingOutcome#DEFERRED}, for a listener whose broker delivers the message again.
+ * {@link RoutingOutcome#DEFERRED}, for a listener that can have the message delivered again.
+ * <p>
+ * A listener that gets an exception from {@link #acceptAndWait(Object)}, or {@link RoutingOutcome#DEFERRED} from
+ * {@link #acceptOrDefer(Object)}, does not acknowledge the message and has the broker deliver it again. On RabbitMQ
+ * that is a nack or a reject with requeue, and on Kafka it is leaving the offset uncommitted and seeking back to the
+ * record. Not acknowledging is not enough on its own. On RabbitMQ the delivery stays outstanding while the channel is
+ * open and counts against the prefetch, so the consumer can stop receiving messages.
  * <p>
  * The catch-up-then-live coordination itself (the buffer, the de-dup cache, and the drain-then-mark ordering) is
  * delegated to {@link BlockingHandover}, shared with {@code CatchupThenPushSubscriptionModel}.
@@ -187,7 +193,8 @@ public final class CatchupProjectionFeed<E> {
      * @throws IllegalStateException if the event was not folded, because the catch-up was stopped before the feed
      *                               went live, the catch-up failed, the waiting thread was interrupted, the live
      *                               buffer is full, or another delivery of the same event was still running. The
-     *                               listener must not acknowledge it, and the broker delivers it again. Also thrown
+     *                               listener must not acknowledge it, and has the broker deliver it again, as the
+     *                               class javadoc describes. Also thrown
      *                               when this is called while the feed is not live from inside the feed's own
      *                               folds or callbacks, the projection's or a view's included, since the wait could
      *                               only end once that same thread moved on.
@@ -218,9 +225,11 @@ public final class CatchupProjectionFeed<E> {
     /**
      * Feed a live domain event without waiting for the catch-up. Once the feed is live the event is folded on the
      * calling thread and this returns {@link RoutingOutcome#DELIVERED}. Before that it returns
-     * {@link RoutingOutcome#DEFERRED} and the event is not kept anywhere. Call this from a listener whose broker
-     * delivers a message again when it is not acknowledged. Acknowledge the message on {@link RoutingOutcome#DELIVERED}
-     * and leave it unacknowledged on {@link RoutingOutcome#DEFERRED}, so the broker delivers it again.
+     * {@link RoutingOutcome#DEFERRED} and the event is not kept anywhere. Call this from a listener that can have a
+     * message delivered again. Acknowledge the message on {@link RoutingOutcome#DELIVERED}. On
+     * {@link RoutingOutcome#DEFERRED}, do not acknowledge it, and have the broker deliver it again with a nack or a
+     * reject with requeue on RabbitMQ, or on Kafka by leaving the offset uncommitted and seeking back to the record.
+     * Not acknowledging is not enough on its own, as the class javadoc explains.
      * <p>
      * {@link RoutingOutcome#DEFERRED} covers an event fed before {@link #catchUp()} or {@link #goLive()} has taken the
      * feed live, while a replay runs, after {@link #stopCatchUp()} stopped a replay before the feed went live, and while
@@ -233,9 +242,9 @@ public final class CatchupProjectionFeed<E> {
      * returns. Before the feed is live it returns {@link RoutingOutcome#DEFERRED} there too.
      * <p>
      * Unlike {@link #acceptAndWait(Object)}, this never waits for a replay and never runs one itself, so a Kafka
-     * consumer keeps polling while the catch-up runs. A catch-up the view asks for while this call runs its code
-     * replays on another thread, or on this thread after this call has returned, see {@link #catchUp()}. It folds with
-     * no metadata, see {@link #acceptOrDefer(EventMetadata, Object)}.
+     * consumer keeps polling while the catch-up runs. {@link #catchUp()} says on which thread a catch-up the view asks
+     * for while this call runs its code replays, and when it does not replay at all. It folds with no metadata, see
+     * {@link #acceptOrDefer(EventMetadata, Object)}.
      *
      * @param event The domain event received from the external source.
      * @return {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#DEFERRED}.
@@ -484,7 +493,8 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay
      * started. One that had not gone live drains nothing and does not go live, and {@link #acceptAndWait(Object)} throws both
-     * for an event waiting on the replay and for one fed after the stop, so the broker delivers them again. One
+     * for an event waiting on the replay and for one fed after the stop, so the listener has the broker deliver them
+     * again, as the class javadoc describes. One
      * replaying after a {@link #goLive()} delivers what it held while the replay ran and goes on delivering, since
      * those events were accepted by a feed that was already live.
      * <p>

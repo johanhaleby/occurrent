@@ -644,9 +644,9 @@ public class OccurrentProperties {
              * its catch-up has taken it live and while a replay runs. On the reactor stack it counts every event taken
              * in and not yet delivered, so it also applies once the subscription is live, when delivery falls behind
              * the feed. Reaching it reports the overflow rather than dropping events or letting the buffer grow
-             * without bound. The blocking stack throws
-             * from the failing feed call, the reactor stack signals the error on that event's returned Mono. Raise it
-             * for a large history behind a busy feed.
+             * without bound. The blocking stack throws from the failing feed call. On the reactor stack the Mono
+             * that {@code accept(..)} returned for that event errors, and the one from {@code acceptOrDefer(..)}
+             * completes with {@code NOT_DELIVERABLE}. Raise it for a large history behind a busy feed.
              */
             private Integer maxBufferedEvents;
 

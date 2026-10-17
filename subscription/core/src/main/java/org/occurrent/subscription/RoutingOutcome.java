@@ -161,6 +161,12 @@ public enum RoutingOutcome {
         /**
          * Hold the event unacknowledged and offer it again later. Nothing about it is broken, so this bypasses
          * the caller's own failure policy, including any parking that policy does.
+         * <p>
+         * For a broker message, holding it unacknowledged does not bring it back on its own. The caller has the
+         * broker deliver it again, on RabbitMQ with a nack or a reject with requeue, or by closing the channel, and on
+         * Kafka by leaving the offset uncommitted and seeking back to the record. On RabbitMQ a delivery left
+         * unacknowledged stays outstanding while the channel is open and counts against the prefetch, so the consumer
+         * can stop receiving messages.
          */
         HOLD,
 

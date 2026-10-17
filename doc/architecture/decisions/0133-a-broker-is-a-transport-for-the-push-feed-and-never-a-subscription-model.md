@@ -916,8 +916,8 @@ handover checks for a replay under the same lock it queues under, and a replay t
 `acceptIfLive` that is not being folded yet back out of the queue and answers it as not live, so the call reports
 `DEFERRED`. The replay then runs on a scheduler thread, and does not start on the thread that folded an event inline for
 the call until that inline fold has returned. On the blocking stack a fold that asks for a catch-up during `acceptIfLive`
-used to have that replay run on the calling thread before the call returned. That replay now runs on another thread,
-or on the calling thread after the call has returned.
+used to have that replay run on the calling thread before the call returned. That call no longer runs it.
+`BlockingHandover.catchUp` says which thread runs it instead, and when it does not run at all.
 
 ## Amendment (2026-08-21): a permanent catch-up refusal stops a source, and a lifecycle `NOT_DELIVERABLE` is paced, not failed
 
