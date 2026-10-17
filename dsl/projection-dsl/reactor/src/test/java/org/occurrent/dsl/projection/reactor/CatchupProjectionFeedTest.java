@@ -1163,6 +1163,134 @@ class CatchupProjectionFeedTest {
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "n"));
     }
 
+    // "n" folds on another thread after a delay, so "2" is only answered after it when the answer waits for "n"
+    @Test
+    void accept_and_wait_the_feeds_own_live_fold_composes_in_answers_the_event_once_the_fed_event_is_folded() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<List<String>> foldedWhenAnswered = new AtomicReference<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        Function<Counted, Mono<Void>> fold = event -> switch (event.eventId()) {
+            case "2" -> Mono.defer(() -> feedRef.get().acceptAndWait(new Counted("n"))).then(Mono.fromRunnable(() -> folded.add("2")));
+            case "n" -> Mono.delay(ofMillis(100)).then(Mono.fromRunnable(() -> folded.add("n")));
+            default -> Mono.fromRunnable(() -> folded.add(event.eventId()));
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", fold,
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        feedRef.set(feed);
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        StepVerifier.create(feed.acceptAndWait(new Counted("2")).doOnSuccess(ignored -> foldedWhenAnswered.set(List.copyOf(folded))))
+                .expectComplete().verify(ofSeconds(5));
+
+        assertThat(foldedWhenAnswered.get()).containsExactly("1", "2", "n");
+    }
+
+    @Test
+    void accept_and_wait_the_feeds_own_live_fold_subscribes_answers_the_event_once_the_fed_event_is_folded() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<List<String>> foldedWhenAnswered = new AtomicReference<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        Function<Counted, Mono<Void>> fold = event -> switch (event.eventId()) {
+            case "2" -> Mono.fromRunnable(() -> feedRef.get().acceptAndWait(new Counted("n")).subscribe()).then(Mono.fromRunnable(() -> folded.add("2")));
+            case "n" -> Mono.delay(ofMillis(100)).then(Mono.fromRunnable(() -> folded.add("n")));
+            default -> Mono.fromRunnable(() -> folded.add(event.eventId()));
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", fold,
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        feedRef.set(feed);
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        StepVerifier.create(feed.acceptAndWait(new Counted("2")).doOnSuccess(ignored -> foldedWhenAnswered.set(List.copyOf(folded))))
+                .expectComplete().verify(ofSeconds(5));
+
+        assertThat(foldedWhenAnswered.get()).containsExactly("1", "2", "n");
+    }
+
+    // "2" is not recorded as delivered while "n" failed, so its redelivery folds it again, and the fixed "n" with it.
+    @Test
+    void a_fed_event_whose_fold_fails_fails_the_event_that_fed_it_and_that_event_is_folded_again_when_redelivered() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicBoolean nFails = new AtomicBoolean(true);
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        Function<Counted, Mono<Void>> fold = event -> switch (event.eventId()) {
+            case "2" -> Mono.defer(() -> feedRef.get().acceptAndWait(new Counted("n"))).then(Mono.fromRunnable(() -> folded.add("2")));
+            case "n" -> Mono.delay(ofMillis(20)).then(Mono.defer(() -> nFails.get()
+                    ? Mono.<Void>error(new IllegalStateException("fold failed for n"))
+                    : Mono.fromRunnable(() -> folded.add("n"))));
+            default -> Mono.fromRunnable(() -> folded.add(event.eventId()));
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", fold,
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        feedRef.set(feed);
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        StepVerifier.create(feed.acceptAndWait(new Counted("2")))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(IllegalStateException.class).hasMessage("fold failed for n"))
+                .verify(ofSeconds(5));
+        assertThat(folded).containsExactly("1", "2");
+
+        nFails.set(false);
+        StepVerifier.create(feed.acceptAndWait(new Counted("2"))).expectComplete().verify(ofSeconds(5));
+        assertThat(folded).containsExactly("1", "2", "2", "n");
+
+        StepVerifier.create(feed.acceptAndWait(new Counted("2"))).expectComplete().verify(ofSeconds(5));
+        assertThat(folded).containsExactly("1", "2", "2", "n");
+    }
+
+    // The cap leaves no room for "n2" while "2" and "n1" are still counted. The fold swallows that refusal, so it is the
+    // feed that fails the answer to "2", after "n1" is folded.
+    @Test
+    void a_fed_event_refused_for_a_full_buffer_fails_the_event_that_fed_it() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<List<String>> foldedWhenAnswered = new AtomicReference<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        Function<Counted, Mono<Void>> fold = event -> event.eventId().equals("2")
+                ? Flux.just("n1", "n2").concatMap(next -> feedRef.get().acceptAndWait(new Counted(next)).onErrorComplete())
+                .then(Mono.fromRunnable(() -> folded.add("2")))
+                : Mono.fromRunnable(() -> folded.add(event.eventId()));
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", fold,
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null, new CatchupThenLiveOptions(10, 2));
+        feedRef.set(feed);
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        StepVerifier.create(feed.acceptAndWait(new Counted("2")).doOnError(ignored -> foldedWhenAnswered.set(List.copyOf(folded))))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage(HandoverMessages.bufferOverflow(2)))
+                .verify(ofSeconds(5));
+
+        assertThat(foldedWhenAnswered.get()).containsExactly("1", "2", "n1");
+        StepVerifier.create(feed.acceptAndWait(new Counted("3"))).expectComplete().verify(ofSeconds(5));
+    }
+
+    // Each event in the chain holds back the answer of the one before it, so a chain the cap does not stop would leave
+    // the answer to "2" waiting for good. The chain ends at "n100" so that a feed without the cap fails the assertion
+    // instead of running out of memory.
+    @Test
+    void a_fold_that_feeds_new_events_without_end_fails_the_event_the_chain_started_from() {
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        Function<Counted, Mono<Void>> fold = event -> {
+            String id = event.eventId();
+            if (id.equals("2")) {
+                return feedRef.get().acceptAndWait(new Counted("n1"));
+            }
+            int next = id.startsWith("n") ? Integer.parseInt(id.substring(1)) + 1 : 0;
+            return next == 0 || next > 100 ? Mono.<Void>empty() : feedRef.get().acceptAndWait(new Counted("n" + next));
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", fold,
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null, new CatchupThenLiveOptions(10, 3));
+        feedRef.set(feed);
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        StepVerifier.create(feed.acceptAndWait(new Counted("2")))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage(HandoverMessages.fedChainTooLong("projection feed", 3)))
+                .verify(ofSeconds(5));
+
+        StepVerifier.create(feed.acceptAndWait(new Counted("3"))).expectComplete().verify(ofSeconds(5));
+    }
+
     @Test
     void accept_and_wait_from_the_feeds_own_replayed_fold_completes_once_queued_and_the_event_is_folded_after_the_replay() {
         List<String> folded = new CopyOnWriteArrayList<>();

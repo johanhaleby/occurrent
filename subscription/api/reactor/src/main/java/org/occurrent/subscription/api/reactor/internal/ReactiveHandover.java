@@ -322,11 +322,17 @@ public final class ReactiveHandover<T, K> {
     // handover starts failing.
     private final AtomicReference<@Nullable Source<T>> liveSource = new AtomicReference<>();
     // Set while the current thread runs a fold or a Source callback of this handover. A catch-up or a live payload fed
-    // there never waits, since the replay, the pause or the delivery it would wait for is waiting for that code.
-    private final ThreadLocal<Boolean> runningOwnCode = new ThreadLocal<>();
-    // Written into the context of this handover's pipeline, so a catch-up composed into a fold or a Source callback
-    // finds it on whichever thread that runs.
+    // there never waits, since the replay, the pause or the delivery it would wait for is waiting for that code. Holds
+    // the acknowledgement of the live payload being delivered, so a payload its fold feeds holds that answer back, or
+    // NOBODY_WAITS for a replayed fold or a callback.
+    private final ThreadLocal<Object> runningOwnCode = new ThreadLocal<>();
+    // The key of the same mark in the context of this handover's pipeline, so a catch-up or a payload composed into a
+    // fold or a Source callback finds it on whichever thread that runs.
     private final Object insideOwnPipeline = new Object();
+    private static final Object NOBODY_WAITS = new Object();
+    // Live payloads folded whose answer waits for the payloads their folds fed, by de-dup key, so another copy from
+    // outside waits for the same answer rather than being answered before those are folded.
+    private final ConcurrentHashMap<K, LiveAck> awaitingFedPayloads = new ConcurrentHashMap<>();
     // Replays numbered in the order they start, and the number of the latest one that went live, so a catch-up own
     // code asked for before a replay started that has since gone live does not replay the same history again.
     private final java.util.concurrent.atomic.AtomicLong replaysStarted = new java.util.concurrent.atomic.AtomicLong();
@@ -478,15 +484,22 @@ public final class ReactiveHandover<T, K> {
                 .map(outcome -> outcome == Outcome.APPLIED);
     }
 
-    private Mono<Outcome> offer(T payload, boolean answerOnceQueued) {
-        return Mono.create(ackSink -> bufferOrDeliverLive(payload, ackSink, answerOnceQueued, false));
+    private Mono<Outcome> offer(T payload, @Nullable Object owner) {
+        return Mono.create(ackSink -> bufferOrDeliverLive(payload, ackSink, owner, false));
     }
 
-    // Whether a call comes from a fold or a Source callback of this handover, asked when the call's Mono is
-    // subscribed. The thread tells for code that subscribes it where this handover called that code, blocking or not,
-    // and the subscriber's context for code that returns the Mono as part of its own.
-    private boolean ownCode(ContextView context) {
-        return runningOwnCode.get() != null || context.hasKey(insideOwnPipeline);
+    // The fold or Source callback of this handover a call comes from, or null when it comes from other code, asked
+    // when the call's Mono is subscribed. The subscriber's context tells for code that returns the Mono as part of its
+    // own, and the thread for code that subscribes it where this handover called that code, blocking or not.
+    private @Nullable Object ownCode(ContextView context) {
+        Object composed = context.getOrDefault(insideOwnPipeline, null);
+        return composed != null ? composed : runningOwnCode.get();
+    }
+
+    // The live payload whose fold fed a payload, now waiting for it too, or null when nobody waits for the payload
+    // that fold delivers, or that payload's answer has already gone out.
+    private @Nullable LiveAck waitingParent(@Nullable Object owner) {
+        return owner instanceof LiveAck parent && parent.waited() && parent.partStarted() ? parent : null;
     }
 
     // Why a payload is refused before it is taken in, or null when it is not. A handover that is failing still takes
@@ -550,15 +563,15 @@ public final class ReactiveHandover<T, K> {
     public Mono<Boolean> acceptIfLive(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
         return Mono.<Outcome>create(ackSink -> {
-            boolean ownCode = ownCode(ackSink.contextView());
-            Throwable failure = refusalCause(ownCode);
+            Object owner = ownCode(ackSink.contextView());
+            Throwable failure = refusalCause(owner != null);
             if (failure != null) {
-                ackSink.error(refusal(failure));
+                refuseFedFrom(owner, ackSink, refusal(failure));
                 return;
             }
-            if (ownCode) {
+            if (owner != null) {
                 // Its delivery cannot start before the code that fed it returns, so true could only mean queued
-                ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.acceptedOrDeferredFromOwnDelivery(noun)));
+                refuseFedFrom(owner, ackSink, new PreDispatchRefusalException(this, HandoverMessages.acceptedOrDeferredFromOwnDelivery(noun)));
                 return;
             }
             if (!live || liveDeliveryPaused()) {
@@ -570,19 +583,36 @@ public final class ReactiveHandover<T, K> {
                 ackSink.success(Outcome.NOT_LIVE);
                 return;
             }
-            bufferOrDeliverLive(payload, ackSink, false, true);
+            bufferOrDeliverLive(payload, ackSink, null, true);
         }).map(outcome -> outcome == Outcome.APPLIED);
+    }
+
+    // A payload refused before it had an acknowledgement still fails the answer of the live payload whose fold fed it.
+    private void refuseFedFrom(@Nullable Object owner, MonoSink<Outcome> ackSink, Throwable refusal) {
+        ackSink.error(refusal);
+        LiveAck parent = waitingParent(owner);
+        if (parent != null) {
+            partEnded(parent, refusal);
+        }
     }
 
     // Shared by acceptReportingDelivery(..) and, once live, by acceptIfLive(..): registers the pending ack, re-checks
     // the terminal failure and stopped flag under the same race window acceptReportingDelivery has always had to
-    // guard, then reserves the dedup key and hands the item to liveSink for the concatMap pipeline to drain.
-    private void bufferOrDeliverLive(T payload, MonoSink<Outcome> ackSink, boolean answerOnceQueued, boolean neverWaitsForReplay) {
-        LiveAck ack = new LiveAck(ackSink, answerOnceQueued, neverWaitsForReplay);
+    // guard, then reserves the dedup key and hands the item to liveSink for the concatMap pipeline to drain. A payload
+    // with an owner comes from this handover's own code and is answered once queued.
+    private void bufferOrDeliverLive(T payload, MonoSink<Outcome> ackSink, @Nullable Object owner, boolean neverWaitsForReplay) {
+        boolean answerOnceQueued = owner != null;
+        LiveAck ack = new LiveAck(ackSink, answerOnceQueued, neverWaitsForReplay, waitingParent(owner));
         ackSink.onDispose(() -> pendingLiveAcks.remove(ack));
+        if (ack.depth() > maxBufferedEvents) {
+            // Each of these payloads holds the answer of the one whose fold fed it, so a fold that feeds without end
+            // fails that answer here rather than leaving it waiting while the chain grows
+            refuse(ack, new PreDispatchRefusalException(this, HandoverMessages.fedChainTooLong(noun, maxBufferedEvents)));
+            return;
+        }
         Throwable failure = refusalCause(answerOnceQueued);
         if (failure != null) {
-            ackSink.error(refusal(failure));
+            refuse(ack, refusal(failure));
             return;
         }
         if (stopped && !live) {
@@ -590,7 +620,7 @@ public final class ReactiveHandover<T, K> {
             // so nothing is coming to fold it, and accept(..) errors so its caller offers the payload again. A
             // handover that has gone live delivers instead, whatever a stop left behind, since its live pipeline
             // runs.
-            ackSink.success(Outcome.STOPPED);
+            answerNotDelivered(ack, Outcome.STOPPED);
             return;
         }
         pendingLiveAcks.add(ack);
@@ -599,18 +629,18 @@ public final class ReactiveHandover<T, K> {
         // already run, and the caller's Mono would never complete.
         failure = refusalCause(answerOnceQueued);
         if (failure != null) {
-            ackSink.error(refusal(failure));
+            refuse(ack, refusal(failure));
             return;
         }
         if (stopped && !live) {
-            answer(ack, Outcome.STOPPED);
+            answerNotDelivered(ack, Outcome.STOPPED);
             return;
         }
         K key;
         try {
             key = dedupKey(payload);
         } catch (RuntimeException keyFailure) {
-            ackSink.error(keyFailure);
+            refuse(ack, keyFailure);
             return;
         }
         Item<K> item = new Item<>(() -> deliver.apply(payload), () -> alreadyDeliveredByReplay(payload), key, ack);
@@ -658,18 +688,17 @@ public final class ReactiveHandover<T, K> {
                 liveBacklog.incrementAndGet();
                 Item<K> stamped = item.withTurn(admitted.incrementAndGet());
                 ack.admittedAs(stamped.turn());
-                pendingOffers.add(new PendingOffer<>(stamped, ack.sink(), System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
+                pendingOffers.add(new PendingOffer<>(stamped, ack, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
             }
         }
         if (replayRuns) {
-            answer(ack, Outcome.NOT_LIVE);
+            answerNotDelivered(ack, Outcome.NOT_LIVE);
             return false;
         }
         if (bufferFull) {
             // Refused for a full buffer, and answered once admission is released, since the answer runs the caller's
             // own code, which can call back into this handover.
-            pendingLiveAcks.remove(ack);
-            ack.sink().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents)));
+            refuse(ack, new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents)));
             return false;
         }
         drainPendingOffers();
@@ -733,7 +762,7 @@ public final class ReactiveHandover<T, K> {
                     if (System.nanoTime() >= pending.deadline()) {
                         pendingOffers.poll();
                         dropFromBacklogAndDrains(pending.item());
-                        pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
+                        refuse(pending.ack(), new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
                         continue;
                     }
                     // Left at the head, so whatever runs next starts with it and the order holds.
@@ -748,14 +777,14 @@ public final class ReactiveHandover<T, K> {
                     pendingOffers.poll();
                     dropFromBacklogAndDrains(pending.item());
                     Throwable failure = failure();
-                    pending.ack().error(failure == null
+                    refuse(pending.ack(), failure == null
                             ? new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun))
                             : refusal(failure));
                 }
                 default -> {
                     pendingOffers.poll();
                     dropFromBacklogAndDrains(pending.item());
-                    pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
+                    refuse(pending.ack(), new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
                 }
             }
         }
@@ -797,7 +826,7 @@ public final class ReactiveHandover<T, K> {
 
     // An offer waiting its turn at the sink, with the point in time after which this engine stops offering it and
     // reports contention instead.
-    private record PendingOffer<K>(Item<K> item, MonoSink<Outcome> ack, long deadline) {
+    private record PendingOffer<K>(Item<K> item, LiveAck ack, long deadline) {
     }
 
     /**
@@ -868,7 +897,7 @@ public final class ReactiveHandover<T, K> {
     // caller's own code, and either can call back into this handover.
     private void answerStopped(ClaimedAcks<T> claimed) {
         tellDrainedSources(claimed.exhausted());
-        claimed.acks().forEach(ack -> ack.sink().success(Outcome.STOPPED));
+        claimed.acks().forEach(ack -> answerNotDelivered(ack, Outcome.STOPPED));
     }
 
     // Gives the count back once per catch-up that ran its pipeline, whichever way that pipeline ends. A stop still owed
@@ -1089,7 +1118,7 @@ public final class ReactiveHandover<T, K> {
                         .then()
                         // Ordered before the marker and before the live buffer drain, so anything a replay-aware view
                         // buffered is durable before either runs.
-                        .then(subscribedAsOwnCode(Mono.defer(source::replayCompleted)))
+                        .then(subscribedAsOwnCode(Mono.defer(source::replayCompleted), NOBODY_WAITS))
                         .doOnSuccess(ignored -> replayOpen.set(false));
             }));
         });
@@ -1179,7 +1208,7 @@ public final class ReactiveHandover<T, K> {
                 }))
                 // Covers the live folds as well as the replay, so a catch-up composed into either answers without
                 // waiting for the replay or the pause that is waiting for it.
-                .contextWrite(Context.of(insideOwnPipeline, Boolean.TRUE))
+                .contextWrite(Context.of(insideOwnPipeline, NOBODY_WAITS))
                 // This engine subscribes its own pipeline rather than handing it back, so without a scheduler the
                 // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated
                 // projection. boundedElastic because the replay folds through blocking bridges.
@@ -1212,7 +1241,7 @@ public final class ReactiveHandover<T, K> {
                         // still waiting for an answer.
                         try {
                             if (!wasLive) {
-                                dropPendingLiveAcks().forEach(dropped -> dropped.sink().success(Outcome.STOPPED));
+                                dropPendingLiveAcks().forEach(dropped -> answerNotDelivered(dropped, Outcome.STOPPED));
                             }
                         } finally {
                             catchUpEnded(counted);
@@ -1243,7 +1272,7 @@ public final class ReactiveHandover<T, K> {
         // the pause it would wait for cannot end before that code does. The pipeline above runs once that code returns,
         // and replays nothing when a replay that started after this call has gone live by then.
         return Mono.deferContextual(context -> {
-            if (!ownCode(context)) {
+            if (ownCode(context) == null) {
                 return catchupDone.asMono();
             }
             askedByOwnCodeAfter.compareAndSet(-1, replaysStarted.get());
@@ -1264,7 +1293,7 @@ public final class ReactiveHandover<T, K> {
     private void deferPayloadsThatNeverWaitForReplay() {
         ClaimedAcks<T> claimed = claimPendingLiveAcks(LiveAck::neverWaitsForReplay);
         tellDrainedSources(claimed.exhausted());
-        claimed.acks().forEach(ack -> answer(ack, Outcome.NOT_LIVE));
+        claimed.acks().forEach(ack -> answerNotDelivered(ack, Outcome.NOT_LIVE));
     }
 
     // Each payload already admitted gives back its place in the backlog, in the sink's queue and in any drain counting
@@ -1514,26 +1543,32 @@ public final class ReactiveHandover<T, K> {
                 // A stop or a replay already answered it, and its caller offers it again.
                 return Mono.empty();
             }
-            if (deliveredIds.contains(item.dedupKey())) {
-                answerDelivered(liveAck);
-                return Mono.empty();
+            K key = item.dedupKey();
+            if (deliveredIds.contains(key)) {
+                return ownPartEnded(liveAck, key, null, Mono.empty());
             }
-            if (replayedIds.contains(item.dedupKey())) {
+            LiveAck leader = awaitingFedPayloads.get(key);
+            if (leader != null) {
+                if (liveAck.waited() && liveAck.parent() == null) {
+                    // From outside, so its caller waits for the same answer as the copy already folded
+                    follow(leader, liveAck);
+                    return Mono.empty();
+                }
+                // Fed by a fold, or nobody waits for it. The copy already folded holds back the answer of the payload
+                // it came from until what its own fold fed is folded too, so this one is a repeat like any other.
+                return ownPartEnded(liveAck, key, null, Mono.empty());
+            }
+            if (replayedIds.contains(key)) {
                 // Applied by the replay already, so delivering it again would apply it twice. The source is told
                 // instead, and the acknowledgement waits for that call rather than running ahead of it (ADR 137).
-                return answerFailureTo(liveAck, item.dedupKey(), subscribedAsOwnCode(Mono.defer(item.alreadyDeliveredByReplay()))
-                        .doOnSuccess(v -> answerDelivered(liveAck)));
+                return ownPartEnded(liveAck, key, null, subscribedAsOwnCode(Mono.defer(item.alreadyDeliveredByReplay()), liveAck));
             }
-            // Mono.defer so a synchronous throw from the fold becomes an onError signal onErrorResume can catch, rather
-            // than aborting the whole pipeline.
-            return answerFailureTo(liveAck, item.dedupKey(), subscribedAsOwnCode(Mono.defer(item.deliver()))
-                    .doOnSuccess(v -> {
-                        deliveredIds.add(item.dedupKey());
-                        answerDelivered(liveAck);
-                    }));
+            // Mono.defer so a synchronous throw from the fold becomes an error signal rather than aborting the whole
+            // pipeline.
+            return ownPartEnded(liveAck, key, key, subscribedAsOwnCode(Mono.defer(item.deliver()), liveAck));
         }
         // Replay payload: an error here propagates and fails the catch-up.
-        return subscribedAsOwnCode(Mono.defer(item.deliver())).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
+        return subscribedAsOwnCode(Mono.defer(item.deliver()), NOBODY_WAITS).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
     }
 
     // Takes the payload out of pendingLiveAcks before answering it, so a failure of this handover after it cannot
@@ -1545,23 +1580,88 @@ public final class ReactiveHandover<T, K> {
         liveAck.sink().success(outcome);
     }
 
-    // A payload answered once queued was answered then, so only one whose caller still waits is answered here.
-    private void answerDelivered(LiveAck liveAck) {
+    // A payload that was not delivered, answered with why. The payload whose fold fed it is answered with a failure,
+    // since its caller would otherwise acknowledge it while this one was never folded.
+    private void answerNotDelivered(LiveAck liveAck, Outcome outcome) {
+        answer(liveAck, outcome);
+        tellParent(liveAck, switch (outcome) {
+            case STOPPED -> new PreDispatchRefusalException(this, HandoverMessages.stoppedBeforeApplied(noun));
+            case APPLIED, NOT_LIVE -> new AssertionError("Only acceptIfLive(..) answers a payload as not live, and it refuses one fed from a fold.");
+        });
+    }
+
+    private void refuse(LiveAck liveAck, Throwable refusal) {
+        pendingLiveAcks.remove(liveAck);
+        liveAck.sink().error(refusal);
+        tellParent(liveAck, refusal);
+    }
+
+    // Ends the part of the answer the payload's own delivery stands for, once that delivery has ended. A payload
+    // nobody waits for gets nothing more, so its failure makes this handover start failing, see
+    // acceptReportingDelivery(..). Folded carries the key when the delivery folds the payload, which counts it as
+    // delivered once everything its fold fed is folded too.
+    private Mono<Void> ownPartEnded(LiveAck liveAck, K dedupKey, @Nullable K folded, Mono<Void> delivery) {
+        return delivery.materialize().flatMap(signal -> {
+            Throwable failure = signal.getThrowable();
+            if (!liveAck.waited()) {
+                if (failure != null) {
+                    return failingFrom(dedupKey, failure);
+                }
+                if (folded != null) {
+                    deliveredIds.add(folded);
+                }
+                return Mono.empty();
+            }
+            if (failure == null && folded != null) {
+                liveAck.folded(folded);
+                awaitingFedPayloads.put(folded, liveAck);
+            }
+            partEnded(liveAck, failure);
+            return Mono.empty();
+        });
+    }
+
+    // A payload's answer waits for its own delivery and for every payload that delivery fed, and goes out with the
+    // first failure among them once the last one has ended.
+    private void partEnded(LiveAck liveAck, @Nullable Throwable failure) {
+        if (!liveAck.partEnded(failure)) {
+            return;
+        }
+        Throwable firstFailure = liveAck.firstFailure();
+        @SuppressWarnings("unchecked")
+        K folded = (K) liveAck.foldedKey();
+        if (folded != null) {
+            // Counted as delivered only when everything it fed was folded, so a redelivery after a failure is folded
+            // again rather than skipped
+            if (firstFailure == null) {
+                deliveredIds.add(folded);
+            }
+            awaitingFedPayloads.remove(folded, liveAck);
+        }
+        liveAck.closeFollowers().forEach(follower -> partEnded(follower, firstFailure));
         if (!liveAck.answeredOnceQueued()) {
-            answer(liveAck, Outcome.APPLIED);
+            if (firstFailure == null) {
+                answer(liveAck, Outcome.APPLIED);
+            } else {
+                pendingLiveAcks.remove(liveAck);
+                liveAck.sink().error(firstFailure);
+            }
+        }
+        tellParent(liveAck, firstFailure);
+    }
+
+    private void tellParent(LiveAck liveAck, @Nullable Throwable failure) {
+        LiveAck parent = liveAck.parent();
+        if (parent != null && liveAck.parentNotTold()) {
+            partEnded(parent, failure);
         }
     }
 
-    // A payload whose caller still waits gets the failure, and the pipeline goes on. One answered once queued has
-    // nobody left to tell, so its failure makes this handover start failing, see acceptReportingDelivery(..).
-    private Mono<Void> answerFailureTo(LiveAck liveAck, K dedupKey, Mono<Void> delivery) {
-        return delivery.onErrorResume(error -> {
-            if (!liveAck.answeredOnceQueued()) {
-                liveAck.sink().error(error);
-                return Mono.empty();
-            }
-            return failingFrom(dedupKey, error);
-        });
+    // The follower's own part is the delivery of the copy it follows, so it ends with that copy's answer
+    private void follow(LiveAck leader, LiveAck follower) {
+        if (!leader.addFollower(follower)) {
+            partEnded(follower, leader.firstFailure());
+        }
     }
 
     // Only one payload is delivered at a time, so no second failure of a queued payload can arrive while the first is
@@ -1684,7 +1784,7 @@ public final class ReactiveHandover<T, K> {
         stopNoLongerOwed();
         latestFailure.set(new RecordedFailure(cause.cause()));
         if (!cause.queuedDeliveryFailed()) {
-            dropPendingLiveAcks().forEach(ack -> ack.sink().error(refusal(cause.cause())));
+            dropPendingLiveAcks().forEach(ack -> refuse(ack, refusal(cause.cause())));
         }
     }
 
@@ -1696,7 +1796,7 @@ public final class ReactiveHandover<T, K> {
             return;
         }
         liveDelivery()
-                .contextWrite(Context.of(insideOwnPipeline, Boolean.TRUE))
+                .contextWrite(Context.of(insideOwnPipeline, NOBODY_WAITS))
                 .subscribeOn(Schedulers.boundedElastic())
                 .subscribe(ignored -> {
                 }, error -> {
@@ -1732,7 +1832,10 @@ public final class ReactiveHandover<T, K> {
         if (cause == null || !terminalError.compareAndSet(null, cause)) {
             return;
         }
-        dropPendingLiveAcks().forEach(ack -> ack.sink().error(refusal(cause)));
+        dropPendingLiveAcks().forEach(ack -> refuse(ack, refusal(cause)));
+        // What is left was folded and waits for payloads its fold fed. Once nothing is left to deliver those have all
+        // ended, so this only reaches a pipeline that ended with payloads still in it, and nothing will deliver them.
+        pendingLiveAcks.forEach(ack -> refuse(ack, refusal(cause)));
         failedForGood.tryEmitError(FailedForGood.INSTANCE);
     }
 
@@ -1741,7 +1844,7 @@ public final class ReactiveHandover<T, K> {
     // completes, so the failure goes on either way, and the log line tells an operator what to remove.
     private Mono<Void> forgetCaughtUp(List<Source<T>> sources) {
         return Flux.fromIterable(sources)
-                .concatMap(source -> subscribedAsOwnCode(Mono.defer(source::forgetCaughtUp))
+                .concatMap(source -> subscribedAsOwnCode(Mono.defer(source::forgetCaughtUp), NOBODY_WAITS)
                         .timeout(forgetAttemptTimeout)
                         .retryWhen(Retry.backoff(FORGET_RETRIES, FORGET_FIRST_RETRY_DELAY))
                         .onErrorResume(forgetFailure -> {
@@ -1787,12 +1890,14 @@ public final class ReactiveHandover<T, K> {
     // Marks the thread only while it subscribes the fold or callback, so a later task on the same pooled thread is not
     // taken for code of this handover. The mark is lifted while a completion or error goes downstream, since a fold
     // that completes on the thread that subscribed it would otherwise leave the thread marked while code that is not
-    // this handover's handles that signal, such as what a caller of acceptIfLive(..) runs next.
-    private Mono<Void> subscribedAsOwnCode(Mono<Void> code) {
-        return Mono.from(subscriber -> runAsOwnCode(() -> code.subscribe(new CoreSubscriber<Void>() {
+    // this handover's handles that signal, such as what a caller of acceptIfLive(..) runs next. The owner is the
+    // acknowledgement of the live payload being delivered, or NOBODY_WAITS.
+    private Mono<Void> subscribedAsOwnCode(Mono<Void> code, Object owner) {
+        return Mono.from(subscriber -> runAsOwnCode(owner, () -> code.subscribe(new CoreSubscriber<Void>() {
             @Override
             public Context currentContext() {
-                return subscriber instanceof CoreSubscriber<?> downstream ? downstream.currentContext() : Context.empty();
+                Context downstream = subscriber instanceof CoreSubscriber<?> core ? core.currentContext() : Context.empty();
+                return downstream.put(insideOwnPipeline, owner);
             }
 
             @Override
@@ -1818,7 +1923,7 @@ public final class ReactiveHandover<T, K> {
     }
 
     private void runOutsideOwnCode(Runnable code) {
-        Boolean outer = runningOwnCode.get();
+        Object outer = runningOwnCode.get();
         runningOwnCode.remove();
         try {
             code.run();
@@ -1830,13 +1935,19 @@ public final class ReactiveHandover<T, K> {
     }
 
     private void runAsOwnCode(Runnable code) {
-        Boolean outer = runningOwnCode.get();
-        runningOwnCode.set(Boolean.TRUE);
+        runAsOwnCode(NOBODY_WAITS, code);
+    }
+
+    private void runAsOwnCode(Object owner, Runnable code) {
+        Object outer = runningOwnCode.get();
+        runningOwnCode.set(owner);
         try {
             code.run();
         } finally {
             if (outer == null) {
                 runningOwnCode.remove();
+            } else {
+                runningOwnCode.set(outer);
             }
         }
     }
@@ -1896,11 +2007,80 @@ public final class ReactiveHandover<T, K> {
         private final java.util.concurrent.atomic.AtomicInteger state = new java.util.concurrent.atomic.AtomicInteger(OPEN);
         // Written and read under the admission guard only.
         private long turn = NOT_ADMITTED;
+        // The live payload whose fold fed this one and whose answer waits for it, and how many such payloads lie
+        // between this one and the payload from outside at the top.
+        private final @Nullable LiveAck parent;
+        private final int depth;
+        private final AtomicBoolean parentTold = new AtomicBoolean();
+        // Its own delivery plus every payload that delivery fed that has not ended yet. The answer goes out at zero.
+        private final java.util.concurrent.atomic.AtomicInteger parts = new java.util.concurrent.atomic.AtomicInteger(1);
+        private final AtomicReference<@Nullable Throwable> firstFailure = new AtomicReference<>();
+        private volatile @Nullable Object foldedKey;
+        // Copies from outside that arrived while this one waited, answered with its answer. Guarded by this.
+        private @Nullable List<LiveAck> followers = new ArrayList<>();
 
-        private LiveAck(MonoSink<Outcome> sink, boolean answeredOnceQueued, boolean neverWaitsForReplay) {
+        private LiveAck(MonoSink<Outcome> sink, boolean answeredOnceQueued, boolean neverWaitsForReplay, @Nullable LiveAck parent) {
             this.sink = sink;
             this.answeredOnceQueued = answeredOnceQueued;
             this.neverWaitsForReplay = neverWaitsForReplay;
+            this.parent = parent;
+            this.depth = parent == null ? 0 : parent.depth + 1;
+        }
+
+        // Whether anyone waits for this payload's answer, its caller from outside or a payload whose fold fed it
+        private boolean waited() {
+            return !answeredOnceQueued || parent != null;
+        }
+
+        private @Nullable LiveAck parent() {
+            return parent;
+        }
+
+        private int depth() {
+            return depth;
+        }
+
+        private boolean parentNotTold() {
+            return parentTold.compareAndSet(false, true);
+        }
+
+        // Adds a part for a payload this one's delivery fed, unless the answer has already gone out
+        private boolean partStarted() {
+            return parts.getAndUpdate(left -> left == 0 ? 0 : left + 1) > 0;
+        }
+
+        // Whether this was the last part, so the answer goes out now
+        private boolean partEnded(@Nullable Throwable failure) {
+            if (failure != null) {
+                firstFailure.compareAndSet(null, failure);
+            }
+            return parts.decrementAndGet() == 0;
+        }
+
+        private @Nullable Throwable firstFailure() {
+            return firstFailure.get();
+        }
+
+        private void folded(Object key) {
+            foldedKey = key;
+        }
+
+        private @Nullable Object foldedKey() {
+            return foldedKey;
+        }
+
+        private synchronized boolean addFollower(LiveAck follower) {
+            if (followers == null) {
+                return false;
+            }
+            followers.add(follower);
+            return true;
+        }
+
+        private synchronized List<LiveAck> closeFollowers() {
+            List<LiveAck> waiting = followers == null ? List.of() : followers;
+            followers = null;
+            return waiting;
         }
 
         private boolean neverWaitsForReplay() {
