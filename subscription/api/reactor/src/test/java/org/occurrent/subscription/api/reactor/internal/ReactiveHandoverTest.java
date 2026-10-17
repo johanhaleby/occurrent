@@ -25,6 +25,7 @@ import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.HandoverMessages;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.MonoSink;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
@@ -34,12 +35,17 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -3848,6 +3854,79 @@ class ReactiveHandoverTest {
         assertThat(source.markCaughtUpCallCount()).isZero();
     }
 
+    // The key of K cannot be computed, so K is refused before it is taken in, and the fold of R1 swallows that refusal.
+    @Test
+    void a_payload_a_replayed_fold_feeds_whose_key_cannot_be_computed_fails_the_catch_up_although_the_fold_swallows_it() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.defer(() -> switch (payload) {
+            case "R1" -> Mono.fromRunnable(() -> {
+                self.get().accept("K").subscribe(queued -> {}, error -> log.add("K refused: " + error.getMessage()));
+                log.add("R1");
+            });
+            default -> Mono.fromRunnable(() -> log.add(payload));
+        }), payload -> {
+            if (payload.equals("K")) {
+                throw new IllegalStateException("no key for K");
+            }
+            return payload;
+        }, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        FakeSource source = source(List.of("R1"), false);
+
+        StepVerifier.create(handover.catchUp(source))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage("no key for K"))
+                .verify(Duration.ofSeconds(5));
+
+        assertThat(log).containsExactly("K refused: no key for K", "R1");
+        assertThat(source.markCaughtUpCallCount()).isZero();
+        assertThat(source.forgetCaughtUpCallCount()).isEqualTo(1);
+    }
+
+    // The handover has failed for good, and a catch-up asked for after that still replays. The fold of R1 feeds N1,
+    // which the failed handover refuses, and swallows that refusal, so the catch-up is the only one left to report it.
+    @Test
+    void a_payload_a_replayed_fold_feeds_that_a_handover_which_failed_for_good_refuses_fails_the_catch_up_although_the_fold_swallows_it() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverFolding(CatchupThenLiveOptions.defaults(), (self, payload) -> switch (payload) {
+            case "bad" -> Mono.error(new IllegalArgumentException("fold failed for bad"));
+            case "R1" -> Mono.fromRunnable(() -> {
+                self.accept("N1").subscribe(queued -> {}, error -> log.add("N1 refused"));
+                log.add("R1");
+            });
+            default -> Mono.fromRunnable(() -> log.add(payload));
+        });
+        StepVerifier.create(handover.catchUp(source(List.of("bad"), false)))
+                .expectErrorSatisfies(error -> assertThat(error).hasMessage("fold failed for bad"))
+                .verify(Duration.ofSeconds(5));
+        assertThat(handover.refusesPermanently()).isTrue();
+        FakeSource source = source(List.of("R1"), false);
+
+        StepVerifier.create(handover.catchUp(source))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasMessage(HandoverMessages.catchUpFailed("test payload"))
+                        .hasRootCauseMessage("fold failed for bad"))
+                .verify(Duration.ofSeconds(5));
+
+        assertThat(log).containsExactly("N1 refused", "R1");
+        assertThat(source.markCaughtUpCallCount()).isZero();
+    }
+
+    @Test
+    void a_payload_replay_started_feeds_that_fails_fails_the_catch_up_after_the_replay_is_folded_and_writes_no_marker() {
+        assertThatACatchUpFailsForAPayloadACallbackFeeds((source, handover) ->
+                source.onReplayStarted = () -> handover.accept("bad").subscribe(queued -> {}, error -> {}));
+    }
+
+    @Test
+    void a_payload_history_done_feeds_that_fails_fails_the_catch_up_after_the_replay_is_folded_and_writes_no_marker() {
+        assertThatACatchUpFailsForAPayloadACallbackFeeds((source, handover) ->
+                source.onHistoryDone = () -> handover.accept("bad").subscribe(queued -> {}, error -> {}));
+    }
+
     @Test
     void a_chain_of_payloads_a_live_fold_feeds_longer_than_the_live_buffer_fails_the_answer_to_the_payload_that_started_it_although_the_folds_swallow_the_refusal() {
         ReactiveHandover<String, String> handover = handoverFolding(new CatchupThenLiveOptions(10, 3), (self, payload) -> {
@@ -3880,6 +3959,25 @@ class ReactiveHandoverTest {
 
         assertThat(loggedWhenAnswered.get()).containsExactly("L1", "Y");
         assertThat(handover.refusesPermanently()).isFalse();
+    }
+
+    // The callback feeds a payload whose fold fails and swallows what it gets back, so the catch-up is the only one left
+    // to report the failure.
+    private static void assertThatACatchUpFailsForAPayloadACallbackFeeds(BiConsumer<FakeSource, ReactiveHandover<String, String>> feedsBad) {
+        List<String> log = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
+        FakeSource source = source(List.of("R1"), false);
+        feedsBad.accept(source, handover);
+
+        StepVerifier.create(handover.catchUp(source))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessage("fold failed for bad"))
+                .verify(Duration.ofSeconds(5));
+
+        assertThat(log).containsExactly("R1");
+        assertThat(source.markCaughtUpCallCount()).isZero();
+        assertThat(source.forgetCaughtUpCallCount()).isEqualTo(1);
     }
 
     // N1 is fed from a Source callback of a catch-up that replays R1, and its fold is held. The marker must wait for it.
@@ -4320,6 +4418,56 @@ class ReactiveHandoverTest {
             assertThat(log).containsExactly("L1", "R1", "L3");
         } finally {
             releaseL1.countDown();
+        }
+    }
+
+    // L1 feeds nothing and its fold completes on the test thread, which ends its delivery there, while another thread
+    // starts a catch-up whose replay pauses live delivery. L1's delivery had started before that, so whichever of the two
+    // happens first, the replay waits for it and L1 is answered true. A false would mean the pause saw L1's delivery as
+    // ended while L1 was still counted as running. Nothing runs between the two steps that end the delivery, so the
+    // threads start at offsets that differ per handover, over many handovers, so that some pause falls between them.
+    @Test
+    void acceptIfLive_whose_fold_completes_on_one_thread_while_a_replay_pauses_live_delivery_on_another_is_answered_true() throws Exception {
+        int handovers = 10_000;
+        int offsetSpreadNanos = 20000;
+        ExecutorService pausing = Executors.newSingleThreadExecutor();
+        CyclicBarrier bothReady = new CyclicBarrier(2);
+        try {
+            for (int i = 0; i < handovers; i++) {
+                Random offsets = new Random(i);
+                AtomicReference<MonoSink<Void>> foldOfL1 = new AtomicReference<>();
+                CountDownLatch foldingL1 = new CountDownLatch(1);
+                ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.<Void>create(sink -> {
+                    foldOfL1.set(sink);
+                    foldingL1.countDown();
+                }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+                StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+                CompletableFuture<Boolean> l1 = handover.acceptIfLive("L1").subscribeOn(Schedulers.boundedElastic()).toFuture();
+                assertThat(foldingL1.await(5, TimeUnit.SECONDS)).isTrue();
+                long pauseOffset = offsets.nextInt(offsetSpreadNanos);
+                long foldEndOffset = offsets.nextInt(offsetSpreadNanos);
+
+                Future<CompletableFuture<Boolean>> replaying = pausing.submit(() -> {
+                    bothReady.await(5, TimeUnit.SECONDS);
+                    spinFor(pauseOffset);
+                    return handover.catchUp(source(List.of(), false)).toFuture();
+                });
+                bothReady.await(5, TimeUnit.SECONDS);
+                spinFor(foldEndOffset);
+                foldOfL1.get().success();
+
+                assertThat(l1).as("L1 of handover %d", i).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+                assertThat(replaying.get(5, TimeUnit.SECONDS)).as("the replay of handover %d", i).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            }
+        } finally {
+            pausing.shutdownNow();
+        }
+    }
+
+    private static void spinFor(long nanos) {
+        long until = System.nanoTime() + nanos;
+        while (System.nanoTime() < until) {
+            Thread.onSpinWait();
         }
     }
 

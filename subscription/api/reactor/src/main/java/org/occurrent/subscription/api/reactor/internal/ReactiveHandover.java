@@ -717,16 +717,12 @@ public final class ReactiveHandover<T, K> {
         if (depth > maxBufferedEvents) {
             // Each of these payloads holds the answer of the one whose fold fed it, so a fold that feeds without end
             // fails that answer here rather than leaving it waiting while the chain grows
-            PreDispatchRefusalException tooLong = new PreDispatchRefusalException(this, HandoverMessages.fedChainTooLong(noun, maxBufferedEvents));
-            if (owner instanceof ReplayFold fold) {
-                fold.feed().failed(tooLong);
-            }
-            refuse(ack, tooLong);
+            refuse(ack, new PreDispatchRefusalException(this, HandoverMessages.fedChainTooLong(noun, maxBufferedEvents)), owner);
             return;
         }
         Throwable failure = refusalCause(answerOnceQueued);
         if (failure != null) {
-            refuse(ack, refusal(failure));
+            refuse(ack, refusal(failure), owner);
             return;
         }
         if (stopped && !live) {
@@ -743,7 +739,7 @@ public final class ReactiveHandover<T, K> {
         // already run, and the caller's Mono would never complete.
         failure = refusalCause(answerOnceQueued);
         if (failure != null) {
-            refuse(ack, refusal(failure));
+            refuse(ack, refusal(failure), owner);
             return;
         }
         if (stopped && !live) {
@@ -754,11 +750,11 @@ public final class ReactiveHandover<T, K> {
         try {
             key = dedupKey(payload);
         } catch (RuntimeException keyFailure) {
-            refuse(ack, keyFailure);
+            refuse(ack, keyFailure, owner);
             return;
         }
         Item<K> item = new Item<>(() -> deliver.apply(payload), () -> alreadyDeliveredByReplay(payload), key, ack);
-        if (owner instanceof ReplayFold fold && takenInByReplay(item, ack, fold.feed(), depth)) {
+        if (owner instanceof ReplayFold fold && takenInByReplay(item, ack, fold, depth)) {
             return;
         }
         if (offerToLiveSink(item, ack) && answerOnceQueued) {
@@ -770,7 +766,8 @@ public final class ReactiveHandover<T, K> {
     // Queues a payload a replayed fold fed on that replay's feed, which folds it before the marker is written, and
     // answers it as queued. Counted in the live backlog like any payload taken in, so the buffer limit holds for these
     // too. Returns false once that replay has folded what its folds fed, and the payload goes to the live sink.
-    private boolean takenInByReplay(Item<K> item, LiveAck ack, ReplayFeed feed, int depth) {
+    private boolean takenInByReplay(Item<K> item, LiveAck ack, ReplayFold fold, int depth) {
+        ReplayFeed feed = fold.feed();
         boolean bufferFull;
         synchronized (admission) {
             if (ack.dropped()) {
@@ -786,9 +783,7 @@ public final class ReactiveHandover<T, K> {
             }
         }
         if (bufferFull) {
-            PreDispatchRefusalException overflow = new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents));
-            feed.failed(overflow);
-            refuse(ack, overflow);
+            refuse(ack, new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents)), fold);
         } else {
             answer(ack, Outcome.APPLIED);
         }
@@ -1821,6 +1816,14 @@ public final class ReactiveHandover<T, K> {
         pendingLiveAcks.remove(liveAck);
         liveAck.sink().error(refusal);
         tellParent(liveAck, refusal);
+    }
+
+    // A refusal of a payload a replayed fold fed fails that replay's catch-up too, since the fold can swallow it
+    private void refuse(LiveAck liveAck, Throwable refusal, @Nullable Object owner) {
+        if (owner instanceof ReplayFold fold) {
+            fold.feed().failed(refusal);
+        }
+        refuse(liveAck, refusal);
     }
 
     // Ends the part of the answer the payload's own delivery stands for, once that delivery has ended. A payload
