@@ -25,6 +25,9 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.slf4j.LoggerFactory;
@@ -58,6 +61,7 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -3242,14 +3246,14 @@ class ReactiveHandoverTest {
 
     // The drain of the second catch-up counts L0, which is being folded, and L1, which waits behind it. The third
     // catch-up holds live delivery back once L0 is folded and fails to fold bad1, and that failure claims L1, which ends
-    // the drain. Its liveDrained() throws a checked exception it does not declare, as a source written in Kotlin can,
-    // and L1 and the failed catch-up still have to be answered.
-    @Test
-    void a_source_whose_live_drained_throws_a_checked_exception_when_a_failing_catch_up_claims_the_payloads_it_buffered_leaves_none_of_them_unanswered() throws Exception {
+    // the drain. Its liveDrained() throws what it is given without declaring it, as a source written in Kotlin can for
+    // a checked exception, and L1 and the failed catch-up still have to be answered, JVM-fatal errors included.
+    @ParameterizedTest
+    @MethodSource("whatALiveDrainedCanThrow")
+    void a_source_whose_live_drained_throws_when_a_failing_catch_up_claims_the_payloads_it_buffered_leaves_none_of_them_unanswered(Throwable thrown) throws Exception {
         List<String> log = new CopyOnWriteArrayList<>();
         CountDownLatch foldingL0 = new CountDownLatch(1);
         CountDownLatch releaseL0 = new CountDownLatch(1);
-        IOException thrown = new IOException("live drained failed");
         ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("L0", self -> Mono.fromRunnable(() -> {
             foldingL0.countDown();
             awaitQuietly(releaseL0);
@@ -4069,8 +4073,7 @@ class ReactiveHandoverTest {
         assertThatTheCatchUpFailedWith(outcome, thrown);
     }
 
-    // Reactor rethrows a JVM-fatal error from a key function rather than signal it, so the failure recorded for the
-    // catch-up is what keeps it from writing its marker, and what K is answered with.
+    // K is refused with the error before it is rethrown, the same as for an exception.
     @Test
     void a_payload_a_replayed_fold_feeds_and_subscribes_elsewhere_whose_key_function_throws_a_no_class_def_found_error_fails_the_catch_up_and_writes_no_marker() {
         NoClassDefFoundError thrown = new NoClassDefFoundError("Lcom/example/KeyClass;");
@@ -4080,12 +4083,10 @@ class ReactiveHandoverTest {
         assertThat(outcome.catchUp().getThrowable()).as("what the catch-up ended with").isSameAs(thrown);
         assertThat(outcome.source().markCaughtUpCallCount()).as("the marker for a replay that fed a payload never folded").isZero();
         assertThat(outcome.log()).as("what was folded").containsExactly("R1");
-        assertThat(catchThrowable(() -> outcome.fed().get(5, TimeUnit.SECONDS))).as("what accept(K) ended with once the catch-up failed")
+        assertThat(catchThrowable(() -> outcome.fed().get(5, TimeUnit.SECONDS))).as("what accept(K) ended with")
                 .isInstanceOf(ExecutionException.class)
                 .cause()
-                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
-                .hasMessage(HandoverMessages.catchUpFailed("test payload"))
-                .hasRootCause(thrown);
+                .isSameAs(thrown);
     }
 
     @Test
@@ -4095,9 +4096,77 @@ class ReactiveHandoverTest {
         JvmFatalKeyFailureOutcome outcome = catchUpOfAFoldFeedingAPayloadWhoseKeyFunctionThrowsAJvmFatalError(thrown, false);
 
         assertThat(outcome.swallowed()).as("what feeding K threw at the fold").containsExactly(thrown);
+        assertThat(catchThrowable(() -> outcome.fed().get(5, TimeUnit.SECONDS))).as("what accept(K) ended with")
+                .isInstanceOf(ExecutionException.class)
+                .cause()
+                .isSameAs(thrown);
         assertThat(outcome.catchUp().getThrowable()).as("what the catch-up ended with").isSameAs(thrown);
         assertThat(outcome.source().markCaughtUpCallCount()).as("the marker for a replay that fed a payload never folded").isZero();
         assertThat(outcome.log()).as("what was folded").containsExactly("R1");
+    }
+
+    // The live fold of E feeds N and swallows what subscribing to it throws, so what N is refused with has to reach E
+    // before a JVM-fatal error leaves the key function, since E would otherwise never be answered.
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("jvmFatalErrors")
+    void a_payload_a_live_fold_feeds_and_subscribes_on_its_own_thread_whose_key_function_throws_a_jvm_fatal_error_leaves_that_payload_and_its_redelivery_answered(
+            String kind, Supplier<Throwable> jvmFatalError) throws Exception {
+        Throwable thrown = jvmFatalError.get();
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Throwable> swallowed = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("E")) {
+                try {
+                    self.get().accept("N").subscribe(queued -> {}, refusal -> {});
+                } catch (Throwable fatal) {
+                    swallowed.add(fatal);
+                }
+            }
+            log.add(payload);
+        }), payload -> {
+            if (payload.equals("N")) {
+                ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown);
+            }
+            return payload;
+        }, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+
+        CompletableFuture<Void> e = handover.accept("E").toFuture();
+        CompletableFuture<Void> redelivered = handover.accept("E").toFuture();
+        CompletableFuture<Void> f = handover.accept("F").toFuture();
+
+        assertThat(catchThrowable(() -> e.get(5, TimeUnit.SECONDS))).as("what accept(E) ended with")
+                .isInstanceOf(ExecutionException.class)
+                .cause().isSameAs(thrown);
+        assertThat(catchThrowable(() -> redelivered.get(5, TimeUnit.SECONDS))).as("what the redelivered accept(E) ended with")
+                .isInstanceOf(ExecutionException.class)
+                .cause().isSameAs(thrown);
+        assertThat(f).as("accept(F)").succeedsWithin(Duration.ofSeconds(5));
+        assertThat(swallowed).as("what feeding N threw at the fold").containsExactly(thrown, thrown);
+        assertThat(log).as("what was folded").containsExactly("E", "E", "F");
+    }
+
+    // A caller outside any fold is the one a JVM-fatal error is rethrown to, after its payload has been answered with it.
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("jvmFatalErrors")
+    void a_payload_from_outside_whose_key_function_throws_a_jvm_fatal_error_is_answered_with_it(
+            String kind, Supplier<Throwable> jvmFatalError) {
+        Throwable thrown = jvmFatalError.get();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.empty(), payload -> {
+            ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown);
+            return payload;
+        }, CatchupThenLiveOptions.defaults(), "test payload");
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        CompletableFuture<Void> x = new CompletableFuture<>();
+
+        Throwable rethrown = catchThrowable(() -> handover.accept("X").subscribe(queued -> {}, x::completeExceptionally, () -> x.complete(null)));
+
+        assertThat(catchThrowable(() -> x.get(5, TimeUnit.SECONDS))).as("what accept(X) ended with")
+                .isInstanceOf(ExecutionException.class)
+                .cause().isSameAs(thrown);
+        assertThat(rethrown).as("what was thrown to the subscriber").isSameAs(thrown);
     }
 
     // The key function of K returns only after the catch-up has logged that it waits for it, and then a while longer,
@@ -4305,6 +4374,20 @@ class ReactiveHandoverTest {
     }
 
     private record KeyFailureOutcome(Signal<Boolean> catchUp, List<Throwable> refusals, List<String> log, FakeSource source) {
+    }
+
+    private static Stream<Arguments> jvmFatalErrors() {
+        return Stream.of(
+                Arguments.of("NoClassDefFoundError", (Supplier<Throwable>) () -> new NoClassDefFoundError("Lcom/example/KeyClass;")),
+                Arguments.of("ExceptionInInitializerError", (Supplier<Throwable>) () -> new ExceptionInInitializerError("static initializer failed")),
+                Arguments.of("StackOverflowError", (Supplier<Throwable>) () -> new StackOverflowError("key function recursed")));
+    }
+
+    private static Stream<Throwable> whatALiveDrainedCanThrow() {
+        return Stream.of(
+                new IOException("live drained failed"),
+                new NoClassDefFoundError("Lcom/example/Source;"),
+                new ExceptionInInitializerError("static initializer failed"));
     }
 
     @SuppressWarnings("unchecked")
