@@ -27,6 +27,7 @@ import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
+import reactor.core.publisher.Operators;
 import reactor.core.publisher.Sinks;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1701,7 +1702,7 @@ public final class ReactiveHandover<T, K> {
         } else if (replayedIds.contains(key)) {
             delivery = subscribedAsOwnCode(Mono.defer(item.alreadyDeliveredByReplay()), fold);
         } else {
-            delivery = subscribedAsOwnCode(Mono.defer(item.deliver()), fold).doOnSuccess(ignored -> deliveredIds.add(key));
+            delivery = subscribedAsCatchUpFold(Mono.defer(item.deliver()), fold).doOnSuccess(ignored -> deliveredIds.add(key));
         }
         return delivery.doFinally(signal -> {
             synchronized (admission) {
@@ -1880,7 +1881,7 @@ public final class ReactiveHandover<T, K> {
             return ownPartEnded(liveAck, key, key, subscribedAsOwnCode(Mono.defer(item.deliver()), liveAck));
         }
         // Replay payload: an error here propagates and fails the catch-up.
-        return subscribedAsOwnCode(Mono.defer(item.deliver()), replayOwner).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
+        return subscribedAsCatchUpFold(Mono.defer(item.deliver()), replayOwner).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
     }
 
     // Takes the payload out of pendingLiveAcks before answering it, so a failure of this handover after it cannot
@@ -2244,33 +2245,63 @@ public final class ReactiveHandover<T, K> {
     // this handover's handles that signal, such as what a caller of acceptIfLive(..) runs next. The owner is the
     // acknowledgement of the live payload being delivered, or NOBODY_WAITS.
     private Mono<Void> subscribedAsOwnCode(Mono<Void> code, Object owner) {
-        return Mono.from(subscriber -> runAsOwnCode(owner, () -> code.subscribe(new CoreSubscriber<Void>() {
-            @Override
-            public Context currentContext() {
-                Context downstream = subscriber instanceof CoreSubscriber<?> core ? core.currentContext() : Context.empty();
-                return downstream.put(insideOwnPipeline, owner);
-            }
+        return subscribedAsOwnCode(code, owner, false);
+    }
 
-            @Override
-            public void onSubscribe(Subscription subscription) {
-                subscriber.onSubscribe(subscription);
-            }
+    // A fold run by a catch-up signals a JVM-fatal error it throws while it is called or subscribed, which Reactor
+    // rethrows instead. Rethrown, it unwinds to the scheduler running the catch-up, and the catch-up never ends, never
+    // fails and never answers the payloads waiting for it. Signalled, it fails the catch-up, which logs it.
+    private Mono<Void> subscribedAsCatchUpFold(Mono<Void> fold, Object owner) {
+        return subscribedAsOwnCode(fold, owner, true);
+    }
 
-            @Override
-            public void onNext(Void value) {
-                runOutsideOwnCode(() -> subscriber.onNext(value));
-            }
+    private Mono<Void> subscribedAsOwnCode(Mono<Void> code, Object owner, boolean signalsJvmFatal) {
+        return Mono.from(subscriber -> runAsOwnCode(owner, () -> {
+            AtomicBoolean subscribed = new AtomicBoolean();
+            // Set before the end goes downstream, so an error thrown by what runs there is not taken for the fold's
+            AtomicBoolean ended = new AtomicBoolean();
+            try {
+                code.subscribe(new CoreSubscriber<Void>() {
+                    @Override
+                    public Context currentContext() {
+                        Context downstream = subscriber instanceof CoreSubscriber<?> core ? core.currentContext() : Context.empty();
+                        return downstream.put(insideOwnPipeline, owner);
+                    }
 
-            @Override
-            public void onError(Throwable error) {
-                runOutsideOwnCode(() -> subscriber.onError(error));
-            }
+                    @Override
+                    public void onSubscribe(Subscription subscription) {
+                        subscribed.set(true);
+                        subscriber.onSubscribe(subscription);
+                    }
 
-            @Override
-            public void onComplete() {
-                runOutsideOwnCode(subscriber::onComplete);
+                    @Override
+                    public void onNext(Void value) {
+                        runOutsideOwnCode(() -> subscriber.onNext(value));
+                    }
+
+                    @Override
+                    public void onError(Throwable error) {
+                        ended.set(true);
+                        runOutsideOwnCode(() -> subscriber.onError(error));
+                    }
+
+                    @Override
+                    public void onComplete() {
+                        ended.set(true);
+                        runOutsideOwnCode(subscriber::onComplete);
+                    }
+                });
+            } catch (VirtualMachineError | LinkageError fatal) {
+                if (!signalsJvmFatal || ended.get()) {
+                    throw fatal;
+                }
+                if (subscribed.get()) {
+                    runOutsideOwnCode(() -> subscriber.onError(fatal));
+                } else {
+                    runOutsideOwnCode(() -> Operators.error(subscriber, fatal));
+                }
             }
-        })));
+        }));
     }
 
     private void runOutsideOwnCode(Runnable code) {

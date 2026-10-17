@@ -4169,6 +4169,121 @@ class ReactiveHandoverTest {
         assertThat(rethrown).as("what was thrown to the subscriber").isSameAs(thrown);
     }
 
+    // A fold of the replay that throws a JVM-fatal error while it is called fails the catch-up, writes no marker, and
+    // answers the live payload buffered behind it.
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("jvmFatalErrors")
+    void a_replayed_fold_that_throws_a_jvm_fatal_error_fails_the_catch_up_writes_no_marker_and_answers_a_buffered_live_payload(
+            String kind, Supplier<Throwable> jvmFatalError) {
+        Throwable thrown = jvmFatalError.get();
+
+        FatalFoldOutcome outcome = catchUpWhoseFoldIs(source(List.of("R1"), false), (run, payload) -> {
+            run.offerLive();
+            ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown);
+            return Mono.empty();
+        });
+
+        assertThatTheCatchUpFailedAndTheLivePayloadWasRefused(outcome, thrown);
+    }
+
+    // The error is thrown while the Mono the fold returned is subscribed, which Reactor rethrows out of subscribe.
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("jvmFatalErrors")
+    void a_replayed_fold_whose_mono_throws_a_jvm_fatal_error_when_subscribed_fails_the_catch_up_writes_no_marker_and_answers_a_buffered_live_payload(
+            String kind, Supplier<Throwable> jvmFatalError) {
+        Throwable thrown = jvmFatalError.get();
+
+        FatalFoldOutcome outcome = catchUpWhoseFoldIs(source(List.of("R1"), false), (run, payload) -> {
+            run.offerLive();
+            return Mono.fromRunnable(() -> ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown));
+        });
+
+        assertThatTheCatchUpFailedAndTheLivePayloadWasRefused(outcome, thrown);
+    }
+
+    // The fold of R1 completes on another scheduler, so the fold of R2 is called on a thread the replay did not start on.
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("jvmFatalErrors")
+    void a_replayed_fold_called_after_a_scheduler_handoff_that_throws_a_jvm_fatal_error_fails_the_catch_up_writes_no_marker_and_answers_a_buffered_live_payload(
+            String kind, Supplier<Throwable> jvmFatalError) {
+        Throwable thrown = jvmFatalError.get();
+
+        FatalFoldOutcome outcome = catchUpWhoseFoldIs(source(List.of("R1", "R2"), false), (run, payload) -> {
+            if (payload.equals("R1")) {
+                run.offerLive();
+                return Mono.delay(Duration.ofMillis(10)).then();
+            }
+            ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown);
+            return Mono.empty();
+        });
+
+        assertThatTheCatchUpFailedAndTheLivePayloadWasRefused(outcome, thrown);
+    }
+
+    // K is folded by the catch-up before the marker, so its fold is held to the same as the fold of a replayed event.
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("jvmFatalErrors")
+    void a_payload_a_replayed_fold_feeds_whose_fold_throws_a_jvm_fatal_error_fails_the_catch_up_writes_no_marker_and_answers_a_buffered_live_payload(
+            String kind, Supplier<Throwable> jvmFatalError) {
+        Throwable thrown = jvmFatalError.get();
+
+        FatalFoldOutcome outcome = catchUpWhoseFoldIs(source(List.of("R1"), false), (run, payload) -> {
+            if (payload.equals("R1")) {
+                run.offerLive();
+                run.handover().accept("K").subscribe(queued -> {}, error -> {});
+                return Mono.empty();
+            }
+            ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown);
+            return Mono.empty();
+        });
+
+        assertThatTheCatchUpFailedAndTheLivePayloadWasRefused(outcome, thrown);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("jvmFatalErrors")
+    void a_payload_a_replayed_fold_feeds_whose_mono_throws_a_jvm_fatal_error_when_subscribed_fails_the_catch_up_writes_no_marker_and_answers_a_buffered_live_payload(
+            String kind, Supplier<Throwable> jvmFatalError) {
+        Throwable thrown = jvmFatalError.get();
+
+        FatalFoldOutcome outcome = catchUpWhoseFoldIs(source(List.of("R1"), false), (run, payload) -> {
+            if (payload.equals("R1")) {
+                run.offerLive();
+                run.handover().accept("K").subscribe(queued -> {}, error -> {});
+                return Mono.empty();
+            }
+            return Mono.fromRunnable(() -> ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown));
+        });
+
+        assertThatTheCatchUpFailedAndTheLivePayloadWasRefused(outcome, thrown);
+    }
+
+    // R1 feeds K on another thread and completes on another scheduler, so the fold of K is called on a thread the
+    // replay did not start on. The replay waits until K is answered as queued, since K would otherwise be fed after the
+    // replay ended.
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("jvmFatalErrors")
+    void a_payload_a_replayed_fold_feeds_from_another_thread_whose_fold_throws_a_jvm_fatal_error_fails_the_catch_up_writes_no_marker_and_answers_a_buffered_live_payload(
+            String kind, Supplier<Throwable> jvmFatalError) {
+        Throwable thrown = jvmFatalError.get();
+        CountDownLatch kTakenIn = new CountDownLatch(1);
+        FakeSource source = source(List.of("R1"), false);
+        source.onReplayCompleted = () -> awaitQuietly(kTakenIn);
+
+        FatalFoldOutcome outcome = catchUpWhoseFoldIs(source, (run, payload) -> {
+            if (payload.equals("R1")) {
+                run.offerLive();
+                run.handover().accept("K").doOnTerminate(kTakenIn::countDown)
+                        .subscribeOn(Schedulers.boundedElastic()).subscribe(queued -> {}, error -> {});
+                return Mono.delay(Duration.ofMillis(10)).then();
+            }
+            ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown);
+            return Mono.empty();
+        });
+
+        assertThatTheCatchUpFailedAndTheLivePayloadWasRefused(outcome, thrown);
+    }
+
     // The key function of K returns only after the catch-up has logged that it waits for it, and then a while longer,
     // so a warning repeated on every look of the catch-up would show up as more than one. K is still folded and the
     // marker written when the key function returns.
@@ -4474,6 +4589,51 @@ class ReactiveHandoverTest {
         Signal<Boolean> catchUp = handover.catchUp(source).materialize().block(Duration.ofSeconds(10));
 
         return new JvmFatalKeyFailureOutcome(catchUp, fed, swallowed, log, source);
+    }
+
+    private static final class FoldRun {
+        private volatile ReactiveHandover<String, String> handover;
+        private final CompletableFuture<Void> live = new CompletableFuture<>();
+
+        ReactiveHandover<String, String> handover() {
+            return handover;
+        }
+
+        // Offered from another thread, so the payload is a live one arriving during the replay and not one the fold feeds back
+        void offerLive() {
+            offeredFromOutside(() -> handover.accept("L")).whenComplete((done, error) -> {
+                if (error == null) {
+                    live.complete(null);
+                } else {
+                    live.completeExceptionally(error);
+                }
+            });
+        }
+    }
+
+    private record FatalFoldOutcome(CompletableFuture<Signal<Boolean>> catchUp, CompletableFuture<Void> live, FakeSource source) {
+    }
+
+    // The catch-up runs on a thread of its own, so a JVM-fatal error that is rethrown unwinds that thread and the
+    // outcome is read within a bound instead of the test thread being the one that is unwound.
+    private static FatalFoldOutcome catchUpWhoseFoldIs(FakeSource source, BiFunction<FoldRun, String, Mono<Void>> fold) {
+        FoldRun run = new FoldRun();
+        run.handover = ReactiveHandover.create(payload -> fold.apply(run, payload), payload -> payload,
+                CatchupThenLiveOptions.defaults(), "test payload");
+        CompletableFuture<Signal<Boolean>> catchUp = run.handover.catchUp(source).materialize()
+                .subscribeOn(Schedulers.boundedElastic()).toFuture();
+        return new FatalFoldOutcome(catchUp, run.live, source);
+    }
+
+    private static void assertThatTheCatchUpFailedAndTheLivePayloadWasRefused(FatalFoldOutcome outcome, Throwable thrown) {
+        assertThat(outcome.catchUp()).as("the catch-up").succeedsWithin(Duration.ofSeconds(5))
+                .satisfies(signal -> assertThat(signal.getThrowable()).as("what the catch-up ended with").isSameAs(thrown));
+        assertThat(outcome.source().markCaughtUpCallCount()).as("the marker for a replay with a fold that threw").isZero();
+        assertThat(catchThrowable(() -> outcome.live().get(5, TimeUnit.SECONDS))).as("what accept(L) ended with")
+                .isInstanceOf(ExecutionException.class)
+                .cause()
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasRootCause(thrown);
     }
 
     private static void assertThatTheCatchUpFailedWith(KeyFailureOutcome outcome, Throwable thrown) {
