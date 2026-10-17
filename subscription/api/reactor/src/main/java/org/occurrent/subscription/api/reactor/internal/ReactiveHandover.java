@@ -345,6 +345,8 @@ public final class ReactiveHandover<T, K> {
         private final java.util.ArrayDeque<FedByReplay> fed = new java.util.ArrayDeque<>();
         private final AtomicReference<@Nullable Throwable> firstFailure = new AtomicReference<>();
         private boolean closed;
+        // Payloads let in by enter(..) and not yet queued here or refused, which keep this feed from closing
+        private int entering;
 
         // A refusal counts too, since the fold that fed the payload can swallow it and the catch-up must still fail
         private void failed(Throwable failure) {
@@ -363,13 +365,28 @@ public final class ReactiveHandover<T, K> {
             return true;
         }
 
-        // The next payload to fold, or null once none is left, which closes this feed
+        // The next payload to fold, or null when none is queued. Closes this feed once none is on its way in either.
         private synchronized @Nullable FedByReplay next() {
             FedByReplay payload = fed.poll();
-            if (payload == null) {
+            if (payload == null && entering == 0) {
                 closed = true;
             }
             return payload;
+        }
+
+        // The owner of a payload made where a fold of this feed runs and subscribed elsewhere, or null once this feed
+        // has closed. Until that payload is queued here or its refusal is recorded here, this feed stays open, so the
+        // catch-up sees the refusal before it writes its marker.
+        private synchronized @Nullable ReplayFold enter(int depth) {
+            if (closed) {
+                return null;
+            }
+            entering++;
+            return new ReplayFold(this, depth, new AtomicBoolean(true));
+        }
+
+        private synchronized void left() {
+            entering--;
         }
 
         private synchronized List<FedByReplay> close() {
@@ -388,8 +405,20 @@ public final class ReactiveHandover<T, K> {
     private record FedByReplay(Item<?> item, int depth) {
     }
 
-    // The owner of a replayed fold, or of the fold of a payload one fed, at that depth
-    private record ReplayFold(ReplayFeed feed, int depth) {
+    // The owner of a replayed fold, or of the fold of a payload one fed, at that depth. Entering is set for a payload
+    // let in by ReplayFeed.enter(..) until that payload has been queued on the feed or refused.
+    private record ReplayFold(ReplayFeed feed, int depth, @Nullable AtomicBoolean entering) {
+        private ReplayFold(ReplayFeed feed, int depth) {
+            this(feed, depth, null);
+        }
+
+        // Released before the payload is answered, since the answer runs its caller's code, which may wait for the
+        // catch-up
+        private void decided() {
+            if (entering != null && entering.compareAndSet(true, false)) {
+                feed.left();
+            }
+        }
     }
     // Live payloads folded whose answer waits for the payloads their folds fed, by de-dup key, so another copy from
     // outside waits for the same answer rather than being answered before those are folded.
@@ -412,6 +441,8 @@ public final class ReactiveHandover<T, K> {
     // How long to wait before offering again. The claim is released by one queue write, so this only has to be
     // long enough not to retry into the same instant.
     private static final java.time.Duration CONCURRENT_EMISSION_RETRY_DELAY = java.time.Duration.ofMillis(1);
+    // How long a catch-up waits before looking again for a payload a replayed fold fed that is still on its way in.
+    private static final java.time.Duration FED_BY_REPLAY_RETRY_DELAY = java.time.Duration.ofMillis(1);
     // Offers waiting their turn at the sink, oldest first, so the order they were made is the order they reach it.
     private final java.util.Queue<PendingOffer<K>> pendingOffers = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final AtomicBoolean offerDrainRunning = new AtomicBoolean();
@@ -576,9 +607,19 @@ public final class ReactiveHandover<T, K> {
             }
             // Made where a fold runs and subscribed elsewhere, so fed from that fold while the answer it holds back
             // or the replay it belongs to is still open, and from outside once that has ended
+            if (calledFrom instanceof ReplayFold fold) {
+                ReplayFold entered = fold.feed().enter(fold.depth());
+                try {
+                    bufferOrDeliverLive(payload, ackSink, entered, null, false);
+                } finally {
+                    if (entered != null) {
+                        entered.decided();
+                    }
+                }
+                return;
+            }
             LiveAck parent = waitingParent(calledFrom);
-            boolean replayStillFolds = calledFrom instanceof ReplayFold fold && fold.feed().open();
-            bufferOrDeliverLive(payload, ackSink, parent != null || replayStillFolds ? calledFrom : null, parent, false);
+            bufferOrDeliverLive(payload, ackSink, parent != null ? calledFrom : null, parent, false);
         });
     }
 
@@ -785,6 +826,7 @@ public final class ReactiveHandover<T, K> {
         if (bufferFull) {
             refuse(ack, new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents)), fold);
         } else {
+            fold.decided();
             answer(ack, Outcome.APPLIED);
         }
         return true;
@@ -1587,7 +1629,12 @@ public final class ReactiveHandover<T, K> {
     private Mono<Void> foldFedByReplay(ReplayFeed feed) {
         return Mono.defer(() -> {
                     FedByReplay next = feed.next();
-                    return next == null ? Mono.<Void>empty() : foldFedByReplay(next, feed).onErrorResume(failure -> {
+                    if (next == null) {
+                        // A payload still on its way in is queued or refused within its own offer, so look again
+                        // shortly, on a timer rather than a held thread
+                        return feed.open() ? Mono.delay(FED_BY_REPLAY_RETRY_DELAY, Schedulers.boundedElastic()).then() : Mono.<Void>empty();
+                    }
+                    return foldFedByReplay(next, feed).onErrorResume(failure -> {
                         feed.failed(failure);
                         return Mono.empty();
                     });
@@ -1822,6 +1869,7 @@ public final class ReactiveHandover<T, K> {
     private void refuse(LiveAck liveAck, Throwable refusal, @Nullable Object owner) {
         if (owner instanceof ReplayFold fold) {
             fold.feed().failed(refusal);
+            fold.decided();
         }
         refuse(liveAck, refusal);
     }

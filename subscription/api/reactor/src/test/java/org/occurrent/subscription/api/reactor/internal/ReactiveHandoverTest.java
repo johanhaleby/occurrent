@@ -3835,6 +3835,56 @@ class ReactiveHandoverTest {
         assertThat(source.forgetCaughtUpCallCount()).isEqualTo(1);
     }
 
+    // N1 is offered on the fold's thread and subscribed on another one, and the live buffer is full. Its key function
+    // is the only user code between the check that the replay still folds and taking N1 in, and it holds N1 there until
+    // R1 has returned. Had the marker been written by then, N1 would be refused to nobody. It waits with a timeout
+    // because the marker is never written when the catch-up waits for N1, so it gives up and lets the offer go on.
+    @Test
+    void a_payload_a_replayed_fold_subscribes_elsewhere_that_is_refused_for_a_full_buffer_after_the_replay_folded_what_it_fed_fails_the_catch_up() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch n1InKey = new CountDownLatch(1);
+        CountDownLatch markerWritten = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            switch (payload) {
+                case "R1" -> {
+                    self.get().accept("N1").subscribeOn(Schedulers.boundedElastic()).subscribe(queued -> {}, error -> {});
+                    awaitQuietly(n1InKey);
+                    log.add("R1");
+                }
+                case "L1" -> {
+                    awaitQuietly(releaseL1);
+                    log.add("L1");
+                }
+                default -> log.add(payload);
+            }
+        }), payload -> {
+            if (payload.equals("N1")) {
+                n1InKey.countDown();
+                countsDownWithin(markerWritten, Duration.ofSeconds(1));
+            }
+            return payload;
+        }, new CatchupThenLiveOptions(10, 1), "test payload");
+        self.set(handover);
+        FakeSource source = source(List.of("R1"), false);
+        source.onMarkCaughtUp = markerWritten::countDown;
+        try {
+            handover.accept("L1").subscribe(queued -> {}, error -> {});
+
+            StepVerifier.create(handover.catchUp(source))
+                    .expectErrorSatisfies(error -> assertThat(error)
+                            .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                            .hasMessage(HandoverMessages.bufferOverflow(1)))
+                    .verify(Duration.ofSeconds(5));
+
+            assertThat(source.markCaughtUpCallCount()).as("the marker for a replay that fed a refused payload").isZero();
+            assertThat(log).as("what was folded").containsExactly("R1");
+        } finally {
+            releaseL1.countDown();
+        }
+    }
+
     // Each fold subscribes the next payload and swallows what it gets back, so the refusal at the end of the chain
     // reaches nobody but the catch-up.
     @Test
@@ -4426,6 +4476,8 @@ class ReactiveHandoverTest {
     // happens first, the replay waits for it and L1 is answered true. A false would mean the pause saw L1's delivery as
     // ended while L1 was still counted as running. Nothing runs between the two steps that end the delivery, so the
     // threads start at offsets that differ per handover, over many handovers, so that some pause falls between them.
+    // Checked against the bad order of the two steps, which failed it in 10 of 10 runs, at handover 123 to 386, and
+    // in 5 of 5 on 2 CPUs. Keep the count at 10,000, since fewer handovers can pass the bad order.
     @Test
     void acceptIfLive_whose_fold_completes_on_one_thread_while_a_replay_pauses_live_delivery_on_another_is_answered_true() throws Exception {
         int handovers = 10_000;
