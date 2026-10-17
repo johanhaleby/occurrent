@@ -23,6 +23,7 @@ import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
+import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
@@ -347,6 +348,10 @@ public final class ReactiveHandover<T, K> {
         private boolean closed;
         // Payloads let in by enter(..) and not yet queued here or refused, which keep this feed from closing
         private int entering;
+        // When the catch-up started looking for a payload still on its way in, and whether that wait was logged
+        private boolean waiting;
+        private long waitingSince;
+        private boolean waitLogged;
 
         // A refusal counts too, since the fold that fed the payload can swallow it and the catch-up must still fail
         private void failed(Throwable failure) {
@@ -371,7 +376,25 @@ public final class ReactiveHandover<T, K> {
             if (payload == null && entering == 0) {
                 closed = true;
             }
+            if (payload != null || closed) {
+                waiting = false;
+            }
             return payload;
+        }
+
+        // True once per feed, when the catch-up has looked for a payload on its way in for longer than the threshold
+        private synchronized boolean waitedLongerThan(java.time.Duration threshold) {
+            long now = System.nanoTime();
+            if (!waiting) {
+                waiting = true;
+                waitingSince = now;
+                return false;
+            }
+            if (waitLogged || now - waitingSince < threshold.toNanos()) {
+                return false;
+            }
+            waitLogged = true;
+            return true;
         }
 
         // The owner of a payload made where a fold of this feed runs and subscribed elsewhere, or null once this feed
@@ -443,6 +466,8 @@ public final class ReactiveHandover<T, K> {
     private static final java.time.Duration CONCURRENT_EMISSION_RETRY_DELAY = java.time.Duration.ofMillis(1);
     // How long a catch-up waits before looking again for a payload a replayed fold fed that is still on its way in.
     private static final java.time.Duration FED_BY_REPLAY_RETRY_DELAY = java.time.Duration.ofMillis(1);
+    // Far longer than a key function takes, so a wait this long means one is blocked, most likely on this catch-up
+    private static final java.time.Duration FED_BY_REPLAY_WAIT_WARNING = java.time.Duration.ofSeconds(5);
     // Offers waiting their turn at the sink, oldest first, so the order they were made is the order they reach it.
     private final java.util.Queue<PendingOffer<K>> pendingOffers = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final AtomicBoolean offerDrainRunning = new AtomicBoolean();
@@ -790,7 +815,10 @@ public final class ReactiveHandover<T, K> {
         K key;
         try {
             key = dedupKey(payload);
-        } catch (RuntimeException keyFailure) {
+        } catch (Throwable keyFailure) {
+            // Throwable, because a key function written in Kotlin can throw a checked exception without declaring it,
+            // and an error that got past here was never recorded on the replay feed the payload came from
+            Exceptions.throwIfJvmFatal(keyFailure);
             refuse(ack, keyFailure, owner);
             return;
         }
@@ -1632,7 +1660,17 @@ public final class ReactiveHandover<T, K> {
                     if (next == null) {
                         // A payload still on its way in is queued or refused within its own offer, so look again
                         // shortly, on a timer rather than a held thread
-                        return feed.open() ? Mono.delay(FED_BY_REPLAY_RETRY_DELAY, Schedulers.boundedElastic()).then() : Mono.<Void>empty();
+                        if (!feed.open()) {
+                            return Mono.<Void>empty();
+                        }
+                        if (feed.waitedLongerThan(FED_BY_REPLAY_WAIT_WARNING)) {
+                            log.warn("A catch-up of this {} has waited more than {} seconds for the de-dup key function "
+                                            + "to return for a payload its replay fed, and does not write its catch-up "
+                                            + "marker until it does. A key function that waits for this catch-up to end "
+                                            + "holds it forever.",
+                                    noun, FED_BY_REPLAY_WAIT_WARNING.toSeconds());
+                        }
+                        return Mono.delay(FED_BY_REPLAY_RETRY_DELAY, Schedulers.boundedElastic()).then();
                     }
                     return foldFedByReplay(next, feed).onErrorResume(failure -> {
                         feed.failed(failure);

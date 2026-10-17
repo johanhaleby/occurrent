@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.api.reactor.internal;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -23,9 +27,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.HandoverMessages;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
+import reactor.core.publisher.Signal;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
@@ -3935,6 +3941,112 @@ class ReactiveHandoverTest {
         assertThat(source.forgetCaughtUpCallCount()).isEqualTo(1);
     }
 
+    // A key function can throw what is not a RuntimeException, an AssertionError or a checked exception that Kotlin or
+    // Lombok throws without declaring it. K is refused all the same, and the fold of R1 swallows that refusal.
+    @Test
+    void a_payload_a_replayed_fold_feeds_and_subscribes_on_its_own_thread_whose_key_function_throws_an_error_fails_the_catch_up_although_the_fold_swallows_it() {
+        AssertionError thrown = new AssertionError("no key for K");
+
+        KeyFailureOutcome outcome = catchUpOfAFoldFeedingAPayloadWhoseKeyFunctionThrows(thrown, false);
+
+        assertThatTheCatchUpFailedWith(outcome, thrown);
+    }
+
+    @Test
+    void a_payload_a_replayed_fold_feeds_and_subscribes_elsewhere_whose_key_function_throws_an_error_fails_the_catch_up_although_the_fold_swallows_it() {
+        AssertionError thrown = new AssertionError("no key for K");
+
+        KeyFailureOutcome outcome = catchUpOfAFoldFeedingAPayloadWhoseKeyFunctionThrows(thrown, true);
+
+        assertThatTheCatchUpFailedWith(outcome, thrown);
+    }
+
+    @Test
+    void a_payload_a_replayed_fold_feeds_and_subscribes_on_its_own_thread_whose_key_function_throws_a_checked_exception_fails_the_catch_up_although_the_fold_swallows_it() {
+        IOException thrown = new IOException("no key for K");
+
+        KeyFailureOutcome outcome = catchUpOfAFoldFeedingAPayloadWhoseKeyFunctionThrows(thrown, false);
+
+        assertThatTheCatchUpFailedWith(outcome, thrown);
+    }
+
+    @Test
+    void a_payload_a_replayed_fold_feeds_and_subscribes_elsewhere_whose_key_function_throws_a_checked_exception_fails_the_catch_up_although_the_fold_swallows_it() {
+        IOException thrown = new IOException("no key for K");
+
+        KeyFailureOutcome outcome = catchUpOfAFoldFeedingAPayloadWhoseKeyFunctionThrows(thrown, true);
+
+        assertThatTheCatchUpFailedWith(outcome, thrown);
+    }
+
+    // The key function of K returns only after the catch-up has logged that it waits for it, and then a while longer,
+    // so a warning repeated on every look of the catch-up would show up as more than one. K is still folded and the
+    // marker written when the key function returns.
+    @Test
+    void a_catch_up_that_waits_more_than_five_seconds_for_the_key_function_of_a_payload_its_replay_fed_logs_one_warning_and_still_writes_its_marker() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        CountDownLatch keyFunctionEntered = new CountDownLatch(1);
+        try (CapturedLog captured = new CapturedLog()) {
+            ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+                if (payload.equals("R1")) {
+                    self.get().accept("K").subscribeOn(Schedulers.boundedElastic()).subscribe(queued -> {}, error -> log.add("K refused: " + error));
+                    awaitQuietly(keyFunctionEntered);
+                }
+                log.add(payload);
+            }), payload -> {
+                if (payload.equals("K")) {
+                    keyFunctionEntered.countDown();
+                    await().atMost(Duration.ofSeconds(15)).until(() -> !captured.warnings().isEmpty());
+                    countsDownWithin(new CountDownLatch(1), Duration.ofMillis(500));
+                }
+                return payload;
+            }, CatchupThenLiveOptions.defaults(), "test payload");
+            self.set(handover);
+            FakeSource source = source(List.of("R1"), false);
+
+            StepVerifier.create(handover.catchUp(source)).expectNext(true).expectComplete().verify(Duration.ofSeconds(20));
+
+            await().atMost(Duration.ofSeconds(5)).until(() -> log.contains("K"));
+            assertThat(log).as("what was folded").containsExactly("R1", "K");
+            assertThat(source.markCaughtUpCallCount()).as("the marker for a replay whose fed payload was folded").isEqualTo(1);
+            assertThat(captured.warnings())
+                    .singleElement()
+                    .satisfies(warning -> assertThat(warning.getFormattedMessage())
+                            .startsWith("A catch-up of this test payload has waited more than 5 seconds for the de-dup key function"));
+        }
+    }
+
+    @Test
+    void a_catch_up_that_waits_a_short_while_for_the_key_function_of_a_payload_its_replay_fed_logs_no_warning() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        CountDownLatch keyFunctionEntered = new CountDownLatch(1);
+        try (CapturedLog captured = new CapturedLog()) {
+            ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+                if (payload.equals("R1")) {
+                    self.get().accept("K").subscribeOn(Schedulers.boundedElastic()).subscribe(queued -> {}, error -> log.add("K refused: " + error));
+                    awaitQuietly(keyFunctionEntered);
+                }
+                log.add(payload);
+            }), payload -> {
+                if (payload.equals("K")) {
+                    keyFunctionEntered.countDown();
+                    countsDownWithin(new CountDownLatch(1), Duration.ofMillis(300));
+                }
+                return payload;
+            }, CatchupThenLiveOptions.defaults(), "test payload");
+            self.set(handover);
+            FakeSource source = source(List.of("R1"), false);
+
+            StepVerifier.create(handover.catchUp(source)).expectNext(true).expectComplete().verify(Duration.ofSeconds(5));
+
+            await().atMost(Duration.ofSeconds(5)).until(() -> log.contains("K"));
+            assertThat(captured.warnings()).isEmpty();
+            assertThat(source.markCaughtUpCallCount()).isEqualTo(1);
+        }
+    }
+
     // The handover has failed for good, and a catch-up asked for after that still replays. The fold of R1 feeds N1,
     // which the failed handover refuses, and swallows that refusal, so the catch-up is the only one left to report it.
     @Test
@@ -4069,6 +4181,82 @@ class ReactiveHandoverTest {
                         .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
                         .hasRootCauseMessage("fold failed for " + failedPayload))
                 .verify(Duration.ofSeconds(5));
+    }
+
+    private record KeyFailureOutcome(Signal<Boolean> catchUp, List<Throwable> refusals, List<String> log, FakeSource source) {
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> void throwWithoutDeclaring(Throwable throwable) throws E {
+        throw (E) throwable;
+    }
+
+    // The fold of R1 feeds K, whose key function throws what it is given, and swallows the refusal of K.
+    private static KeyFailureOutcome catchUpOfAFoldFeedingAPayloadWhoseKeyFunctionThrows(Throwable thrown, boolean subscribedElsewhere) {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.defer(() -> switch (payload) {
+            case "R1" -> Mono.fromRunnable(() -> {
+                CountDownLatch answered = new CountDownLatch(1);
+                Mono<Void> fed = self.get().accept("K");
+                if (subscribedElsewhere) {
+                    fed = fed.subscribeOn(Schedulers.boundedElastic());
+                }
+                fed.subscribe(queued -> {}, error -> {
+                    refusals.add(error);
+                    answered.countDown();
+                }, answered::countDown);
+                awaitQuietly(answered);
+                log.add("R1");
+            });
+            default -> Mono.fromRunnable(() -> log.add(payload));
+        }), payload -> {
+            if (payload.equals("K")) {
+                ReactiveHandoverTest.<RuntimeException>throwWithoutDeclaring(thrown);
+            }
+            return payload;
+        }, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        FakeSource source = source(List.of("R1"), false);
+
+        Signal<Boolean> catchUp = handover.catchUp(source).materialize().block(Duration.ofSeconds(10));
+
+        return new KeyFailureOutcome(catchUp, refusals, log, source);
+    }
+
+    private static void assertThatTheCatchUpFailedWith(KeyFailureOutcome outcome, Throwable thrown) {
+        assertThat(outcome.catchUp().getThrowable()).as("what the catch-up ended with").isSameAs(thrown);
+        assertThat(outcome.refusals()).as("what the fold was told about K").containsExactly(thrown);
+        assertThat(outcome.log()).as("what was folded").containsExactly("R1");
+        assertThat(outcome.source().markCaughtUpCallCount()).as("the marker for a replay that fed a refused payload").isZero();
+    }
+
+    // Thread safe, unlike a ListAppender, since the handover logs from the thread of a timer
+    private static final class CapturedLog implements AutoCloseable {
+        private final Logger logger = (Logger) LoggerFactory.getLogger(ReactiveHandover.class);
+        private final List<ILoggingEvent> events = new CopyOnWriteArrayList<>();
+        private final AppenderBase<ILoggingEvent> appender = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                events.add(event);
+            }
+        };
+
+        CapturedLog() {
+            appender.start();
+            logger.addAppender(appender);
+        }
+
+        List<ILoggingEvent> warnings() {
+            return events.stream().filter(event -> event.getLevel() == Level.WARN).toList();
+        }
+
+        @Override
+        public void close() {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     private static boolean countsDownWithin(CountDownLatch latch, Duration timeout) {
