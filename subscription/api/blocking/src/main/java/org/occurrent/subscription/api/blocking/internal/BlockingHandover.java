@@ -174,8 +174,7 @@ public final class BlockingHandover<T, K> {
          * A payload the replay never delivered, one suppressed because an earlier live delivery already handled it,
          * does not come here. That earlier delivery ran everything a delivery runs, so there is nothing left owing.
          * <p>
-         * Called again for every further copy of the same payload, since a source that redelivers gets one call per
-         * redelivery. The default does nothing.
+         * Can be called again for a further copy of the same payload. The default does nothing.
          *
          * @param payload The live payload that was not delivered.
          */

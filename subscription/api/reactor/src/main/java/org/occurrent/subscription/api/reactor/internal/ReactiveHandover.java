@@ -201,8 +201,8 @@ public final class ReactiveHandover<T, K> {
          * than losing what it owed. A payload fed from a replayed fold, or from {@link #replayStarted()},
          * {@link #replayCompleted()} or {@link #historyDone()} of a catch-up that replays, was answered once it was
          * queued. While that catch-up folds it, an error signal here fails the catch-up instead, the same way an error
-         * from that payload's fold does. Called again for every further copy of the same payload. The default emits
-         * nothing.
+         * from that payload's fold does. Can be called again for a further copy of the same payload. The default
+         * emits nothing.
          *
          * @param payload The live payload that was not delivered.
          */

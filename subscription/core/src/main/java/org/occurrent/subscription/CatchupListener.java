@@ -77,8 +77,8 @@ public interface CatchupListener {
      * {@code waitUntilApplied} for such an append times out rather than returning.
      * <p>
      * Sent only after {@link #historyRead(Object)}, and only for an event the history read itself delivered. An event
-     * an earlier live delivery already handled is not sent here, because that delivery wrote down what it owed. Sent
-     * again for every further copy the source offers, so an implementation records rather than counts.
+     * an earlier live delivery already handled is not sent here, because that delivery wrote down what it owed. It
+     * can be sent again for a further copy the source offers, so an implementation records rather than counts.
      * <p>
      * Unlike the two calls above, a failure here is meant to escape rather than be swallowed. Where this is sent at
      * all it is the only chance the append gets, so swallowing a failed write acknowledges an append nothing wrote

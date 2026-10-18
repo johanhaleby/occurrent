@@ -288,12 +288,13 @@ payload.
   handover went live. The two caches are filled by one writer each.
 - `CatchupThenLiveOptions.dedupCacheSize` sizes each of the two caches, so a handover holds up to twice the ids it
   did. At the default of 10000 that is 10000 more short strings per registration.
-- For a payload from other code, a hook that throws reaches the payload's own acknowledgement rather than the
-  delivery pipeline, so the source offers the payload again and the recording is retried. On the drain path a throw
-  releases the reservations the drain took, the same recovery a failed drain delivery gets. On the reactive engine, a
-  payload fed from a replayed fold, or from `replayStarted`, `replayCompleted` or the `historyDone` of a catch-up that
-  replays, was answered once it was queued. A hook that throws while that catch-up delivers the payload fails the
-  catch-up, the same as a failed delivery of it.
+- On the live path, which on the reactive engine includes the drain, a hook that throws for a payload from other code
+  reaches the payload's own acknowledgement rather than the delivery pipeline, so the source offers the payload again.
+  On the blocking engine a throw during the drain releases the reservations the drain took and fails the catch-up,
+  whoever fed the payload, the same as a failed drain delivery. On the reactive engine, a payload fed from a replayed
+  fold, or from `replayStarted`, `replayCompleted` or the `historyDone` of a catch-up that replays, was answered once
+  it was queued. A hook that throws while that catch-up delivers the payload fails the catch-up, the same as a failed
+  delivery of it.
 - `replayedIds` is cleared when a replay is abandoned (decision 6), which answers
   [#974](https://github.com/johanhaleby/occurrent/issues/974). After `stopCatchUp()` and then `goLive()`, a view that
   coalesces receives the events the stopped replay discarded, and a view that writes through receives them a second
