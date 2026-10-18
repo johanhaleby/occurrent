@@ -83,11 +83,12 @@ catch-up, so a catch-up that replays nothing, a feed's `goLive()` after its `cat
 source that can record. A replay also clears `replayedIds` when it starts, so every key in it came from the source
 the hook reports to.
 
-### 3. The hook fires once per suppressed copy, not once per event
+### 3. The hook fires once per copy `replayedIds` suppresses, not once per event
 
-A broker that offers the same event three times can get up to three calls, one for each copy `replayedIds` suppresses. Recording an append is writing an id into a set,
-so a repeat costs a store round trip and changes nothing. Counting calls, or holding state to make the second one
-quiet, would buy nothing and would need its own eviction rule.
+When a broker offers the same event three times, its source can get up to three calls, one for each copy `replayedIds`
+suppresses. Recording an append is writing an id into a set, so a repeat costs at most a store round trip and changes
+nothing. Counting calls, or holding state to make the second one quiet, would buy nothing and would need its own
+eviction rule.
 
 ### 4. The payload type is whatever that layer already has
 
