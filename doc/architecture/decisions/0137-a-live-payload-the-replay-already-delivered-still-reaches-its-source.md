@@ -85,7 +85,7 @@ the hook reports to.
 
 ### 3. The hook fires once per suppressed copy, not once per event
 
-A broker that offers the same event three times gets three calls. Recording an append is writing an id into a set,
+A broker that offers the same event three times can get up to three calls, one for each copy `replayedIds` suppresses. Recording an append is writing an id into a set,
 so a repeat costs a store round trip and changes nothing. Counting calls, or holding state to make the second one
 quiet, would buy nothing and would need its own eviction rule.
 
