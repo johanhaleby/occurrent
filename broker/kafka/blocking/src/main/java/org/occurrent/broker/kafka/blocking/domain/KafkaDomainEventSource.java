@@ -215,9 +215,13 @@ public final class KafkaDomainEventSource<E> implements AutoCloseable {
      *                       {@code Consumer}. Refused when {@code group.id} is absent, and when
      *                       {@code enable.auto.commit} is anything other than exactly {@code "false"}, per ADR 133,
      *                       since seeking only works if nothing else commits. {@code auto.offset.reset} defaults to
-     *                       {@code "earliest"}, so a consumer group with no committed offset starts at the oldest
-     *                       record the topic still holds rather than at its end, and does not miss a record
-     *                       published while it joins. A value set here wins.
+     *                       {@code "earliest"}. A partition the group has no committed offset for, or whose committed
+     *                       offset the topic no longer holds, then starts at the oldest record the topic still holds
+     *                       rather than at its end, so a new group does not miss a record published while it joins. A
+     *                       group whose committed offsets expired or were deleted therefore reads every record the
+     *                       topic still holds again, including those it already handled. A value set here wins, and
+     *                       {@code "latest"} instead skips every record published before the first poll fixes the
+     *                       position.
      * @param feed           The feed this source calls {@link DomainEventFeed#acceptOrDeferCloudEvent(CloudEvent)} on.
      */
     public static <E> Builder<E> builder(Map<String, Object> consumerConfig, DomainEventFeed<E> feed) {
