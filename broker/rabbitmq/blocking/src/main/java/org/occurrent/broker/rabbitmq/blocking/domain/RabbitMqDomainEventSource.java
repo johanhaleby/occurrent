@@ -146,8 +146,8 @@ import static java.util.Objects.requireNonNull;
  * consume it, a consequence of that queue policy, not of anything this source does. Size a bound or a TTL against
  * how long a replay can run, or leave the queue unbounded, before pointing this source at it.
  * <p>
- * A message published during a replay is kept for this source only if its queue and bindings already exist when the
- * replay starts. The same holds for a message published after {@code goLive}. Build this source before calling
+ * A message reaches this source's queue only if the queue and a matching binding exist when the message is
+ * published, whether that is during a replay or after {@code goLive}. Build this source before calling
  * {@code catchUp}, {@code catchUpAll} or {@code goLive} on the feed, or with {@code declareTopology(false)} have
  * whoever owns the topology create them before then. The Topology paragraph of {@link RabbitMqCloudEventSource} says
  * what is lost otherwise.
