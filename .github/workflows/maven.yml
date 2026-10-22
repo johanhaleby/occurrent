@@ -353,10 +353,6 @@ jobs:
             from_docker_hub=$(( from_docker_hub + 1 ))
           done < <(bash .github/scripts/required-test-images.sh .)
           echo "images ready: $from_mirror from the mirror, $from_docker_hub from Docker Hub"
-      - name: Show the runner kernel
-        run: |
-          echo "runner-kernel $(uname -r)"
-          cat /proc/version_signature || true
       # Each subtree is timed and reported to the run summary, so the shard balance can always be
       # re-derived from the last green run instead of being measured by hand. Rows are appended as
       # they complete rather than collected and written at the end, so a shard that fails partway
