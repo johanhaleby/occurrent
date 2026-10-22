@@ -26,8 +26,8 @@ description: >-
   a loop, a try or a switch for example, moves into a new private void method that the method calls before returning
   Mono.empty(), named so that it hides no method the class could already call, and so that no method of a supertype
   the parser cannot see plausibly has the name. A declaration with no body, abstract or in an interface, only changes
-  its return type. A wrapped cancelSubscription call that is not returned gets a TODO
-  comment. A class that also implements the blocking CancellableSubscriptions stays unchanged apart from a TODO comment, since no
+  its return type. A wrapped cancelSubscription call written in the method body that is not returned gets a TODO
+  comment. One made inside another method that the body calls gets none. A class that also implements the blocking CancellableSubscriptions stays unchanged apart from a TODO comment, since no
   one method can implement both, and has to be split into a blocking and a reactor adapter by hand. An implementation that deletes stored state asynchronously still has to return a Mono that completes once
   that delete has, see doc/migration/upgrading-to-0.34.0.md. Java only, a Kotlin implementation needs the manual steps
   instead.

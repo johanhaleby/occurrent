@@ -51,9 +51,10 @@ import static java.util.Objects.requireNonNull;
  * broker's side of that channel (or the channel itself is simply gone), so this sink retires the channel and opens
  * a fresh one underneath it, and a later publish is never kept waiting on an abandoned one, blamed for its eventual
  * nack, or stuck permanently on a channel the broker already closed. That recovery reaches a channel-level
- * shutdown. A connection-level one leaves nothing this sink can reopen a channel on, and needs the caller's own
- * {@link Connection} to support reconnection instead, RabbitMQ's client offers this directly as automatic
- * connection recovery.
+ * shutdown. After a connection-level one there is no connection to reopen a channel on until the caller's own
+ * {@link Connection} reconnects, which RabbitMQ's client offers as automatic connection recovery. If a publish
+ * failed during that outage, the first publish after the reconnect can fail too, and it reopens the channel for the
+ * publishes after it.
  * <p>
  * Each publish carries its own random {@code correlationId}, so a {@code basic.return} is matched to the publish it
  * belongs to and never to a different one, including a retry of the same event after an earlier attempt's
@@ -180,10 +181,12 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         /**
          * Retries a {@link RabbitMqPublishException} that is neither {@link RabbitMqUnroutableEventException}
          * (a configuration bug, not a transient failure) nor caused by a {@link ShutdownSignalException}. The
-         * channel behind a {@link ShutdownSignalException} is already retired and replaced before this predicate
-         * ever runs, so a retry here would not be recovering anything, only spending an attempt on a decision this
-         * sink already made. A caller who wants that specific failure retried automatically opts in with its own
-         * {@link RetryStrategy}. {@link RabbitMqPublishTimeoutException} is excluded too, per ADR 133, since an
+         * channel behind a {@link ShutdownSignalException} is already retired before this predicate ever runs, and
+         * after a channel-level shutdown it is replaced too, so a retry here would not be recovering anything, only
+         * spending an attempt on a decision this sink already made. After a connection-level shutdown the
+         * replacement could not be opened, and a retry fails until the caller's {@link Connection} reconnects. A
+         * caller who wants that specific failure retried automatically opts in with its own {@link RetryStrategy}.
+         * {@link RabbitMqPublishTimeoutException} is excluded too, per ADR 133, since an
          * expired acknowledgement timeout is for the caller to decide on, not for this retry to absorb. A wait
          * interrupted by {@link InterruptedException} is excluded as well, since the thread asked to stop is not
          * asking to try again. Whatever the resolver's {@code CloudEventTypeMapper} throws for a type it does not

@@ -51,7 +51,8 @@ import java.util.function.Function;
  * <p>
  * An empty result Mono from {@link #execute} means the domain function produced no new events, so nothing is appended and
  * no snapshot is written. {@link #executeAndReturnDecision} still emits the decided state for a no-op, nullable or not.
- * {@link #executeAndReturnState} emits it too, whether or not anything was appended.
+ * {@link #executeAndReturnState} emits it too, whether or not anything was appended, except a null state, which errors
+ * before anything is appended.
  * <p>
  * Deliberate asymmetry with the stream executor: this executor only advances the base when the decision actually
  * appended events, since a no-op decision has no {@link DcbAppendResult} to key the save on.

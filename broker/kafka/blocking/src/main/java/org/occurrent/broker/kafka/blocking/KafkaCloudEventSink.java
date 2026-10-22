@@ -314,7 +314,8 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * mistake is visible rather than left to fail unpredictably on the first publish.
          * <p>
          * {@code producerConfig} breaking either leg {@link KafkaOrderingPrerequisites} checks, the partitioner
-         * respecting record keys or a retried send never overtaking one that already succeeded, logs a warning
+         * respecting record keys or a send the Kafka client retries itself never overtaking one that already
+         * succeeded, logs a warning
          * naming the settings responsible rather than refusing to build, unlike {@code acks} above. A weaker
          * {@code acks} has no legitimate use with this sink, but a custom partitioner, ignored keys, or disabled
          * idempotence with a caller's own retry policy all do, for a deployment with its own partitioning and
