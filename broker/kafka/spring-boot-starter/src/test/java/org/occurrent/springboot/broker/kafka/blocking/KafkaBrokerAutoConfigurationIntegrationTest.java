@@ -70,12 +70,7 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                 .withPropertyValues(
                         "occurrent.broker.kafka.bootstrap-servers=" + kafkaContainer.getBootstrapServers(),
                         "occurrent.broker.kafka.topic=" + topic,
-                        "occurrent.broker.kafka.source.poll-timeout=100ms",
-                        // This test's consumer group is a fresh UUID with no committed offset, and the publish
-                        // below can land before the source's own subscription finishes joining the group. Kafka's
-                        // own default, auto.offset.reset=latest, would then skip straight past that already
-                        // published record instead of ever seeing it.
-                        "occurrent.broker.kafka.consumer.additional-properties[auto.offset.reset]=earliest"
+                        "occurrent.broker.kafka.source.poll-timeout=100ms"
                 )
                 .run(context -> {
                     KafkaCloudEventSink sink = context.getBean(KafkaCloudEventSink.class);
@@ -134,8 +129,7 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                 .withPropertyValues(
                         "occurrent.broker.kafka.bootstrap-servers=" + kafkaContainer.getBootstrapServers(),
                         "occurrent.broker.kafka.topic=" + topic,
-                        "occurrent.broker.kafka.source.poll-timeout=100ms",
-                        "occurrent.broker.kafka.consumer.additional-properties[auto.offset.reset]=earliest"
+                        "occurrent.broker.kafka.source.poll-timeout=100ms"
                 )
                 .run(context -> {
                     KafkaCloudEventSink sink = context.getBean(KafkaCloudEventSink.class);

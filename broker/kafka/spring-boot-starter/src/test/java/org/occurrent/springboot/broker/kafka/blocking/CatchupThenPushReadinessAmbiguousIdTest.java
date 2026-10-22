@@ -104,8 +104,7 @@ class CatchupThenPushReadinessAmbiguousIdTest {
                 .withPropertyValues(
                         "occurrent.broker.kafka.bootstrap-servers=" + kafkaContainer.getBootstrapServers(),
                         "occurrent.broker.kafka.topic=" + topic,
-                        "occurrent.broker.kafka.source.poll-timeout=100ms",
-                        "occurrent.broker.kafka.consumer.additional-properties[auto.offset.reset]=earliest"
+                        "occurrent.broker.kafka.source.poll-timeout=100ms"
                 )
                 .run(context -> {
                     GenericApplicationContext springContext = (GenericApplicationContext) context.getSourceApplicationContext();

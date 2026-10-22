@@ -255,7 +255,14 @@ public final class KafkaCloudEventSource implements AutoCloseable {
      *                       minimum. Read once, at {@link Builder#build()}, to construct and own this source's own
      *                       {@code Consumer}. Refused when {@code group.id} is absent, and when
      *                       {@code enable.auto.commit} is anything other than exactly {@code "false"}, per ADR 133,
-     *                       since seeking only works if nothing else commits.
+     *                       since seeking only works if nothing else commits. {@code auto.offset.reset} defaults to
+     *                       {@code "earliest"}. A partition the group has no committed offset for, or whose committed
+     *                       offset the topic no longer holds, then starts at the oldest record the topic still holds
+     *                       rather than at its end, so a new group does not miss a record published while it joins. A
+     *                       group whose committed offsets expired or were deleted therefore reads every record the
+     *                       topic still holds again, including those it already handled. A value set here wins, and
+     *                       {@code "latest"} instead skips every record published before the first poll fixes the
+     *                       position.
      * @param model          The live model this source feeds. Never a {@link CatchupThenPushSubscriptionModel}, see
      *                       the class javadoc.
      */
@@ -843,6 +850,8 @@ public final class KafkaCloudEventSource implements AutoCloseable {
             }
             Set<KafkaDestination> destinations = KafkaTopology.topicsToSubscribe(resolver, bindingFilter, bindings);
             Map<String, Object> config = new HashMap<>(consumerConfig);
+            // Kafka's own default, latest, lets a new group skip a record published before its first assignment
+            config.putIfAbsent(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
             KafkaConsumer<String, byte[]> consumer = new KafkaConsumer<>(config, new StringDeserializer(), new ByteArrayDeserializer());
             KafkaDeliveryFailureAction failureAction = null;
             try {

@@ -44,6 +44,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -949,6 +950,55 @@ class KafkaCloudEventSourceTest extends KafkaTestSupport {
             source.close();
             logger.detachAppender(appender);
         }
+    }
+
+    @Test
+    void a_new_consumer_group_that_sets_no_auto_offset_reset_receives_an_event_published_before_the_source_was_built() {
+        String groupId = "group-" + UUID.randomUUID();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        assertThat(consumerConfig).doesNotContainKey(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG);
+        publishCloudEvent(topic, "stream-1", orderPlaced("published-before-build"));
+
+        try (KafkaCloudEventSource source = KafkaCloudEventSource.builder(consumerConfig, model)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                    assertThat(handled).extracting(CloudEvent::getId).containsExactly("published-before-build"));
+        }
+    }
+
+    @Test
+    void a_new_consumer_group_that_sets_auto_offset_reset_latest_skips_an_event_published_before_the_source_was_built_but_receives_one_published_after() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
+        Map<String, Object> consumerConfig = new HashMap<>(consumerConfig(groupId));
+        consumerConfig.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        publishCloudEvent(topic, "stream-1", orderPlaced("published-before-build"));
+
+        try (KafkaCloudEventSource source = KafkaCloudEventSource.builder(consumerConfig, model)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            awaitPartitionsAssigned(groupId, Set.of(new TopicPartition(topic, 0)));
+
+            // Under latest the start position is set on the first poll after assignment, and a probe published
+            // before that poll is skipped, so every retry publishes a new probe
+            AtomicInteger probes = new AtomicInteger();
+            await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                publishCloudEvent(topic, "stream-1", orderPlaced("published-after-assignment-" + probes.incrementAndGet()));
+                assertThat(handled).extracting(CloudEvent::getId).anyMatch(id -> id.startsWith("published-after-assignment-"));
+            });
+        }
+        assertThat(handled).extracting(CloudEvent::getId).doesNotContain("published-before-build");
     }
 
     // Counts only what this test's own source logged, since its loop thread's name contains the group id
