@@ -30,6 +30,11 @@ import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
  * itself makes, a missing resolver with {@code declareTopology} left on, {@code PARK} with no parking destination,
  * still applies unchanged. This factory only fills in defaults and never relaxes what the builder already enforces.
  * <p>
+ * Call {@code build()} on the returned builder before the first subscription starts on the model, or on a catch-up in
+ * front of it, since that declares the queue and its bindings. With {@code occurrent.broker.rabbitmq.source.declare-topology} set to {@code false}, whoever owns the
+ * topology must create them before then. The Topology paragraph of {@link RabbitMqCloudEventSource} says what is lost
+ * otherwise.
+ * <p>
  * <strong>The returned builder's {@link RabbitMqCloudEventSource#close()} is the caller's to call once the
  * consumer is done with it,</strong> the same way the hand-wired bootstraps already do. The source this builds is
  * not a Spring bean, so nothing in the application context closes it.
