@@ -59,12 +59,11 @@ import java.util.function.Supplier;
  * history from the event store, then hands over to the live push feed, so a brand-new or rebuilt projection is
  * backfilled before it consumes the broker.
  * <p>
- * The replay, a catch-up-complete marker step, and the live feed are composed into one ordered pipeline with
- * {@link Flux#concat}: the replay is consumed first, then the marker is recorded, then the live feed. A live event
- * fed through {@code accept(..)} during the replay waits in a bounded unicast sink until the pipeline reaches it,
- * unless the sink is full, and the overlap is de-duplicated by the CloudEvent id and source together. A replay
- * stopped before going live drops what the sink held. Because the whole pipeline is serialized by
- * {@code concatMap}, the de-dup cache needs no locking.
+ * The catch-up applies the replayed events first, then the events a replayed handler wrote, and then records the
+ * catch-up-complete marker. A live event fed through {@code accept(..)} during the replay waits in a bounded unicast
+ * sink until after that, unless the sink is full, and the overlap is de-duplicated by the CloudEvent id and source
+ * together. A replay stopped before going live drops the events fed from outside that the sink held, and keeps the
+ * events a replayed handler wrote, as described below.
  * <p>
  * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and runs once per subscription id, guarded
  * by an optional {@link CheckpointStorage} marker so a restart skips it. {@link #cancelSubscription(String)} deletes the
@@ -84,24 +83,44 @@ import java.util.function.Supplier;
  * fails or is stopped. A handler that writes an event the subscription's filter accepts does not wait for it. This
  * model hands the subscription's events to the handler one at a time, so that event cannot be applied before the
  * handler returns. The write returns once the event is queued, and the handler gets the events it wrote in the
- * order it wrote them, once it has returned, and for a write made during the replay once the subscription has gone
- * live. A replay that ends before that writes no catch-up marker, so the next replay hands the handler the same
- * history again. The model recognizes the write when the handler returns it as part of the {@link Mono} it returns,
- * or subscribes it, blocking or not, on the thread it was called on. A handler that blocks on the write from a thread
- * it switched to still waits for itself. {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} called from the
- * handler, recognized the same way, is refused for this subscription instead, live or not, and reported as
+ * order it wrote them, once it has returned. The model recognizes the write when the handler returns it as part of
+ * the {@link Mono} it returns, or subscribes it, blocking or not, on the thread it was called on. A write made on
+ * that thread and subscribed elsewhere counts too, while the event the handler was called for has not been answered,
+ * or for a replayed event, until the catch-up has applied the events its replay wrote.
+ * A handler that blocks on the write from a thread it switched to still waits for itself. A write the handler's code
+ * makes on another thread after the handler has returned is a write from outside, answered to whatever subscribed
+ * it. {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} called from the handler, recognized the same way, is
+ * refused for that call only, live or not, and reported as
  * {@link org.occurrent.subscription.RoutingOutcome#NOT_DELIVERABLE}, since it could only report the event as queued
- * rather than applied.
+ * rather than applied. The event the handler was called for is not failed with it.
  * <p>
- * When applying an event written that way fails, the write has already returned. The subscription then starts
- * failing, and a failed catch-up starts it failing the same way. It deletes its catch-up marker, refuses every later
- * event that does not come from its handler, applies the events it has already taken in and those its handler writes
- * meanwhile, and then fails for good. A failed catch-up also refuses each event from anywhere else that is still
- * waiting, and does not apply it. Cancel the subscription and subscribe again, and its catch-up replays the history. When deleting
- * the marker still fails after 3 retries, the subscription logs an error naming the subscription id. Subscribing
- * again in this process replays the history anyway, and deletes the marker again first, but the marker has to be
- * deleted by hand before a restart. An event that no replay can
- * bring back is lost only when applying it failed.
+ * The events a handler wrote, and those their handlers wrote in turn, are answered for by whatever waits for the
+ * event the handler was called for.
+ * <ul>
+ *     <li>For an event fed through {@code accept(..)} or {@code acceptOrDefer(..)}, the returned {@link Mono}
+ *     completes only once the written events have been applied. {@code accept(..)} errors with the first failure
+ *     or refusal among them, and {@code acceptOrDefer(..)} reports it as
+ *     {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} describes. An event written more than
+ *     {@link CatchupThenLiveOptions#maxBufferedEvents()} levels below the event fed from outside, by a handler
+ *     handling an event that was itself written, and so on, is refused.</li>
+ *     <li>For a replayed event, the written events are applied after the rest of the history and before the
+ *     catch-up marker. When one of them fails or is refused, even when the handler swallowed the error, the rest
+ *     are still applied, and then the catch-up fails, so {@code waitUntilStarted()} errors and no marker is
+ *     written. A replay that is stopped or fails before that hands the written events to the live feed. After a
+ *     stop they are applied once the subscription is live, with no further replay when it already was, and after a
+ *     failure before the subscription fails for good.</li>
+ *     <li>For an event nothing waits for, such as one a stopped replay left to the live feed, a failure to apply
+ *     it starts the subscription failing.</li>
+ * </ul>
+ * <p>
+ * A failing subscription deletes its catch-up marker, refuses every later event that does not come from its handler,
+ * applies the events it has already taken in and those its handler writes meanwhile, and then fails for good. A
+ * failed catch-up starts it failing the same way, and also refuses each event from anywhere else that is still
+ * waiting, and does not apply it. Cancel the subscription and subscribe again, and its catch-up replays the history.
+ * When deleting the marker still fails after 3 retries, the subscription logs an error naming the subscription id.
+ * Subscribing again in this process replays the history anyway, and deletes the marker again first, but the marker
+ * has to be deleted by hand before a restart. A written event that no replay can bring back and nothing waits for is
+ * lost when applying it fails, or when the process stops before it is applied.
  * <p>
  * Nothing records which live events the subscription has handled, and a crash before the handler has run
  * loses the event from the in-memory event store too, so after a crash the store never holds an event the
@@ -111,7 +130,9 @@ import java.util.function.Supplier;
  * Fed from a broker, call {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)} and acknowledge the message
  * only when its {@link Mono} completes with {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
  * {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. It refuses an event arriving during the replay instead of
- * buffering it, so the broker delivers that event again, and a delivery after this model has gone live applies it.
+ * buffering it, so the listener has the broker deliver that event again, as
+ * {@link org.occurrent.subscription.RoutingOutcome.Disposition#HOLD} describes, and a delivery after this model has
+ * gone live applies it.
  * Once the catch-up has failed, the {@link Mono} completes with
  * {@link org.occurrent.subscription.RoutingOutcome#REFUSED} for every event, and the listener stops.
  * Delivery is at-least-once, so
@@ -342,8 +363,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public Mono<Void> alreadyDeliveredByReplay(CloudEvent event) {
-                // fromRunnable rather than a plain call, so a listener that throws errors the payload's own
-                // acknowledgement instead of the pipeline that was about to acknowledge it. On boundedElastic
+                // fromRunnable rather than a plain call, so a listener that throws errors this Mono instead of the
+                // pipeline that was about to acknowledge the payload. On boundedElastic
                 // because a recording listener writes to a store, and a payload emitted into the live sink is
                 // delivered inline on whichever thread emitted it, which for a broker source is one that must not
                 // block.
@@ -790,8 +811,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     /**
      * A subscription whose catch-up is running on a scheduler thread. {@code waitUntilStarted} is the only thing that
      * joins it, which is what lets a caller choose to keep the replay off the startup path. It completes when the
-     * replay finished or was stopped, and errors when it failed: a projection's runner discards the value, so
-     * swallowing a replay failure would start an application whose read model is silently empty.
+     * replay finished, and the events its handler wrote during the replay have been applied, or when it was stopped.
+     * It errors when it failed, and when one of those written events failed or was refused: a projection's runner
+     * discards the value, so swallowing a replay failure would start an application whose read model is silently
+     * empty.
      * <p>
      * It tracks the one replay it was created for. A replay that {@link #stop()} interrupted completes here and stays
      * completed after {@link #start(boolean)} launches a fresh one, since this handle cannot see it. Ask

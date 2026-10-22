@@ -1152,8 +1152,10 @@ Run the catch-up on a thread of its own, or feed the event once the catch-up has
 
 In 0.33.0 a stopped feed and a second delivery of an event still being applied both returned normally, so the
 listener acknowledged an event that nothing had applied. Do not acknowledge the message when `acceptAndWait(..)` throws,
-and the broker delivers it again. A listener that acknowledges only after `acceptAndWait(..)` returns, and lets an
-exception reach the broker client, needs no change.
+and have the broker deliver it again. Not acknowledging is not enough on its own, and the javadoc of
+`RoutingOutcome.Disposition.HOLD` says what RabbitMQ and Kafka need instead. A listener that acknowledges only after
+`acceptAndWait(..)` returns needs no change when its broker client already has the message delivered again on an
+exception.
 
 In 0.33.0 an event fed while the feed was not live from inside the projection, a view or another callback of the
 same feed was buffered and applied once a catch-up took the feed live. Now it is refused. Thrown while the catch-up replays history into the projection or a view,
@@ -1166,7 +1168,9 @@ reassigned. RabbitMQ closes the channel of a consumer that holds on to a message
 than `consumer_timeout`, 30 minutes by default, and delivers the message again. Both cost a redelivery, not the event.
 
 On the reactor stack, `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` already returned a `Mono`
-that completes once the event is applied, and `acceptAndWait(..)` returns the same `Mono`. That `Mono` now errors with an `IllegalStateException` for an event fed
+that completes once the event is applied, and `acceptAndWait(..)` returns the same `Mono`. That `Mono` now also waits
+for every event the fold fed while applying it, and errors when one of them fails or is refused, as section 15
+describes. It also errors with an `IllegalStateException` for an event fed
 while the feed is stopped, after a catch-up was stopped before the feed went live and before the next `catchUp()`
 or `goLive()`. A `goLive()` called before the stop and waiting for the stopped replay is the exception. It takes the
 feed live once that replay has ended, and the feed applies the events fed after that.
@@ -1180,7 +1184,8 @@ waited. It completed once
 a catch-up started after the stop applied the event, and never completed when no catch-up came, as in an application
 shutting down. A catch-up started after the stop no longer applies those events, so they come back only when the
 broker delivers them again. A consumer that discards a message after a set number of redeliveries can discard such
-an event, where 0.33.0 applied it. Do not acknowledge the message when the `Mono` errors.
+an event, where 0.33.0 applied it. Do not acknowledge the message when the `Mono` errors, and have the broker deliver
+it again.
 
 A catch-up counts as running from the `CatchupProjectionFeed.catchUp()` or `goLive()` call, and from the
 subscription to the `Mono` that `DomainEventFeed.catchUpAll()`, `catchUp(id)` or `goLive(id)` returned, until the
@@ -1188,18 +1193,23 @@ feed goes live, its replay notices a stop, or it fails. A replay notices a stop 
 projection, so one with no event left to hand over goes live as if there had been no stop.
 
 `acceptOrDefer(..)` never waits for a catch-up, so a Kafka consumer that calls it keeps polling through a long replay.
-Nor does it run one on the calling thread. A catch-up the fold asks for while the call applies the event replays on a
-virtual thread that call starts, or on the thread that asked for it first, when that is another thread. Once
+Nor does it run one itself. On the blocking stack, `CatchupProjectionFeed.catchUp()` says on which thread a catch-up
+the fold asks for while the call applies the event replays, and when it does not replay at all. Once
 the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`, so `DELIVERED`
 means the event has been applied. Before that, during a catch-up, and after a `stopCatchUp()` that stopped a replay
-before the feed went live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Leave the message
-unacknowledged then, and the broker delivers it again. A stop that ends a replay on a feed that was already live keeps
-it live, so the call applies the event and returns `DELIVERED` again. The blocking `acceptOrDefer(..)` also returns
+before the feed went live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Do not acknowledge the
+message then, and have the broker deliver it again, as the javadoc of `RoutingOutcome.Disposition.HOLD` describes.
+A stop that ends a replay on a feed that was already live keeps
+it live, so the call applies the event and returns `DELIVERED` again. On the reactor stack `DELIVERED` also means
+every event the fold fed while applying it has been applied. When a replay holds one of those back, the call returns
+`DEFERRED` instead of waiting, and the feed records the event as applied once those are, so a later delivery returns
+`DELIVERED` without applying it again. The blocking `acceptOrDefer(..)` also returns
 `DEFERRED` while another thread is still applying the same event. It throws an `IllegalStateException` once the catch-up
 has failed, and on the reactor stack its `Mono` errors with one instead. On the reactor stack the `Mono` also errors
-with an `IllegalStateException` when the code that applies an event to the feed, the `fold` you passed it, calls it.
-Section 15 says why. That `Mono` also errors when the queue of live events waiting to be applied is full, at the size
-`CatchupThenLiveOptions.maxBufferedEvents()` sets. Do not acknowledge the message on any of these errors.
+with an `IllegalStateException` when the feed's own code calls it, the `fold` you passed it or a callback such as
+`replayStarted()`. Section 15 says why. Once the feed is live, that `Mono` also errors when the live events taken in and
+not yet applied reach `CatchupThenLiveOptions.maxBufferedEvents()`, and that count includes the event being applied. Do not acknowledge the message on any of these errors, and have the
+broker deliver it again.
 `DomainEventFeed.acceptOrDeferCloudEvent(..)`, which the Kafka and RabbitMQ sources call, gives the same outcomes for a
 `CloudEvent`, and `FILTERED` for one that does not match the filter given to `register(..)`.
 
@@ -1295,24 +1305,47 @@ projection feed, the `fold` you pass to `CatchupProjectionFeed.create(..)` or `D
 the same feed. It happened live and during a replay, whether the handler blocked on the call or returned it as part of
 its `Mono`.
 
-Now the call completes once the event is queued. The event is applied once the handler or fold has returned, in the
-order it was fed, and an event fed during the replay once the subscription or feed has gone live. A replay that ends
-before that writes no catch-up marker, so the next replay hands the handler or fold the same history again. That holds
-for `PushSubscriptionModel.accept(..)` called from the handler, and for `acceptAndWait(..)` on `CatchupProjectionFeed`
-and `DomainEventFeed` and `DomainEventFeed.acceptAndWaitCloudEvent(..)` called from the fold. A handler or fold that
-used the call's completion or its error to learn that the event was applied now learns only that it was queued.
+Now the call completes once the event is queued, and the event is applied once the handler or fold has returned, in
+the order it was fed. That holds for `PushSubscriptionModel.accept(..)` called from the handler, and for
+`acceptAndWait(..)` on `CatchupProjectionFeed` and `DomainEventFeed` and `DomainEventFeed.acceptAndWaitCloudEvent(..)`
+called from the fold or from a callback such as `replayStarted()`. A handler or fold that used the call's completion or
+its error to learn that the event was applied now learns only that it was queued.
+
+An event counts as fed from the handler or fold of an event E when the call is made on the thread the handler or fold
+was called on for E, or is returned as part of the `Mono` it returns. A call made on that thread and subscribed on
+another counts too, as long as E has not been answered, or for a replayed E, until the catch-up has applied the events
+its replay fed. An event fed from the handler or fold of such an event counts
+as fed from E's as well. A call made on another thread after the handler or fold has returned is a call from outside,
+answered to whatever subscribed it. What happens to an event fed from E's handler or fold depends on what waits for E.
+
+- When E was fed from outside, by a broker listener or a write to the in-memory event store, the `Mono` of that call
+  completes only once every event fed from E's handler or fold has been applied. When one of them fails or is refused,
+  that `Mono` errors with the first failure, and E is not recorded as applied, so offering E again applies it again. An
+  event fed more than `CatchupThenLiveOptions.maxBufferedEvents()` levels below E is refused. The push model reports a
+  refusal from `acceptOrDefer(..)` as `NOT_DELIVERABLE` or `REFUSED` for E, even though E's handler ran.
+- When E was replayed, or the event was fed from `replayStarted()` or `replayCompleted()` of a projection feed, the
+  event is applied after the rest of the history and before the catch-up writes its marker. When one of them fails or
+  is refused, even when the handler or fold swallowed the error, the rest are still applied, and then the catch-up
+  fails. `CatchupProjectionFeed.catchUp()`, the `Mono` from `DomainEventFeed.catchUpAll()` and the subscription's
+  `waitUntilStarted()` error, and no marker is written, so the next replay hands the handler or fold the same history
+  again. So a `replayCompleted()` that feeds an event whose fold fails now fails the catch-up. A replay that is
+  stopped or fails before that hands those events to the live feed.
+- When nothing waits for E, for an event fed from `replayAbandoned()` say, a failure to apply it starts the
+  subscription or feed failing. It deletes its catch-up marker, refuses every later event from anywhere else with that
+  failure, applies the events it has already taken in and those its handler or fold feeds it meanwhile, and then fails
+  for good.
+
+In 0.33.0 the failure went only to the call, so a handler that did not wait for it lost the event, and the next event
+was applied.
 
 `acceptOrDefer(..)` and `acceptOrDeferCloudEvent(..)` report `DELIVERED` only for an event that has been applied, and
-an event fed from the handler or fold cannot be applied before that code returns. So called from the fold, live or
-not, `acceptOrDefer(..)` on either feed, and `acceptOrDeferCloudEvent(..)` for an event that matches the filter, error
-with an `IllegalStateException` and queue nothing. Call `acceptAndWait(..)` or `acceptAndWaitCloudEvent(..)` there
-instead. `PushSubscriptionModel.acceptOrDefer(..)` called from the handler reports `NOT_DELIVERABLE` for that
-handler's own subscription and queues nothing for it. None of these calls existed in 0.33.0.
-
-When applying one of these events fails, nobody is waiting for it any more. The subscription or feed then starts
-failing. It deletes its catch-up marker, refuses every later event from anywhere else with that failure, applies the
-events it has already taken in and those its handler or fold feeds it meanwhile, and then fails for good. In 0.33.0 the
-failure went only to the call, so a handler that did not wait for it lost the event, and the next event was applied.
+an event fed from the handler or fold cannot be applied before that code returns. So called from the fold or a
+callback, live or not, `acceptOrDefer(..)` on either feed, and `acceptOrDeferCloudEvent(..)` for an event that matches
+the filter, error with an `IllegalStateException` and queue nothing. Call `acceptAndWait(..)` or
+`acceptAndWaitCloudEvent(..)` there instead. `PushSubscriptionModel.acceptOrDefer(..)` called from the handler reports
+`NOT_DELIVERABLE` for that handler's own subscription and queues nothing for it. That refusal goes to the call only.
+E is not failed with it, and a catch-up fails only when the handler or fold passes the error on. None of these calls
+existed in 0.33.0.
 
 A failed catch-up starts the subscription or feed failing the same way, whether its replay, its marker read or its
 marker write failed, so an event its handler or fold queued before that failure is still applied. An event from anywhere
@@ -1324,7 +1357,8 @@ What to do:
 
 - After a failure, fix its cause, then cancel the subscription and subscribe again, or build a new feed. Once the
   catch-up marker is gone, its catch-up replays the history, the failed event and the events after it included. An
-  event that no replay can bring back is lost only when applying it failed, as in 0.33.0.
+  event that no replay can bring back and nothing waits for is lost when applying it fails, or when the process stops
+  before it is applied.
 - When deleting the marker still fails after 3 retries, the subscription or feed logs an error naming its id. Delete
   the marker stored under that id in the `CheckpointStorage` you passed for catch-up markers before you subscribe again
   or build the new feed, since a marker left in place makes that catch-up skip the replay.

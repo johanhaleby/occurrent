@@ -115,8 +115,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
          *         failed; an error is how that propagates instead), or errors with {@link Refusal} to report a
          *         refusal decided before any dispatch was attempted (an engine-level guard, not a handler running
          *         at all), so {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} can tell it apart from a
-         *         handler that errored after genuinely being invoked. Any other error is taken to mean the opposite:
-         *         dispatch was attempted and the handler behind it failed.
+         *         handler that errored after genuinely being invoked. {@link Refusal} names the one other case it
+         *         reports. Any other error is taken to mean the opposite: dispatch was attempted and the handler
+         *         behind it failed.
          */
         Mono<Boolean> route(CloudEvent cloudEvent, boolean bufferIfNotLive);
 
@@ -133,6 +134,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
          * A refusal that clears on its own, a catch-up-then-live engine whose live buffer is full while its replay
          * is still running, say, passes {@code false} and reports {@link RoutingOutcome#NOT_DELIVERABLE}, which
          * sends the event through the caller's failure policy instead.
+         * <p>
+         * A catch-up-then-live engine on this stack also emits one after its handler has run on the routed event,
+         * when it refused an event that handler fed back into the same engine. So {@link RoutingOutcome#REFUSED}
+         * or {@link RoutingOutcome#NOT_DELIVERABLE} does not always mean the handler never ran.
          */
         final class Refusal extends RuntimeException {
             private final RuntimeException refusal;
@@ -396,8 +401,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * exception. It propagates without {@code matchObserver} being told at all, because an action that ended in an
      * {@link Error} delivered nothing, and the blocking stack reports nothing for it either.
      * <p>
-     * A {@link RoutingAction.Refusal} is a different thing again. The action was reached but refused before
-     * attempting any dispatch, so it is never {@link RoutingOutcome#DELIVERED}, and the wrapped cause propagates
+     * A {@link RoutingAction.Refusal} is a different thing again. The action was reached but refused, before
+     * attempting any dispatch or, for the case {@link RoutingAction.Refusal} names, after its handler fed back an
+     * event it then refused, so it is never {@link RoutingOutcome#DELIVERED}, and the wrapped cause propagates
      * rather than the refusal itself. Which outcome is reported comes from the refusal,
      * {@link RoutingOutcome#REFUSED} when the action promises refusing is permanent for that registration and
      * {@link RoutingOutcome#NOT_DELIVERABLE} when it does not.

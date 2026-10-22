@@ -902,22 +902,29 @@ stays as a deprecated method that calls it. The push models' method has the same
 `acceptOrDefer` does, or `FILTERED` for an event the registered filter does not match.
 
 `DELIVERED` from either feed means the event's fold, the projection function that applies it, has completed before the
-answer, in this call or in an earlier delivery of the same event. On the reactor stack a call from inside the
-projection's own fold could only answer once the event is queued, because the feed folds one event at a time.
-`ReactiveHandover.acceptIfLive` therefore refuses any call from its own code with
+answer, in this call or in an earlier delivery of the same event. On the reactor stack it also means every event fed
+from that fold has been folded, which
+[ADR 137](0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md) defines. When a replay holds one
+of those back, the call reports `DEFERRED` instead of waiting, and the event is recorded as folded once they are. When
+one of them fails or is refused, the call errors, or on the reactor `CatchupThenPushSubscriptionModel` reports the
+refusal as `NOT_DELIVERABLE` or `REFUSED`, even though the event's own handler ran.
+
+On the reactor stack a call from inside the projection's own fold could only answer once the event is queued, because
+the feed folds one event at a time. `ReactiveHandover.acceptIfLive` therefore refuses any call from its own code with
 `ReactiveHandover.PreDispatchRefusalException`, live or not, and the reactor `CatchupThenPushSubscriptionModel` reports
-that refusal as `NOT_DELIVERABLE`. `refusesPermanently()` stays false, so neither a source that stops on `REFUSED` nor a
+that refusal as `NOT_DELIVERABLE`. The refusal goes to that call only, and the event whose fold made the call is not
+failed with it. `refusesPermanently()` stays false, so neither a source that stops on `REFUSED` nor a
 domain source that stops on a feed refusing permanently stops for it. The blocking feed folds such a call on the calling
 thread before it returns, so it needs no refusal.
 
-Without waiting means the call never waits for a replay and never runs one on the calling thread. A replay can start between
+Without waiting means the call never waits for a replay and never runs one itself. A replay can start between
 the reactor live check and the hand-over, or after the event was queued and before its fold started. The reactor
 handover checks for a replay under the same lock it queues under, and a replay that starts takes every event from
 `acceptIfLive` that is not being folded yet back out of the queue and answers it as not live, so the call reports
 `DEFERRED`. The replay then runs on a scheduler thread, and does not start on the thread that folded an event inline for
 the call until that inline fold has returned. On the blocking stack a fold that asks for a catch-up during `acceptIfLive`
-used to have that replay run on the calling thread before the call returned. That replay now runs on a virtual thread
-the call starts before it returns, or on the thread that asked for it first, when that is another thread.
+used to have that replay run on the calling thread before the call returned. That call no longer runs it.
+`BlockingHandover.catchUp` says which thread runs it instead, and when it does not run at all.
 
 ## Amendment (2026-08-21): a permanent catch-up refusal stops a source, and a lifecycle `NOT_DELIVERABLE` is paced, not failed
 

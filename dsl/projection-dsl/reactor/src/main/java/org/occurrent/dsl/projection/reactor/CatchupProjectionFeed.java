@@ -48,16 +48,25 @@ import java.util.function.Function;
  * <p>
  * The live path is conversion-free: {@link #acceptAndWait(Object)} folds a domain event straight into the read model. Only the
  * catch-up reads the event store (CloudEvents) and decodes each replayed event once with the {@link CloudEventConverter}.
- * The replay, a catch-up-complete marker step, and the live feed are composed into one ordered pipeline with
- * {@link Flux#concat}: the replay is consumed first, then the marker is recorded, then live events buffered in a bounded
- * unicast sink during the replay flow through, de-duplicated by an event-id extracted from the <em>domain</em> event.
- * Because the pipeline is serialized by {@code concatMap}, the de-dup cache needs no locking.
+ * The catch-up folds the replayed events first, then the events a replayed fold, {@code replayStarted()} or
+ * {@code replayCompleted()} fed, and then records the catch-up-complete marker. Live events that arrive meanwhile wait
+ * in a bounded unicast sink and are folded after that, de-duplicated by an event id extracted from the
+ * <em>domain</em> event.
  * <p>
  * Contract (see ADR 62): catch-up is Occurrent's job, live-resume is the broker's. The {@link Mono} from
- * {@link #acceptAndWait(Object)} completes only after its handler runs, so the listener can acknowledge after
- * processing. {@link #acceptOrDefer(Object)} completes with {@link RoutingOutcome#DEFERRED} instead of waiting while
- * the feed is not live. Delivery is at-least-once, so the fold must be idempotent. The buffer is bounded and fails
- * loud on overflow.
+ * {@link #acceptAndWait(Object)} called by a listener completes only after the fold has run, and so has the fold of
+ * every event fed from it, so the listener can acknowledge after processing. {@link #acceptAndWait(Object)} says which
+ * events count as fed from a fold. Called from inside this feed's own code, its fold or a callback such as
+ * {@code replayStarted()}, it completes once the event is queued, before the event is folded, so that completion is
+ * no point to acknowledge at. {@link #acceptOrDefer(Object)} completes with {@link RoutingOutcome#DEFERRED} instead of
+ * waiting while the feed is not live, or while a replay holds back an event fed from the fold. Delivery is
+ * at-least-once, so folding the same event twice must give the same result as folding it once. Once the feed is
+ * live, a call errors when the live events taken in and not yet folded, the one being folded included, reach
+ * {@link CatchupThenLiveOptions#maxBufferedEvents()}.
+ * <p>
+ * A listener whose {@link Mono} errors, or completes with {@link RoutingOutcome#DEFERRED}, does not acknowledge the
+ * message and has the broker deliver it again, as {@link RoutingOutcome.Disposition#HOLD} describes. Not acknowledging
+ * is not enough on its own.
  * <p>
  * The replay decodes CloudEvents, so {@link EventMetadata} is available there and is folded with the event. A live
  * domain event arrives with no CloudEvent behind it and is folded with {@link EventMetadata#empty()}. A projection
@@ -189,30 +198,64 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Feed a live domain event. The returned {@link Mono} completes once the event has been folded (or immediately if it
-     * is a de-duplicated overlap), so the listener can acknowledge after processing. Events fed before or during the
-     * catch-up are buffered and delivered after the replay, and their {@link Mono} completes only then.
+     * Feed a live domain event. Called by a listener, the returned {@link Mono} completes once the event has been
+     * folded, and so has every event fed from its fold, so the listener can acknowledge after processing. When the
+     * event repeats one the replay folded and is not folded again, the {@link Mono} waits instead for
+     * {@link ReactiveReplayAware#alreadyDeliveredByReplay(EventMetadata)} of a fold that implements it, and for every
+     * event fed from there. Events fed before or during the catch-up are buffered and delivered after the replay, and
+     * their {@link Mono} completes only then.
+     * <p>
+     * An event counts as fed from a fold when the fold calls this feed for it on the thread this feed called the fold
+     * on, or returns the call's {@link Mono} as part of its own. One called there and subscribed on another thread
+     * counts too, as long as the {@link Mono} of the event whose fold made the call has not completed, or for a
+     * replayed event, until the catch-up has folded the events its replay fed. An event fed from the fold of such an
+     * event counts as fed from the first fold as well. A call the fold's code makes on another thread after the fold
+     * has returned is a call from outside, answered on its own like a listener's.
      * <p>
      * It errors with an {@link IllegalStateException} instead when the event was not folded, because the catch-up was
      * stopped before the feed went live, {@link #stopCatchUp()} was called while the feed had not gone live and no
      * catch-up was running, the event was fed after either of those stops and before the next {@link #catchUp()} or
-     * {@link #goLive()}, the feed is failing or has failed, or the live buffer is full. The listener must not
-     * acknowledge it, and the broker delivers it again.
+     * {@link #goLive()}, the feed is failing or has failed, or the live buffer is full. It also errors when an event
+     * fed from its fold fails or is refused, with the first such failure. That covers a chain of events each fed from
+     * the fold of the one before, which this feed refuses once it is longer than
+     * {@link CatchupThenLiveOptions#maxBufferedEvents()}. The event is then not recorded as folded, so a redelivery
+     * folds it again. Another copy of the event fed while it waits gets the same answer. The listener must not
+     * acknowledge it, and has the broker deliver it again, as {@link RoutingOutcome.Disposition#HOLD} describes.
      * <p>
-     * Called from inside this feed's fold, it completes once the event is queued instead, since this feed folds one
-     * event at a time and the event cannot be folded before that fold returns. The fold's call is recognized when the
-     * returned {@link Mono} is part of the {@link Mono} the fold returns, or is subscribed, blocking or not, on the
-     * thread this feed called the fold on. The event is folded after that fold, in the order it was fed. When folding
-     * it fails, this feed starts failing, and a failed catch-up starts it failing the same way. It deletes its catch-up
-     * marker, refuses every later event that does not come from its fold, folds the events it has already taken in and
-     * those its fold feeds it meanwhile, and then fails for good. A failed catch-up also refuses each event from
-     * anywhere else that is still waiting, and does not fold it. Build a new feed, and once the marker is gone its catch-up replays the history. When deleting
-     * the marker still fails after 3 retries, the feed logs an error naming the feed id, and the marker has to be
-     * deleted by hand before building a new feed. An event that no replay can bring back is lost only when its own
-     * fold failed.
+     * Called from inside this feed's own code, its fold or a callback such as {@code replayStarted()}, it completes
+     * once the event is queued instead, before the event is folded, so that completion is no point to acknowledge at.
+     * This feed folds one event at a time, and the event cannot be folded before that code returns. Such a call is
+     * recognized when the returned {@link Mono} is part of a {@link Mono} that code returns, or is subscribed, blocking
+     * or not, on the thread this feed called that code on. The event is folded after that code returns, in the order it
+     * was fed. When the {@code eventId} function throws for it, the call errors with what it threw, and that counts as
+     * a refusal. What a failure or a refusal of such an event does depends on where it was fed from.
+     * <ul>
+     *     <li>From the fold of an event a listener waits for, or from {@code alreadyDeliveredByReplay(..)} called for
+     *     such an event, it errors that listener's {@link Mono}, as above.</li>
+     *     <li>From the fold of a replayed event, or from {@code replayStarted()} or {@code replayCompleted()} of a
+     *     catch-up that replays, or from {@code alreadyDeliveredByReplay(..)} called for an event fed from there, the
+     *     event is folded after the history and before the catch-up writes its marker. A
+     *     failure or a refusal fails the catch-up, also when the fold that fed the event swallowed it, see
+     *     {@link #catchUp()}. A replay that is stopped or fails before that hands such events to the live feed.
+     *     After a stop they are folded once the feed is live, with no further catch-up when it already was, and after
+     *     a failure before this feed fails for good.</li>
+     *     <li>From code nothing waits for, {@code replayAbandoned()} say, or the fold of an event fed from there, a
+     *     failed fold makes this feed start failing.</li>
+     * </ul>
+     * A failing feed deletes its catch-up marker, refuses every later event that does not come from its fold, folds the
+     * events it has already taken in and those its fold feeds it meanwhile, and then fails for good. A failed catch-up
+     * starts it failing the same way, and also refuses each event from anywhere else that is still waiting, and does
+     * not fold it. Build a new feed, and once the marker is gone its catch-up replays the history. When deleting the
+     * marker still fails after 3 retries, the feed logs an error naming the feed id, and the marker has to be deleted
+     * by hand before building a new feed.
+     * <p>
+     * An event fed from code nothing waits for has no caller to tell, so when no replay can bring it back, it is lost
+     * if its fold fails or the process stops before it is folded. An event the fold's code feeds on another thread
+     * after the fold has returned is answered to whatever subscribed it there.
      *
      * @param event The domain event received from the external source.
-     * @return A {@link Mono} that completes when the event has been folded.
+     * @return A {@link Mono} that completes when the event has been folded, and every event fed from its fold, or once
+     * it is queued when called from inside this feed's own code.
      */
     public Mono<Void> acceptAndWait(E event) {
         Objects.requireNonNull(event, "event cannot be null");
@@ -230,7 +273,8 @@ public final class CatchupProjectionFeed<E> {
      *
      * @param metadata The metadata the source has for this event.
      * @param event    The domain event received from the external source.
-     * @return A {@link Mono} that completes when the event has been folded.
+     * @return A {@link Mono} that completes when the event has been folded, and every event fed from its fold, or once
+     * it is queued when called from inside this feed's own code.
      */
     public Mono<Void> acceptAndWait(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
@@ -240,32 +284,39 @@ public final class CatchupProjectionFeed<E> {
 
     /**
      * Feed a live domain event without waiting for the catch-up. Once the feed is live the event is queued for its fold,
-     * and the returned {@link Mono} completes with {@link RoutingOutcome#DELIVERED} once it has been folded. Before that
-     * it completes with {@link RoutingOutcome#DEFERRED} right away, and the event is not kept anywhere. Call this from a
-     * listener whose broker delivers a message again when it is not acknowledged. Acknowledge the message on
-     * {@link RoutingOutcome#DELIVERED} and leave it unacknowledged on {@link RoutingOutcome#DEFERRED}, so the broker
-     * delivers it again.
+     * and the returned {@link Mono} completes with {@link RoutingOutcome#DELIVERED} once it has been folded, and so has
+     * every event fed from its fold, see {@link #acceptAndWait(Object)}. Before that it completes with
+     * {@link RoutingOutcome#DEFERRED} right away, and the event is not kept anywhere. Call this from a
+     * listener that can have a message delivered again. Acknowledge the message on {@link RoutingOutcome#DELIVERED}. On
+     * {@link RoutingOutcome#DEFERRED}, do not acknowledge it, and have the broker deliver it again, as
+     * {@link RoutingOutcome.Disposition#HOLD} describes.
      * <p>
      * {@link RoutingOutcome#DEFERRED} covers an event fed before {@link #catchUp()} or {@link #goLive()} has taken the
      * feed live, while a replay runs, and after {@link #stopCatchUp()} stopped a replay before the feed went live. It
      * also covers an event queued before a replay started and not yet being folded, which that replay takes back out
-     * of the queue, so this never waits for a replay. {@link RoutingOutcome#DELIVERED} also covers an event the replay or an earlier delivery already folded, which is
+     * of the queue, so this never waits for a replay. For the same reason it covers an event whose fold has run when a
+     * replay holds back an event fed from that fold. Its id is still recorded as folded once the events fed from its
+     * fold are folded, so a redelivery after that completes with {@link RoutingOutcome#DELIVERED} without folding it
+     * again. When its own fold failed, the {@link Mono} errors with that failure instead.
+     * {@link RoutingOutcome#DELIVERED} also covers an event the replay or an earlier delivery already folded, which is
      * not folded again while its id is among the latest {@link CatchupThenLiveOptions#dedupCacheSize()} ids this feed
      * remembers. An event older than that is folded a second time, and the {@link Mono} completes with
      * {@link RoutingOutcome#DELIVERED} once that fold has completed. An earlier delivery of the same event that is
      * still queued or being folded finishes first, since this feed folds one event at a time.
      * <p>
      * The returned {@link Mono} errors with an {@link IllegalStateException} instead when the feed is failing or has
-     * failed, and when the queue of live events waiting for their fold is full, a size
-     * {@link CatchupThenLiveOptions#maxBufferedEvents()} sets. Leave the message unacknowledged on either error, so
-     * the broker delivers it again. A full queue empties as the fold catches up, while a failed feed never accepts
-     * again. An error from the projection's fold is passed on as well.
+     * failed, and, once the feed is live, when the live events taken in and not yet folded reach
+     * {@link CatchupThenLiveOptions#maxBufferedEvents()}, the event being folded included. Do not acknowledge the
+     * message on either error, and have the broker deliver it again, as {@link RoutingOutcome.Disposition#HOLD}
+     * describes. A full queue empties as the fold catches up, while a failed feed never accepts again. An error from
+     * the projection's fold is passed on as well, and so is the failure or refusal of an event fed from it.
      * <p>
-     * Called from inside this feed's fold, live or not, it errors with an {@link IllegalStateException} too. This feed
-     * folds one event at a time, so the event could not be folded before the answer, and
-     * {@link RoutingOutcome#DELIVERED} would report an event as folded that is only queued. Call
-     * {@link #acceptAndWait(Object)} from inside the fold instead. The fold's call is recognized the way
-     * {@link #acceptAndWait(Object)} describes.
+     * Called from inside this feed's own code, its fold or a callback, live or not, it errors with an
+     * {@link IllegalStateException} too. This feed folds one event at a time, so the event could not be folded before
+     * the answer, and {@link RoutingOutcome#DELIVERED} would report an event as folded that is only queued. Call
+     * {@link #acceptAndWait(Object)} from there instead. Such a call is recognized the way
+     * {@link #acceptAndWait(Object)} describes. The error goes to this call only. The event whose fold made the call is
+     * not failed with it, and a catch-up fails only when the fold or callback passes the error on.
      *
      * @param event The domain event received from the external source.
      * @return A {@link Mono} that completes with {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#DEFERRED}.
@@ -322,6 +373,12 @@ public final class CatchupProjectionFeed<E> {
      * completion marker, then start delivering the live feed. The returned {@link Mono} completes when the replay and
      * marker are done. Call once, after wiring the live feed.
      * <p>
+     * Before it writes the marker, the catch-up folds every event fed from the fold of a replayed event, or from
+     * {@code replayStarted()} or {@code replayCompleted()}, and every event fed from their folds in turn. When one of
+     * them fails or is refused, also when the fold or callback that fed it swallowed the error, the rest are still
+     * folded, and then the catch-up fails. The returned {@link Mono} errors, no marker is written, and this feed starts
+     * failing the way {@link #acceptAndWait(Object)} describes for a failed catch-up.
+     * <p>
      * A call the view makes while this feed is calling it, from its fold or from a callback such as
      * {@code replayStarted()}, completes without waiting for the replay, since that replay cannot start before the
      * view's code returns. The call is recognized when the returned {@link Mono} is part of the {@link Mono} the view's
@@ -337,8 +394,9 @@ public final class CatchupProjectionFeed<E> {
      * event again. Each of those catch-ups replays again unless it finds the catch-up marker written, so a feed built
      * without a {@link CheckpointStorage} for that marker replays without end.
      *
-     * @return A {@link Mono} that completes when the catch-up replay has finished and the feed has gone live, or, for a
-     *         call the view makes while this feed is calling it, once the catch-up has been asked for.
+     * @return A {@link Mono} that completes when the catch-up replay has finished, the events fed from it have been
+     *         folded and the feed has gone live, or, for a call the view makes while this feed is calling it, once the
+     *         catch-up has been asked for.
      */
     public Mono<Void> catchUp() {
         // A stop before this call does not stop this catch-up, and a stop after it does, even when the view makes
@@ -471,7 +529,8 @@ public final class CatchupProjectionFeed<E> {
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay started.
      * One that had not gone live drains nothing and does not go live, and the {@link Mono} {@link #acceptAndWait(Object)}
      * returned for each event it held errors rather than completing, the same as for an event fed after the stop, so
-     * the listener does not acknowledge it and the broker delivers it again. One replaying after a {@link #goLive()}
+     * the listener does not acknowledge it and has the broker deliver it again, as
+     * {@link RoutingOutcome.Disposition#HOLD} describes. One replaying after a {@link #goLive()}
      * delivers what it held while the replay ran and goes on delivering, since those events were accepted by a feed
      * that was already live.
      * <p>
@@ -480,7 +539,8 @@ public final class CatchupProjectionFeed<E> {
      * {@link #catchUp()} or {@link #goLive()}, errors, so a shutting-down application that never starts a catch-up does
      * not leave it waiting. When this method finds no catch-up running and stops the feed, the error handling of
      * each event still waiting runs on the calling thread, unless the listener's own pipeline moves it. A catch-up
-     * started after the stop does not fold that event, and the broker delivers it again. A catch-up counts as running
+     * started after the stop does not fold that event, so it comes back only when the listener has the broker deliver
+     * it again. A catch-up counts as running
      * from the {@link #catchUp()} or {@link #goLive()} call until the feed goes live, its replay notices a stop, or it
      * fails. A stop that comes during a {@link #catchUp()} call that then throws, for example because reading the
      * catch-up marker threw, still errors the {@link Mono} of each waiting event, unless another catch-up takes the

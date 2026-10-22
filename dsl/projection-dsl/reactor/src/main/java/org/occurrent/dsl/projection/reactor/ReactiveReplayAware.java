@@ -45,8 +45,10 @@ public interface ReactiveReplayAware {
 
     /**
      * The replay finished delivering every event; anything buffered since {@link #replayStarted()} must be written
-     * before the returned {@link Mono} completes, because the driver records the catch-up complete immediately
-     * afterwards.
+     * before the returned {@link Mono} completes, because the driver records the catch-up complete afterwards. Before
+     * it does, it folds the events this call, {@link #replayStarted()} and the replayed folds fed it. When one of
+     * those fails or is refused, the catch-up fails and is not recorded complete, see
+     * {@link CatchupProjectionFeed#catchUp()}.
      */
     Mono<Void> replayCompleted();
 
@@ -67,11 +69,13 @@ public interface ReactiveReplayAware {
      * recording view writes the append down only when its replay applied an event of it.
      * <p>
      * Sent only after {@link #replayCompleted()}, and only for an event the replay itself delivered. An event an
-     * earlier live delivery already handled is not sent here, because that delivery did all of it. Sent again for
-     * every further copy the feed is offered, so an implementation records rather than counts.
+     * earlier live delivery already handled is not sent here, because that delivery did all of it. It can be sent
+     * again for a further copy the feed is offered, so an implementation records rather than counts.
      * <p>
-     * A {@link Mono} that errors here errors the event's own acknowledgement rather than the catch-up, so the source
-     * offers the event again. The default emits nothing.
+     * For an event a listener fed, a {@link Mono} that errors here errors that event's own acknowledgement rather than
+     * the catch-up, so the source offers the event again. While the catch-up folds an event fed from the fold of a
+     * replayed event, or from {@link #replayStarted()} or {@link #replayCompleted()}, an error here for that event
+     * fails the catch-up instead, and no marker is written. The default emits nothing.
      *
      * @param metadata What the feed knows about the event that was not delivered a second time. Empty when the live
      *                 copy arrived through {@code acceptAndWait(E)} or {@code acceptOrDefer(E)}, which carry no

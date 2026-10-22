@@ -64,8 +64,8 @@ public interface ReplayAware {
      * recording view writes the append down only when its replay applied an event of it.
      * <p>
      * Sent only after {@link #replayCompleted()}, and only for an event the replay itself delivered. An event an
-     * earlier live delivery already handled is not sent here, because that delivery did all of it. Sent again for
-     * every further copy the feed is offered, so an implementation records rather than counts.
+     * earlier live delivery already handled is not sent here, because that delivery did all of it. It can be sent
+     * again for a further copy the feed is offered, so an implementation records rather than counts.
      * <p>
      * The default does nothing, which is what a view that only batches its replay wants.
      *

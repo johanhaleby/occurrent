@@ -167,7 +167,8 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * {@link RoutingOutcome#UNAVAILABLE} when no subscription is registered, this model is stopped or the subscription
      * is paused, and {@link RoutingOutcome#DEFERRED} for an event refused during the replay or, with a
      * {@code CatchupThenPushSubscriptionModel} in front, whose earlier delivery is still running on another thread.
-     * Have the broker redeliver the message for those two. It returns {@link RoutingOutcome#REFUSED} when the catch-up
+     * Have the broker redeliver the message for those two, as {@link RoutingOutcome.Disposition#HOLD} describes. It
+     * returns {@link RoutingOutcome#REFUSED} when the catch-up
      * in front has failed for good, which no redelivery can get past, so stop consuming. Any other refusal decided
      * before the handler would run comes back as {@link RoutingOutcome#NOT_DELIVERABLE}, for the listener's failure
      * policy.

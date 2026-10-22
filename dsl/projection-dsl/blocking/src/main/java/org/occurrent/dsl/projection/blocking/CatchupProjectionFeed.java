@@ -67,7 +67,11 @@ import java.util.stream.Stream;
  * acknowledges an event that is only held in memory. A replay stopped after a {@link #goLive()} drains the buffer
  * instead, and the call returns normally.
  * {@link #acceptOrDefer(Object)} never waits. It folds the event only once the feed is live and otherwise returns
- * {@link RoutingOutcome#DEFERRED}, for a listener whose broker delivers the message again.
+ * {@link RoutingOutcome#DEFERRED}, for a listener that can have the message delivered again.
+ * <p>
+ * A listener that gets an exception from {@link #acceptAndWait(Object)}, or {@link RoutingOutcome#DEFERRED} from
+ * {@link #acceptOrDefer(Object)}, does not acknowledge the message and has the broker deliver it again, as
+ * {@link RoutingOutcome.Disposition#HOLD} describes. Not acknowledging is not enough on its own.
  * <p>
  * The catch-up-then-live coordination itself (the buffer, the de-dup cache, and the drain-then-mark ordering) is
  * delegated to {@link BlockingHandover}, shared with {@code CatchupThenPushSubscriptionModel}.
@@ -187,10 +191,11 @@ public final class CatchupProjectionFeed<E> {
      * @throws IllegalStateException if the event was not folded, because the catch-up was stopped before the feed
      *                               went live, the catch-up failed, the waiting thread was interrupted, the live
      *                               buffer is full, or another delivery of the same event was still running. The
-     *                               listener must not acknowledge it, and the broker delivers it again. Also thrown
-     *                               when this is called while the feed is not live from inside the feed's own
-     *                               folds or callbacks, the projection's or a view's included, since the wait could
-     *                               only end once that same thread moved on.
+     *                               listener must not acknowledge it, and has the broker deliver it again, as
+     *                               {@link RoutingOutcome.Disposition#HOLD} describes. Also thrown when this is called
+     *                               while the feed is not live from inside the feed's own folds or callbacks, the
+     *                               projection's or a view's included, since the wait could only end once that same
+     *                               thread moved on.
      */
     public void acceptAndWait(E event) {
         Objects.requireNonNull(event, "event cannot be null");
@@ -218,9 +223,10 @@ public final class CatchupProjectionFeed<E> {
     /**
      * Feed a live domain event without waiting for the catch-up. Once the feed is live the event is folded on the
      * calling thread and this returns {@link RoutingOutcome#DELIVERED}. Before that it returns
-     * {@link RoutingOutcome#DEFERRED} and the event is not kept anywhere. Call this from a listener whose broker
-     * delivers a message again when it is not acknowledged. Acknowledge the message on {@link RoutingOutcome#DELIVERED}
-     * and leave it unacknowledged on {@link RoutingOutcome#DEFERRED}, so the broker delivers it again.
+     * {@link RoutingOutcome#DEFERRED} and the event is not kept anywhere. Call this from a listener that can have a
+     * message delivered again. Acknowledge the message on {@link RoutingOutcome#DELIVERED}. On
+     * {@link RoutingOutcome#DEFERRED}, do not acknowledge it, and have the broker deliver it again, as
+     * {@link RoutingOutcome.Disposition#HOLD} describes.
      * <p>
      * {@link RoutingOutcome#DEFERRED} covers an event fed before {@link #catchUp()} or {@link #goLive()} has taken the
      * feed live, while a replay runs, after {@link #stopCatchUp()} stopped a replay before the feed went live, and while
@@ -232,10 +238,10 @@ public final class CatchupProjectionFeed<E> {
      * Called from inside this feed's fold once the feed is live, it folds the event on that same thread, before this
      * returns. Before the feed is live it returns {@link RoutingOutcome#DEFERRED} there too.
      * <p>
-     * Unlike {@link #acceptAndWait(Object)}, this never waits for a replay and never runs one on the calling thread, so
-     * a Kafka consumer keeps polling while the catch-up runs. A catch-up the view asks for while this call runs its
-     * code replays on a virtual thread this call starts before it returns, or on the thread that asked for it first,
-     * when that is another thread, see {@link #catchUp()}. It folds with no metadata, see {@link #acceptOrDefer(EventMetadata, Object)}.
+     * Unlike {@link #acceptAndWait(Object)}, this never waits for a replay and never runs one itself, so a Kafka
+     * consumer keeps polling while the catch-up runs. {@link #catchUp()} says on which thread a catch-up the view asks
+     * for while this call runs its code replays, and when it does not replay at all. It folds with no metadata, see
+     * {@link #acceptOrDefer(EventMetadata, Object)}.
      *
      * @param event The domain event received from the external source.
      * @return {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#DEFERRED}.
@@ -343,22 +349,24 @@ public final class CatchupProjectionFeed<E> {
      * A call the view makes while this feed is calling it, from its fold or from a callback such as
      * {@code replayStarted()}, returns without waiting for the replay, since that replay cannot start before the view's
      * code returns. Returning then means the catch-up was asked for, not that it has run. The replay runs once the
-     * view's code has returned, on the thread that asked first, and before the feed call that ran the view's code on
-     * that thread returns, such as the {@link #acceptAndWait(Object)} that delivered the event, unless an interrupt makes that
-     * thread give up or leave it as described below. When that feed call is {@link #acceptOrDefer(Object)}, the replay
+     * view's code has returned, on the thread that asked first, and before the feed call made on that thread from
+     * outside this feed's own code returns, such as the {@link #acceptAndWait(Object)} that delivered the event, unless
+     * an interrupt makes that thread give up or leave it as described below. When that feed call is
+     * {@link #acceptOrDefer(Object)}, the replay
      * runs on a virtual thread that call starts instead, before {@link #acceptOrDefer(Object)} returns without waiting
      * for it. A call from another thread that asks before that replay starts
      * asks for the same replay, and can return before it has run. A view that hands the call to another thread and
      * waits for it is not recognized, and waits for a replay that cannot start while it waits.
      * <p>
      * That replay can still be stopped by a {@link #stopCatchUp()} called after every call that asked for it, or
-     * refused because another catch-up on this feed failed after every such call and before the replay started or found
-     * the history caught up already. Another catch-up that fails while the replay runs does not refuse it. The view's
-     * code is not told, though a stopped replay calls {@code replayStarted()} and {@code replayAbandoned()} on a replay
-     * aware view like any other stopped replay. When the replay fails, this feed refuses every later event, the same as
-     * after any other failed catch-up, unless it failed on an interrupted thread. A {@code catchUp()} or
-     * {@link #goLive()} that runs the replay throws the failure, and an {@link #acceptAndWait(Object)} that runs it, or
-     * the thread an {@link #acceptOrDefer(Object)} started for it, logs the failure instead of throwing it.
+     * refused because another catch-up on this feed failed after every such call and before the replay started, or,
+     * when the history turned out to be caught up already, before this feed went live. Another catch-up that fails
+     * while the replay runs does not refuse it. The view's code is not told, though a stopped replay calls
+     * {@code replayStarted()} and {@code replayAbandoned()} on a replay aware view like any other stopped replay. When
+     * the replay fails, this feed refuses every later event, the same as after any other failed catch-up, unless it
+     * failed on an interrupted thread. A {@code catchUp()} or {@link #goLive()} that runs the replay throws the
+     * failure, and an {@link #acceptAndWait(Object)} that runs it, or the thread an {@link #acceptOrDefer(Object)}
+     * started for it, logs the failure instead of throwing it.
      * <p>
      * An interrupt keeps the thread that runs such a replay from waiting. When that thread is interrupted where the
      * replay would wait for another fold or replay, it gives up the calls made on it and logs a warning. When the
@@ -483,7 +491,8 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay
      * started. One that had not gone live drains nothing and does not go live, and {@link #acceptAndWait(Object)} throws both
-     * for an event waiting on the replay and for one fed after the stop, so the broker delivers them again. One
+     * for an event waiting on the replay and for one fed after the stop, so the listener has the broker deliver them
+     * again, as {@link RoutingOutcome.Disposition#HOLD} describes. One
      * replaying after a {@link #goLive()} delivers what it held while the replay ran and goes on delivering, since
      * those events were accepted by a feed that was already live.
      * <p>

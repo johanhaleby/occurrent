@@ -140,10 +140,11 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * propagates directly, see {@link PushObserver}.
      *
      * @param cloudEvent The event received from the external source.
-     * @return A {@link Mono} that does not complete before every handler the event reaches has completed. Called from
-     * inside the handler of a {@link CatchupThenPushSubscriptionModel} in front, it does not wait for that handler's
-     * subscription to apply the event, only for the event to be queued there, as that class describes. It still waits
-     * for every other subscription the event reaches.
+     * @return A {@link Mono} that does not complete before every handler the event reaches has completed. With a
+     * {@link CatchupThenPushSubscriptionModel} in front, it also waits for the events that subscription's handler
+     * wrote while handling the event, and errors when one of them fails or is refused, as that class describes. Called
+     * from inside that handler, it does not wait for that handler's subscription to apply the event, only for the
+     * event to be queued there. It still waits for every other subscription the event reaches.
      */
     public Mono<Void> accept(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
@@ -151,7 +152,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     }
 
     /**
-     * Feed a single event from a broker, or from any other source that delivers the event again when it is not
+     * Feed a single event from a broker, or from any other source that can deliver the event again when it is not
      * acknowledged. As {@link #accept(CloudEvent)}, except an event that would only buffer, a
      * {@link CatchupThenPushSubscriptionModel} in front still replaying, say, is refused instead of buffered. An event
      * queued just before a replay starts on an already live catch-up model is refused the same way. The replay takes
@@ -162,29 +163,40 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * Acknowledge the message on {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}, the two outcomes
      * for which {@link RoutingOutcome#mayAcknowledge()} is true.
      * <ul>
-     *     <li>{@link RoutingOutcome#DELIVERED} once the registered handler has applied the event, or once a
-     *     {@link CatchupThenPushSubscriptionModel} in front finds it had already applied it, from its replay or from
-     *     an earlier delivery. With a {@link CatchupThenPushSubscriptionModel} in front, an event offered while an
+     *     <li>{@link RoutingOutcome#DELIVERED} once the registered handler has applied the event, and with a
+     *     {@link CatchupThenPushSubscriptionModel} in front, the events its handler wrote while handling it, or once
+     *     that model finds it had already applied it, from its replay or from an earlier delivery. With a
+     *     {@link CatchupThenPushSubscriptionModel} in front, an event offered while an
      *     earlier delivery of the same event is still running waits behind that delivery.</li>
      *     <li>{@link RoutingOutcome#FILTERED} when the subscription's filter declined the event. Redelivering it to
      *     the same filter would only be declined again.</li>
      *     <li>{@link RoutingOutcome#DEFERRED} when a {@link CatchupThenPushSubscriptionModel} in front has not gone
      *     live, because its replay is still running, say, or starts a replay before its handler has started on the
-     *     event, since this never waits for a replay. The handler never ran, so have the broker deliver it again
-     *     later.</li>
+     *     event, since this never waits for a replay. The handler never ran then. It is also reported after the
+     *     handler ran, when a replay holds back an event the handler wrote while handling the event, and that model
+     *     records this event as applied once the written events are applied, so a later delivery does not run the
+     *     handler again. Either way, have the broker deliver it again later, as
+     *     {@link RoutingOutcome.Disposition#HOLD} describes.</li>
      *     <li>{@link RoutingOutcome#UNAVAILABLE} when no subscription is registered, this model is stopped, or the
      *     subscription is paused. Stopping a {@link CatchupThenPushSubscriptionModel} in front stops this model too,
-     *     whether or not its replay had finished. Have the broker deliver it again later.</li>
+     *     whether or not its replay had finished. Have the broker deliver it again later, as
+     *     {@link RoutingOutcome.Disposition#HOLD} describes.</li>
      *     <li>{@link RoutingOutcome#REFUSED} when the subscription is failing or has failed, which a failed catch-up
-     *     in front or a failed event its handler wrote starts. No redelivery gets past that, so stop consuming.</li>
+     *     in front starts, and so does a failed event its handler wrote that nothing waits for, as
+     *     {@link CatchupThenPushSubscriptionModel} describes. No redelivery gets past that, so stop consuming.</li>
      *     <li>{@link RoutingOutcome#NOT_DELIVERABLE} for any other refusal decided before the handler would run, a
-     *     full live buffer in the catch-up in front, say. Apply the listener's failure policy. A call from inside the
+     *     full live buffer in the catch-up in front, say. Apply the listener's failure policy. The catch-up in front
+     *     also reports a refusal of an event its handler wrote while handling the event as
+     *     {@link RoutingOutcome#NOT_DELIVERABLE}, or as {@link RoutingOutcome#REFUSED} when the subscription is
+     *     failing, after the handler has run. A call from inside the
      *     handler of a {@link CatchupThenPushSubscriptionModel} in front is refused this way for that model's
      *     subscription, live or not, since the event could only be queued behind that handler, not applied.</li>
      * </ul>
      * <p>
      * The {@link Mono} errors instead of completing with an outcome only when the subscription's filter or the
-     * handler failed, with that failure. {@link #accept(CloudEvent)} still errors for a failed catch-up or a full
+     * handler failed, with that failure. With a {@link CatchupThenPushSubscriptionModel} in front, that includes the
+     * handler failing on an event it wrote while handling the event. {@link #accept(CloudEvent)} still errors for a
+     * failed catch-up or a full
      * live buffer.
      * <p>
      * Never call this from a write path. An event it refuses there is lost, since nothing delivers it again. The same
@@ -196,7 +208,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * A configured {@link PushObserver} is told the event's {@link RoutingOutcome} on the same terms as for
      * {@link #accept(CloudEvent)}.
      *
-     * @param cloudEvent The event received from the broker, which the broker delivers again if this refuses it.
+     * @param cloudEvent The event received from the broker, which the listener has delivered again when this refuses it.
      * @return A {@link Mono} that completes with the event's {@link RoutingOutcome}, which decides whether to
      * acknowledge the message.
      */
