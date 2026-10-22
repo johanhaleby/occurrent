@@ -147,9 +147,10 @@ import static java.util.Objects.requireNonNull;
  * how long a replay can run, or leave the queue unbounded, before pointing this source at it.
  * <p>
  * A message published during a replay is kept for this source only if its queue and bindings already exist when the
- * replay starts. Build this source before calling {@code catchUp} or {@code catchUpAll}, or with
- * {@code declareTopology(false)} have whoever owns the topology create them before then. The Topology paragraph of
- * {@link RabbitMqCloudEventSource} says what is lost otherwise.
+ * replay starts. The same holds for a message published after {@code goLive}. Build this source before calling
+ * {@code catchUp}, {@code catchUpAll} or {@code goLive} on the feed, or with {@code declareTopology(false)} have
+ * whoever owns the topology create them before then. The Topology paragraph of {@link RabbitMqCloudEventSource} says
+ * what is lost otherwise.
  * <p>
  * <strong>A permanently failed catch-up stops this source, the same as {@link UnreadableLiveFilterException}.</strong>
  * Once the registered projection's own catch-up-then-live handover has failed, that failure never clears, so
@@ -820,8 +821,8 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
          * for a deployment whose platform team owns the queue and its bindings itself, per #415. This source then
          * only consumes from {@code queue} and never calls {@code queueDeclare} or {@code queueBind}. With
          * {@code false}, building this source creates nothing, so whoever owns the topology must create the queue and
-         * every binding before {@code catchUp} or {@code catchUpAll} is called on the feed. The Topology paragraph of
-         * {@link RabbitMqCloudEventSource} says what is lost otherwise.
+         * every binding before {@code catchUp}, {@code catchUpAll} or {@code goLive} is called on the feed. The
+         * Topology paragraph of {@link RabbitMqCloudEventSource} says what is lost otherwise.
          */
         public Builder<E> declareTopology(boolean declareTopology) {
             this.declareTopology = declareTopology;
