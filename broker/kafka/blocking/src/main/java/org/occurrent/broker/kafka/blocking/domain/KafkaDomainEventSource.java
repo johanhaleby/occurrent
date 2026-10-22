@@ -214,7 +214,10 @@ public final class KafkaDomainEventSource<E> implements AutoCloseable {
      *                       minimum. Read once, at {@link Builder#build()}, to construct and own this source's own
      *                       {@code Consumer}. Refused when {@code group.id} is absent, and when
      *                       {@code enable.auto.commit} is anything other than exactly {@code "false"}, per ADR 133,
-     *                       since seeking only works if nothing else commits.
+     *                       since seeking only works if nothing else commits. {@code auto.offset.reset} defaults to
+     *                       {@code "earliest"}, so a consumer group with no committed offset starts at the oldest
+     *                       record the topic still holds rather than at its end, and does not miss a record
+     *                       published while it joins. A value set here wins.
      * @param feed           The feed this source calls {@link DomainEventFeed#acceptOrDeferCloudEvent(CloudEvent)} on.
      */
     public static <E> Builder<E> builder(Map<String, Object> consumerConfig, DomainEventFeed<E> feed) {
@@ -812,6 +815,8 @@ public final class KafkaDomainEventSource<E> implements AutoCloseable {
             }
             Set<KafkaDestination> destinations = KafkaTopology.topicsToSubscribe(resolver, bindingFilter, bindings);
             Map<String, Object> config = new HashMap<>(consumerConfig);
+            // Kafka's own default, latest, lets a new group skip a record published before its first assignment
+            config.putIfAbsent(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
             KafkaConsumer<String, byte[]> consumer = new KafkaConsumer<>(config, new StringDeserializer(), new ByteArrayDeserializer());
             KafkaDeliveryFailureAction failureAction = null;
             try {

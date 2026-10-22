@@ -43,6 +43,7 @@ import java.lang.reflect.Field;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -951,6 +952,58 @@ class KafkaDomainEventSourceTest extends KafkaTestSupport {
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                 assertThatThrownBy(() -> parkingProducer.send(new org.apache.kafka.clients.producer.ProducerRecord<>(parkingTopic, "k", new byte[0])))
                         .isInstanceOf(IllegalStateException.class));
+    }
+
+    @Test
+    void a_new_consumer_group_that_sets_no_auto_offset_reset_receives_an_event_published_before_the_source_was_built() {
+        String groupId = "group-" + UUID.randomUUID();
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        assertThat(consumerConfig).doesNotContainKey(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG);
+        publish("stream-1", "id-1", "published-before-build");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig, feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                    assertThat(handled).containsExactly(new TestOrderPlaced("published-before-build")));
+        }
+    }
+
+    @Test
+    void a_new_consumer_group_that_sets_auto_offset_reset_latest_skips_an_event_published_before_the_source_was_built_but_receives_one_published_after() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+        Map<String, Object> consumerConfig = new HashMap<>(consumerConfig(groupId));
+        consumerConfig.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        publish("stream-1", "id-before", "published-before-build");
+
+        try (KafkaDomainEventSource<TestOrderPlaced> source = KafkaDomainEventSource.builder(consumerConfig, feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            awaitPartitionsAssigned(groupId, Set.of(new TopicPartition(topic, 0)));
+
+            // Under latest the start position is set on the first poll after assignment, and a probe published
+            // before that poll is skipped, so every retry publishes a new probe
+            AtomicInteger probes = new AtomicInteger();
+            await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                int probe = probes.incrementAndGet();
+                publish("stream-1", "id-after-" + probe, "published-after-assignment-" + probe);
+                assertThat(handled).extracting(TestOrderPlaced::orderId).anyMatch(id -> id.startsWith("published-after-assignment-"));
+            });
+        }
+        assertThat(handled).extracting(TestOrderPlaced::orderId).doesNotContain("published-before-build");
     }
 
     private Map<String, Object> consumerConfig(String groupId) {
