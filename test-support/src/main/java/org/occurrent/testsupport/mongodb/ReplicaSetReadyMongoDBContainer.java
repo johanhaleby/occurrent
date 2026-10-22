@@ -106,6 +106,10 @@ public final class ReplicaSetReadyMongoDBContainer extends MongoDBContainer {
     public ReplicaSetReadyMongoDBContainer(String dockerImageName) {
         super(DockerImageName.parse(dockerImageName));
         withReplicaSet();
+        // MongoDB 8.0 refuses to start on Linux 6.19 or newer while tcmalloc's per-CPU caches are active (SERVER-121912).
+        // The image disables glibc's rseq registration so tcmalloc can use rseq for those caches. Enabling it again turns
+        // the caches off, so mongod starts on any kernel.
+        withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1");
     }
 
     /**
