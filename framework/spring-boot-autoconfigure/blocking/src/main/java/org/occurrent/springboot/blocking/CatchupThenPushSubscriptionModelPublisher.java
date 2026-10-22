@@ -56,7 +56,7 @@ final class CatchupThenPushSubscriptionModelPublisher {
      *                       against it is fed. See {@link CatchupThenPushWrapperRegistry}.
      * @throws IllegalStateException    if a bean with that name already exists
      * @throws IllegalArgumentException if another {@code @Projection} or {@code @Saga} is already registered on
-     *                                  {@code liveFeed}
+     *                                  {@code liveFeed} in {@code applicationContext}
      */
     static void publish(ApplicationContext applicationContext, String annotationName, String id, PushSubscriptionModel liveFeed, CatchupThenPushSubscriptionModel model, Logger log) {
         String beanName = beanName(id);

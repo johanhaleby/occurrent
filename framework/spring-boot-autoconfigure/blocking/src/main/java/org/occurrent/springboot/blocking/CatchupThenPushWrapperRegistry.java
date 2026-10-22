@@ -34,17 +34,19 @@ import java.util.Optional;
  * Records which {@code @Projection} or {@code @Saga} is registered on each live {@link PushSubscriptionModel}, and
  * publishes the {@link CatchupThenPushSubscriptionModel} wrapping each feed as a single shared bean under
  * {@link #BEAN_NAME}, so a CloudEvent-level broker source wired in a separate starter module that never depends on
- * this one (per ADR 133 decision 1) can find the wrapper for its own {@code model} argument. A wrapper's per-id bean
- * name ({@link CatchupThenPushSubscriptionModelPublisher#beanName(String)}) cannot give it that: ADR 102 allows two
- * wrapper instances to share a subscription id, and a source asking whether its feed is ready needs the wrapper
- * built on the exact {@link PushSubscriptionModel} instance it was built with.
+ * this module can find the wrapper for its own {@code model} argument. A wrapper's per-id bean name
+ * ({@link CatchupThenPushSubscriptionModelPublisher#beanName(String)}) cannot give it that, because two wrapper
+ * instances may subscribe under the same id (an application can declare its own wrapper beans), and a source asking
+ * whether its feed is ready needs the wrapper built on the exact {@link PushSubscriptionModel} instance it was built
+ * with.
  * <p>
  * A {@link PushSubscriptionModel} delivers to one subscription only, so a second {@code @Projection} or
- * {@code @Saga} on the same feed instance fails context refresh with an {@link IllegalArgumentException} naming both,
- * whether or not either one catches up first and whether subscriptions start on their own or manually. Without that,
- * manual start would leave the published entry pointing at whichever wrapper registered last, and a broker source
- * asking it would stay paused forever. Registering the same wrapper on the same feed again is not a second
- * registration.
+ * {@code @Saga} on the same feed instance in the same application context fails that context's refresh with an
+ * {@link IllegalArgumentException} naming both, whether or not either one catches up first and whether subscriptions
+ * start on their own or manually. Manual start defers the subscribe that would otherwise refuse it, so the check runs
+ * here at registration. Registrations are recorded per application context, so this check does not see a
+ * registration made in a parent or sibling context on a feed inherited from a parent. Registering the same wrapper on
+ * the same feed again is not a second registration.
  * <p>
  * Feeds are compared by identity, never with {@code equals}, both here and in the published map, since
  * {@link PushSubscriptionModel} is not final and a subclass may override {@code equals}.
@@ -73,16 +75,17 @@ final class CatchupThenPushWrapperRegistry {
 
     /**
      * Records that the {@code annotationName} ({@code "@Projection"} or {@code "@Saga"}) registration {@code id} is
-     * registered on {@code liveFeed}, and that {@code wrapper}, when not {@code null}, wraps it. A registration with no catch-up in front of the feed
-     * passes {@code null}. Creates and publishes the shared beans the first time this is called for
-     * {@code applicationContext}.
+     * registered on {@code liveFeed}, and that {@code wrapper}, when not {@code null}, wraps it. A registration with
+     * no catch-up in front of the feed passes {@code null}. Creates and publishes the shared beans the first time
+     * this is called for {@code applicationContext}.
      * <p>
      * A no-op when {@code applicationContext} is not a {@link ConfigurableApplicationContext}, matching
      * {@link CatchupThenPushSubscriptionModelPublisher#publish}'s own fallback for the same exotic-harness case. A
      * second registration on the same feed is then refused when it subscribes instead, and a broker source's
      * readiness lookup finds no wrapper and answers ready.
      *
-     * @throws IllegalArgumentException if a different registration is already recorded on {@code liveFeed}
+     * @throws IllegalArgumentException if a different registration is already recorded on {@code liveFeed} in
+     *                                  {@code applicationContext}
      */
     static void register(ApplicationContext applicationContext, String annotationName, String id, PushSubscriptionModel liveFeed, @Nullable CatchupThenPushSubscriptionModel wrapper) {
         if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {

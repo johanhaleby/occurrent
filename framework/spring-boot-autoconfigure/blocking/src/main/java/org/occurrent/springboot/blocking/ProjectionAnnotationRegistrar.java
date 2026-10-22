@@ -740,7 +740,7 @@ class ProjectionAnnotationRegistrar {
             subscribable = model;
             catchupModel = model;
         } else {
-            // Recorded with no wrapper, so a second projection or saga on this feed still fails refresh.
+            // Recorded with no wrapper, so a second projection or saga on this feed in this context still fails refresh.
             CatchupThenPushWrapperRegistry.register(applicationContext, "@Projection", id, pushModel, null);
             // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because
             // occurrent.subscription.mode = manual defers the subscription, and a recorded Live would tell a readiness

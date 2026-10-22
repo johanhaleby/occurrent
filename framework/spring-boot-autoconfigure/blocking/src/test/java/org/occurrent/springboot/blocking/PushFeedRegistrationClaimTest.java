@@ -57,10 +57,10 @@ import static org.mockito.Mockito.mock;
 
 /**
  * A {@code PushSubscriptionModel} delivers to one subscription only, so one feed bean takes one push
- * {@code @Projection} or {@code @Saga}. These tests check that a second registration on the same feed instance fails
- * context refresh and names both registrations, that feeds are told apart by identity rather than {@code equals}, and
- * that the {@code occurrentCatchupThenPushSubscriptionModelsByLiveFeed} map a broker source reads resolves each feed
- * to its own wrapper.
+ * {@code @Projection} or {@code @Saga}. These tests check that a second registration on the same feed instance in
+ * the same application context fails its refresh and names both registrations, that feeds are told apart by
+ * identity rather than {@code equals}, and that the {@code occurrentCatchupThenPushSubscriptionModelsByLiveFeed} map
+ * a broker source reads resolves each feed to its own wrapper.
  * <p>
  * They start no containers. They use an empty in-memory reader, a mocked checkpoint storage and the real
  * {@code PushSubscriptionModel}.
