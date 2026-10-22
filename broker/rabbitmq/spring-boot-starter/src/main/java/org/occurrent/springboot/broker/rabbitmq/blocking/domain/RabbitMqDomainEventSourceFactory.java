@@ -25,6 +25,11 @@ import org.occurrent.dsl.projection.blocking.DomainEventFeed;
  * {@code RabbitMqCloudEventSourceFactory}. A source is inherently per-consumer, one queue per projection or saga
  * per ADR 90, so this is a factory rather than a single auto-configured source bean.
  * <p>
+ * Call {@code build()} on the returned builder before {@code catchUp}, {@code catchUpAll} or {@code goLive} is called
+ * on the feed, since that declares the queue and its bindings. With {@code occurrent.broker.rabbitmq.source.declare-topology} set to
+ * {@code false}, whoever owns the topology must create them before then. The Topology paragraph of
+ * {@code RabbitMqCloudEventSource} says what is lost otherwise.
+ * <p>
  * <strong>The returned builder's {@link RabbitMqDomainEventSource#close()} is the caller's to call once the
  * consumer is done with it.</strong> The source this builds is not a Spring bean, so nothing in the application
  * context closes it.

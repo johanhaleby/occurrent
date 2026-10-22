@@ -88,7 +88,14 @@ import static java.util.Objects.requireNonNull;
  * declareTopology(false)} skips all of this for a deployment whose platform team owns the queue and its bindings
  * itself, per #415. A binding only narrows what arrives. A {@link SubscriptionFilter} on anything other than the
  * event type is invisible to it, and {@code acceptOrDefer(...)} still applies the subscription's own filter
- * regardless of what was bound.
+ * regardless of what was bound. The queue and its bindings must exist before the first subscription starts on
+ * {@code model}, or on a {@link CatchupThenPushSubscriptionModel} in front of it. With {@code declareTopology} left
+ * {@code true}, building this source first creates them, and with {@code declareTopology(false)} whoever owns the
+ * topology must create them first. RabbitMQ delivers a published message only to the queues bound at that moment, so
+ * an event published after that subscription starts and before they exist never reaches this queue, and one stored
+ * after a catch-up's last read is not read by the catch-up either. The broker returns a {@code mandatory} publish,
+ * the kind {@link RabbitMqCloudEventSink} makes, as unroutable only when no queue matches it, so a publish that some
+ * other queue matches succeeds without reporting that this queue is missing.
  * <p>
  * <strong>{@link Builder#build()} retries a broker briefly unreachable, per #867, on the {@code Connection} it was
  * given.</strong> Opening the channel, declaring the queue and its bindings, and setting QoS all happen inside
@@ -762,7 +769,11 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         /**
          * Whether this source declares its queue and bindings at all. {@code true} by default. Set to {@code false}
          * for a deployment whose platform team owns the queue and its bindings itself, per #415. This source then
-         * only consumes from {@code queue} and never calls {@code queueDeclare} or {@code queueBind}.
+         * only consumes from {@code queue} and never calls {@code queueDeclare} or {@code queueBind}. With
+         * {@code false}, building this source creates nothing, so whoever owns the topology must create the queue and
+         * every binding before the first subscription starts on the model, or on a
+         * {@link CatchupThenPushSubscriptionModel} in front of it. The Topology paragraph of the class javadoc says
+         * what is lost otherwise.
          */
         public Builder declareTopology(boolean declareTopology) {
             this.declareTopology = declareTopology;
