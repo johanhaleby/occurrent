@@ -88,7 +88,11 @@ import static java.util.Objects.requireNonNull;
  * declareTopology(false)} skips all of this for a deployment whose platform team owns the queue and its bindings
  * itself, per #415. A binding only narrows what arrives. A {@link SubscriptionFilter} on anything other than the
  * event type is invisible to it, and {@code acceptOrDefer(...)} still applies the subscription's own filter
- * regardless of what was bound.
+ * regardless of what was bound. The queue must exist before a {@link CatchupThenPushSubscriptionModel} in front of
+ * {@code model} subscribes, so build this source first. RabbitMQ delivers a published message only to the queues
+ * bound at that moment, so an event stored after the catch-up's last read and published before the queue exists
+ * reaches neither the catch-up nor this queue, and a {@code mandatory} publish, the kind
+ * {@link RabbitMqCloudEventSink} makes, fails only when no queue at all is bound to its routing key.
  * <p>
  * <strong>{@link Builder#build()} retries a broker briefly unreachable, per #867, on the {@code Connection} it was
  * given.</strong> Opening the channel, declaring the queue and its bindings, and setting QoS all happen inside
@@ -762,7 +766,9 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         /**
          * Whether this source declares its queue and bindings at all. {@code true} by default. Set to {@code false}
          * for a deployment whose platform team owns the queue and its bindings itself, per #415. This source then
-         * only consumes from {@code queue} and never calls {@code queueDeclare} or {@code queueBind}.
+         * only consumes from {@code queue} and never calls {@code queueDeclare} or {@code queueBind}. With
+         * {@code false}, the queue must already exist before a {@link CatchupThenPushSubscriptionModel} in front of
+         * the model subscribes. The Topology paragraph of the class javadoc says what is lost otherwise.
          */
         public Builder declareTopology(boolean declareTopology) {
             this.declareTopology = declareTopology;
