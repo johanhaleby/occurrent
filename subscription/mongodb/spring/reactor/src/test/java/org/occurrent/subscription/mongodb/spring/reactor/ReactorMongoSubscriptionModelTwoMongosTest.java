@@ -87,6 +87,8 @@ class ReactorMongoSubscriptionModelTwoMongosTest {
     private static final GenericContainer<?> shardedCluster = new GenericContainer<>("mongo:8.0")
             .withCopyFileToContainer(MountableFile.forClasspathResource("sharded-two-mongos/start.sh"), "/start.sh")
             .withCreateContainerCmdModifier(command -> command.withEntrypoint("bash", "/start.sh"))
+            // Lets mongod start on Linux 6.19 or newer, for the reason given in ReplicaSetReadyMongoDBContainer (SERVER-121912).
+            .withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
             .withExposedPorts(FIRST_MONGOS_PORT, SECOND_MONGOS_PORT)
             .waitingFor(Wait.forLogMessage(".*SHARDED CLUSTER READY.*", 1).withStartupTimeout(Duration.ofMinutes(5)));
 
