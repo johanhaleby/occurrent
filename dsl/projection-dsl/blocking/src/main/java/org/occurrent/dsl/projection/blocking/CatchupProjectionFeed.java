@@ -454,9 +454,9 @@ public final class CatchupProjectionFeed<E> {
      * waiting for the replay, since that replay cannot end before the call returns. During a replay, a call the view
      * hands to another thread waits for that replay, which cannot end while the view waits for the call.
      * <p>
-     * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. The de-dup
-     * cache only suppresses the overlap between a replay and the live feed, and there is no replay on this path, so
-     * it is not a guard against your broker redelivering a message.
+     * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. A redelivery
+     * of an event this feed already delivered to the view is skipped only while its id is among the latest
+     * {@link CatchupThenLiveOptions#dedupCacheSize()} ids this feed remembers.
      */
     public void goLive() {
         handover.catchUp(new BlockingHandover.Source<>() {

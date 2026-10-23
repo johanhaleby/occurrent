@@ -378,9 +378,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * <p>
      * Sharing one evaluation between the matcher and the report, unlike a separate pre-check ahead of
      * {@link #route(CloudEvent)}, means the two can never disagree about whether the event matched, even for a
-     * matcher that is not a deterministic pure function of the event, and means no lifecycle transition (a
-     * concurrent {@code stop()}, a {@code pauseSubscription} or a {@code resumeSubscription}) can land between the
-     * decision and the report. Nothing registered, the model not running and the sole subscription being paused all
+     * matcher that is not a deterministic pure function of the event. The report never checks again whether the
+     * model is running or the subscription is paused, so it describes the decision this call acted on, even when a
+     * concurrent {@code stop()}, {@code pauseSubscription} or {@code resumeSubscription} runs between that decision
+     * and the report. Nothing registered, the model not running and the sole subscription being paused all
      * report {@link RoutingOutcome#UNAVAILABLE} and throw nothing, the same three states
      * {@link #route(CloudEvent)} already skips for dispatch. A filter that declines the event reports
      * {@link RoutingOutcome#FILTERED}. The matcher itself throwing a {@link RuntimeException} or an

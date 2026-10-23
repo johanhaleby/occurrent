@@ -76,9 +76,10 @@ import java.util.UUID;
  * </ul>
  * A body ending in a {@code return} or a {@code throw} stays in place too. Each {@code return;} of a body that stays in
  * place becomes {@code return Mono.empty();}. A declaration with no body, abstract or in an interface that extends
- * either one, changes only its return type. A call to a wrapped
- * {@code cancelSubscription(String)} that the result does not return gets a {@code TODO} comment, since the
- * {@code Mono} returned then completes without waiting for that call's cleanup. See
+ * either one, changes only its return type. A call to a wrapped {@code cancelSubscription(String)} written in the
+ * method's body that the result does not return gets a {@code TODO} comment, since the {@code Mono} returned then
+ * completes without waiting for that call's cleanup. A call made inside another method that the body calls gets no
+ * {@code TODO}, and the {@code Mono} returned does not wait for it either. See
  * doc/migration/upgrading-to-0.34.0.md for an implementation that deletes stored state asynchronously, which has to
  * return a {@code Mono} that completes once that delete has.
  * <p>

@@ -42,8 +42,8 @@ import static org.occurrent.broker.kafka.blocking.KafkaDestinations.streamIdOf;
  * types never share a topic to begin with. That guarantee also rests on two things {@code producerConfig}
  * controls and this resolver cannot enforce by itself, checked together as one unit by
  * {@link KafkaOrderingPrerequisites} rather than as a list of individual settings. The producer's partitioner has
- * to actually partition by the record key, and a batch retried after a failed send must never land after a later
- * one that already succeeded on the same partition for whatever calls this sink's {@code publish} concurrently,
+ * to actually partition by the record key, and a batch the Kafka client retries after a failed send must never be
+ * appended after a later one that already succeeded on the same partition for whatever calls this sink's {@code publish} concurrently,
  * {@link KafkaOrderingPrerequisites}'s own javadoc states exactly what that second prerequisite does and does not
  * cover. {@link KafkaCloudEventSink.Builder#build()} warns, naming the
  * specific setting responsible, whenever either one fails, so this javadoc states the two prerequisites rather

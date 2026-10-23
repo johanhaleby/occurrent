@@ -481,9 +481,9 @@ public final class CatchupProjectionFeed<E> {
      * callback such as {@code replayStarted()}, completes without waiting for the replay, since that replay cannot end
      * before the call does.
      * <p>
-     * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. The de-dup
-     * cache only suppresses the overlap between a replay and the live feed, and there is no replay on this path, so
-     * it is not a guard against your broker redelivering a message.
+     * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. A redelivery
+     * of an event this feed already delivered to the view is skipped only while its id is among the latest
+     * {@link CatchupThenLiveOptions#dedupCacheSize()} ids this feed remembers.
      *
      * @return A {@link Mono} that completes once the feed is live.
      */

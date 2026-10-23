@@ -2030,7 +2030,8 @@ change for step 3, and for step 5 when the wrapped model's cancel is the last st
 
 A body that calls a wrapped model's `cancelSubscription(..)` anywhere else, inside an `if` or before other statements,
 gets a `TODO` comment, since the `Mono` it returns does not wait for that call. Return that call's `Mono`, as step 5
-describes. Step 4 stays by hand, since the recipe cannot tell a delete that runs in the background from code that
+describes. The recipe only looks at the calls written in the body itself, so a call made inside another method that
+the body calls gets no `TODO`, and the `Mono` returned does not wait for it either. Check such a helper by hand. Step 4 stays by hand, since the recipe cannot tell a delete that runs in the background from code that
 finishes before the method returns. The recipe does not change a Kotlin implementation, or a lambda or method reference
 that implements `CancellableSubscriptions`. It does not change the method of a class that also implements the blocking
 `CancellableSubscriptions`, apart from a `TODO` comment that points here, since changing the return type would only swap

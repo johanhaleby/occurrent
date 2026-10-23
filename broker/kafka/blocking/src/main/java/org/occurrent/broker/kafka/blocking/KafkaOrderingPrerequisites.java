@@ -26,8 +26,8 @@ import java.util.Optional;
 /**
  * Whether a {@code producerConfig} still keeps the two things stream-id keying needs to actually order records,
  * checked as exactly two legs rather than as a growing list of individual Kafka settings known to break one of
- * them. The partitioner has to respect record keys, and a retried send has to never be appended after a later one
- * that already succeeded. Either leg failing reorders records that share a key on the same partition regardless
+ * them. The partitioner has to respect record keys, and a send the Kafka client retries itself has to never be
+ * appended after a later one that already succeeded. Either leg failing reorders records that share a key on the same partition regardless
  * of how correctly {@link KafkaSharedTopicDestinationResolver} or {@link KafkaTopicPerTypeDestinationResolver}
  * derived that key, so a new Kafka setting discovered to break one of them is a new way to fail the same leg, not
  * a reason to add a third check.
@@ -56,7 +56,8 @@ final class KafkaOrderingPrerequisites {
      * partition regardless of whether a key is present, or sets {@link ProducerConfig#PARTITIONER_IGNORE_KEYS_CONFIG}
      * to {@code true}, which makes the default partitioner ignore a key it would otherwise have hashed.
      * <p>
-     * <b>A retried send must never be appended after a later one that already succeeded.</b> Kafka's own
+     * <b>A send the Kafka client retries itself must never be appended after a later one that already
+     * succeeded.</b> Kafka's own
      * documentation for {@link ProducerConfig#ENABLE_IDEMPOTENCE_CONFIG} states the interplay directly, idempotence
      * is enabled by default, requires {@code retries} greater than zero, {@code acks=all}, and
      * {@code max.in.flight.requests.per.connection} no greater than five, and a conflicting setting (an explicit
@@ -71,13 +72,12 @@ final class KafkaOrderingPrerequisites {
      * outstanding on this producer's one connection for a retry to overtake. That pin says nothing about two
      * different threads calling {@code publish} on this sink at once, each is its own caller with its own record
      * on its own path into the accumulator, and the pin only ever orders requests already queued behind one
-     * another, never decides which of two concurrent callers gets there first. A retriable failure only backs off
-     * and retries once the failed send's outcome is already fully known, {@code KafkaCloudEventSink.publishOnce}
-     * only throws after {@code Future#get} for the previous attempt has itself returned, so one caller's own
-     * retries never overlap that same caller's later attempt on this producer regardless of this leg. What the pin
-     * and idempotence protect against instead is a second, genuinely concurrent {@code publish} call from another
-     * thread landing on the accumulator while the first caller's retry is still backing off, since nothing about
-     * that second call was ever ordered after the first to begin with.
+     * another, never decides which of two concurrent callers gets there first. What idempotence and
+     * {@code max.in.flight.requests.per.connection=1} protect is the order of records the producer already holds, so
+     * the Kafka client's own retry of an earlier batch is never appended after a later one. A retry by this sink's
+     * {@code RetryStrategy} is a new {@code send}, made after the attempt before it failed, so a concurrent
+     * {@code publish} that reaches the producer during that retry's backoff is appended first, and neither setting
+     * changes that.
      */
     static Optional<String> brokenOrderingGuarantee(Map<String, Object> config) {
         List<String> causes = new ArrayList<>();
