@@ -1,3 +1,11 @@
+### Changelog next version
+
+#### Highlights
+
+#### Changes
+
+#### Breaking changes
+
 ### 0.34.0 (2026-10-23)
 
 #### Highlights
