@@ -37,8 +37,8 @@ criteria item a `tag:` key for each of its tags and a `type:` key for each of it
 `type:X` for each type it writes. A command that reads `type("InvoiceIssued").tags(invoice1)` therefore conflicts with
 an append of an `InvoiceIssued` tagged `invoice2`, which doesn't match it. The two appends also increment the same
 `type:InvoiceIssued` document, so MongoDB doesn't let them commit at the same time. ADR 21 accepted false conflicts
-between appends that share a tag or a type, as the boundary the caller chose. For an item with tags, though, the type is shared with every event of that type in the store, and the boundary
-the caller chose is the tag.
+between appends that share a tag or a type, as the boundary the caller chose. For an item with tags, though, the type
+is shared with every event of that type in the store, and the boundary the caller chose is the tag.
 
 ## Decision
 
@@ -103,9 +103,10 @@ moves with every such append. A conditional append on the item increments the sa
 the two appends share a document and MongoDB lets only one of them commit, which is the argument ADR 21 rests on. An
 item without tags keeps its type keys and ADR 21's argument unchanged, and excluded types never had keys.
 
-Conflicts between criteria with tags and appends that only share a type with them go away. The writes don't. Every
-append still increments `type:X`, so each type marker is still written by every append of that type in the store,
-which is the second part of #1229.
+For criteria with tags, an append that only shares a type with them no longer makes the check refuse a later append
+on those criteria. Two appends of the same type that run at the same time still conflict, whatever their tags. Every
+append still increments `type:X`, so both write the same marker document and MongoDB doesn't let them commit at the
+same time. That is the second part of #1229.
 
 ### Invariants
 
@@ -114,9 +115,12 @@ I1 holds for any token, and I3 is about markers alone. I2 holds only when all of
 - `t` is the token that a read with criteria `Cr` on a store instance `S` returned, used as returned and not rebuilt
   with `of` outside the store.
 - The append goes to `S`, in the process and the Occurrent version that did the read.
-- No event in `S` was deleted, or changed with `updateEvent`, between the read and the append. The in-memory store
-  checks only the events it still holds, so a matching event deleted after the read no longer counts there. The
-  MongoDB stores don't lower a marker when an event is deleted or changed, so they still refuse.
+- Between the read and the append, nothing removed or changed an event in `S` through `EventStoreOperations`, and
+  nobody pruned the markers of `S` as ADR 21 allows. The in-memory store checks only the events it still holds, so a
+  matching event removed after the read no longer counts there. The MongoDB stores remove events only from the event
+  collection and leave the markers as they are, so a removed event still counts there. A pruned marker counts from
+  the start again when the next append recreates it, so its version can come back to the one a token read before the
+  pruning holds.
 
 The invariants:
 
@@ -135,16 +139,18 @@ matching event should have refused:
 
 - A token read on one store instance and used on another, when the criteria match and both stores happen to be at the
   same version.
-- A token built with `of` outside a store, for example `of(tags(b), token.version())` from a token read with `tags(a)`. `of` is
-  public because the stores live in other modules than the token, and a `DcbEventStore` of your own needs it too.
+- A token built with `of` outside a store, for example `of(tags(b), token.version())` from a token read with
+  `tags(a)`. `of` is public because the stores live in other modules than the token, and a `DcbEventStore` of your own
+  needs it too.
 - A version saved and turned back into a token later, which the next section shows for a value saved under 0.34.
 
 ### Upgrading
 
 Nothing changes on disk. The marker documents, their ids and what increments them stay the same, so 0.34 and 0.35
 nodes can append to the same store. A conditional append from a 0.34 node still increments type markers that 0.35
-doesn't read for criteria with tags. Marker versions only go up, so an extra increment can make a check refuse an
-append and the command retry, and it can't make a check let one through. Going back to 0.34 is safe for the data.
+doesn't read for criteria with tags. An append only ever raises a marker version, so an extra increment can make a
+check refuse an append and the command retry, and it can't make a check let one through. Going back to 0.34 is safe
+for the data.
 
 A token saved under 0.34 falls outside the conditions I2 needs. A token value from 0.34 is a sum over tag and type
 markers, while 0.35 sums tag markers only, so a value saved under 0.34 can let an append through on 0.35 that should
@@ -183,10 +189,13 @@ catch that.
 ## Consequences
 
 - A condition built from a read's token and other criteria than the read's throws, on every store. A token used on
-  another store instance, built with `of` outside a store, or saved and restored can still let an append through, as a hand-made
-  `long` can in 0.34.
-- On the MongoDB stores, criteria with tags no longer conflict with an append that only shares a type with them. The
-  in-memory store already behaved this way, so the TCK asserts the same answer for that case on every store.
+  another store instance, built with `of` outside a store, or saved and restored can still let an append through, as
+  a hand-made `long` can in 0.34. So can a token read before an event was removed or the markers were pruned.
+- On the MongoDB stores, an append that only shares a type with criteria that have tags no longer makes the check
+  refuse a later append on those criteria. The in-memory store already behaved this way, so the TCK asserts the same
+  answer for that case on every store. Appends of one type that run at the same time still write the same `type:X`
+  document on MongoDB, whatever their tags, and the TCK test below runs its appends one after another, so it doesn't
+  show that they stop conflicting.
 - `DcbConsistencyToken` becomes a class and the two stream constructors are removed, which breaks store
   implementations and code that creates tokens or streams. The refusal breaks code that appends with other criteria
   than it read with. There is no OpenRewrite recipe for either, because the replacement needs the read criteria,
@@ -199,4 +208,4 @@ catch that.
   the first test, and a store that checks no marker fails the control.
 - `DcbConcurrencyConformance` gets two cases where a condition on a type and a tag races a condition on that type
   alone, and one on that tag alone, over the same event. That event matches both conditions, so these races show that
-  the check stays sound and not that the type conflict is gone.
+  the check stays sound and not that the type-only refusal is gone.

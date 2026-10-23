@@ -7,8 +7,10 @@ Date: 2026-06-22
 Accepted
 
 Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md). For a criteria item with at least one tag, the query reads and increments only its `tag:`
-markers and no longer its `type:` markers, so criteria with tags don't conflict with an append that only shares a type
-with them. What an append increments for its own events is unchanged.
+markers and no longer its `type:` markers, so an append that only shares a type with criteria that have tags no longer
+makes the check refuse a later append on them. What an append increments for its own events is unchanged, so two
+appends of one type that run at the same time still write the same `type:` marker. Pruning markers resets their
+versions, so a token read before the pruning can let an append through, and callers read again after it.
 
 ## Context
 
