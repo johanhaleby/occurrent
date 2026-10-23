@@ -310,6 +310,8 @@ class SagaAnnotationRegistrar {
             throw new IllegalArgumentException("@Saga '%s' with source=PUSH resolved a %s, which is not a PushSubscriptionModel.".formatted(id, feedBean.getClass().getName()));
         }
         if (annotation.catchup() == org.occurrent.annotation.Catchup.NONE) {
+            // Recorded with no wrapper, so a second projection or saga on this feed in this context still fails refresh.
+            CatchupThenPushWrapperRegistry.register(applicationContext, "@Saga", id, pushModel, null);
             // No history to replay, so it is live as soon as it is running. Asked rather than recorded because
             // occurrent.subscription.mode = manual withholds a push saga, and a recorded Live would tell a readiness
             // probe that a saga nobody has started yet is ready to serve.
@@ -330,7 +332,7 @@ class SagaAnnotationRegistrar {
         // Published so a CloudEvent-level broker source, wired in a separate starter module that never depends on
         // this one, can look this exact object up and gate its own consumption on model::isReadyForLiveDelivery.
         // See CatchupThenPushSubscriptionModelPublisher.
-        CatchupThenPushSubscriptionModelPublisher.publish(applicationContext, id, pushModel, model, log);
+        CatchupThenPushSubscriptionModelPublisher.publish(applicationContext, "@Saga", id, pushModel, model, log);
         return model;
     }
 

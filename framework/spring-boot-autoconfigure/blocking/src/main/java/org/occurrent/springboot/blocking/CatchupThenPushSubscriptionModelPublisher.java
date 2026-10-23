@@ -50,11 +50,15 @@ final class CatchupThenPushSubscriptionModelPublisher {
      * {@code liveFeed} in {@link CatchupThenPushWrapperRegistry}, or log and skip both if {@code applicationContext}
      * is not a {@link ConfigurableApplicationContext}.
      *
-     * @param liveFeed The {@link PushSubscriptionModel} {@code model} wraps, the same instance a source built
-     *                 against it is fed. See {@link CatchupThenPushWrapperRegistry}.
-     * @throws IllegalStateException if a bean with that name already exists
+     * @param annotationName The annotation registering {@code id}, {@code "@Projection"} or {@code "@Saga"}, for the
+     *                       message when another registration already holds {@code liveFeed}.
+     * @param liveFeed       The {@link PushSubscriptionModel} {@code model} wraps, the same instance a source built
+     *                       against it is fed. See {@link CatchupThenPushWrapperRegistry}.
+     * @throws IllegalStateException    if a bean with that name already exists
+     * @throws IllegalArgumentException if another {@code @Projection} or {@code @Saga} is already registered on
+     *                                  {@code liveFeed} in {@code applicationContext}
      */
-    static void publish(ApplicationContext applicationContext, String id, PushSubscriptionModel liveFeed, CatchupThenPushSubscriptionModel model, Logger log) {
+    static void publish(ApplicationContext applicationContext, String annotationName, String id, PushSubscriptionModel liveFeed, CatchupThenPushSubscriptionModel model, Logger log) {
         String beanName = beanName(id);
         if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
             // Every Spring Boot context is configurable, so this is only reachable from an exotic harness. The
@@ -73,8 +77,8 @@ final class CatchupThenPushSubscriptionModelPublisher {
             // duplicate-singleton error.
             throw new IllegalStateException("Cannot publish the CatchupThenPushSubscriptionModel for '%s' as '%s' because a bean with that name already exists. Occurrent publishes each push catch-up's wrapper under 'catchupThenPushSubscriptionModel-<id>', so rename your bean or the id.".formatted(id, beanName));
         }
+        CatchupThenPushWrapperRegistry.register(applicationContext, annotationName, id, liveFeed, model);
         beanFactory.registerSingleton(beanName, model);
-        CatchupThenPushWrapperRegistry.register(applicationContext, liveFeed, model);
     }
 
     /** The bean name the {@link CatchupThenPushSubscriptionModel} for {@code id} is published under. */

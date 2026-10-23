@@ -736,10 +736,12 @@ class ProjectionAnnotationRegistrar {
             // Published so a CloudEvent-level broker source, wired in a separate starter module that never depends
             // on this one, can look this exact object up and gate its own consumption on
             // model::isReadyForLiveDelivery. See CatchupThenPushSubscriptionModelPublisher.
-            CatchupThenPushSubscriptionModelPublisher.publish(applicationContext, id, pushModel, model, log);
+            CatchupThenPushSubscriptionModelPublisher.publish(applicationContext, "@Projection", id, pushModel, model, log);
             subscribable = model;
             catchupModel = model;
         } else {
+            // Recorded with no wrapper, so a second projection or saga on this feed in this context still fails refresh.
+            CatchupThenPushWrapperRegistry.register(applicationContext, "@Projection", id, pushModel, null);
             // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because
             // occurrent.subscription.mode = manual defers the subscription, and a recorded Live would tell a readiness
             // probe that a projection nobody has started yet is ready to serve.
