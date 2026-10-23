@@ -30,7 +30,7 @@ typealias ContentType = String
 /**
  * Create a cloud event converter from Kotlin.
  *
- * See [cloud event documentation](https://occurrent.org/documentation#cloudevents) for info on what the cloud event attributes mean.<br><br>
+ * See [cloud event documentation](https://occurrent.org/docs/layer-0/cloudevents/) for info on what the cloud event attributes mean.<br><br>
  *
  * @param objectMapper The jackson object mapper to use
  * @param cloudEventSource The source of the cloud event

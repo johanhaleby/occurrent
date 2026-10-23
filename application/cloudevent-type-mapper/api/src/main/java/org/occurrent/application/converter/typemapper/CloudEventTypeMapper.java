@@ -18,7 +18,7 @@
 package org.occurrent.application.converter.typemapper;
 
 /**
- * A cloud event type mapper is component whose purpose it is to get the <a href="https://occurrent.org/documentation#cloudevents">cloud event type</a> from a
+ * A cloud event type mapper is component whose purpose it is to get the <a href="https://occurrent.org/docs/layer-0/cloudevents/">cloud event type</a> from a
  * class or instance of your domain event type and vice versa. It is typically used as a helper to {@code CloudEventConverter}'s.
  *
  * @param <T> The base type of your domain events
