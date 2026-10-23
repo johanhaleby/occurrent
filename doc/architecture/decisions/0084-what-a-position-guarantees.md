@@ -6,6 +6,8 @@ Date: 2026-07-31
 
 Accepted. Adds the position conformance suites to the TCK ([ADR 77](0077-a-published-tck-for-occurrent-contracts.md))
 and settles a contract that three shipped test files contradicted. Resolves #485 and #486.
+Extended by [ADR 148](0148-a-position-reader-stops-at-the-complete-through-position.md), which adds the complete-through position, the
+one position a reader may use as a watermark.
 
 ## Context
 

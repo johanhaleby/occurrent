@@ -4,7 +4,8 @@ Date: 2026-07-17
 
 ## Status
 
-Accepted
+Accepted. Amended by [ADR 148](0148-a-position-reader-stops-at-the-complete-through-position.md), which saves a DCB snapshot at the
+complete-through position instead of the last position of the command's own append.
 
 ## Context
 
