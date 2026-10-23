@@ -15,7 +15,7 @@ import java.util.function.Function;
 /**
  * An application service interface that should be good enough for most scenarios.
  * Combine it with command composition ({@code org.occurrent:command-composition:<version>}) to solve
- * an even more wide-range of use cases. See <a href="https://occurrent.org/documentation#commands">command documentation</a> for more information.
+ * an even more wide-range of use cases. See <a href="https://occurrent.org/docs/overview/commands/">command documentation</a> for more information.
  *
  * @param <E> The type of the event to store. Normally this would be your custom "DomainEvent" class but it could also be {@link CloudEvent}.
  */

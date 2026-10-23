@@ -35,21 +35,21 @@ public class OccurrentProperties {
     private static final String DEFAULT_MONGO_EVENTS_COLLECTION = "events";
 
     /**
-     * Event Store Configuration (see <a href="https://occurrent.org/documentation#eventstore">docs</a>)
+     * Event Store Configuration (see <a href="https://occurrent.org/docs/layer-0/eventstore/">docs</a>)
      */
     private EventStoreProperties eventStore = new EventStoreProperties();
     /**
-     * Subscription Configuration (see <a href="https://occurrent.org/documentation#subscriptions">docs</a>)
+     * Subscription Configuration (see <a href="https://occurrent.org/docs/layer-0/subscriptions/">docs</a>)
      */
     private SubscriptionProperties subscription = new SubscriptionProperties();
 
     /**
-     * CloudEventConverter Configuration (see <a href="https://occurrent.org/documentation#cloudevent-conversion">docs</a>)
+     * CloudEventConverter Configuration (see <a href="https://occurrent.org/docs/layer-1/cloudevent-conversion/">docs</a>)
      */
     private CloudEventConverterProperties cloudEventConverter = new CloudEventConverterProperties();
 
     /**
-     * Application Service Configuration (see <a href="https://occurrent.org/documentation#application-service">docs</a>)
+     * Application Service Configuration (see <a href="https://occurrent.org/docs/layer-1/application-service/">docs</a>)
      */
     private ApplicationServiceProperties applicationService = new ApplicationServiceProperties();
 

@@ -61,7 +61,7 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
      *     <li>No subject</li>
      * </ol>
      * <p>
-     * See <a href="https://occurrent.org/documentation#cloudevents">cloud event documentation</a> for info on what the cloud event attributes mean.<br><br>
+     * See <a href="https://occurrent.org/docs/layer-0/cloudevents/">cloud event documentation</a> for info on what the cloud event attributes mean.<br><br>
      * Use {@link Builder} for more advanced configuration.
      *
      * @param xStream          The XStream instance to use

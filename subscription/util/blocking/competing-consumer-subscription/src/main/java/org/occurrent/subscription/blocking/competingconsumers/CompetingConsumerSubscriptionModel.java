@@ -41,8 +41,8 @@ import static java.util.Objects.requireNonNull;
  * and receive events from it. If a subscriber looses its lock, another subscriber will take over automatically. To achieve distributed locking, the subscription model uses a {@link CompetingConsumerStrategy} to
  * support different algorithms. You can write custom algorithms by implementing this interface yourself. Here's an example of how to create and use the {@link CompetingConsumerSubscriptionModel}. This example
  * uses the {@code NativeMongoLeaseCompetingConsumerStrategy} from module {@code org.occurrent:subscription-mongodb-native-blocking-competing-consumer-strategy}.
- * It also wraps the <a href="https://occurrent.org/documentation#durable-subscriptions-blocking">DurableSubscriptionModel</a> which in turn wraps the
- * <a href="https://occurrent.org/documentation#blocking-subscription-using-the-native-java-mongodb-driver">Native MongoDB</a> subscription model.
+ * It also wraps the <a href="https://occurrent.org/docs/layer-0/durable-subscriptions/">DurableSubscriptionModel</a> which in turn wraps the
+ * <a href="https://occurrent.org/docs/layer-0/blocking-subscription-models/#blocking-subscription-using-the-native-java-mongodb-driver">Native MongoDB</a> subscription model.
  * <br>
  * <br>
  * <pre>
