@@ -60,6 +60,8 @@ differently, so read them first.
   uses `acceptOrDefer(CloudEvent)`.
 - [Section 14](#14-a-projection-feeds-golive-waits-for-a-running-catch-up). A projection feed's `goLive()` waits for a
   running catch-up of the same projection, and fails if that catch-up failed.
+- [Section 30](#30-a-catchup-called-from-a-views-own-code-returns-without-waiting-for-the-replay). A `catchUp()` that
+  a view's own code calls on its blocking feed returns without waiting, and the replay runs once that code returns.
 
 ### Subscription models
 
@@ -2856,3 +2858,43 @@ start its live model, a second `resumeSubscription(subscriptionId)` resumes the 
 
 There is no recipe for this change. Where a subscription resumes from and when a subscribe is refused are runtime
 behavior that a rewrite of the source cannot see.
+
+## 30. A `catchUp()` called from a view's own code returns without waiting for the replay
+
+This covers `catchUp()` on the blocking `CatchupProjectionFeed`, and `catchUp(id)` and `catchUpAll()` on the blocking
+`DomainEventFeed`, when the view's own code calls them on the feed that is calling it. That means the code that
+applies an event to the view, live or replayed, and a callback such as `replayStarted()`, `replayCompleted()` or
+`replayAbandoned()`. In 0.33.0 such a call ran the replay inside the view's code, on the same thread, and returned once
+the replay had ended. A failure of that replay was thrown to the view's code.
+
+Now the call returns once the catch-up has been asked for, and the replay runs after the view's code returns. It runs
+on the thread that asked first, before the feed call that ran the view's code on that thread returns, such as the
+`acceptAndWait(..)` that delivered the event or the `catchUp()` whose replay called the view. A call from another
+thread that asks before that replay starts asks for the same replay, and can return before it has run.
+
+The failure of that replay no longer reaches the view's code. A `catchUp()` or `goLive()` that runs the replay throws
+it, and an `acceptAndWait(..)` that runs it, the deprecated `accept(..)` included, logs it instead of throwing it. As
+after any failed catch-up, the feed then refuses every later event, unless the replay failed on an interrupted thread.
+
+You are affected in these cases:
+
+- View code that calls `catchUp()`, `catchUp(id)` or `catchUpAll()` on its own feed and then reads what the replay
+  wrote finds the replay has not run yet.
+- View code that catches the failure of that call no longer sees it.
+- A view that hands the call to another thread and waits for it there waits for a replay that cannot start while it
+  waits.
+- Code on another thread that calls `catchUp()` while such a replay waits to start can return before the replay has
+  run.
+
+What to do:
+
+- Do the work that needs the replayed state after the feed call that ran the view's code returns, for example after
+  the `acceptAndWait(..)` or `catchUp()` you made from outside the view.
+- Handle a failed replay around the `catchUp()` or `goLive()` you call from outside the view's code. For an
+  `acceptAndWait(..)` the failure is only logged.
+- Call `catchUp()` from the view's own thread rather than from one it hands the call to.
+
+The javadoc of `CatchupProjectionFeed.catchUp()` covers interrupts, and when the replay does not run at all.
+
+There is no recipe for this change. Which code calls `catchUp()`, and on which thread, is runtime behavior that a
+rewrite of the source cannot see.
