@@ -40,3 +40,5 @@ nbdist/
 .context/*
 # The policy file is the one tracked file, because a policy only counts when it is tracked
 !.context/orchestrator-policy.yml
+
+.claude
