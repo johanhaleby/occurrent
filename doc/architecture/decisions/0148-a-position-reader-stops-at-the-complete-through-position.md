@@ -59,9 +59,13 @@ collection with a `-fences` suffix, holds documents `{_id: <first position>, kin
   exists can never commit.
 
 **CT is computed from the counter document and the fences.** A reader reads the counter document, then the fences for the
-first positions of its entries, both with read concern majority. CT is `first - 1` of the lowest entry without a fence,
-or `position` when every entry has one. When an entry has no fence, the reader reads the counter document again and treats
-an entry that is gone by then as resolved. Reading CT never writes.
+first positions of its entries. CT is `first - 1` of the lowest entry without a fence, or `position` when every entry has
+one. When an entry has no fence, the reader reads the counter document again and treats an entry that is gone by then as
+resolved. These reads, and the events read that follows them, run with read concern majority in one causally consistent
+session, so no read sees an older state than the one before it, even when they go to different replica set members.
+Without the session, the second counter read could come from a member that hasn't seen an entry's reservation yet, and
+the reader would count that entry as gone. An events read from such a member could miss events below CT. Reading CT never
+writes.
 
 **An append learns its own CT inside its transaction.** In the same snapshot as the append condition check, the
 transaction reads the counter document and the fences of its entries. If its own entry is missing, it aborts and takes a
@@ -80,6 +84,10 @@ block, starts over with the fence insert and this check.
   `deleteMany({_id: {$lte: P, $nin: F}})`. Fences have no TTL.
 - `reapStaleReservations()` on the store does the 120-second step on its own, outside any transaction and session. It
   needs write permission.
+- A write on a fence `_id` that an open transaction has already inserted waits for that transaction to end. On a replica
+  set the transaction lifetime limit bounds that wait, but a prepared cross-shard transaction can hold it for as long as
+  its coordinator takes. So the 120-second step and the fence delete run with a client-side timeout and are skipped when
+  it expires. Skipping is safe, because an entry without a fence only holds CT back.
 
 **A fence that already exists makes the owner take a new block.** The stores retry an append with the same block for a long
 time. The DCB paths make up to 15 attempts, and each one can retry inside the driver's `withTransaction`. The stream
@@ -91,6 +99,14 @@ the append takes a new block. After 3 new blocks in one call, the call throws an
 another appender has dropped the entry. An `abort` insert after that succeeds, even though the events committed. So after
 an unknown commit result or a cancellation, the store reads the events collection, with read concern majority, for an
 event at the block's first position with its own `appendId`.
+
+The `abort` insert and that read run in one causally consistent session, with write concern and read concern majority, so
+the read waits until the majority-committed state covers everything the insert saw. Without the session, a commit the
+primary has applied but not yet replicated could be missing from the read, the store would report that nothing was written,
+and a retry by the caller would append the events twice. A duplicate key on the `abort` insert doesn't settle it either,
+because the `commit` fence it hit can still roll back after a failover. When the store can't settle the outcome within a
+bound, including when the `abort` insert itself times out behind the transaction, it throws an exception saying the
+outcome is unknown, and the 120-second step fences the entry later.
 
 **In a caller's transaction, nothing changes but the session.** The reservation is a plain `$inc` inside the caller's
 transaction, with no entry and no fence, so the counter write commits together with the events. The native store now
@@ -119,10 +135,18 @@ and then it throws an exception naming the entry that holds CT back.
 events between CT and the head and never read them.
 
 **The public API gets one new component and one new method.** `DcbEventStream` and `DcbAppendResult` gain
-`completeThroughPosition`, and `PositionOrderedReader` on both stacks gains `completeThroughPosition()`, which defaults to
-`currentPosition()`. The compatibility constructors keep the old arities and default the new component to
-`lastSequencePosition`. That is right for `InMemoryEventStore`, which assigns and commits positions under one lock, and
-wrong for any store that commits out of position order.
+`completeThroughPosition`, and `PositionOrderedReader` on both stacks gains `completeThroughPosition()`. All three types
+shipped in 0.34, so a store outside this repository may construct or implement them, and a default can't know whether that
+store commits in position order. So the defaults claim nothing:
+
+- The `DcbAppendResult` compatibility constructors set the new component to `firstSequencePosition - 1`, so the snapshot
+  decider skips its save.
+- The `DcbEventStream` compatibility constructor sets it to 0, so nothing that resumes from it moves.
+- `completeThroughPosition()` throws `UnsupportedOperationException` unless the store overrides it.
+
+The MongoDB stores, `InMemoryEventStore` (which assigns and commits positions under one lock) and the adapters in this
+repository override it. The event store TCK gets a conformance test that holds a lower append while a higher one commits,
+and checks that CT stays below the held append until it commits or aborts.
 
 ## Alternatives considered
 
@@ -174,6 +198,11 @@ design writes the fence itself.
   reads a few more events. A DCB `@Snapshot` may not include its newest event until the next delivery.
 - Concurrent appends in native ambient mode now conflict on the counter document, as Spring appends in a caller's
   transaction already do.
+- An append whose commit result the store can't settle now throws an exception saying the outcome is unknown. The caller
+  has to find out from the events whether it was written before it retries.
+- A store outside this repository that implements `PositionOrderedReader` and doesn't override `completeThroughPosition()`
+  can't run a no-live position catch-up any more. The catch-up stops with the `UnsupportedOperationException` until the
+  store implements the method. The 0.35.0 changelog and migration guide have to name this break.
 - A 0.34 writer still reserves with a plain `$inc` and adds no entry, so CT can move above one of its appends before
   that append commits. The guarantee holds once every writer runs 0.35. DCB snapshots and position-only checkpoints written by 0.34 may already be past a lost event. The migration
   guide says to delete DCB snapshots, and that the store can't repair a position-only checkpoint.
