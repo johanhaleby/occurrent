@@ -109,11 +109,14 @@ which is the second part of #1229.
 
 ### Invariants
 
-I1 holds for any token, and I3 is about markers alone. I2 holds only when both of these are true:
+I1 holds for any token, and I3 is about markers alone. I2 holds only when all of these are true:
 
 - `t` is the token that a read with criteria `Cr` on a store instance `S` returned, used as returned and not rebuilt
   with `of` outside the store.
 - The append goes to `S`, in the process and the Occurrent version that did the read.
+- No event in `S` was deleted, or changed with `updateEvent`, between the read and the append. The in-memory store
+  checks only the events it still holds, so a matching event deleted after the read no longer counts there. The
+  MongoDB stores don't lower a marker when an event is deleted or changed, so they still refuse.
 
 The invariants:
 
