@@ -26,6 +26,8 @@
 
     <artifactId>occurrent-broker-rabbitmq-spring-boot-starter</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

@@ -26,6 +26,8 @@
 
     <artifactId>occurrent-broker-kafka-blocking</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
