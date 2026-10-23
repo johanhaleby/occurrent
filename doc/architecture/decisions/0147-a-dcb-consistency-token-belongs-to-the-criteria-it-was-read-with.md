@@ -50,6 +50,12 @@ token with `DcbConsistencyToken.of(DcbCriteria, long)`, and `criteria()` returns
 there for store implementations, the way `value()` is in 0.34, and nothing outside a store should read or keep it. Two
 tokens are equal when their criteria are the same, as defined in the next section, and their versions are equal.
 
+`of` is public because the stores live in other modules than the token, and a `DcbEventStore` of your own needs it
+too. So code outside a store can still call `of(tags(b), token.version())` on a token read with `tags(a)` and get the
+`tags(b)` append through, the same way it could pass any `long` to `DcbConsistencyToken.of(long)` in 0.34. The check
+in this ADR catches code that reads with one criteria and appends with another using the token the read returned. It
+doesn't stop a caller from building a token by hand.
+
 These are removed:
 
 - The public constructor, `DcbConsistencyToken.of(long)` and `value()`.
@@ -87,8 +93,8 @@ anything. `GenericDcbApplicationService` retries only `DcbAppendConditionNotFulf
 - `wholeStoreLock(DcbConsistencyToken)` stays, since its name says the condition covers the whole store. It refuses a
   token that wasn't read with `DcbCriteria.all()`.
 
-The rule is the same on every store. Code that changes the criteria between the read and the append fails in a test
-against the in-memory store, and not first in production on MongoDB.
+The rule is the same on every store. Code that changes the criteria between the read and the append, and passes the
+token the read returned, fails in a test against the in-memory store, and not first in production on MongoDB.
 
 ### Query markers for an item with tags
 
@@ -150,9 +156,16 @@ repeat `DcbEventStream.lastSequencePosition()` until then.
 **Give the token a string form** for sending it to a client and back. Nothing in the repository needs one, and a stable
 encoding is a wire format to keep compatible. The final class lets it be added later.
 
+**Let only the store that read a token create it.** Each store would get its own token type and check that a condition
+holds one of its own. A `DcbEventStore` of your own still needs a public way to create a token, so a caller can still
+build one by hand. Every store implementation would need its own token type and the check, and the TCK would need
+tests for it, only to close the route through the built-in stores. #1228 is about code that reads with one criteria and appends with another by mistake, and the
+criteria in the token catch that.
+
 ## Consequences
 
-- An append can't pass with a token read for other criteria, on any store.
+- An append with the token a read returned can't pass with other criteria than the read's, on any store. A token
+  built by hand with `of` can still get past the check, as a hand-made `long` can in 0.34.
 - On the MongoDB stores, criteria with tags no longer conflict with an append that only shares a type with them. The
   in-memory store already behaved this way, so the TCK asserts the same answer for that case on every store.
 - `DcbConsistencyToken` becomes a class and the two stream constructors are removed, which breaks store
