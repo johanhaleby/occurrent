@@ -154,12 +154,17 @@ encoding is a wire format to keep compatible. The final class lets it be added l
 
 - An append can't pass with a token read for other criteria, on any store.
 - On the MongoDB stores, criteria with tags no longer conflict with an append that only shares a type with them. The
-  in-memory store already behaved this way, so the two marker models in the TCK now give the same answer for that case.
+  in-memory store already behaved this way, so the TCK asserts the same answer for that case on every store.
 - `DcbConsistencyToken` becomes a class and the two stream constructors are removed, which breaks store
   implementations and code that creates tokens or streams. The refusal breaks code that appends with other criteria than it read with. No
   OpenRewrite recipe can migrate either, because the replacement needs the read criteria, which the call site doesn't
   have.
 - The deprecation warning shows up wherever a caller passes the criteria and the token separately.
 - ADR 31 and ADR 53 decided that the token stays a `long`. This ADR reverses that, while ADR 31's single read stands.
-- The TCK gets tests for the refusal on every store, and `DcbConcurrencyConformance` gets two cases where a condition on
-  a type and a tag races a condition on that type alone, and one on that tag alone, over the same event.
+- The TCK gets tests for the refusal on every store. It also gets a test on every store that reads
+  `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token, which succeeds. Its
+  control appends an `X` tagged `a` instead, and that append is refused. A store that still reads the type marker fails
+  the first test, and a store that checks no marker fails the control.
+- `DcbConcurrencyConformance` gets two cases where a condition on a type and a tag races a condition on that type
+  alone, and one on that tag alone, over the same event. That event matches both conditions, so these races show that
+  the check stays sound and not that the type conflict is gone.
