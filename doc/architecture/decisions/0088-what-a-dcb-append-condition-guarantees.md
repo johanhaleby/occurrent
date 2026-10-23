@@ -6,6 +6,10 @@ Date: 2026-08-02
 
 Accepted. Part of #394, TCK phase 4.
 
+Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md). A condition can't be created with a token read for other criteria, and throws
+`IllegalArgumentException` before any store is called. On the MongoDB stores, criteria with tags no longer conflict
+with an append that only shares a type with them, so both marker models give the same answer there.
+
 ## Context
 
 DCB is the biggest block of untested-in-common behaviour left in #394: roughly 5,300 lines of DCB test code across the
