@@ -97,11 +97,11 @@ it before production.
 its `type:` keys as before, and `DcbCriteria.all()` keeps the `all` key. `eventMarkerKeys` doesn't change, so every
 append still increments a marker for each tag and each type of its events.
 
-The marker check stays sound for an item with tags. An event matches the item only when it has all of the item's
-tags, so an append of a matching event increments every one of the item's `tag:` markers. A token over those markers
-moves with every such append. A conditional append on the item increments the same markers from its query keys, so
-the two appends share a document and MongoDB lets only one of them commit, which is the argument ADR 21 rests on. An
-item without tags keeps its type keys and ADR 21's argument unchanged, and excluded types never had keys.
+ADR 21's argument for the marker check still holds for an item with tags. An event matches the item only when it has all
+of the item's tags, so an append of a matching event increments every one of the item's `tag:` markers, and a token over
+those markers moves with it. A conditional append on the item increments the same markers from its query keys, so the
+two appends share a document and MongoDB lets only one of them commit. An item without tags keeps its type keys, and
+excluded types never had keys.
 
 For criteria with tags, an append that only shares a type with them no longer makes the check refuse a later append
 on those criteria. Two appends of the same type that run at the same time still conflict, whatever their tags. Every
@@ -110,39 +110,16 @@ same time. That is the second part of #1229.
 
 ### Invariants
 
-I1 holds for any token, and I3 is about markers alone. I2 holds only when all of these are true:
-
-- `t` is the token that a read with criteria `Cr` on a store instance `S` returned, used as returned and not rebuilt
-  with `of` outside the store.
-- The append goes to `S`, in the process and the Occurrent version that did the read.
-- Between the read and the append, nothing removed or changed an event in `S` through `EventStoreOperations`, and
-  nobody pruned the markers of `S` as ADR 21 allows. The in-memory store checks only the events it still holds, so a
-  matching event removed after the read no longer counts there. The MongoDB stores remove events only from the event
-  collection and leave the markers as they are, so a removed event still counts there. A pruned marker counts from
-  the start again when the next append recreates it, so its version can come back to the one a token read before the
-  pruning holds.
-
-The invariants:
-
-- **I1.** For a condition with criteria `Ca` and a token `t` whose criteria are `Ct`, the condition can't be created
-  when `Ca` isn't the same as `Ct`. It throws `IllegalArgumentException` and no store is called. When `t` came from a
-  read, `Ct` is that read's `Cr`.
-- **I2.** When `Ca` is the same as `Cr`, `Cr` isn't `DcbCriteria.all()`, and an event matching `Cr` was committed to
-  `S` after the read, `S` refuses the append with `DcbAppendConditionNotFulfilledException`. For `DcbCriteria.all()`
-  the MongoDB stores detect only other whole-store appends, as ADR 30 decided.
-- **I3.** For an item `i` with tags and an event `e` matching `i`, the markers an append of `e` increments include
+- **I1.** For a condition with criteria `Ca` and a token whose criteria are `Ct`, the condition can't be created when
+  `Ca` isn't the same as `Ct`. It throws `IllegalArgumentException` and no store is called.
+- **I2.** For an item `i` with tags and an event `e` matching `i`, the markers an append of `e` increments include
   every query marker of `i`. For an item `i` without tags, they include at least one query marker of `i`.
 
-The check binds a token to its criteria and to nothing else. It doesn't know which store instance, process or
-Occurrent version read the token, so I2 promises nothing for these, and each of them can let an append through that a
-matching event should have refused:
+Apart from I1 and the query markers in I2, what a store refuses for a condition is what ADR 21 and ADR 88 decided.
 
-- A token read on one store instance and used on another, when the criteria match and both stores happen to be at the
-  same version.
-- A token built with `of` outside a store, for example `of(tags(b), token.version())` from a token read with
-  `tags(a)`. `of` is public because the stores live in other modules than the token, and a `DcbEventStore` of your own
-  needs it too.
-- A version saved and turned back into a token later, which the next section shows for a value saved under 0.34.
+I1 compares criteria and nothing else. A token used on another store instance, built with `of` outside a store, or
+saved and turned back into a token later gets past it whenever its criteria match the condition's. `of` is public
+because the stores live in other modules than the token, and a `DcbEventStore` of your own needs it too.
 
 ### Upgrading
 
@@ -152,12 +129,10 @@ doesn't read for criteria with tags. An append only ever raises a marker version
 check refuse an append and the command retry, and it can't make a check let one through. Going back to 0.34 is safe
 for the data.
 
-A token saved under 0.34 falls outside the conditions I2 needs. A token value from 0.34 is a sum over tag and type
-markers, while 0.35 sums tag markers only, so a value saved under 0.34 can let an append through on 0.35 that should
-have been refused. Say a 0.34 read of `type("X").tags(t)` sums 2 from `tag:t` and 3 from `type:X`, so the value is 5.
-After the upgrade three appends tagged `t` take `tag:t` from 2 to 5, and one of them is an `X`. The 0.35 check sums 5
-and lets the append through. The migration guide tells anyone who saved a token value, in an ETag or a queued command
-for example, to read again instead. Occurrent itself doesn't save a token.
+A token value saved under 0.34 isn't valid on 0.35. For criteria with tags it is a sum over tag and type markers,
+while 0.35 sums the tag markers only, so an old value can let an append through that should have been refused. The
+migration guide tells anyone who saved a token value, in an ETag or a queued command for example, to read again
+instead. Occurrent itself doesn't save a token.
 
 ## Alternatives considered
 
@@ -188,9 +163,7 @@ catch that.
 
 ## Consequences
 
-- A condition built from a read's token and other criteria than the read's throws, on every store. A token used on
-  another store instance, built with `of` outside a store, or saved and restored can still let an append through, as
-  a hand-made `long` can in 0.34. So can a token read before an event was removed or the markers were pruned.
+- A condition built from a read's token and other criteria than the read's throws, on every store.
 - On the MongoDB stores, an append that only shares a type with criteria that have tags no longer makes the check
   refuse a later append on those criteria. The in-memory store already behaved this way, so the TCK asserts the same
   answer for that case on every store. Appends of one type that run at the same time still write the same `type:X`
@@ -208,4 +181,4 @@ catch that.
   the first test, and a store that checks no marker fails the control.
 - `DcbConcurrencyConformance` gets two cases where a condition on a type and a tag races a condition on that type
   alone, and one on that tag alone, over the same event. That event matches both conditions, so these races show that
-  the check stays sound and not that the type-only refusal is gone.
+  the check still refuses on a matching event and not that the type-only refusal is gone.
