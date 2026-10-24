@@ -34,7 +34,8 @@ collection holds a stream event with a numeric `position` and has no usable inde
 I ran `explain("executionStats")` on MongoDB 8.0.34 on a collection with 50,000 stream events that have a `position`
 and 1,000 DCB events with two tags each, in two layouts. In `interleaved` one DCB event follows every 50 stream events.
 In `streamfirst` all the stream events come first. I compared a collection without an index on `dcbTags` alone with one
-that has the sparse `dcbTags_1`. The filters have the shape the native store sends, with the same sorts and limits.
+that has the sparse `dcbTags_1`. Each filter is the two conditions the native store sends, a position range and
+`dcbTags` existing, with the same sorts and limits.
 
 | Read | `interleaved`, with the index | `streamfirst`, with the index | Without the index |
 |---|---|---|---|
