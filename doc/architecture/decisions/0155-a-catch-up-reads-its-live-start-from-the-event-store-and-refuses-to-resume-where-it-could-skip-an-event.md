@@ -161,8 +161,7 @@ A specific-time catch-up whose replay outlasts the history now fails at once. It
 times.
 
 `startAtGlobalPosition`, `startAtDcbPosition` and `DcbStartAt.afterPosition(long)` are deprecated with `forRemoval =
-true`. `GlobalCheckpoint.of(long)` gets javadoc only and is not deprecated, although ADR 148 listed it among the
-deprecations.
+true`. `GlobalCheckpoint.of(long)` gets javadoc only and is not deprecated.
 
 How a refusal ends a replay depends on how the replay started. A replay started by a subscribe ends, reports the error
 at `waitUntilStarted`, and logs it once. A replay started by a resume or a takeover stops there, with one error log and
