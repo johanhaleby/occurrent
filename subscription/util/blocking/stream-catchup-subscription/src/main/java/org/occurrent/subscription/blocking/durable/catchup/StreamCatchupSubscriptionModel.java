@@ -25,6 +25,8 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
@@ -81,6 +83,9 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     private static final Filter STREAM_CAPABILITY_FILTER = Filter.capability(EventStoreCapability.STREAM);
 
     private final EventStoreQueries eventStoreQueries;
+    // The same object as eventStoreQueries. A catch-up reads its live start and every replay read through the scope it
+    // opens, so the store has to implement the SPI, which a decorator around the store doesn't.
+    private final CatchupReads catchupReads;
     // The capability guard ANDed into every read and live handover: STREAM_CAPABILITY_FILTER for a stream
     // subscription, null for a capability-agnostic one, which then delivers events of every capability.
     private final @Nullable Filter capabilityScope;
@@ -129,6 +134,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, @Nullable Filter capabilityScope, AbstractCatchupSubscriptionModel.SharedCatchupState sharedState) {
         super(subscriptionModel, config, subscriptionModelContextType, sharedState);
         this.eventStoreQueries = Objects.requireNonNull(eventStoreQueries, "eventStoreQueries cannot be null");
+        this.catchupReads = requireCatchupReads(eventStoreQueries, CatchupReads.class);
         this.capabilityScope = capabilityScope;
     }
 
@@ -296,13 +302,13 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // that leaves the change stream history during a long replay is not handed over (replayUntilLiveStartHolds).
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        TimeReplayStart replayStart = timeReplayStart(subscriptionId, checkpoint, delegatedStartAt);
 
         // Cache to avoid re-delivering events already streamed during catch-up when they arrive again live.
         BoundedIdCache<CatchupEventKey> catchupPhaseCache = new BoundedIdCache<>(config.cacheSize);
         Predicate<CloudEvent> persistDuringCatchup = persistDuringCatchupForOneAttempt();
-        TimeReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, replayStart, delegatedStartAt,
-                start -> replayTimes(subscriptionId, filter, action, start, catchupPhaseCache, persistDuringCatchup));
+        TimeReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, this::openScope, storedTimeLiveStart(checkpoint),
+                liveStart -> timeReplayStart(subscriptionId, checkpoint, liveStart, delegatedStartAt), delegatedStartAt,
+                (start, scope) -> replayTimes(subscriptionId, filter, action, start, scope, catchupPhaseCache, persistDuringCatchup));
 
         // Locked from the identity decision through the delegate subscribe call below. Unlocked, a
         // cancelSubscription or a fresh subscribe for this id could land in the gap after this attempt decided it
@@ -340,14 +346,19 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         });
     }
 
+    private ReplayScope<CatchupReadScope> openScope(@Nullable String notBefore) {
+        CatchupReadScope scope = catchupReads.openCatchupReadScope(notBefore);
+        return new ReplayScope<>(scope, scope.liveStart(), scope::close);
+    }
+
     // One pass of the time replay from replayStart
-    private void replayTimes(String subscriptionId, @Nullable SubscriptionFilter filter, Consumer<CloudEvent> action, TimeReplayStart replayStart,
+    private void replayTimes(String subscriptionId, @Nullable SubscriptionFilter filter, Consumer<CloudEvent> action, TimeReplayStart replayStart, CatchupReadScope scope,
                              BoundedIdCache<CatchupEventKey> catchupPhaseCache, Predicate<CloudEvent> persistDuringCatchup) {
         Filter catchupFilter = deriveFilterToUseDuringCatchupPhase(filter, replayStart.replayFrom());
         Function<CloudEvent, Checkpoint> checkpointAt = e -> replayStart.checkpointAt(e.getTime());
 
         long numberOfEventsBeforeStartingCatchupSubscription = eventStoreQueries.count(catchupFilter);
-        deliverCatchupEvents(eventStoreQueries.query(catchupFilter, config.catchupPhaseSortBy), subscriptionId, action, null, persistDuringCatchup, checkpointAt);
+        deliverCatchupEvents(scope.query(catchupFilter, 0, Integer.MAX_VALUE, config.catchupPhaseSortBy), subscriptionId, action, null, persistDuringCatchup, checkpointAt);
 
         // Reconcile events written after the bulk replay started by reading the newest N in insertion order
         // (SortBy.natural descending + limit, no skip) and reversing them for delivery. Live delivery from the live
@@ -376,7 +387,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 long windowCountAsLong = Math.min(remaining, Math.min(config.dcbCatchupPositionWindowSize, Integer.MAX_VALUE));
                 int windowCount = (int) windowCountAsLong;
                 long skip = remaining - windowCount;
-                List<CloudEvent> window = new ArrayList<>(eventStoreQueries.query(catchupFilter, Math.toIntExact(skip), windowCount, SortBy.natural(DESCENDING)).toList());
+                List<CloudEvent> window = new ArrayList<>(scope.query(catchupFilter, Math.toIntExact(skip), windowCount, SortBy.natural(DESCENDING)).toList());
                 Collections.reverse(window);
                 deliverCatchupEvents(window.stream(), subscriptionId, action, catchupPhaseCache, persistDuringCatchup, checkpointAt);
                 remaining -= windowCount;
@@ -405,7 +416,6 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     // ---------------------------------------------------------------------------------------------------------------
 
     private Subscription startPositionCatchupSubscriptionForStream(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
-        PositionOrderedReader positionOrderedReader = (PositionOrderedReader) eventStoreQueries;
         Filter streamFilter = withCapabilityScope(plainFilterOf(filter));
         long windowSize = config.dcbCatchupPositionWindowSize;
 
@@ -418,27 +428,29 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // that leaves the change stream history during a long replay is not handed over (replayUntilLiveStartHolds).
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        PositionReplayStart replayStart = positionReplayStart(subscriptionId, checkpoint, delegatedStartAt);
 
         // Page through the position sequence from the resume position to the head seen at the start, in windows so a
         // large rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
         // Re-reads of overlapping windows are deduped by the cache (delivery is at-least-once).
         BoundedIdCache<CatchupEventKey> catchupPhaseCache = new BoundedIdCache<>(config.cacheSize);
         Predicate<CloudEvent> persistDuringCatchup = persistDuringCatchupForOneAttempt();
-        PositionCatchupPipeline.Reader streamReader = new PositionCatchupPipeline.Reader() {
-            @Override
-            public long currentHead() {
-                return positionOrderedReader.currentPosition();
-            }
+        PositionReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, this::openScope, storedPositionLiveStart(checkpoint),
+                liveStart -> positionReplayStart(subscriptionId, checkpoint, liveStart, delegatedStartAt), delegatedStartAt,
+                (start, scope) -> {
+                    // Reads the head and every window through the scope of this attempt
+                    PositionCatchupPipeline.Reader streamReader = new PositionCatchupPipeline.Reader() {
+                        @Override
+                        public long currentHead() {
+                            return scope.currentPosition();
+                        }
 
-            @Override
-            public Stream<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
-                return positionOrderedReader.readInPositionOrder(streamFilter, PositionRange.between(fromExclusive, toInclusive));
-            }
-        };
-        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(streamReader, windowSize);
-        PositionReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, replayStart, delegatedStartAt,
-                start -> replayPositions(subscriptionId, action, pipeline, streamReader, start, catchupPhaseCache, persistDuringCatchup));
+                        @Override
+                        public Stream<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
+                            return scope.readInPositionOrder(streamFilter, PositionRange.between(fromExclusive, toInclusive));
+                        }
+                    };
+                    replayPositions(subscriptionId, action, new PositionCatchupPipeline(streamReader, windowSize), streamReader, start, catchupPhaseCache, persistDuringCatchup);
+                });
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // time-based path above. An unlocked gap here is observable two ways, a lost cancellation, or a fresh

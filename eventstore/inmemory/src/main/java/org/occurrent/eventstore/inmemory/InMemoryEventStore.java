@@ -29,7 +29,11 @@ import org.occurrent.eventstore.api.SortBy.NaturalImpl;
 import org.occurrent.eventstore.api.SortBy.SingleFieldImpl;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.blocking.*;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.api.dcb.*;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
@@ -73,7 +77,7 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
  * when the store first increments it and again after {@link #deleteAll()}, and no marker has unstamped increments.
  */
 @NullMarked
-public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation {
+public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation, CatchupReads, DcbCatchupReads {
 
     // We cannot use ConcurrentMap since it doesn't maintain insertion order
     private final Map<String, CopyOnWriteArrayList<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
@@ -84,6 +88,11 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     // (matching MongoDB's $natural), not the per-stream grouping from iterating "state".
     private final AtomicLong insertionSequence = new AtomicLong();
     private final Map<String, Long> insertionOrderByEventKey = new ConcurrentHashMap<>();
+
+    // A position and the event it belongs to become visible together, under the monitor of "state", so a read never sees
+    // a position whose event commits later. That is the premise CatchupReads.unscoped needs.
+    private final CatchupReads catchupReads = CatchupReads.unscoped(this, this);
+    private final DcbCatchupReads dcbCatchupReads = DcbCatchupReads.unscoped(this);
 
     private final Consumer<List<CloudEvent>> listener;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
@@ -540,6 +549,22 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
         listener.accept(addedEvents);
         return result;
+    }
+
+    /**
+     * Internal. Reads this store directly and reports no live start, see {@link CatchupReads#unscoped}.
+     */
+    @Override
+    public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+        return catchupReads.openCatchupReadScope(notBefore);
+    }
+
+    /**
+     * Internal. Reads this store directly and reports no live start, see {@link DcbCatchupReads#unscoped}.
+     */
+    @Override
+    public DcbCatchupReadScope openDcbCatchupReadScope(@Nullable String notBefore) {
+        return dcbCatchupReads.openDcbCatchupReadScope(notBefore);
     }
 
     @Override

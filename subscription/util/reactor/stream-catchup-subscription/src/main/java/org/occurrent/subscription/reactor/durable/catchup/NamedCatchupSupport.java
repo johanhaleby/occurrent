@@ -51,7 +51,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 
@@ -179,7 +178,8 @@ final class NamedCatchupSupport {
     }
 
     /**
-     * Subscribes with a catch-up phase. It replays from {@code start} through {@code reader}, applies the
+     * Subscribes with a catch-up phase. It replays from {@code start} through the scope {@code scopes} opens for each
+     * replay attempt, applies the
      * caller's {@code action} to each replayed event without retry, then hands the live half to the wrapped model's
      * named {@code subscribe(..)} resuming from a token captured before the replay, or the one {@code start} holds
      * while the wrapped model still has the history from it, deduped against the ids the
@@ -190,7 +190,7 @@ final class NamedCatchupSupport {
      * replay loses the token 4 times in a row fails like any other failed replay.
      */
     Subscription subscribeWithCatchup(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
-                                      CatchupReader reader, long windowSize, int handoverCacheSize, GlobalCheckpoint start,
+                                      CatchupScopes scopes, long windowSize, int handoverCacheSize, GlobalCheckpoint start,
                                       Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
         requireNotShutdown();
@@ -201,7 +201,7 @@ final class NamedCatchupSupport {
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(handoverCacheSize);
-        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(scopes, windowSize, handoverCacheSize);
         CatchupState state = new CatchupState(null);
 
         Function<CloudEvent, Mono<Void>> liveAction = cloudEvent ->
@@ -211,7 +211,7 @@ final class NamedCatchupSupport {
         // same start position and resolves its live token again. Re-adding ids to the cache is a no-op, and
         // delivering replayed events again is at-least-once.
         Replay replay = new Replay(subscriptionId, delegate, pipeline, cache, action, liveSubscriptionFilter, liveAction);
-        state.launcher = launcher(replay, state, () -> pipeline.resolveStart(wrapped, start, subscriptionId), 0, null);
+        state.launcher = launcher(replay, state, PositionCatchupPipeline.notBefore(start), scope -> pipeline.resolveStart(wrapped, start, subscriptionId, scope.liveStart()), 0, null);
 
         if (catchingUp.putIfAbsent(subscriptionId, state) != null) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
@@ -247,10 +247,12 @@ final class NamedCatchupSupport {
                           Function<CloudEvent, Mono<Void>> liveAction) {
     }
 
-    // Runs the replay from the start firstStart resolves, through the caller's action without retry (failure is loud),
-    // then hands over to the wrapped model. replaysAgain is how many times the replay already ran again. takenOver is
-    // the handover whose lost live start this replay takes over, or null for a replay a subscribe started.
-    private Runnable launcher(Replay replay, CatchupState state, Supplier<Mono<PositionCatchupPipeline.ReplayStart>> firstStart, int replaysAgain, @Nullable HandedOver takenOver) {
+    // Runs the replay from the start firstStart resolves in the scope of the attempt, through the caller's action without
+    // retry (failure is loud), then hands over to the wrapped model. notBefore is the live start an earlier attempt
+    // stored, which the scope's reads must see everything up to, or null. replaysAgain is how many times the replay
+    // already ran again. takenOver is the handover whose lost live start this replay takes over, or null for a replay a
+    // subscribe started.
+    private Runnable launcher(Replay replay, CatchupState state, @Nullable String notBefore, Function<CatchupScope, Mono<PositionCatchupPipeline.ReplayStart>> firstStart, int replaysAgain, @Nullable HandedOver takenOver) {
         String subscriptionId = replay.subscriptionId();
         return () -> {
             // A relaunch reads the history again from the same start position, so it is a different catch-up and
@@ -259,8 +261,7 @@ final class NamedCatchupSupport {
             Object launched = new Object();
             state.episode.set(launched);
             announceCatchupStarted(subscriptionId, state, launched);
-            Disposable replaying = Mono.defer(firstStart)
-                    .flatMapMany(replayStart -> replayThenHandOver(replay, state, launched, replayStart, replaysAgain))
+            Disposable replaying = replayThenHandOver(replay, state, launched, notBefore, firstStart, replaysAgain)
                     .subscribe(unused -> {
                     }, throwable -> {
                         if (takenOver != null) {
@@ -304,38 +305,47 @@ final class NamedCatchupSupport {
         };
     }
 
-    // Replays from replayStart through the caller's action, then hands over to its token, or replays again first when
-    // the token left the change stream history during the replay. replaysAgain is how many times the replay already
-    // ran again.
-    private Flux<Void> replayThenHandOver(Replay replay, CatchupState state, Object launched, PositionCatchupPipeline.ReplayStart replayStart, int replaysAgain) {
+    // Replays from the start firstStart resolves through the caller's action, then hands over to its token, or replays
+    // again first when the token left the change stream history during the replay. The start is resolved and the replay
+    // read in one scope, which is closed when the replay ends. replaysAgain is how many times the replay already ran
+    // again.
+    private Flux<Void> replayThenHandOver(Replay replay, CatchupState state, Object launched, @Nullable String notBefore,
+                                          Function<CatchupScope, Mono<PositionCatchupPipeline.ReplayStart>> firstStart, int replaysAgain) {
         String subscriptionId = replay.subscriptionId();
         PositionCatchupPipeline pipeline = replay.pipeline();
         // A stop between dispose landing and this event truncates here, before the action runs.
         BooleanSupplier keepReplaying = () -> !stopped && isCurrent(state, launched);
-        return pipeline.replayApplying(replayStart, replay.cache(), keepReplaying, replay.action(),
-                        () -> {
-                            CatchupListener boundaryListener = catchupListeners.get(subscriptionId);
-                            if (boundaryListener != null) {
-                                // The launch this callback belongs to, not whatever the field holds by the time it
-                                // runs, so a relaunch cannot end its predecessor's history read for it.
-                                boundaryListener.historyRead(launched);
-                            }
-                        })
-                .thenMany(Flux.defer(() -> {
-                    // A replay a stop cut short goes to handOver without the check, which parks it or leaves it to
-                    // the launch that replaced it
-                    Mono<PositionCatchupPipeline.ReplayStart> liveStart = keepReplaying.getAsBoolean()
-                            ? pipeline.liveStartAfterReplay(wrapped, replayStart, subscriptionId, replaysAgain)
-                            : Mono.just(replayStart);
-                    return liveStart.flatMapMany(next -> {
-                        if (next != replayStart) {
-                            announceCatchupStarted(subscriptionId, state, launched);
-                            return replayThenHandOver(replay, state, launched, next, replaysAgain + 1);
+        return Flux.defer(() -> {
+            AtomicReference<PositionCatchupPipeline.ReplayStart> resolved = new AtomicReference<>();
+            return pipeline.<Void>inScope(notBefore, firstStart, (replayStart, reader) -> pipeline.replayApplying(reader, replayStart, replay.cache(), keepReplaying, replay.action(),
+                            () -> {
+                                CatchupListener boundaryListener = catchupListeners.get(subscriptionId);
+                                if (boundaryListener != null) {
+                                    // The launch this callback belongs to, not whatever the field holds by the time it
+                                    // runs, so a relaunch cannot end its predecessor's history read for it.
+                                    boundaryListener.historyRead(launched);
+                                }
+                            }), resolved)
+                    .thenMany(Flux.defer(() -> {
+                        PositionCatchupPipeline.ReplayStart replayStart = resolved.get();
+                        if (replayStart == null) {
+                            return Flux.<Void>empty();
                         }
-                        handOver(replay, state, launched, replayStart, replaysAgain);
-                        return Flux.<Void>empty();
-                    });
-                }));
+                        // A replay a stop cut short goes to handOver without the check, which parks it or leaves it to
+                        // the launch that replaced it
+                        Mono<Boolean> liveStartHolds = keepReplaying.getAsBoolean()
+                                ? pipeline.liveStartHolds(wrapped, replayStart, subscriptionId, replaysAgain)
+                                : Mono.just(true);
+                        return liveStartHolds.flatMapMany(holds -> {
+                            if (!holds) {
+                                announceCatchupStarted(subscriptionId, state, launched);
+                                return replayThenHandOver(replay, state, launched, null, pipeline.fromOrigin(wrapped, replayStart), replaysAgain + 1);
+                            }
+                            handOver(replay, state, launched, replayStart, replaysAgain);
+                            return Flux.<Void>empty();
+                        });
+                    }));
+        });
     }
 
     // Announced inside the map operation that holds this id, which cancelSubscription's own remove also takes, so a
@@ -502,7 +512,7 @@ final class NamedCatchupSupport {
     private @Nullable CatchupState takeOver(String subscriptionId, HandedOver made) {
         Replay replay = made.replay();
         CatchupState state = new CatchupState(made);
-        state.launcher = launcher(replay, state, () -> replay.pipeline().replayAgainAfterLiveStartLost(wrapped, made.replayStart(), subscriptionId, made.replaysAgain()),
+        state.launcher = launcher(replay, state, null, replay.pipeline().replayAgainAfterLiveStartLost(wrapped, made.replayStart(), subscriptionId, made.replaysAgain()),
                 made.replaysAgain() + 1, made);
         CatchupState inFlight = catchingUp.compute(subscriptionId, (id, current) -> {
             if (current == made.handingOver()) {

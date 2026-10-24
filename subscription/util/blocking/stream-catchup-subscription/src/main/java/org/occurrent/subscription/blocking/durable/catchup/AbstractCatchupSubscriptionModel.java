@@ -29,6 +29,7 @@ import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
@@ -62,6 +63,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -1775,15 +1777,17 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Captures the live resume checkpoint handed over to live delivery. Every catch-up captures it before its bulk
      * replay, so an event that commits during the replay, whatever its position or time, is delivered live.
-     * Returns null when the delegate must not run ({@code delegatedStartAt} null, catch-up owns the position
-     * entirely). Fails loudly if the delegate has no checkpoint rather than silently resuming at "now" and
-     * dropping events committed during replay.
+     * It is the {@code liveStart} the attempt's {@linkplain ReplayScope read scope} reports, which the event store
+     * read in the same session as the replay reads, or the wrapped model's global checkpoint when the store reports
+     * none. Returns null when the delegate must not run ({@code delegatedStartAt} null, catch-up owns the position
+     * entirely). Fails loudly if there is no checkpoint rather than silently resuming at "now" and dropping events
+     * committed during replay.
      */
-    protected @Nullable Checkpoint captureLiveResumeCheckpoint(@Nullable StartAt delegatedStartAt) {
+    protected @Nullable Checkpoint captureLiveResumeCheckpoint(@Nullable String liveStart, @Nullable StartAt delegatedStartAt) {
         if (delegatedStartAt == null) {
             return null;
         }
-        Checkpoint checkpoint = subscriptionModel.globalCheckpoint();
+        Checkpoint checkpoint = liveStart == null ? subscriptionModel.globalCheckpoint() : new StringBasedCheckpoint(liveStart);
         if (checkpoint == null) {
             throw new IllegalStateException("Cannot run a catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.");
         }
@@ -1899,10 +1903,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * first attempt started from, with a live start read now, and redelivers what it already delivered. A
      * {@code start} without a live start gets one read now, before the replay.
      */
-    protected TimeReplayStart timeReplayStart(String subscriptionId, Checkpoint start, @Nullable StartAt delegatedStartAt) {
+    protected TimeReplayStart timeReplayStart(String subscriptionId, Checkpoint start, @Nullable String liveStart, @Nullable StartAt delegatedStartAt) {
         if (!CatchupTimeCheckpoint.isCatchupTimeCheckpoint(start)) {
             TimeBasedCheckpoint time = start instanceof TimeBasedCheckpoint timeBasedCheckpoint ? timeBasedCheckpoint : timeOf(start.asString());
-            return new TimeReplayStart(time, captureLiveResumeCheckpoint(delegatedStartAt), time);
+            return new TimeReplayStart(time, captureLiveResumeCheckpoint(liveStart, delegatedStartAt), time);
         }
         CatchupTimeCheckpoint stored = CatchupTimeCheckpoint.parse(start);
         TimeBasedCheckpoint time = timeOf(stored.time());
@@ -1915,7 +1919,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
         log.warn("The subscription model no longer has the history from the live start stored for catch-up subscription {}, so the catch-up replays again from time {} instead of {} and redelivers the events in between. Live start: {}",
                 subscriptionId, replayOrigin.asString(), time.asString(), stored.liveFrom().asString());
-        return new TimeReplayStart(replayOrigin, captureLiveResumeCheckpoint(delegatedStartAt), replayOrigin);
+        return new TimeReplayStart(replayOrigin, captureLiveResumeCheckpoint(liveStart, delegatedStartAt), replayOrigin);
     }
 
     private static TimeBasedCheckpoint timeOf(String time) {
@@ -1932,14 +1936,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * redelivers what it already delivered. A {@code start} without a live start gets one read now, before the
      * replay, as in earlier versions.
      */
-    protected PositionReplayStart positionReplayStart(String subscriptionId, Checkpoint start, @Nullable StartAt delegatedStartAt) {
+    protected PositionReplayStart positionReplayStart(String subscriptionId, Checkpoint start, @Nullable String liveStart, @Nullable StartAt delegatedStartAt) {
         GlobalCheckpoint global = GlobalCheckpoint.parse(start);
         if (delegatedStartAt == null) {
             return new PositionReplayStart(global.position(), null, global.position(), null);
         }
         Checkpoint storedLiveFrom = global.liveFrom().orElse(null);
         if (storedLiveFrom == null) {
-            return new PositionReplayStart(global.position(), captureLiveResumeCheckpoint(delegatedStartAt), global.position(), null);
+            return new PositionReplayStart(global.position(), captureLiveResumeCheckpoint(liveStart, delegatedStartAt), global.position(), null);
         }
         long replayOrigin = global.replayOrigin().orElse(global.position());
         if (subscriptionModel.canResumeFrom(storedLiveFrom)) {
@@ -1947,7 +1951,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
         log.warn("The subscription model no longer has the history from the live start stored for catch-up subscription {}, so the catch-up replays again from position {} instead of {} and redelivers the events in between. Live start: {}",
                 subscriptionId, replayOrigin, global.position(), storedLiveFrom.asString());
-        return new PositionReplayStart(replayOrigin, captureLiveResumeCheckpoint(delegatedStartAt), replayOrigin, null);
+        return new PositionReplayStart(replayOrigin, captureLiveResumeCheckpoint(liveStart, delegatedStartAt), replayOrigin, null);
     }
 
     /**
@@ -1969,29 +1973,95 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * history as it would without this model. A replay that was stopped,
      * cancelled or taken over is not asked about, and its start is returned as it is for the handover to deal with.
      * <p>
+     * Each run of {@code replay} reads through one {@link ReplayScope} that {@code scopes} opens for it. The scope gives
+     * the live start, which the event store reads in the session that then makes every read of the replay, and it is
+     * closed when that run ends, whether it completes, fails or is cancelled. A replay that runs again opens a new
+     * scope. {@code notBefore} is the live start stored for the subscription, if there is one, and the scope never
+     * reads a live start from before it.
+     * <p>
      * A {@link CatchupListener} is told the catch-up started again before each replay run again, since what that
      * replay delivers is history read again and not events written since the catch-up started. Only meaningful on the
      * virtual thread {@link #startCatchupAsync} started for this attempt.
      */
-    protected <S extends ReplayStart<S>> S replayUntilLiveStartHolds(String subscriptionId, S first, @Nullable StartAt delegatedStartAt, Consumer<S> replay) {
+    protected <S extends ReplayStart<S>, R> S replayUntilLiveStartHolds(String subscriptionId, ReplayScopes<R> scopes, @Nullable String notBefore, Function<@Nullable String, S> firstStart,
+                                                                         @Nullable StartAt delegatedStartAt, BiConsumer<S, R> replay) {
         ReplayState state = CURRENT_ATTEMPT.get().replay;
         // Counted on from the replays before a takeover, and from zero by an attempt that runs again after a failure
         int replaysAgain = state.replaysAgainBefore;
         state.replaysAgainBefore = 0;
-        if (replaysAgain > MAX_REPLAYS_AGAIN) {
-            throw liveStartLostEachTime(subscriptionId, replaysAgain, first.liveFrom());
+        S replayed;
+        // One scope for the live start and every read of one replay, closed when it ends, however it ends
+        try (ReplayScope<R> scope = scopes.open(notBefore)) {
+            replayed = firstStart.apply(scope.liveStart());
+            if (replaysAgain > MAX_REPLAYS_AGAIN) {
+                throw liveStartLostEachTime(subscriptionId, replaysAgain, replayed.liveFrom());
+            }
+            replay.accept(replayed, scope.reads());
         }
-        S replayed = first;
-        replay.accept(replayed);
         for (; ; replaysAgain++) {
-            S again = replayAgainIfLiveStartLost(subscriptionId, replayed, delegatedStartAt, replaysAgain);
+            S again = replayAgainIfLiveStartLost(subscriptionId, replayed, delegatedStartAt, replaysAgain, scopes, replay);
             if (again == null) {
                 state.replaysAgain = replaysAgain;
                 return replayed;
             }
             replayed = again;
-            replay.accept(replayed);
         }
+    }
+
+    /**
+     * Returns {@code store} as the {@code spi} a catch-up reads through. A catch-up reads its live start and every
+     * replay read in one session of the event store, so it can't read through a store that doesn't implement the SPI,
+     * such as a decorator around one.
+     *
+     * @throws IllegalArgumentException if {@code store} doesn't implement {@code spi}
+     */
+    protected static <T> T requireCatchupReads(Object store, Class<T> spi) {
+        if (!spi.isInstance(store)) {
+            throw new IllegalArgumentException("Cannot run a catch-up subscription over " + store.getClass().getName() + ", because it does not implement " + spi.getSimpleName() + " (" + spi.getName()
+                    + "). A catch-up reads its live start and every replay read from the event store in one session, which only a store that implements it can do. Hand the catch-up the event store itself and decorate around the subscription instead.");
+        }
+        return spi.cast(store);
+    }
+
+    /**
+     * Opens the {@link ReplayScope} of one replay, with the live start the event store reports and the reads that see
+     * everything up to it.
+     */
+    @FunctionalInterface
+    protected interface ReplayScopes<R> {
+        /**
+         * @param notBefore The live start an earlier attempt stored, which the reads must see everything up to, or null
+         */
+        ReplayScope<R> open(@Nullable String notBefore);
+    }
+
+    /**
+     * The reads of one replay and the live start they are consistent with. Closing it releases what the event store
+     * holds for the replay.
+     *
+     * @param reads     What the replay reads through
+     * @param liveStart The live start the event store reports for the replay, or null when it reports none
+     * @param closer    Ends the scope
+     */
+    protected record ReplayScope<R>(R reads, @Nullable String liveStart, Runnable closer) implements AutoCloseable {
+        @Override
+        public void close() {
+            closer.run();
+        }
+    }
+
+    /**
+     * The live start stored in a position checkpoint by an earlier attempt, or null when it has none
+     */
+    protected static @Nullable String storedPositionLiveStart(Checkpoint start) {
+        return GlobalCheckpoint.parse(start).liveFrom().map(Checkpoint::asString).orElse(null);
+    }
+
+    /**
+     * The live start stored in a time checkpoint by an earlier attempt, or null when it has none
+     */
+    protected static @Nullable String storedTimeLiveStart(Checkpoint start) {
+        return CatchupTimeCheckpoint.isCatchupTimeCheckpoint(start) ? CatchupTimeCheckpoint.parse(start).liveFrom().asString() : null;
     }
 
     private static IllegalStateException liveStartLostEachTime(String subscriptionId, int replays, @Nullable Checkpoint lastLiveStart) {
@@ -2001,7 +2071,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     // Null when the wrapped model can still resume from the live start, or when this attempt should no longer replay
-    private <S extends ReplayStart<S>> @Nullable S replayAgainIfLiveStartLost(String subscriptionId, S replayed, @Nullable StartAt delegatedStartAt, int replaysAgain) {
+    private <S extends ReplayStart<S>, R> @Nullable S replayAgainIfLiveStartLost(String subscriptionId, S replayed, @Nullable StartAt delegatedStartAt, int replaysAgain,
+                                                                                  ReplayScopes<R> scopes, BiConsumer<S, R> replay) {
         Checkpoint liveFrom = replayed.liveFrom();
         if (liveFrom == null || !shouldKeepReplaying(subscriptionId) || subscriptionModel.canResumeFrom(liveFrom)) {
             return null;
@@ -2011,21 +2082,25 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
         log.warn("The live start of catch-up subscription {} left the subscription model's history during the replay, so the catch-up replays again from {} and redelivers the events in between. Live start: {}",
                 subscriptionId, replayed.describeOrigin(), liveFrom.asString());
-        S again = replayed.fromOrigin(captureLiveResumeCheckpoint(delegatedStartAt));
-        // Told only while this attempt still owns the id, as on registration, so an attempt that lost the id cannot
-        // reset what its replacement told the listener. One the listener fails is held, and hands nothing over, as a
-        // stopped one does.
-        CatchupAttempt attempt = CURRENT_ATTEMPT.get();
-        try (HandoverLock ignored = lockHandover(subscriptionId)) {
-            if (currentAttempt.get(subscriptionId) != attempt) {
-                return null;
+        // The new scope reads the live start this replay goes live from, and every read of the replay
+        try (ReplayScope<R> scope = scopes.open(null)) {
+            S again = replayed.fromOrigin(captureLiveResumeCheckpoint(scope.liveStart(), delegatedStartAt));
+            // Told only while this attempt still owns the id, as on registration, so an attempt that lost the id cannot
+            // reset what its replacement told the listener. One the listener fails is held, and hands nothing over, as a
+            // stopped one does.
+            CatchupAttempt attempt = CURRENT_ATTEMPT.get();
+            try (HandoverLock ignored = lockHandover(subscriptionId)) {
+                if (currentAttempt.get(subscriptionId) != attempt) {
+                    return null;
+                }
+                if (!tellCatchupStarted(subscriptionId, attempt)) {
+                    hold(subscriptionId, attempt);
+                    return null;
+                }
             }
-            if (!tellCatchupStarted(subscriptionId, attempt)) {
-                hold(subscriptionId, attempt);
-                return null;
-            }
+            replay.accept(again, scope.reads());
+            return again;
         }
-        return again;
     }
 
     /**

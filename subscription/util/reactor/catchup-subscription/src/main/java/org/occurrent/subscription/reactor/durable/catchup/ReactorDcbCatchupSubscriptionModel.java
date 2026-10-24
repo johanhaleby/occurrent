@@ -24,6 +24,8 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
@@ -96,6 +98,9 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     final NamedCatchupSupport namedSubscriptions;
     private final DcbEventStore dcbEventStore;
+    // The same object as dcbEventStore. A catch-up reads its live start and every replay read through the scope it opens
+    // for each attempt, so the store has to implement the SPI, which a decorator around the store doesn't.
+    private final DcbCatchupReads dcbCatchupReads;
     private final @Nullable DcbCriteria defaultCriteria;
     private final long windowSize;
     private final int handoverCacheSize;
@@ -138,6 +143,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         this.subscriptionModelContextType = requireNonNull(subscriptionModelContextType, "subscriptionModelContextType cannot be null");
         this.namedSubscriptions = new NamedCatchupSupport(subscriptionModel, subscriptionModelContextType);
         this.dcbEventStore = requireNonNull(dcbEventStore, DcbEventStore.class.getSimpleName() + " cannot be null");
+        this.dcbCatchupReads = CatchupScopes.requireCatchupReads(dcbEventStore, DcbCatchupReads.class);
         this.defaultCriteria = defaultCriteria;
         if (windowSize <= 0) {
             throw new IllegalArgumentException("Window size must be greater than zero");
@@ -205,8 +211,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
             return namedSubscriptions.subscribeStraightToLive(subscriptionId, liveFilter, livePredicate, resolved == null ? startAt : resolved, action);
         }
         GlobalCheckpoint start = GlobalCheckpoint.parse(position.checkpoint);
-        CatchupReader reader = new DcbCatchupReader(dcbEventStore, criteria);
-        return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, reader, windowSize, handoverCacheSize, start, action);
+        return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, scopes(criteria), windowSize, handoverCacheSize, start, action);
     }
 
     // --- The life cycle forwards to the wrapped model, with bookkeeping for subscriptions still replaying.
@@ -310,18 +315,22 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
                     .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria));
         }
 
-        CatchupReader reader = new DcbCatchupReader(dcbEventStore, criteria);
-        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(scopes(criteria), windowSize, handoverCacheSize);
         Predicate<CloudEvent> livePredicate = cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria);
         return pipeline.catchup(subscriptionModel, DcbSubscriptionFilter.filter(criteria), livePredicate, position.checkpoint);
     }
 
-    // Reads DCB events in position order through the DcbEventStore, wrapping each with its position so a durable
-    // model layered on top can persist replay progress.
-    private record DcbCatchupReader(DcbEventStore dcbEventStore, DcbCriteria criteria) implements CatchupReader {
+    // Opens the scope of one replay attempt, which reads DCB events in position order
+    private CatchupScopes scopes(DcbCriteria criteria) {
+        return notBefore -> dcbCatchupReads.openDcbCatchupReadScope(notBefore).map(scope -> new DcbCatchupScope(scope, criteria));
+    }
+
+    // Reads DCB events in position order through the scope, wrapping each with its position so a durable model layered
+    // on top can persist replay progress.
+    private record DcbCatchupScope(DcbCatchupReadScope scope, DcbCriteria criteria) implements CatchupScope {
         @Override
         public Flux<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
-            return dcbEventStore.read(criteria, DcbReadOptions.between(fromExclusive, toInclusive))
+            return scope.read(criteria, DcbReadOptions.between(fromExclusive, toInclusive))
                     .flatMapMany(stream -> Flux.fromIterable(stream.events())
                             .map(event -> (CloudEvent) new CheckpointAwareCloudEvent(event, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(event)))));
         }
@@ -329,7 +338,17 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         @Override
         public Mono<Long> currentHead() {
             // lastSequencePosition is the global head at read time regardless of whether the criteria matched anything.
-            return dcbEventStore.read(criteria, DcbReadOptions.between(0, 0)).map(stream -> stream.lastSequencePosition());
+            return scope.read(criteria, DcbReadOptions.between(0, 0)).map(stream -> stream.lastSequencePosition());
+        }
+
+        @Override
+        public @Nullable String liveStart() {
+            return scope.liveStart();
+        }
+
+        @Override
+        public Mono<Void> close() {
+            return scope.close();
         }
     }
 }
