@@ -713,22 +713,24 @@ The setting stays, so an operator can turn resuming from versions off. With it o
   javadoc of both says so.
 - The store logs one warning at start that names the setting.
 
-An upgrade from 0.34 needs no manual step, provided no 0.34 `updateEvent` ever runs on an event a 0.35 node wrote. That
-covers the rolling overlap, a rollback to 0.34 followed by a re-upgrade, and a 0.34 tool that shares the event
-collection. Nothing has to be switched during the upgrade. The migration guide explains the detection and the setting,
-and the changelog names the setting and its default. Events written before the upgrade have no `mv` and are reached only
-by a full read, and every 0.35 snapshot starts from one, because 0.34 DCB snapshots are invalid.
+An upgrade from 0.34 needs no manual step, provided nothing replaces the document of an event a 0.35 node wrote. That
+rules out a 0.34 `updateEvent`, a 0.34 tool and any other code that replaces event documents, during the rolling
+overlap, after a rollback to 0.34 followed by a re-upgrade, and from a tool that shares the event collection. Nothing
+has to be switched during the upgrade. The migration guide explains the detection and the setting, and the changelog
+names the setting and its default. Events written before the upgrade have no `mv` and are reached only by a full read,
+and every 0.35 snapshot starts from one, because 0.34 DCB snapshots are invalid.
 
 If a 0.34 `updateEvent` does run on such an event, 0.34.0 reads `mv` as a string extension through
 `DocumentCloudEventReader` (`DocumentCloudEventReader.java:68-83` at 0.34.0) and, when the update function changed the
 event, writes it back as a string. A function that builds a fresh event drops `mv` instead, with the same consequence.
-No marker changes, so u doesn't move, and nothing moves it afterwards. The miss is permanent until something forces a
-full read of that boundary, such as a prune or another increment without `mv`. A snapshot decider or `@Snapshot` view
-whose saved versions are below the event's never applies it. And the decider's token counts the event's marker
-increment, so its next append passes its condition without the event. That's a lost update, not only an event missing
-from the state. Full reads, subscriptions and catch-ups select by tags, type and position, never by `mv`, so they still
-return the event. I chose a documented precondition over a repair step, and the migration guide states the precondition
-and what happens when it isn't met.
+Any other code that replaces the document drops `mv` or turns it into a string the same way. No marker changes, so u
+doesn't move, and nothing moves it afterwards. The miss is permanent until something forces a full read of that
+boundary, such as a prune or another increment without `mv`. A snapshot decider or `@Snapshot` view whose saved versions
+are below the event's never applies it. And the decider's token counts the event's marker increment, so its next append
+passes its condition without the event. That's a lost update, not only an event missing from the state. Full reads,
+subscriptions and catch-ups select by tags, type and position, never by `mv`, so they still return the event. I chose a
+documented precondition over a repair step, and the migration guide states the precondition and what happens when it
+isn't met.
 
 ### Why a late append can't be missed
 
@@ -907,14 +909,15 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
   0.34, moves u, the count of increments without `mv`, and the snapshots it affects are rebuilt from a full read. With
   the setting off, every decision reads its boundary's full history, no DCB snapshot is saved, a direct `afterVersions`
   or `fromVersions` call returns `DcbSnapshotInvalid`, and the store names the setting in a warning at start.
-- An upgrade from 0.34 needs no manual step, provided no 0.34 `updateEvent` ever runs on an event a 0.35 node wrote,
-  whether during the rolling overlap, after a rollback to 0.34 and a re-upgrade, or from a 0.34 tool that shares the
-  event collection. Such an event drops out of every read that resumes after saved versions, and nothing moves u, so the
-  miss is permanent until something forces a full read of that boundary. The decider's token counts the event's marker
-  increment, so its next append passes its condition without the event, which is a lost update. An update function that
-  builds a fresh event drops `mv` with the same consequence. Full reads, subscriptions and catch-ups select by tags,
-  type and position, never by `mv`, so they still return the event. The migration guide states the precondition and
-  explains the detection and the setting, and the changelog names the setting and its default.
+- An upgrade from 0.34 needs no manual step, provided nothing replaces the document of an event a 0.35 node wrote, be it
+  a 0.34 `updateEvent`, a 0.34 tool or any other document replacement, whether during the rolling overlap, after a
+  rollback to 0.34 and a re-upgrade, or from a tool that shares the event collection. Such an event drops out of every
+  read that resumes after saved versions, and nothing moves u, so the miss is permanent until something forces a full
+  read of that boundary. The decider's token counts the event's marker increment, so its next append passes its
+  condition without the event, which is a lost update. An update function that builds a fresh event drops `mv` with the
+  same consequence. Full reads, subscriptions and catch-ups select by tags, type and position, never by `mv`, so they
+  still return the event. The migration guide states the precondition and explains the detection and the setting, and
+  the changelog names the setting and its default.
 - The first command on a boundary that existed before the upgrade reads in full and saves nothing, because its markers
   have no epoch yet. Its append gives them one, and the next command can save.
 - A decider inside a transaction the caller owns never saves a snapshot. Saving after that transaction commits isn't in
