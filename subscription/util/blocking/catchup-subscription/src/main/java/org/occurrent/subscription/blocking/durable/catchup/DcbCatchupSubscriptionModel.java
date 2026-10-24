@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
 import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -37,6 +38,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 import org.occurrent.subscription.internal.BoundedIdCache;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.util.Objects;
@@ -124,7 +126,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
         // A non-DCB position means the catch-up already handed over and the live subscription stored a change-stream
         // token (or the caller asked to start live directly). Subscribe live, still applying the DCB query post-filter.
-        if (!isDcbCatchupPosition(firstStartAt)) {
+        if (!isDcbCatchupPosition(subscriptionId, firstStartAt)) {
             return subscribeLiveWithoutCatchup(subscriptionId, filter, firstStartAt, action, holdPaused);
         }
 
@@ -138,7 +140,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     @Override
     @Nullable CatchupReplay replayToResume(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, Checkpoint stored) {
         StartAt storedStartAt = StartAt.checkpoint(stored);
-        if (!isDcbCatchupPosition(storedStartAt)) {
+        if (!isDcbCatchupPosition(subscriptionId, storedStartAt)) {
             return null;
         }
         return lastStored -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, lastStored == null ? storedStartAt : StartAt.checkpoint(lastStored));
@@ -184,8 +186,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // after the reconciliation loop stabilises is newer than the live resume position and arrives live.
         BoundedIdCache<CatchupEventKey> catchupPhaseCache = new BoundedIdCache<>(config.cacheSize);
         Predicate<CloudEvent> persistDuringCatchup = persistDuringCatchupForOneAttempt();
-        PositionReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, this::openScope, storedPositionLiveStart(checkpoint),
-                liveStart -> positionReplayStart(subscriptionId, checkpoint, liveStart, delegatedStartAt), delegatedStartAt,
+        PositionReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, this::openScope, storedLiveStart(checkpoint),
+                liveStart -> positionReplayStart(subscriptionId, checkpoint, liveStart, delegatedStartAt),
                 (start, scope) -> {
                     // Reads the head and every window through the scope of this attempt
                     PositionCatchupPipeline.Reader dcbReader = new PositionCatchupPipeline.Reader() {
@@ -293,10 +295,15 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
     // firstStartAt is already resolved (non-dynamic) by the time this runs, so the context class used to call get()
     // again is a no-op; generateSubscriptionModelContext() is used anyway for consistency with the other call sites.
-    private boolean isDcbCatchupPosition(StartAt startAt) {
+    private boolean isDcbCatchupPosition(String subscriptionId, StartAt startAt) {
         StartAt start = startAt.get(generateSubscriptionModelContext());
         if (!(start instanceof StartAtCheckpoint position)) {
             return false;
+        }
+        // Before the position test, since the marked form of a time replay starts with the position prefix
+        if (CatchupCheckpoints.isMarkedTime(position.checkpoint)) {
+            throw new CatchupCannotResumeException("Cannot run DCB catch-up subscription " + subscriptionId + " from checkpoint \"" + position.checkpoint.asString()
+                    + "\", because a catch-up that replays by time stored it, and a DCB catch-up replays only by position.");
         }
         return GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
     }
