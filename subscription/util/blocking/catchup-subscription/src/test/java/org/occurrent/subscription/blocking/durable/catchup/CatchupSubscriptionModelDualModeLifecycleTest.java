@@ -23,7 +23,11 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.api.dcb.*;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
@@ -223,7 +227,12 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
     }
 
     // Never actually read from since these tests only exercise cancelSubscription/shutdown, not subscribe.
-    private static final class UnusedEventStoreQueries implements EventStoreQueries {
+    private static final class UnusedEventStoreQueries implements EventStoreQueries, CatchupReads {
+        @Override
+        public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+            return TimeOrderedCatchupReads.over(this).openCatchupReadScope(notBefore);
+        }
+
         @Override
         public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
             throw new AssertionError("query must not be called by this test");
@@ -241,7 +250,12 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
     }
 
     // Never actually read from since these tests only exercise cancelSubscription/shutdown, not subscribe.
-    private static final class UnusedDcbEventStore implements DcbEventStore {
+    private static final class UnusedDcbEventStore implements DcbEventStore, DcbCatchupReads {
+        @Override
+        public DcbCatchupReadScope openDcbCatchupReadScope(@Nullable String notBefore) {
+            return DcbCatchupReads.unscoped(this).openDcbCatchupReadScope(notBefore);
+        }
+
         @Override
         public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
             throw new AssertionError("read must not be called by this test");

@@ -623,7 +623,7 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
     }
 
     // Three events at positions 1 to 3. Every read waits until release(), and a read started after that returns at once.
-    private static final class GatedReader implements PositionOrderedReader {
+    private static final class GatedReader implements UnscopedPositionOrderedReader {
         private final Sinks.Empty<Void> released = Sinks.empty();
 
         void release() {

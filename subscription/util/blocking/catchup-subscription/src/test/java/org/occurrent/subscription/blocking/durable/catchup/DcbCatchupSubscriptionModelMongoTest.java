@@ -29,6 +29,9 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
+import org.jspecify.annotations.Nullable;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
@@ -257,7 +260,7 @@ class DcbCatchupSubscriptionModelMongoTest {
      * signals, after the read has captured its snapshot. Holding the replay open lets the test commit an in-flight,
      * below-head event mid-replay and exercise the catch-up to live handover deterministically.
      */
-    private static final class BlockingOnFirstWindowRead implements DcbEventStore {
+    private static final class BlockingOnFirstWindowRead implements DcbEventStore, DcbCatchupReads {
         private final DcbEventStore delegate;
         private final CountDownLatch bulkReadReached;
         private final CountDownLatch proceed;
@@ -271,7 +274,32 @@ class DcbCatchupSubscriptionModelMongoTest {
 
         @Override
         public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
-            DcbEventStream result = delegate.read(criteria, options);
+            return blockAfterTheFirstWindowRead(options, delegate.read(criteria, options));
+        }
+
+        // The reads of the catch-up go through the scope the delegate opens, so the first window read of the scope blocks
+        @Override
+        public DcbCatchupReadScope openDcbCatchupReadScope(@Nullable String notBefore) {
+            DcbCatchupReadScope scope = ((DcbCatchupReads) delegate).openDcbCatchupReadScope(notBefore);
+            return new DcbCatchupReadScope() {
+                @Override
+                public @Nullable String liveStart() {
+                    return scope.liveStart();
+                }
+
+                @Override
+                public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+                    return blockAfterTheFirstWindowRead(options, scope.read(criteria, options));
+                }
+
+                @Override
+                public void close() {
+                    scope.close();
+                }
+            };
+        }
+
+        private DcbEventStream blockAfterTheFirstWindowRead(DcbReadOptions options, DcbEventStream result) {
             boolean windowRead = options.afterPosition().isPresent() && options.upToPosition().isPresent()
                     && options.afterPosition().getAsLong() != options.upToPosition().getAsLong();
             if (windowRead && blockedOnce.compareAndSet(false, true)) {
