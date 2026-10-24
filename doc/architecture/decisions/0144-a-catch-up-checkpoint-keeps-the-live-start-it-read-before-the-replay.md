@@ -11,7 +11,10 @@ MongoDB checkpoint storages and subscription models they run on. Also part of
 [#1218](https://github.com/johanhaleby/occurrent/issues/1218), which applies it to the time-based catch-up in the
 blocking `StreamCatchupSubscriptionModel`. For that catch-up it reverses the choice in
 [ADR 14](0014-reconcile-catchup-events-by-insertion-order-to-avoid-loss-under-clock-skew.md) to read the live start after
-the replay.
+the replay. Amended by
+[ADR 155](0155-a-catch-up-reads-its-live-start-from-the-event-store-and-refuses-to-resume-where-it-could-skip-an-event.md),
+which reads the live start from the event store in both modes and refuses to resume from a position or a time stored
+without a live start, or from an origin above the beginning once its live start is lost.
 
 ## Context
 
