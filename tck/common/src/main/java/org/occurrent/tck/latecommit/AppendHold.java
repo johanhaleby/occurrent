@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.tck.eventstore.blocking;
+package org.occurrent.tck.latecommit;
 
 import org.jspecify.annotations.NullMarked;
 

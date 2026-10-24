@@ -28,6 +28,9 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.filter.Filter;
+import org.occurrent.tck.latecommit.LateAppend;
+import org.occurrent.tck.latecommit.LateCommitGuarantee;
+import org.occurrent.tck.latecommit.LateCommits;
 
 import java.util.LinkedHashSet;
 import java.util.List;

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.tck.eventstore.blocking;
+package org.occurrent.tck.latecommit;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -24,7 +24,8 @@ import java.util.function.Supplier;
 import static java.util.Objects.requireNonNull;
 
 /**
- * How a store answers the late-commit suites. A store has one of two answers, and the suites run for real either way.
+ * How a store answers the late-commit suites, the event-store ones and the subscription restart suite alike. A store has
+ * one of two answers, and the suites run for real either way.
  * <ul>
  *     <li><strong>It can hold an append between assigning its position and committing it</strong>, which is how a store
  *     that reserves a position before its transaction commits lets a lower position commit after a higher one. The
@@ -34,8 +35,8 @@ import static java.util.Objects.requireNonNull;
  *     one atomic write, so a lower position can never become visible after a higher one. The suite then has nothing to
  *     hold and checks the declaration instead, by requiring the append to be visible as soon as it has returned.</li>
  * </ul>
- * A fixture that gives neither answer fails the suite before its first assertion, because
- * {@link EventStoreFixture#lateCommits()} has no default.
+ * A fixture that gives neither answer fails the suite before its first assertion, because the {@code lateCommits()}
+ * accessor on each fixture interface has no usable default.
  */
 @NullMarked
 public final class LateCommits {

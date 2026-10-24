@@ -18,6 +18,7 @@ package org.occurrent.tck.eventstore.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.junit.jupiter.api.BeforeEach;
+import org.occurrent.tck.latecommit.LateCommits;
 
 /**
  * What {@link DcbLateCommitConformance} and {@link StreamLateCommitConformance} share. It touches
