@@ -26,7 +26,9 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
 import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStateStoreQueries;
@@ -92,6 +94,15 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String CURRENT_STEP = "currentStep";
     private static final String STREAM_WATERMARKS = "streamWatermarks";
     private static final String POSITION_WATERMARK = "positionWatermark";
+    // The versions applied per stream and event type, as a list of sub-documents rather than a map keyed by stream id and
+    // event type. Both are free text that can hold dots, which a field name should not.
+    private static final String STREAM_MARKS = "streamMarks";
+    private static final String MARKS_STREAM_ID = "streamId";
+    private static final String MARKS_FLOOR = "floor";
+    private static final String MARKS_TYPES = "types";
+    private static final String MARKS_TYPE = "type";
+    private static final String MARKS_MARK = "mark";
+    private static final String MARKS_APPLIED = "applied";
     private static final String CREATED_AT = "createdAt";
     private static final String UPDATED_AT = "updatedAt";
     private static final String COMPLETED_AT = "completedAt";
@@ -111,7 +122,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // envelope whose state is being ignored would move the step away from the state it describes, and a later projected
     // read would report a step the stored state was never in.
     private static final List<String> EVERY_FIELD_EXCEPT_THE_STATE = List.of(STATUS, VERSION, TIMERS,
-            NEXT_TIMER_FIRES_AT, STREAM_WATERMARKS, POSITION_WATERMARK, CREATED_AT, UPDATED_AT,
+            NEXT_TIMER_FIRES_AT, STREAM_WATERMARKS, POSITION_WATERMARK, STREAM_MARKS, CREATED_AT, UPDATED_AT,
             COMPLETED_AT, STARTED, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE,
             FAILURE_MESSAGE);
 
@@ -311,7 +322,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // compares the failing input against them to recognise an input the instance has already handled, and the
         // record it writes carries them over untouched, so projecting them away would quarantine the instance and
         // drop them at the same time.
-        query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK);
+        query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK).include(STREAM_MARKS);
         Supplier<@Nullable Document> read = () -> mongoOperations.findOne(query, Document.class, collectionName);
         return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
@@ -426,6 +437,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         document.append(STREAM_WATERMARKS, new Document(new LinkedHashMap<>(envelope.streamWatermarks())));
         if (envelope.positionWatermark() != null) {
             document.append(POSITION_WATERMARK, envelope.positionWatermark());
+        }
+        if (!envelope.streamMarks().isEmpty()) {
+            document.append(STREAM_MARKS, toMarksDocuments(envelope.streamMarks()));
         }
         appendInstant(document, CREATED_AT, envelope.createdAt());
         appendInstant(document, UPDATED_AT, envelope.updatedAt());
@@ -569,7 +583,37 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // currentStep is only honoured when the state was projected away; with a state present the envelope re-derives it.
         return new SagaEnvelope<>(sagaId, state, status, version, timers, streamWatermarks, positionWatermark,
                 readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT),
-                document.getString(CURRENT_STEP), started, toFailure(document));
+                document.getString(CURRENT_STEP), started, toFailure(document), toStreamMarks(document));
+    }
+
+    private static List<Document> toMarksDocuments(Map<String, StreamMarks> streamMarks) {
+        List<Document> streams = new ArrayList<>();
+        streamMarks.forEach((streamId, marks) -> {
+            List<Document> types = new ArrayList<>();
+            marks.byType().forEach((type, typeMark) -> types.add(new Document(MARKS_TYPE, type)
+                    .append(MARKS_MARK, typeMark.mark())
+                    .append(MARKS_APPLIED, typeMark.applied())));
+            streams.add(new Document(MARKS_STREAM_ID, streamId).append(MARKS_FLOOR, marks.floor()).append(MARKS_TYPES, types));
+        });
+        return streams;
+    }
+
+    // A document written before 0.35.0 has no marks, which reads as every event type of a stream being applied up to the
+    // stream's watermark.
+    private static Map<String, StreamMarks> toStreamMarks(Document document) {
+        Map<String, StreamMarks> streamMarks = new LinkedHashMap<>();
+        for (Document stream : document.getList(STREAM_MARKS, Document.class, List.of())) {
+            Map<String, TypeMark> byType = new LinkedHashMap<>();
+            for (Document type : stream.getList(MARKS_TYPES, Document.class, List.of())) {
+                List<Long> applied = new ArrayList<>();
+                for (Object version : type.getList(MARKS_APPLIED, Object.class, List.of())) {
+                    applied.add(((Number) version).longValue());
+                }
+                byType.put(type.getString(MARKS_TYPE), new TypeMark(((Number) type.get(MARKS_MARK)).longValue(), applied));
+            }
+            streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType));
+        }
+        return streamMarks;
     }
 
     private static @Nullable SagaFailure toFailure(Document document) {
