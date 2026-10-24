@@ -4,7 +4,9 @@ Date: 2026-06-22
 
 ## Status
 
-Accepted
+Accepted. Amended by [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) on pruning. A pruned marker is
+recreated with a new epoch, so pruning also invalidates every DCB snapshot on that boundary. The read refuses such a
+snapshot, and it's rebuilt from a full read on its next use.
 
 Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md). For a criteria item with at least one tag, the query reads and increments only its `tag:`
 markers and no longer its `type:` markers, so an append that only shares a type with criteria that have tags no longer

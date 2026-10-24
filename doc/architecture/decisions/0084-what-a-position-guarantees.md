@@ -6,6 +6,8 @@ Date: 2026-07-31
 
 Accepted. Adds the position conformance suites to the TCK ([ADR 77](0077-a-published-tck-for-occurrent-contracts.md))
 and settles a contract that three shipped test files contradicted. Resolves #485 and #486.
+Extended by [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md), which records that a position is not a
+snapshot version either. A DCB snapshot resumes from the marker versions of its boundary instead.
 
 ## Context
 
