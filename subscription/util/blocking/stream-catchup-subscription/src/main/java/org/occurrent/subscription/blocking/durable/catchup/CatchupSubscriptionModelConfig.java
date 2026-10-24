@@ -131,6 +131,12 @@ public class CatchupSubscriptionModelConfig {
      * with <code>SortBy.ascending(TIME, "_id")</code>. This means that MongoDB can efficiently both search for the correct type and then perform a sort based on time,
      * but use "insertion order" if time is the same for two or more events. If you don't supply a filter, then you can instead create the index <code>{time : 1, _id : 1}</code>.
      * </p>
+     * <p>
+     * A catch-up from a time that stores its position during the catch-up phase stores a time below which it has delivered every
+     * event. With a {@code sortBy} that sorts by time ascending first, as the default does, that is the time of the event it
+     * delivered. With any other {@code sortBy} it stores the time it started from until it has read through the history, so a
+     * restart in the middle of that read replays from where it started and delivers what it already delivered again.
+     * </p>
      *
      * @param sortBy The {@link SortBy} instance to use during catchup phase. Default is <code>SortBy.ascending(TIME, STREAM_VERSION)</code>.
      * @return A new instance of {@link CatchupSubscriptionModel}.

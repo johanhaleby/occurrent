@@ -32,6 +32,7 @@ import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -176,8 +177,9 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     private static boolean startsAtExplicitDcbPosition(StartAt startAt) {
         StartAt resolved = startAt.get(new StartAt.SubscriptionModelContext(ReactorCatchupSubscriptionModel.class));
+        // The marked form of a time replay starts with the position prefix, and goes to the stream model, which refuses it
         return resolved instanceof StartAtCheckpoint position
-                && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
+                && !CatchupCheckpoints.isMarkedTime(position.checkpoint) && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
     }
 
     @Override
