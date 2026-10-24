@@ -103,6 +103,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String MARKS_TYPE = "type";
     private static final String MARKS_MARK = "mark";
     private static final String MARKS_APPLIED = "applied";
+    private static final String MARKS_HORIZON = "horizon";
     private static final String CREATED_AT = "createdAt";
     private static final String UPDATED_AT = "updatedAt";
     private static final String COMPLETED_AT = "completedAt";
@@ -592,7 +593,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             List<Document> types = new ArrayList<>();
             marks.byType().forEach((type, typeMark) -> types.add(new Document(MARKS_TYPE, type)
                     .append(MARKS_MARK, typeMark.mark())
-                    .append(MARKS_APPLIED, typeMark.applied())));
+                    .append(MARKS_APPLIED, typeMark.applied())
+                    .append(MARKS_HORIZON, typeMark.horizon())));
             streams.add(new Document(MARKS_STREAM_ID, streamId).append(MARKS_FLOOR, marks.floor()).append(MARKS_TYPES, types));
         });
         return streams;
@@ -609,7 +611,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 for (Object version : type.getList(MARKS_APPLIED, Object.class, List.of())) {
                     applied.add(((Number) version).longValue());
                 }
-                byType.put(type.getString(MARKS_TYPE), new TypeMark(((Number) type.get(MARKS_MARK)).longValue(), applied));
+                Object horizon = type.get(MARKS_HORIZON);
+                byType.put(type.getString(MARKS_TYPE), new TypeMark(((Number) type.get(MARKS_MARK)).longValue(), applied,
+                        horizon == null ? Long.MIN_VALUE : ((Number) horizon).longValue()));
             }
             streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType));
         }

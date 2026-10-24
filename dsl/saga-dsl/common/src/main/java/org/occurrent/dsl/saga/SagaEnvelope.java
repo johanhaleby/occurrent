@@ -142,8 +142,11 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      * @param mark    the highest version applied
      * @param applied the versions below {@code mark} that were applied, ascending. A version below {@code mark} that is
      *                not in here and not too far behind it was never applied, so it is applied when it arrives
+     * @param horizon the highest version this mark has stopped remembering, under the reorder window in force when it was
+     *                recorded. A version at or below it is skipped even if a larger window is configured later, since
+     *                the versions between the two windows are no longer in {@code applied}
      */
-    public record TypeMark(long mark, List<Long> applied) {
+    public record TypeMark(long mark, List<Long> applied, long horizon) {
         public TypeMark {
             applied = List.copyOf(applied);
         }

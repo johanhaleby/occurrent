@@ -515,7 +515,8 @@ public final class SagaExecutionSupport {
         if (version == typeMark.mark() || typeMark.applied().contains(version)) {
             return Delivery.REDELIVERY;
         }
-        return version <= typeMark.mark() - reorderWindow ? Delivery.BEHIND_WINDOW : Delivery.NEW;
+        // The horizon outlasts a window that is raised later, because the versions it forgot are not in applied any more.
+        return version <= Math.max(typeMark.horizon(), typeMark.mark() - reorderWindow) ? Delivery.BEHIND_WINDOW : Delivery.NEW;
     }
 
     // Everything at or below the floor was applied before versions were recorded per type. A stream the instance has
@@ -550,8 +551,9 @@ public final class SagaExecutionSupport {
             mark = previous.mark();
         }
         // Past the window a version is skipped, so remembering it would only grow the state.
-        applied.removeIf(earlier -> earlier <= mark - reorderWindow);
-        byType.put(typeKey(meta), new TypeMark(mark, List.copyOf(applied)));
+        long horizon = Math.max(previous == null ? Long.MIN_VALUE : previous.horizon(), mark - reorderWindow);
+        applied.removeIf(earlier -> earlier <= horizon);
+        byType.put(typeKey(meta), new TypeMark(mark, List.copyOf(applied), horizon));
         return new StreamMarks(floor, byType);
     }
 

@@ -640,8 +640,8 @@ class SagaExecutionSupportTest {
         /** Stream s1 has a floor of 10 and a watermark of 30. Type A is at 30 with 27 and 28 applied, type B is at 20 with nothing below it. */
         private SagaEnvelope<OrderState> marked() {
             return envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(10, Map.of(
-                    TYPE_A, new TypeMark(30, List.of(27L, 28L)),
-                    TYPE_B, new TypeMark(20, List.of())))));
+                    TYPE_A, new TypeMark(30, List.of(27L, 28L), 26),
+                    TYPE_B, new TypeMark(20, List.of(), 16)))));
         }
 
         private SagaEnvelope<OrderState> envelope(Map<String, Long> streamWatermarks, Map<String, StreamMarks> streamMarks) {
@@ -763,7 +763,7 @@ class SagaExecutionSupportTest {
             void the_window_decides_how_far_behind_a_late_arrival_may_be() {
                 // Given
                 SagaEnvelope<OrderState> current = envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0,
-                        Map.of(TYPE_A, new TypeMark(30, List.of())))));
+                        Map.of(TYPE_A, new TypeMark(30, List.of(), Long.MIN_VALUE)))));
 
                 // When
                 List<Delivery> deliveries = List.of(
@@ -783,8 +783,8 @@ class SagaExecutionSupportTest {
 
             private SagaEnvelope<OrderState> withTheUntypedMark() {
                 return envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0, Map.of(
-                        "", new TypeMark(30, List.of(28L)),
-                        TYPE_A, new TypeMark(5, List.of())))));
+                        "", new TypeMark(30, List.of(28L), 26),
+                        TYPE_A, new TypeMark(5, List.of(), 1)))));
             }
 
             @Test
@@ -818,7 +818,7 @@ class SagaExecutionSupportTest {
             void is_not_covered_by_the_marks_of_a_named_type() {
                 // Given an instance that has only folded events of a named type
                 SagaEnvelope<OrderState> current = envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0, Map.of(
-                        TYPE_A, new TypeMark(30, List.of())))));
+                        TYPE_A, new TypeMark(30, List.of(), 26)))));
 
                 // When
                 Delivery delivery = SagaExecutionSupport.classify(current, new EventMeta(STREAM, 20L, null), WINDOW);
@@ -883,7 +883,7 @@ class SagaExecutionSupportTest {
                 // Then
                 assertAll(
                         () -> assertThat(outcome.processed()).isTrue(),
-                        () -> assertThat(outcome.envelope().streamMarks().get(STREAM).byType().get(TYPE_A)).isEqualTo(new TypeMark(31, List.of(28L, 30L))),
+                        () -> assertThat(outcome.envelope().streamMarks().get(STREAM).byType().get(TYPE_A)).isEqualTo(new TypeMark(31, List.of(28L, 30L), 27)),
                         () -> assertThat(outcome.envelope().streamWatermarks()).isEqualTo(Map.of(STREAM, 31L))
                 );
             }
@@ -896,7 +896,7 @@ class SagaExecutionSupportTest {
                 // Then
                 assertAll(
                         () -> assertThat(outcome.processed()).isTrue(),
-                        () -> assertThat(outcome.envelope().streamMarks().get(STREAM).byType().get(TYPE_A)).isEqualTo(new TypeMark(30, List.of(27L, 28L, 29L))),
+                        () -> assertThat(outcome.envelope().streamMarks().get(STREAM).byType().get(TYPE_A)).isEqualTo(new TypeMark(30, List.of(27L, 28L, 29L), 26)),
                         () -> assertThat(outcome.envelope().streamWatermarks()).isEqualTo(Map.of(STREAM, 30L))
                 );
             }
@@ -905,7 +905,7 @@ class SagaExecutionSupportTest {
             void the_applied_versions_stay_ascending_when_a_late_version_is_below_the_ones_already_there() {
                 // Given type A at 30 with 28 applied, and 27 still inside the window of 4 as 27 is above 26
                 SagaEnvelope<OrderState> current = envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0,
-                        Map.of(TYPE_A, new TypeMark(30, List.of(28L))))));
+                        Map.of(TYPE_A, new TypeMark(30, List.of(28L), 26)))));
 
                 // When
                 Outcome<OrderState, OrderCommand> outcome = apply(current, meta(TYPE_A, 27));
@@ -922,9 +922,9 @@ class SagaExecutionSupportTest {
                 // Then
                 Map<String, TypeMark> byType = outcome.envelope().streamMarks().get(STREAM).byType();
                 assertAll(
-                        () -> assertThat(byType.get("org.example.C")).isEqualTo(new TypeMark(11, List.of())),
-                        () -> assertThat(byType.get(TYPE_A)).isEqualTo(new TypeMark(30, List.of(27L, 28L))),
-                        () -> assertThat(byType.get(TYPE_B)).isEqualTo(new TypeMark(20, List.of())),
+                        () -> assertThat(byType.get("org.example.C")).isEqualTo(new TypeMark(11, List.of(), 7)),
+                        () -> assertThat(byType.get(TYPE_A)).isEqualTo(new TypeMark(30, List.of(27L, 28L), 26)),
+                        () -> assertThat(byType.get(TYPE_B)).isEqualTo(new TypeMark(20, List.of(), 16)),
                         () -> assertThat(outcome.envelope().streamWatermarks()).isEqualTo(Map.of(STREAM, 30L))
                 );
             }
@@ -974,7 +974,7 @@ class SagaExecutionSupportTest {
                 }
 
                 // Then
-                assertThat(current.streamMarks().get(STREAM).byType().get(TYPE_A)).isEqualTo(new TypeMark(50, List.of(47L, 48L, 49L)));
+                assertThat(current.streamMarks().get(STREAM).byType().get(TYPE_A)).isEqualTo(new TypeMark(50, List.of(47L, 48L, 49L), 46));
             }
 
             @Test
@@ -983,7 +983,7 @@ class SagaExecutionSupportTest {
                 Outcome<OrderState, OrderCommand> outcome = apply(withoutMarks(Map.of(STREAM, 5L)), meta(TYPE_A, 7));
 
                 // Then
-                assertThat(outcome.envelope().streamMarks().get(STREAM)).isEqualTo(new StreamMarks(5, Map.of(TYPE_A, new TypeMark(7, List.of()))));
+                assertThat(outcome.envelope().streamMarks().get(STREAM)).isEqualTo(new StreamMarks(5, Map.of(TYPE_A, new TypeMark(7, List.of(), 3))));
             }
 
             @Test
@@ -1023,7 +1023,7 @@ class SagaExecutionSupportTest {
                 assertAll(
                         () -> assertThat(marks.keySet()).containsExactlyInAnyOrder(STREAM, "s2"),
                         () -> assertThat(marks.get(STREAM)).isEqualTo(marked().streamMarks().get(STREAM)),
-                        () -> assertThat(marks.get("s2").byType().get(TYPE_A)).isEqualTo(new TypeMark(4, List.of()))
+                        () -> assertThat(marks.get("s2").byType().get(TYPE_A)).isEqualTo(new TypeMark(4, List.of(), 0))
                 );
             }
 
@@ -1071,7 +1071,7 @@ class SagaExecutionSupportTest {
             void the_overload_without_a_window_uses_the_default_window() {
                 // Given type A at 300 with nothing below it, so with the default window of 256 the edge is 300 - 256 = 44
                 SagaEnvelope<OrderState> current = envelope(Map.of(STREAM, 300L), Map.of(STREAM, new StreamMarks(0,
-                        Map.of(TYPE_A, new TypeMark(300, List.of())))));
+                        Map.of(TYPE_A, new TypeMark(300, List.of(), 44)))));
 
                 // When
                 Outcome<OrderState, OrderCommand> atTheEdge = SagaExecutionSupport.process(orderFulfillment(), "o1", current,
@@ -1084,6 +1084,111 @@ class SagaExecutionSupportTest {
                         () -> assertThat(SagaExecutionSupport.DEFAULT_REORDER_WINDOW).isEqualTo(256),
                         () -> assertThat(atTheEdge.processed()).isFalse(),
                         () -> assertThat(insideTheWindow.processed()).isTrue()
+                );
+            }
+        }
+
+        @Nested
+        @DisplayName("when the reorder window changes between deliveries")
+        class WhenTheReorderWindowChangesBetweenDeliveries {
+
+            private static final int NARROW = 2;
+            private static final int WIDE = 256;
+
+            private Outcome<OrderState, OrderCommand> applyWith(@Nullable SagaEnvelope<OrderState> current, EventMeta meta, int reorderWindow) {
+                return SagaExecutionSupport.process(orderFulfillment(), "o1", current, SagaInput.event(new OrderPlaced("o1", 100)), meta, NOW, reorderWindow);
+            }
+
+            private TypeMark typeAMark(SagaEnvelope<OrderState> current) {
+                return current.streamMarks().get(STREAM).byType().get(TYPE_A);
+            }
+
+            /** Versions 9 and 11 of type A were applied under a window of 2, which dropped 9 from the applied versions. */
+            private SagaEnvelope<OrderState> afterNinePrunedByNarrowWindow() {
+                SagaEnvelope<OrderState> afterNine = applyWith(null, meta(TYPE_A, 9), NARROW).envelope();
+                return applyWith(afterNine, meta(TYPE_A, 11), NARROW).envelope();
+            }
+
+            @Test
+            void a_version_pruned_under_a_narrow_window_is_recorded_as_the_horizon_of_its_type() {
+                // When
+                SagaEnvelope<OrderState> current = afterNinePrunedByNarrowWindow();
+
+                // Then
+                assertThat(typeAMark(current)).isEqualTo(new TypeMark(11, List.of(), 9));
+            }
+
+            @Test
+            void a_version_pruned_under_a_narrow_window_is_still_behind_the_window_when_the_window_is_widened() {
+                // Given
+                SagaEnvelope<OrderState> current = afterNinePrunedByNarrowWindow();
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, meta(TYPE_A, 9), WIDE);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.BEHIND_WINDOW);
+            }
+
+            @Test
+            void a_version_pruned_under_a_narrow_window_does_not_run_its_reaction_again_when_the_window_is_widened() {
+                // Given
+                SagaEnvelope<OrderState> current = afterNinePrunedByNarrowWindow();
+
+                // When
+                Outcome<OrderState, OrderCommand> outcome = applyWith(current, meta(TYPE_A, 9), WIDE);
+
+                // Then
+                assertAll(
+                        () -> assertThat(outcome.processed()).isFalse(),
+                        () -> assertThat(outcome.commands()).isEmpty()
+                );
+            }
+
+            @Test
+            void a_version_that_was_never_applied_above_the_horizon_is_still_new_when_the_window_is_widened() {
+                // Given
+                SagaEnvelope<OrderState> current = afterNinePrunedByNarrowWindow();
+
+                // When
+                Outcome<OrderState, OrderCommand> outcome = applyWith(current, meta(TYPE_A, 10), WIDE);
+
+                // Then
+                assertAll(
+                        () -> assertThat(SagaExecutionSupport.classify(current, meta(TYPE_A, 10), WIDE)).isEqualTo(Delivery.NEW),
+                        () -> assertThat(outcome.processed()).isTrue(),
+                        () -> assertThat(outcome.commands()).containsExactly(new NotifyWarehouse("o1")),
+                        () -> assertThat(typeAMark(outcome.envelope())).isEqualTo(new TypeMark(11, List.of(10L), 9))
+                );
+            }
+
+            @Test
+            void a_wider_window_does_not_lower_the_horizon_when_a_later_version_is_applied() {
+                // Given
+                SagaEnvelope<OrderState> current = afterNinePrunedByNarrowWindow();
+
+                // When
+                SagaEnvelope<OrderState> afterTwelve = applyWith(current, meta(TYPE_A, 12), WIDE).envelope();
+
+                // Then
+                assertAll(
+                        () -> assertThat(typeAMark(afterTwelve)).isEqualTo(new TypeMark(12, List.of(11L), 9)),
+                        () -> assertThat(SagaExecutionSupport.classify(afterTwelve, meta(TYPE_A, 9), WIDE)).isEqualTo(Delivery.BEHIND_WINDOW)
+                );
+            }
+
+            @Test
+            void the_horizon_never_decreases_however_the_window_changes_between_deliveries() {
+                // When the window goes from 256 to 2 and back to 256 across three consecutive versions
+                SagaEnvelope<OrderState> underWide = applyWith(null, meta(TYPE_A, 100), WIDE).envelope();
+                SagaEnvelope<OrderState> underNarrow = applyWith(underWide, meta(TYPE_A, 101), NARROW).envelope();
+                SagaEnvelope<OrderState> underWideAgain = applyWith(underNarrow, meta(TYPE_A, 102), WIDE).envelope();
+
+                // Then the horizon is 100 - 256 first, then 101 - 2, and stays there
+                assertAll(
+                        () -> assertThat(typeAMark(underWide)).isEqualTo(new TypeMark(100, List.of(), -156)),
+                        () -> assertThat(typeAMark(underNarrow)).isEqualTo(new TypeMark(101, List.of(100L), 99)),
+                        () -> assertThat(typeAMark(underWideAgain)).isEqualTo(new TypeMark(102, List.of(100L, 101L), 99))
                 );
             }
         }
@@ -1148,7 +1253,7 @@ class SagaExecutionSupportTest {
             void whether_a_late_arrival_produces_a_record_depends_on_the_window_given() {
                 // Given type A at 30, so 27 is behind the window when the window is 3 or less and a late arrival when it is 4 or more
                 SagaEnvelope<OrderState> current = envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0,
-                        Map.of(TYPE_A, new TypeMark(30, List.of())))));
+                        Map.of(TYPE_A, new TypeMark(30, List.of(), Long.MIN_VALUE)))));
 
                 // When
                 FailureRecord<OrderState> narrow = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, 27), failure, NOW, budget, 3);

@@ -362,7 +362,7 @@ class SagaLateStreamVersionTest {
             deliver(9, added("nine"));
 
             // Then
-            assertThat(stored().streamMarks().get(STREAM).byType().get(ITEM_ADDED_TYPE)).isEqualTo(new TypeMark(10, List.of(9L)));
+            assertThat(stored().streamMarks().get(STREAM).byType().get(ITEM_ADDED_TYPE)).isEqualTo(new TypeMark(10, List.of(9L), 8));
         }
     }
 
@@ -469,7 +469,8 @@ class SagaLateStreamVersionTest {
                     () -> assertThat(marks).hasSize(1),
                     () -> assertThat(marks.get(STREAM).byType()).hasSize(1),
                     () -> assertThat(itemAdded.mark()).isEqualTo(events),
-                    () -> assertThat(itemAdded.applied()).hasSizeLessThanOrEqualTo(256)
+                    () -> assertThat(itemAdded.applied()).hasSizeLessThanOrEqualTo(256),
+                    () -> assertThat(itemAdded.horizon()).isEqualTo(events - 256L)
             );
         }
     }
@@ -594,7 +595,7 @@ class SagaLateStreamVersionTest {
             assertAll(
                     () -> assertThat(issued).containsExactly(reserve("six")),
                     () -> assertThat(stored().streamMarks().get(STREAM).floor()).isEqualTo(5L),
-                    () -> assertThat(stored().streamMarks().get(STREAM).byType().get(ITEM_ADDED_TYPE)).isEqualTo(new TypeMark(6, List.of()))
+                    () -> assertThat(stored().streamMarks().get(STREAM).byType().get(ITEM_ADDED_TYPE)).isEqualTo(new TypeMark(6, List.of(), -250))
             );
         }
 

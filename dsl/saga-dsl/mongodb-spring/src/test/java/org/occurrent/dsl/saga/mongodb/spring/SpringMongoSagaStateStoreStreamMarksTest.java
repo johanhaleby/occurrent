@@ -74,9 +74,9 @@ class SpringMongoSagaStateStoreStreamMarksTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
     private static final Map<String, StreamMarks> MARKS = Map.of(
             STREAM_ID, new StreamMarks(3, Map.of(
-                    PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L)),
-                    PAID_TYPE, new TypeMark(5, List.of()))),
-            "other", new StreamMarks(Long.MIN_VALUE, Map.of(PLACED_TYPE, new TypeMark(1, List.of()))));
+                    PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L), 8),
+                    PAID_TYPE, new TypeMark(5, List.of(), 1))),
+            "other", new StreamMarks(Long.MIN_VALUE, Map.of(PLACED_TYPE, new TypeMark(1, List.of(), Long.MIN_VALUE))));
 
     private MongoOperations mongoOperations;
     private SagaStateStore<String> stateStore;
@@ -154,6 +154,36 @@ class SpringMongoSagaStateStoreStreamMarksTest {
         }
 
         @Test
+        void the_horizon_of_every_type_round_trips() {
+            // Given
+            save(instanceWith(MARKS, 1), 0);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertAll(
+                    () -> assertThat(read.streamMarks().get(STREAM_ID).byType().get(PLACED_TYPE).horizon()).isEqualTo(8L),
+                    () -> assertThat(read.streamMarks().get(STREAM_ID).byType().get(PAID_TYPE).horizon()).isEqualTo(1L),
+                    () -> assertThat(read.streamMarks().get("other").byType().get(PLACED_TYPE).horizon()).isEqualTo(Long.MIN_VALUE)
+            );
+        }
+
+        @Test
+        void the_horizon_is_stored_as_a_field_of_the_type_entry() {
+            // Given
+            save(instanceWith(MARKS, 1), 0);
+
+            // When
+            Document raw = rawDocument();
+
+            // Then
+            Document stream = raw.getList("streamMarks", Document.class).stream().filter(s -> STREAM_ID.equals(s.getString("streamId"))).findFirst().orElseThrow();
+            Document placed = stream.getList("types", Document.class).stream().filter(t -> PLACED_TYPE.equals(t.getString("type"))).findFirst().orElseThrow();
+            assertThat(placed.getLong("horizon")).isEqualTo(8L);
+        }
+
+        @Test
         void the_lowest_possible_floor_round_trips() {
             // Given
             save(instanceWith(MARKS, 1), 0);
@@ -169,7 +199,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
         void an_update_replaces_the_marks_it_had_before() {
             // Given
             save(instanceWith(MARKS, 1), 0);
-            Map<String, StreamMarks> later = Map.of(STREAM_ID, new StreamMarks(3, Map.of(PLACED_TYPE, new TypeMark(13, List.of(10L, 12L)))));
+            Map<String, StreamMarks> later = Map.of(STREAM_ID, new StreamMarks(3, Map.of(PLACED_TYPE, new TypeMark(13, List.of(10L, 12L), 9))));
 
             // When
             save(instanceWith(later, 2), 1);
@@ -272,6 +302,42 @@ class SpringMongoSagaStateStoreStreamMarksTest {
     }
 
     @Nested
+    @DisplayName("when a stored type entry has no horizon")
+    class WhenAStoredTypeEntryHasNoHorizon {
+
+        // A type entry as the store wrote it before it kept a horizon, with a mark and applied versions only.
+        private Document documentWithATypeEntryWithoutAHorizon() {
+            Document typeEntry = new Document("type", PLACED_TYPE).append("mark", 12L).append("applied", List.of(9L, 10L, 11L));
+            Document stream = new Document("streamId", STREAM_ID).append("floor", 3L).append("types", List.of(typeEntry));
+            return documentWrittenBy0_34().append("streamMarks", List.of(stream));
+        }
+
+        @Test
+        void find_reads_the_horizon_as_the_lowest_possible_version() {
+            // Given
+            mongoOperations.insert(documentWithATypeEntryWithoutAHorizon(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertThat(read.streamMarks().get(STREAM_ID).byType().get(PLACED_TYPE)).isEqualTo(new TypeMark(12, List.of(9L, 10L, 11L), Long.MIN_VALUE));
+        }
+
+        @Test
+        void findWithoutState_reads_the_horizon_as_the_lowest_possible_version() {
+            // Given
+            mongoOperations.insert(documentWithATypeEntryWithoutAHorizon(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // Then
+            assertThat(read.streamMarks().get(STREAM_ID).byType().get(PLACED_TYPE).horizon()).isEqualTo(Long.MIN_VALUE);
+        }
+    }
+
+    @Nested
     @DisplayName("when a failure is written without the state")
     class WhenAFailureIsWrittenWithoutTheState {
 
@@ -305,7 +371,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             // Given
             save(instanceWith(MARKS, 1), 0);
             SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
-            Map<String, StreamMarks> other = Map.of(STREAM_ID, new StreamMarks(3, Map.of(PLACED_TYPE, new TypeMark(99, List.of()))));
+            Map<String, StreamMarks> other = Map.of(STREAM_ID, new StreamMarks(3, Map.of(PLACED_TYPE, new TypeMark(99, List.of(), 95))));
             SagaEnvelope<String> record = failureRecordFor(read);
             SagaEnvelope<String> withOtherMarks = new SagaEnvelope<>(SAGA_ID, record.state(), record.status(), record.version(), record.timers(),
                     record.streamWatermarks(), null, record.createdAt(), record.updatedAt(), null, record.currentStep(), record.started(),
