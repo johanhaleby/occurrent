@@ -6,6 +6,9 @@ Date: 2026-06-28
 
 Accepted
 
+Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md). The token is no longer a `long`. It holds the criteria it was read with and a version
+the store defines. Reading all of a query's markers in a single read still stands.
+
 ## Context
 
 ADR 0021 defines the DCB consistency token as the sum of the versions of a query's conflict markers, captured when the query is read and rechecked inside the append transaction. The append recheck reads the markers inside its transaction, so it sees one consistent snapshot. The read-time capture did not: it read each marker with a separate `findById`, outside any session or transaction.
