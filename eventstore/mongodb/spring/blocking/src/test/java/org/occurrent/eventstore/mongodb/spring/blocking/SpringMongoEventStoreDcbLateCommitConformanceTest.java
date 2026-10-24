@@ -20,7 +20,6 @@ import com.mongodb.ConnectionString;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.tck.eventstore.blocking.DcbLateCommitConformance;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
-import org.occurrent.tck.internal.scaffolding.ExpectedGuaranteeViolation;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -28,17 +27,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
-/**
- * The store reserves a position before its append commits, so these tests are expected to violate the guarantee until
- * https://github.com/johanhaleby/occurrent/issues/1230 is fixed.
- */
 @Testcontainers
-@ExpectedGuaranteeViolation(
-        tests = {
-                "a_decider_that_resumes_from_its_own_append_does_not_lose_an_append_that_was_still_in_flight",
-                "a_view_that_resumes_from_a_read_does_not_lose_an_append_that_was_still_in_flight"
-        },
-        issue = "https://github.com/johanhaleby/occurrent/issues/1230")
 class SpringMongoEventStoreDcbLateCommitConformanceTest extends DcbLateCommitConformance {
 
     @Container
