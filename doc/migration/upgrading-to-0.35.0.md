@@ -30,6 +30,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 
 ### DCB
 
+- [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). **Breaks the build** if you
+  use a record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`.
+
 ### Subscriptions and catch-up
 
 - [A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint).
@@ -63,6 +66,10 @@ The compiler finds those for you. The other sections compile fine and behave dif
   The emitted state is declared non-null. Breaks the build only for a Kotlin `Mono<State?>` written by hand.
 
 ### The rewrite recipe
+
+- `org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35` adds the new bindings to a record pattern over
+  `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`. See
+  [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions).
 
 ## A global position is no longer a saga redelivery key
 
@@ -466,3 +473,54 @@ compile unchanged.
 
 Drop the `?` from the hand-written `Mono<State?>`. There is no OpenRewrite recipe, since the compiler reports every
 place that needs it.
+
+## DCB reads can resume from marker versions
+
+On MongoDB a DCB append reserves its position before its transaction commits, so an append holding 41 can commit after
+the append at 42. A read after position 42 never returns 41, and a decider or view that resumes from a position it saw
+loses that append ([#1230](https://github.com/johanhaleby/occurrent/issues/1230)). 0.35.0 lets a read resume from
+marker versions instead, as [ADR 148](../architecture/decisions/0148-dcb-snapshots-resume-from-marker-versions-not-positions.md)
+describes.
+
+What is new:
+
+- `read(criteria, DcbReadOptions.withVersions())` reports `DcbEventStream.markerVersions()`, the epoch and version of
+  each marker of the criteria, read at the same point in time as the events. It reports them only for a full forward
+  read, with no limit, skip or position bound, and criteria other than `MatchAll`.
+- A conditional append with a consistency token reports the same in `DcbAppendResult.markerVersions()`.
+- `read(criteria, DcbReadOptions.afterVersions(saved))` returns every matching event appended after `saved`, including
+  one that committed late below a position an earlier read saw. When the store can't compare `saved` with its own
+  markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
+  full.
+- `DcbAppendConfirmation.isConfirmed(result)` answers whether an append is committed at majority, read outside any
+  transaction of yours. The MongoDB stores and `InMemoryEventStore` implement it.
+
+What changes on MongoDB without you doing anything:
+
+- Every DCB append counts its marker increments in a new field `s`, gives each marker document an `epoch`, and writes an
+  `mv` field into each event with the epoch and version of each of its markers. A read never returns `mv` as part of a
+  CloudEvent. The store creates an index on `mv` at start, together with the other DCB indexes.
+- A read that asks for versions runs in a short read-only transaction of its own on the primary. Its commit waits at
+  most `markerVersionsCommitTimeout`, 5 seconds by default, a new setting in each MongoDB `EventStoreConfig`. When the commit fails,
+  `withVersions()` returns the events without versions and `afterVersions(..)` throws `DcbSnapshotInvalidException`.
+- `resumeFromMarkerVersions(false)` turns resuming off. No read or append reports versions, `afterVersions(..)` throws,
+  and the store logs a warning at start. `s`, `epoch` and `mv` are still written, so turning it back on is safe.
+- Inside a session or transaction of yours, such as Spring's `@Transactional` or a native ambient session, a read
+  reports no versions and `afterVersions(..)` throws `DcbSnapshotInvalidException`. Your transaction may still abort,
+  and versions that counted its increments would skip the append that takes those versions next. Read the boundary in
+  full there.
+
+The upgrade needs no manual step, provided nothing replaces the document of an event a 0.35 node wrote. That rules out
+a 0.34 node's `updateEvent`, a 0.34 tool, or your own code replacing event documents, during a rolling upgrade, after a
+rollback to 0.34 followed by a new upgrade, and from a tool that shares the event collection. Such an event loses its
+`mv` and is no longer returned by `afterVersions(..)`. A full read still returns it. A store built on
+`MongoTemplate.withSession(..)` or `ReactiveMongoTemplate.withSession(..)` doesn't support reading versions.
+
+Two things break, and only one of them is a compile error:
+
+- A record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions` with the old number of components stops
+  compiling. `UpgradeToOccurrent_0_35` adds `var markerVersions` to the first two, and `var versionsRequested` and
+  `var afterVersions` to the third.
+- An `isEqualTo(...)` on a whole `DcbAppendResult` or `DcbEventStream` that a store returned still compiles, and fails
+  when the store reported versions. Compare the components you mean instead. Every existing constructor stays, and sets
+  the new components to empty.
