@@ -805,7 +805,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     }
                     sessionTemplate.setSessionSynchronization(NEVER);
                     if (notBefore != null) {
-                        OperationTimeLiveStart.tryParse(notBefore).ifPresent(session::advanceOperationTime);
+                        // Advances to just before the live start and not to it, since the cluster time may not have reached it yet
+                        // and the replay only needs what committed before it
+                        OperationTimeLiveStart.tryParse(notBefore).map(OperationTimeLiveStart::oneIncrementBefore).ifPresent(session::advanceOperationTime);
                     }
                     // The read only moves the session's operation time to the one the live start is taken from
                     return counterRead(template)

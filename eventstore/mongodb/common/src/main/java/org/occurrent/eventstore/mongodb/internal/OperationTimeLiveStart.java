@@ -82,6 +82,14 @@ public final class OperationTimeLiveStart {
     }
 
     /**
+     * The operation time one increment before {@code operationTime}, borrowing from the seconds when the increment is 0.
+     */
+    public static BsonTimestamp oneIncrementBefore(BsonTimestamp operationTime) {
+        requireNonNull(operationTime, "operationTime cannot be null");
+        return new BsonTimestamp(operationTime.getValue() - 1);
+    }
+
+    /**
      * The operation time in {@code liveStart}, a string {@link #format(BsonTimestamp)} built. Throws what the JSON parser
      * throws when {@code liveStart} isn't JSON, and {@link ClassCastException} when the field isn't a timestamp.
      *

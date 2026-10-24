@@ -27,7 +27,7 @@ import java.util.stream.Stream;
 
 /**
  * Internal, not part of the public API. The reads of one catch-up replay attempt are the live start, the head and every
- * replay read. A store that reports a live start makes these reads see everything that committed up to it. Close the
+ * replay read. A store that reports a live start makes these reads see everything that committed before it. Close the
  * scope when the attempt ends, and close each returned {@link Stream} as the {@link org.occurrent.eventstore.api.blocking.PositionOrderedReader}
  * contract says.
  */

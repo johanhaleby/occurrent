@@ -27,7 +27,7 @@ import reactor.core.publisher.Mono;
 
 /**
  * Internal, not part of the public API. The reads of one reactive catch-up replay attempt are the live start, the head
- * and every replay read. A store that reports a live start makes these reads see everything that committed up to it.
+ * and every replay read. A store that reports a live start makes these reads see everything that committed before it.
  * Close the scope when the attempt ends.
  */
 @NullMarked

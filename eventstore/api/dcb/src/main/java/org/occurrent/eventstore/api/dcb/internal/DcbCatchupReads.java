@@ -44,7 +44,7 @@ public interface DcbCatchupReads {
      *
      * @param notBefore The live start an earlier attempt stored, when this attempt resumes from it, otherwise {@code null}.
      *                  A store that reports a live start makes every read of the scope see at least everything that
-     *                  committed up to {@code notBefore}. A value the store doesn't recognize as one of its own live
+     *                  committed before {@code notBefore}. A value the store doesn't recognize as one of its own live
      *                  starts is ignored.
      * @return The scope of the attempt. Must be closed.
      */

@@ -1011,7 +1011,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             this.session = mongoClient.startSession(ClientSessionOptions.builder().causallyConsistent(true).build());
             try {
                 if (notBefore != null) {
-                    OperationTimeLiveStart.tryParse(notBefore).ifPresent(session::advanceOperationTime);
+                    // Advances to just before the live start and not to it, since the cluster time may not have reached it yet
+                    // and the replay only needs what committed before it
+                    OperationTimeLiveStart.tryParse(notBefore).map(OperationTimeLiveStart::oneIncrementBefore).ifPresent(session::advanceOperationTime);
                 }
                 positions.find(session, eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first();
                 BsonTimestamp t0 = session.getOperationTime();

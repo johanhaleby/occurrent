@@ -30,7 +30,7 @@ interface CatchupScopes {
     /**
      * Subscribing to the returned {@link Mono} opens the scope.
      *
-     * @param notBefore The live start an earlier attempt stored, which the reads must see everything up to, or null
+     * @param notBefore The live start an earlier attempt stored, which the reads must see everything before, or null
      */
     Mono<CatchupScope> open(@Nullable String notBefore);
 
