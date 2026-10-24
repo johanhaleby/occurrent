@@ -13,6 +13,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [A global position is no longer a saga redelivery key](#a-global-position-is-no-longer-a-saga-redelivery-key). A
   saga recognises a redelivery by `streamid` with `streamversion` only. An event that has just a `position` is refused
   under the default `REQUIRED`, and an unreadable `streamid` or `streamversion` fails the delivery. Compiles unchanged.
+- [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
+  A saga keeps the highest applied version per stream and event type, and applies a late version instead of skipping
+  it. Saga instances store a new `streamMarks` field. Compiles unchanged.
 
 ### DCB
 
@@ -91,3 +94,63 @@ The [runbook for a quarantined saga instance](../runbooks/quarantined-saga-insta
 
 No signature changes, so there is nothing for `UpgradeToOccurrent_0_35` to rewrite. Whether a feed can supply the
 stream key, or should use `BEST_EFFORT`, depends on the feed.
+
+## A saga applies a stream version that arrives after a higher one
+
+Up to 0.34.0 a saga kept the highest stream version it had applied for each stream, and skipped every later event at or
+below it. That loses an event whenever a stream's events reach the saga out of order. `KafkaTopicPerTypeDestinationResolver`
+orders one stream's events of one type and nothing across types, so a saga that listens to two event types of a stream
+can see version 1000 of one type before version 2 of the other. The reason is in
+[ADR 154](../architecture/decisions/0154-a-saga-tells-a-late-stream-event-from-a-redelivery-per-event-type.md), and the
+report is [#1305](https://github.com/johanhaleby/occurrent/issues/1305).
+
+### Who is affected
+
+A saga fed through a broker or a partitioner that does not keep a stream's events in version order. A saga fed straight
+from an Occurrent event store, in order, behaves as before.
+
+### What changes
+
+The saga keeps the highest applied version per stream and event type. For an event of a stream:
+
+| The event's stream version | What the saga does |
+| --- | --- |
+| Above the highest applied version of its event type | Applies it |
+| Equal to that version, or one the saga recorded as applied | Skips it as a redelivery |
+| Below it by less than the reorder window and not recorded | Applies it, since it arrived late |
+| Below it by the reorder window or more | Skips it and logs a warning once per stream |
+
+A reaction that ran for a late event runs once. A redelivery of that event is skipped.
+
+### The reorder window
+
+The window is 256 by default. Change it with `SagaRunnerConfig.withReorderWindow(int)` when the feed reorders further:
+
+```java
+SagaRunnerConfig config = SagaRunnerConfig.defaults().withReorderWindow(1024);
+```
+
+A saga declared with `@Saga` always uses the default, since there is no annotation attribute or Spring property for it.
+An event further behind than the window is lost in the way it was lost before 0.35.0, and the warning says which stream
+it came from. A larger window keeps more numbers in every instance.
+
+### Stored saga state
+
+A saga instance document gains a `streamMarks` field. It holds, per stream, a `floor` and a list of event types, and
+each type has its highest applied `mark` and the `applied` versions below it. It is a list rather than a map because
+stream ids and event types can contain dots. An instance holds at most 256 `applied` versions per stream and event
+type, so a document grows by some kilobytes for an instance that listens to a few streams, and every save rewrites them.
+
+A document saved by 0.31.0 to 0.34.0, or by an earlier 0.35.0 build, has no `streamMarks`. It reads as a floor equal to
+each stream's watermark, so everything the instance has already seen stays skipped, and a version above the watermark
+is applied as before. Late versions are recognised from the instance's next save on.
+
+`streamWatermarks` is still written with the highest version of each stream. A 0.34.0 node reads a document that
+0.35.0 saved, ignores `streamMarks`, and replaces the document without it on its next save. The next 0.35.0 node then
+reads it as an old document. A rolling upgrade works, and so does going back to 0.34.0, which loses late events on that
+stretch as it did before.
+
+### Why there is no recipe
+
+`EventMeta`, `SagaEnvelope` and `SagaRunnerConfig` each gain a component, and the previous constructors stay. Nothing
+that compiled stops compiling, so there is nothing for `UpgradeToOccurrent_0_35` to rewrite.
