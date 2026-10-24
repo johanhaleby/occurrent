@@ -38,7 +38,10 @@ import static java.util.Objects.requireNonNull;
  * @param version           the optimistic-lock version, incremented on every save. A fresh instance is saved at version 1.
  * @param timers            the pending timers, by name
  * @param streamWatermarks  the highest stream version folded per stream id, for deduplicating redelivered stream events
- * @param positionWatermark the highest global position folded, for deduplicating redelivered position-carrying events
+ * @param positionWatermark ignored. 0.31.0 to 0.34.0 stored the highest global position folded here, and the saga no
+ *                          longer reads it, because a position says nothing about whether an event was already folded.
+ *                          A stored value still loads, and the executor writes {@code null}. Deprecated since 0.35.0
+ *                          and removed in a later release
  * @param createdAt         when the instance was created
  * @param updatedAt         when the instance was last saved
  * @param completedAt       when the instance completed, or {@code null} while active
@@ -64,7 +67,7 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        long version,
                                                        List<TimerEntry> timers,
                                                        Map<String, Long> streamWatermarks,
-                                                       @Nullable Long positionWatermark,
+                                                       @Deprecated(since = "0.35.0") @Nullable Long positionWatermark,
                                                        @Nullable Instant createdAt,
                                                        @Nullable Instant updatedAt,
                                                        @Nullable Instant completedAt,

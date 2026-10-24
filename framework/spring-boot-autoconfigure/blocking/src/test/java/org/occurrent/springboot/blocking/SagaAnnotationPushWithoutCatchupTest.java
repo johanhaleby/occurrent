@@ -104,14 +104,14 @@ class SagaAnnotationPushWithoutCatchupTest {
             PushSubscriptionModel feed = context.getBean(PushSubscriptionModel.class);
             RecordingDispatcher dispatcher = context.getBean(RecordingDispatcher.class);
 
-            // What a listener forwarding another application's event delivers, with no streamid, streamversion or position
+            // What a listener forwarding another application's event delivers, with no streamid or streamversion
             Throwable refusal = catchThrowable(() -> feed.accept(TestConverter.INSTANCE.toCloudEvent(new OrderPlaced("e1", "order-3"))));
 
             // The feed never gets an acknowledgement, so the dropped metadata surfaces instead of costing the saga its
             // redelivery protection for as long as it runs
             assertAll(
                     () -> assertThat(refusal).isInstanceOf(SagaRedeliveryDetectionException.class)
-                            .hasMessageContaining("no streamid, streamversion or position"),
+                            .hasMessageContaining("without both a streamid and a streamversion"),
                     () -> assertThat(dispatcher.issued).isEmpty()
             );
         });

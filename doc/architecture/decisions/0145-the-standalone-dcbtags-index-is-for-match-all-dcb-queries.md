@@ -8,6 +8,10 @@ Accepted. Resolves [#1233](https://github.com/johanhaleby/occurrent/issues/1233)
 `SpringMongoEventStore` and `ReactorMongoEventStore`, and changes which stores get the `dcbTags` index from
 [ADR 49](0049-dcb-reads-exclude-non-dcb-stream-events.md).
 
+Amended by [ADR 152](0152-the-dcbtags-startup-check-names-every-unusable-index-and-promises-no-query-plan.md). The startup
+check accepts one more partial filter, reads the collection before it lists indexes, names every unusable index and no
+longer says that every match-all read uses the index.
+
 ## Context
 
 With the `DCB` capability enabled, the three MongoDB event stores create these indexes next to the `position` index,

@@ -51,11 +51,15 @@ import static java.util.Objects.requireNonNull;
  * a stream id and a stream version, so such an event is recorded and quarantined like any other and answers
  * {@code null} here. Read {@code input} when you want the identity and {@code position} when you have a feed that
  * numbers its events and you want the number.
+ * <p>
+ * A record that 0.31.0 to 0.34.0 wrote for an event carrying only a position holds {@code position:N} as its
+ * {@code input}. The executor treats such a record as no record, so a new failure starts a fresh budget and the
+ * instance's next successful delivery clears it.
  *
- * @param input          the failing input's redelivery key, which is its stream id with its version, or its global
- *                       position. The same string the executor compares against to tell one failing input from the next
+ * @param input          the failing input's redelivery key, which is its stream id with its stream version. The same
+ *                       string the executor compares against to tell one failing input from the next
  * @param position       the global subscription position of the failing event, or {@code null} when the event carries
- *                       none, in which case {@code input} holds its stream id and version instead
+ *                       none
  * @param firstFailedAt  when this instance started failing, which is when the quarantine budget started running. Not
  *                       necessarily when {@code input} first failed, see above. Strictly it is when the first failure
  *                       was recorded, and the instance may have been failing for longer, because several ways of

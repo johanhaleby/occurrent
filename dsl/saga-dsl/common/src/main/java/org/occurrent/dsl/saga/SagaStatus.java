@@ -70,7 +70,8 @@ public enum SagaStatus {
      *   <li>Quarantine is switched off neither by {@code SagaRunnerConfig.disableQuarantine()} nor by the runner at
      *       startup. The runner switches it off on a subscription model that cannot guarantee it holds every event it
      *       delivers.</li>
-     *   <li>The event carries a redelivery key, which is a stream id with its stream version or a global position.</li>
+     *   <li>The event carries a redelivery key, which is a stream id with its stream version. An event with only a global
+     *       position has none.</li>
      *   <li>What was thrown is not an {@link OutOfMemoryError}.</li>
      *   <li>The instance is {@link #ACTIVE} and does not already count the event as handled.</li>
      *   <li>The instance has been failing for at least {@code quarantineAfter}, measured from

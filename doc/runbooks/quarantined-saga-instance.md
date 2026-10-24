@@ -159,9 +159,8 @@ The javadoc on `SagaStatus.QUARANTINED` lists which ways those are.
 ```java
 SagaInstance instance = quarantined.getFirst();
 SagaFailure failure = instance.failure();
-// failure.input()          the failing event's redelivery key, a stream id with its stream version,
-//                          or the global position when the event has no stream metadata
-// failure.position()       that global position beside it when the store assigns one, otherwise null
+// failure.input()          the failing event's redelivery key, a stream id with its stream version
+// failure.position()       the event's global position when the store assigns one, otherwise null
 // failure.firstFailedAt()  when this instance started failing, strictly when its first failure record
 //                          was written, which is later than the first failure itself if an earlier
 //                          failure recorded nothing

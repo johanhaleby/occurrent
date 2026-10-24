@@ -918,12 +918,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // Runs after the (dcbTags, position) index exists, since the lookup is hinted on it. A failed check only logs.
+    // The indexes are listed only when a stream event exists, so a collection without one needs no listIndexes privilege.
     private static void warnOnPositionedStreamEventsWithoutDcbTagsIndex(MongoCollection<Document> eventStoreCollection, String eventStoreCollectionName) {
         try {
-            String warning = DcbTagsIndexCheck.warningFor(eventStoreCollectionName, eventStoreCollection.listIndexes());
-            if (warning == null) {
-                return;
-            }
             Document positionedStreamEvent = eventStoreCollection.find(DcbTagsIndexCheck.positionedStreamEvent())
                     .hint(DcbTagsIndexCheck.hint())
                     .min(DcbTagsIndexCheck.min())
@@ -931,7 +928,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                     .limit(1)
                     .projection(Projections.include(ID))
                     .first();
-            if (positionedStreamEvent != null) {
+            if (positionedStreamEvent == null) {
+                return;
+            }
+            String warning = DcbTagsIndexCheck.warningFor(eventStoreCollectionName, eventStoreCollection.listIndexes().into(new ArrayList<>()));
+            if (warning != null) {
                 log.warn(warning);
             }
         } catch (RuntimeException e) {
