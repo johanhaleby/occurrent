@@ -87,6 +87,7 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
     @RegisterExtension
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
+    private MongoClient mongoClient;
     private SpringMongoEventStore eventStore;
     private MongoTemplate mongoTemplate;
     private String streamId;
@@ -99,7 +100,7 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
     @BeforeEach
     void create_the_stack() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-        MongoClient mongoClient = MongoClients.create(connectionString);
+        mongoClient = MongoClients.create(connectionString);
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
@@ -113,7 +114,11 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
 
     @AfterEach
     void shutdown() {
-        catchup.shutdown();
+        try {
+            catchup.shutdown();
+        } finally {
+            mongoClient.close();
+        }
     }
 
     @Test
