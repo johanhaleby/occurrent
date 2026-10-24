@@ -41,8 +41,15 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). Call `acceptAndWait(..)` instead, which
   `accept(..)` already forwarded to. `UpgradeToOccurrent_0_34` renames the calls, but only while the project still
   depends on 0.33.0 or 0.34.0. Breaks the build.
+- [A catch-up needs the event store itself](#a-catch-up-needs-the-event-store-itself). A catch-up subscription model
+  throws `IllegalArgumentException` when you construct it over a decorator, a test double or your own implementation of
+  the event store interfaces. Compiles unchanged.
 
 ### Spring Boot starter
+
+- [A catch-up needs the event store itself](#a-catch-up-needs-the-event-store-itself). A context whose
+  `EventStoreQueries`, event store or `DcbEventStore` bean is a decorator, a mock or your own implementation fails at
+  startup when a catch-up runs over it. Compiles unchanged.
 
 ### Brokers
 
@@ -397,3 +404,38 @@ Two things break, and only one of them is a compile error:
 - An `isEqualTo(...)` on a whole `DcbAppendResult` or `DcbEventStream` that a store returned still compiles, and fails
   when the store reported versions. Compare the components you mean instead. Every existing constructor stays, and sets
   the new components to empty.
+
+## A catch-up needs the event store itself
+
+A catch-up subscription reads the point where its live subscription takes over, and every event it replays, through
+the event store, which on MongoDB runs those reads in one session. An event that commits late, below a position the
+replay already read, is then replayed or delivered live, and not skipped. [ADR 155](../architecture/decisions/0155-a-catch-up-reads-its-live-start-from-the-event-store-and-refuses-to-resume-where-it-could-skip-an-event.md)
+has the reasons. Only the event store itself can do that, so the catch-up checks what it was given when you construct
+it.
+
+### Who is affected
+
+The four catch-up subscription models and what they check:
+
+| Model | Checks |
+| --- | --- |
+| `StreamCatchupSubscriptionModel` | the `EventStoreQueries` |
+| `DcbCatchupSubscriptionModel` | the `DcbEventStore` |
+| `ReactorStreamCatchupSubscriptionModel` | the `PositionOrderedReader` |
+| `ReactorDcbCatchupSubscriptionModel` | the `DcbEventStore` |
+
+`MongoEventStore`, `SpringMongoEventStore` and `InMemoryEventStore` pass the two blocking checks, and
+`ReactorMongoEventStore` passes the two reactor ones. A class that wraps one of them, a mock, and your own implementation of the interface do not, and the constructor throws an
+`IllegalArgumentException` naming `CatchupReads` or `DcbCatchupReads`.
+
+Both Spring Boot starters run a subscription through a catch-up by default, and build the catch-up over the event store
+bean in the context. A context whose bean is such a class fails at startup with the same exception.
+
+### What to do
+
+Hand the catch-up the event store itself. Put a decorator around the subscription model, or around the code the
+subscription calls, and no longer around the event store the catch-up reads. In a test, run the catch-up over
+`InMemoryEventStore` or a MongoDB event store instead of a mock.
+
+`CatchupReads` and `DcbCatchupReads` are in packages named `internal`. They are public only because the stores and the
+catch-ups live in different modules, and they can change in any release, so implementing them yourself is not supported.
