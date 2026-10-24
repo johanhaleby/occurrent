@@ -79,8 +79,11 @@ is dropped and the saga logs an error naming the stream. That version is then sk
 back after the instance has moved that far ahead, which is today's behaviour for it.
 
 The failure record keeps its older role as a fallback. A record naming an event still says that the event was never
-applied, so the saga treats that event as new however far behind it is. This covers an instance whose record was written
-before pending existed, and it costs one line.
+applied, so the saga treats that event as new however far behind it is, and at or below the floor too. This covers an
+instance whose record was written before pending existed. When quarantine is on and that event is offered again, the
+saga lists it as pending, so replacing the record with another input's failure no longer forgets it. An instance holds
+one failure record, so a different input that fails before the legacy event is offered again replaces it, which is the
+last row of the table.
 
 **The horizon keeps a raised window from undoing a skip.** Trimming `applied` forgets the versions at or below
 `mark - window`, and a version the saga forgot looks the same as one it never applied. If the window were only read from
@@ -109,6 +112,7 @@ failed in the saga.** That is the precondition, and these are the cases that fal
 | The instance is completed or quarantined | Inert by design | Quarantine logs |
 | A version that did not fail arrives more than the window behind, without a restart replaying it | Skipped as a redelivery | One warning per stream |
 | More than the window many versions are pending on one stream and type | The smallest is dropped | Error |
+| A failure record written before 0.35.0 is replaced by another input's failure before its own input is offered again | The record was the only memory of that input, so it is skipped when it comes back behind the window | No |
 
 The fifth row is the one this design cannot close. A restart from an old checkpoint delivers a long run of behind-window
 versions that are all correct skips, and a reordered version looks the same. Throwing on each would block the replay, and

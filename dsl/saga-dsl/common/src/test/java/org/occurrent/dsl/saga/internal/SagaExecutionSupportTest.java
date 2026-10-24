@@ -1316,6 +1316,13 @@ class SagaExecutionSupportTest {
                         NOW, NOW, null, null, true, record, Map.of(STREAM, new StreamMarks(0, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)))));
             }
 
+            /** As {@link #failingOn}, with the given versions pending for stream s1. */
+            private SagaEnvelope<OrderState> failingOnWithPending(String input, Instant firstFailedAt, Map<String, List<Long>> pending) {
+                SagaFailure record = new SagaFailure(input, null, firstFailedAt, IllegalStateException.class.getName(), "boom");
+                return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM, 30L), null,
+                        NOW, NOW, null, null, true, record, Map.of(STREAM, new StreamMarks(0, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)), pending)));
+            }
+
             private Outcome<OrderState, OrderCommand> applyOrderPlaced(SagaEnvelope<OrderState> current, EventMeta meta) {
                 return SagaExecutionSupport.process(orderFulfillment(), "o1", current, SagaInput.event(new OrderPlaced("o1", 100)), meta, NOW, WINDOW);
             }
@@ -1414,15 +1421,57 @@ class SagaExecutionSupportTest {
             }
 
             @Test
-            void the_same_input_failing_again_inside_the_budget_produces_no_new_record() {
+            void the_same_input_failing_again_inside_the_budget_produces_no_new_record_when_it_is_pending_already() {
                 // Given
-                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW);
+                SagaEnvelope<OrderState> current = failingOnWithPending(STREAM + "@5", NOW, Map.of(TYPE_A, List.of(5L)));
 
                 // When
                 FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, 5), failure, NOW, budget, WINDOW);
 
                 // Then
                 assertThat(record).isNull();
+            }
+
+            @Test
+            void the_same_input_failing_again_inside_the_budget_lists_it_as_pending_when_the_record_was_written_before_pending_existed() {
+                // Given a record naming version 5 that does not list it as pending
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW);
+
+                // When
+                FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, 5), failure, NOW.plusSeconds(60), budget, WINDOW);
+
+                // Then
+                assertAll(
+                        () -> assertThat(record).isNotNull(),
+                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(5L),
+                        () -> assertThat(record.envelope().failure()).isEqualTo(current.failure()),
+                        () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.ACTIVE),
+                        () -> assertThat(record.quarantined()).isFalse()
+                );
+            }
+
+            @Test
+            void a_version_listed_as_pending_by_a_retry_is_still_new_after_the_instance_moved_past_the_window_and_failed_on_another_input() {
+                // Given an instance stored before 0.35.0, which has a watermark of 4 and no marks, failing on version 5
+                SagaFailure legacyRecord = new SagaFailure(STREAM + "@5", null, NOW, IllegalStateException.class.getName(), "boom");
+                SagaEnvelope<OrderState> legacy = new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(),
+                        Map.of(STREAM, 4L), null, NOW, NOW, null, null, true, legacyRecord);
+                FailureRecord<OrderState> retry = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", legacy, meta(TYPE_A, 5), failure, NOW.plusSeconds(60), budget, WINDOW);
+
+                // When versions 6 to 30 are applied and then version 31 fails
+                SagaEnvelope<OrderState> applied = retry == null ? legacy : retry.envelope();
+                for (long version = 6; version <= 30; version++) {
+                    applied = applyOrderPlaced(applied, meta(TYPE_A, version)).envelope();
+                }
+                FailureRecord<OrderState> failedOn31 = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", applied, meta(TYPE_A, 31), failure, NOW.plusSeconds(120), budget, WINDOW);
+                assertThat(failedOn31).isNotNull();
+
+                // Then the record names version 31 and version 5 is new because it is pending
+                assertAll(
+                        () -> assertThat(failedOn31.envelope().failure().input()).isEqualTo(STREAM + "@31"),
+                        () -> assertThat(pendingOf(failedOn31.envelope(), STREAM, TYPE_A)).containsExactly(5L, 31L),
+                        () -> assertThat(SagaExecutionSupport.classify(failedOn31.envelope(), meta(TYPE_A, 5), WINDOW)).isEqualTo(Delivery.NEW)
+                );
             }
 
             @Test
@@ -1549,6 +1598,74 @@ class SagaExecutionSupportTest {
         }
 
         @Nested
+        @DisplayName("when an input fails and the instance holds more pending versions than the window")
+        class WhenAnInputFailsAndTheInstanceHoldsMorePendingVersionsThanTheWindow {
+
+            private static final int NARROW_WINDOW = 2;
+
+            private ListAppender<ILoggingEvent> appender;
+            private ch.qos.logback.classic.Logger logger;
+
+            @BeforeEach
+            void attachAppender() {
+                LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+                logger = context.getLogger(SagaExecutionSupport.class);
+                appender = new ListAppender<>();
+                appender.start();
+                logger.addAppender(appender);
+            }
+
+            @AfterEach
+            void detachAppender() {
+                logger.detachAppender(appender);
+            }
+
+            /** Six versions of type A are pending, which a window of 2 could not have recorded. */
+            private SagaEnvelope<OrderState> withSixPendingVersionsOfTypeA() {
+                return envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0,
+                        Map.of(TYPE_A, new TypeMark(30, List.of(), 20)), Map.of(TYPE_A, List.of(5L, 6L, 7L, 8L, 9L, 10L)))));
+            }
+
+            @Test
+            void only_the_largest_pending_versions_that_fit_the_window_are_kept() {
+                // Given
+                SagaEnvelope<OrderState> current = withSixPendingVersionsOfTypeA();
+
+                // When
+                FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, 31),
+                        new IllegalStateException("boom"), NOW, Duration.ofMinutes(5), NARROW_WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(10L, 31L);
+            }
+
+            @Test
+            void each_version_that_is_no_longer_remembered_is_logged_as_an_error_once() {
+                // Given
+                SagaEnvelope<OrderState> current = withSixPendingVersionsOfTypeA();
+
+                // When
+                SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, 31),
+                        new IllegalStateException("boom"), NOW, Duration.ofMinutes(5), NARROW_WINDOW);
+
+                // Then
+                List<String> errors = appender.list.stream()
+                        .filter(event -> event.getLevel() == Level.ERROR)
+                        .map(ILoggingEvent::getFormattedMessage)
+                        .toList();
+                assertAll(
+                        () -> assertThat(errors).hasSize(5),
+                        () -> assertThat(errors).anyMatch(message -> message.contains("version 5 is no longer remembered")),
+                        () -> assertThat(errors).anyMatch(message -> message.contains("version 6 is no longer remembered")),
+                        () -> assertThat(errors).anyMatch(message -> message.contains("version 7 is no longer remembered")),
+                        () -> assertThat(errors).anyMatch(message -> message.contains("version 8 is no longer remembered")),
+                        () -> assertThat(errors).anyMatch(message -> message.contains("version 9 is no longer remembered"))
+                );
+            }
+        }
+
+        @Nested
         @TestInstance(TestInstance.Lifecycle.PER_CLASS)
         @DisplayName("when classifying a delivery against an instance with pending versions")
         class WhenClassifyingADeliveryAgainstAnInstanceWithPendingVersions {
@@ -1631,7 +1748,7 @@ class SagaExecutionSupportTest {
             }
 
             @Test
-            void a_version_at_or_below_the_floor_is_a_redelivery_even_if_it_is_listed_as_pending() {
+            void a_version_at_or_below_the_floor_is_new_when_it_is_listed_as_pending() {
                 // Given the floor is 10
                 SagaEnvelope<OrderState> current = markedWithPending(Map.of(TYPE_A, List.of(3L, 10L, 12L)));
 
@@ -1642,10 +1759,52 @@ class SagaExecutionSupportTest {
 
                 // Then
                 assertAll(
-                        () -> assertThat(belowTheFloor).isEqualTo(Delivery.REDELIVERY),
-                        () -> assertThat(atTheFloor).isEqualTo(Delivery.REDELIVERY),
+                        () -> assertThat(belowTheFloor).isEqualTo(Delivery.NEW),
+                        () -> assertThat(atTheFloor).isEqualTo(Delivery.NEW),
                         () -> assertThat(aboveTheFloor).isEqualTo(Delivery.NEW)
                 );
+            }
+
+            /** The floor is 30 and type A is at 30, with version 5 of type A pending. */
+            private SagaEnvelope<OrderState> withFloorOf30AndVersion5Pending() {
+                return envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(30,
+                        Map.of(TYPE_A, new TypeMark(30, List.of(), 26)), Map.of(TYPE_A, List.of(5L)))));
+            }
+
+            @Test
+            void a_pending_version_below_the_floor_is_new() {
+                // Given
+                SagaEnvelope<OrderState> current = withFloorOf30AndVersion5Pending();
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, meta(TYPE_A, 5), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.NEW);
+            }
+
+            @Test
+            void a_version_below_the_floor_that_is_not_pending_is_a_redelivery() {
+                // Given
+                SagaEnvelope<OrderState> current = withFloorOf30AndVersion5Pending();
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, meta(TYPE_A, 6), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.REDELIVERY);
+            }
+
+            @Test
+            void a_version_below_the_floor_is_a_redelivery_when_only_another_type_has_that_version_pending() {
+                // Given
+                SagaEnvelope<OrderState> current = withFloorOf30AndVersion5Pending();
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, meta(TYPE_B, 5), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.REDELIVERY);
             }
 
             @Test

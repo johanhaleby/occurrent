@@ -381,9 +381,11 @@ public final class SagaExecutionSupport {
         // exists to remove.
         boolean budgetUsedUp = Duration.between(existing.firstFailedAt(), now).compareTo(quarantineAfter) >= 0;
         if (!budgetUsedUp && existing.input().equals(input)) {
-            // The same input failing again inside the budget, so there is nothing new to record. A different input
-            // failing does get written, because the record has to name the input the instance is failing on now.
-            return null;
+            // The same input failing again inside the budget, so the failure record stays as it is. A different input
+            // failing does get written, because the record has to name the input the instance is failing on now. A
+            // record written before pending existed names the input without listing it as pending, so the retry lists it,
+            // and an input that is pending already writes nothing.
+            return pendingRecord(saga, sagaId, current, meta, now, reorderWindow);
         }
         // Keep the instant the failing started, refresh the input and what it is failing with, because an input that
         // fails one way and then another is still the same instance failing, and the later exception is the more useful
@@ -468,7 +470,8 @@ public final class SagaExecutionSupport {
         String type = typeKey(meta);
         TreeSet<Long> versions = new TreeSet<>(marks == null ? List.of() : marks.pending().getOrDefault(type, List.of()));
         versions.add(Objects.requireNonNull(meta.streamVersion()));
-        if (versions.size() > reorderWindow) {
+        // More than the window can already be stored when the window was lowered after they were recorded.
+        while (versions.size() > reorderWindow) {
             long dropped = versions.pollFirst();
             log.error("Stream {} has more than {} failed versions of type '{}' outstanding, so version {} is no longer remembered as failed. "
                             + "It is skipped as behind the reorder window if it arrives again after the instance moved that far ahead.",
@@ -537,9 +540,9 @@ public final class SagaExecutionSupport {
         Long watermark = current.streamWatermarks().get(meta.streamId());
         long floor = floorOf(marks, watermark);
         if (version <= floor) {
-            // A failure record naming this input says it was never applied, whatever the floor says, because later
-            // deliveries keep an unrelated failure record and only the save that applies the input clears it.
-            return namesFailureOf(current, meta) ? Delivery.NEW : Delivery.REDELIVERY;
+            // A pending version or a failure record naming this input says it was never applied, whatever the floor says.
+            // Later deliveries keep an unrelated failure record and only the save that applies the input clears it.
+            return isPending(marks, meta) || namesFailureOf(current, meta) ? Delivery.NEW : Delivery.REDELIVERY;
         }
         TypeMark typeMark = marks == null ? null : marks.byType().get(typeKey(meta));
         if (typeMark == null || version > typeMark.mark()) {
