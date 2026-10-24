@@ -647,7 +647,7 @@ public class OccurrentProperties {
              * writes more than this many levels below an event from outside or a replayed event, each level written
              * by the handler of the one above. Reaching it reports the overflow rather than dropping events or
              * letting the buffer grow without bound. The blocking stack throws from the failing feed call. On the
-             * reactor stack the Mono that {@code acceptAndWait(..)} returned for that event errors, and the one from
+             * reactor stack the Mono that {@code accept(..)} returned for that event errors, and the one from
              * {@code acceptOrDefer(..)} completes with {@code NOT_DELIVERABLE}. Raise it for a large history behind a
              * busy feed.
              */
