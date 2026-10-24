@@ -19,7 +19,9 @@ package org.occurrent.dsl.saga.internal;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.*;
+import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -76,9 +78,34 @@ public final class SagaExecutionSupport {
         return !(failure instanceof OutOfMemoryError);
     }
 
-    /** Delivery metadata used to deduplicate a redelivered event. All fields are {@code null} for a timer input. */
-    public record EventMeta(@Nullable String streamId, @Nullable Long streamVersion, @Nullable Long position) {
-        public static final EventMeta NONE = new EventMeta(null, null, null);
+    /**
+     * How many versions behind the highest one applied of its type a stream event may arrive and still be applied. A feed
+     * that reorders a stream's events of one type, such as a broker consumer with more than one message in flight, can
+     * deliver version 7 before version 6. 256 covers a prefetch far beyond what such a feed is configured with.
+     */
+    public static final int DEFAULT_REORDER_WINDOW = 256;
+
+    /** What the executor makes of a stream event, given the versions the instance has already applied. */
+    public enum Delivery {
+        /** The instance has not applied it, so it is applied. */
+        NEW,
+        /** The instance has applied it, so it is skipped. */
+        REDELIVERY,
+        /** Further behind the highest applied version of its type than the window covers, so it is skipped. */
+        BEHIND_WINDOW
+    }
+
+    /**
+     * Delivery metadata used to deduplicate a redelivered event. All fields are {@code null} for a timer input.
+     * {@code eventType} is the cloud event type, and it only has to be there when the feed can reorder a stream's events
+     * across types. A stream event without one is treated as being of a single type named by the empty string.
+     */
+    public record EventMeta(@Nullable String streamId, @Nullable Long streamVersion, @Nullable Long position, @Nullable String eventType) {
+        public static final EventMeta NONE = new EventMeta(null, null, null, null);
+
+        public EventMeta(@Nullable String streamId, @Nullable Long streamVersion, @Nullable Long position) {
+            this(streamId, streamVersion, position, null);
+        }
 
         /**
          * The string that identifies this input across redeliveries, which is the stream id with its stream version,
@@ -136,6 +163,23 @@ public final class SagaExecutionSupport {
                                                                            SagaInput<E> input,
                                                                            EventMeta meta,
                                                                            Instant now) {
+        return process(saga, sagaId, current, input, meta, now, DEFAULT_REORDER_WINDOW);
+    }
+
+    /**
+     * As {@link #process(Saga, String, SagaEnvelope, SagaInput, EventMeta, Instant)}, with the reorder window the runner
+     * is configured with.
+     *
+     * @param reorderWindow how many versions behind the highest one applied of its type a stream event may arrive and
+     *                      still be applied, at least 1
+     */
+    public static <E, S extends @Nullable Object, C> Outcome<S, C> process(Saga<E, S, C> saga,
+                                                                           String sagaId,
+                                                                           @Nullable SagaEnvelope<S> current,
+                                                                           SagaInput<E> input,
+                                                                           EventMeta meta,
+                                                                           Instant now,
+                                                                           int reorderWindow) {
         // Whether a start transition was saved, which is neither "onStart was called" nor "a document exists". An
         // instance whose very first event failed has an envelope holding nothing but that failure. Keying on the
         // document would leave such an instance permanently "already started", so a later redelivery of its start event
@@ -155,7 +199,7 @@ public final class SagaExecutionSupport {
             // tell that the state has a gap in it.
             return Outcome.skip();
         }
-        if (current != null && isRedelivery(current, meta)) {
+        if (current != null && classify(current, meta, reorderWindow) != Delivery.NEW) {
             return Outcome.skip();
         }
 
@@ -204,7 +248,9 @@ public final class SagaExecutionSupport {
         long expectedVersion = isNew ? 0 : current.version();
         Instant createdAt = isNew ? now : current.createdAt();
         Map<String, Long> streamWatermarks = isNew ? new LinkedHashMap<>() : new LinkedHashMap<>(current.streamWatermarks());
+        Map<String, StreamMarks> streamMarks = isNew ? new LinkedHashMap<>() : new LinkedHashMap<>(current.streamMarks());
         if (meta.streamId() != null && meta.streamVersion() != null) {
+            streamMarks.put(meta.streamId(), recorded(streamMarks.get(meta.streamId()), streamWatermarks.get(meta.streamId()), meta, reorderWindow));
             streamWatermarks.merge(meta.streamId(), meta.streamVersion(), Math::max);
         }
 
@@ -222,7 +268,8 @@ public final class SagaExecutionSupport {
                 // Derived from nextState by the envelope's constructor; nothing sensible to pass here.
                 null,
                 true,
-                failureAfter(current, meta, terminal));
+                failureAfter(current, meta, terminal),
+                streamMarks);
         return Outcome.processed(next, commands, expectedVersion);
     }
 
@@ -290,6 +337,21 @@ public final class SagaExecutionSupport {
                                                                                           Throwable failure,
                                                                                           Instant now,
                                                                                           Duration quarantineAfter) {
+        return onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter, DEFAULT_REORDER_WINDOW);
+    }
+
+    /**
+     * As {@link #onFailure(Saga, String, SagaEnvelope, EventMeta, Throwable, Instant, Duration)}, with the reorder window
+     * the runner is configured with.
+     */
+    public static <E, S extends @Nullable Object, C> @Nullable FailureRecord<S> onFailure(Saga<E, S, C> saga,
+                                                                                          String sagaId,
+                                                                                          @Nullable SagaEnvelope<S> current,
+                                                                                          EventMeta meta,
+                                                                                          Throwable failure,
+                                                                                          Instant now,
+                                                                                          Duration quarantineAfter,
+                                                                                          int reorderWindow) {
         String input = meta.redeliveryKey();
         if (input == null) {
             // Nothing here tells one delivery of this input from the next, so a record written now could never be
@@ -301,7 +363,7 @@ public final class SagaExecutionSupport {
             // Neither reaches the saga at all, so neither can be what threw. Defensive rather than reachable.
             return null;
         }
-        if (current != null && isRedelivery(current, meta)) {
+        if (current != null && classify(current, meta, reorderWindow) != Delivery.NEW) {
             // The save committed and its response was lost on the way back, so the reloaded instance already counts
             // this input as handled. A record written here is never cleared, because the redelivery that would clear it
             // is skipped as one, so keep the committed outcome instead.
@@ -382,14 +444,14 @@ public final class SagaExecutionSupport {
         return new FailureRecord<>(withFailure(current, record, status, now), current.version(), quarantined);
     }
 
-    // Deliberately copies the stream watermarks and timers over untouched. A failure advances neither, because the input
+    // Deliberately copies the stream watermarks, stream marks and timers over untouched. A failure advances neither, because the input
     // was not handled, and a quarantined instance's timers stop because the store's due-timer query asks for ACTIVE ones.
     // The position watermark is dropped, as in process, since nothing reads it.
     private static <S extends @Nullable Object> SagaEnvelope<S> withFailure(SagaEnvelope<S> current, SagaFailure record,
                                                                            SagaStatus status, Instant now) {
         return new SagaEnvelope<>(current.sagaId(), current.state(), status, current.version() + 1, current.timers(),
                 current.streamWatermarks(), null, current.createdAt(), now, current.completedAt(),
-                current.currentStep(), current.started(), record);
+                current.currentStep(), current.started(), record, current.streamMarks());
     }
 
 
@@ -407,17 +469,90 @@ public final class SagaExecutionSupport {
     }
 
     /**
-     * Whether {@code current} has already handled the input {@code meta} describes, which is what its stream watermarks
-     * record. An input without a stream id and a stream version is never a redelivery, whatever its position.
+     * Whether {@code current} has already handled the input {@code meta} describes, or is too far past it to say. An
+     * input without a stream id and a stream version is never a redelivery, whatever its position.
      * Public because the executor needs the same answer on a path where it could not load the instance, and two copies
      * of this rule would be free to disagree about which instance is past which input.
      */
     public static <S extends @Nullable Object> boolean isRedelivery(SagaEnvelope<S> current, EventMeta meta) {
-        if (meta.streamId() != null && meta.streamVersion() != null) {
-            Long watermark = current.streamWatermarks().get(meta.streamId());
-            return watermark != null && meta.streamVersion() <= watermark;
+        return isRedelivery(current, meta, DEFAULT_REORDER_WINDOW);
+    }
+
+    /** As {@link #isRedelivery(SagaEnvelope, EventMeta)}, with the reorder window the runner is configured with. */
+    public static <S extends @Nullable Object> boolean isRedelivery(SagaEnvelope<S> current, EventMeta meta, int reorderWindow) {
+        return classify(current, meta, reorderWindow) != Delivery.NEW;
+    }
+
+    /**
+     * What {@code current} makes of the input {@code meta} describes. A stream event is told apart by its stream id,
+     * its cloud event type and its stream version, because that is the order a feed can keep. Kafka orders one stream's
+     * events of one type against each other and nothing across types, so the highest version applied is kept per type
+     * and a lower version of another type is not a redelivery of it.
+     * <p>
+     * Within one type, a version above the highest applied is new. A version at it, or among the {@code applied} ones
+     * below it, was applied. Any other version less than {@code reorderWindow} below it is a late arrival and is new.
+     * One further behind than that is skipped as {@link Delivery#BEHIND_WINDOW}, since remembering every version would
+     * make the state grow with the stream, and a restart that replays old events must not run their reactions again.
+     * <p>
+     * An instance stored before 0.35.0 has a watermark per stream and no marks. Everything at or below that watermark
+     * was applied, so it stays skipped whatever its type, and the type marks start from the next event.
+     */
+    public static <S extends @Nullable Object> Delivery classify(SagaEnvelope<S> current, EventMeta meta, int reorderWindow) {
+        if (meta.streamId() == null || meta.streamVersion() == null) {
+            return Delivery.NEW;
         }
-        return false;
+        long version = meta.streamVersion();
+        StreamMarks marks = current.streamMarks().get(meta.streamId());
+        Long watermark = current.streamWatermarks().get(meta.streamId());
+        long floor = floorOf(marks, watermark);
+        if (version <= floor) {
+            return Delivery.REDELIVERY;
+        }
+        TypeMark typeMark = marks == null ? null : marks.byType().get(typeKey(meta));
+        if (typeMark == null || version > typeMark.mark()) {
+            return Delivery.NEW;
+        }
+        if (version == typeMark.mark() || typeMark.applied().contains(version)) {
+            return Delivery.REDELIVERY;
+        }
+        return version <= typeMark.mark() - reorderWindow ? Delivery.BEHIND_WINDOW : Delivery.NEW;
+    }
+
+    // Everything at or below the floor was applied before versions were recorded per type. A stream the instance has
+    // never seen has no floor, which Long.MIN_VALUE says without assuming where a stream's versions start.
+    private static long floorOf(@Nullable StreamMarks marks, @Nullable Long watermark) {
+        if (marks != null) {
+            return marks.floor();
+        }
+        return watermark != null ? watermark : Long.MIN_VALUE;
+    }
+
+    private static String typeKey(EventMeta meta) {
+        return meta.eventType() == null ? "" : meta.eventType();
+    }
+
+    // The marks of one stream after recording the version meta describes. The floor is fixed when the stream first gets
+    // marks, at the watermark the instance had then, which is what the pre-0.35.0 rule would have skipped up to.
+    private static StreamMarks recorded(@Nullable StreamMarks marks, @Nullable Long watermark, EventMeta meta, int reorderWindow) {
+        long floor = floorOf(marks, watermark);
+        long version = Objects.requireNonNull(meta.streamVersion());
+        Map<String, TypeMark> byType = marks == null ? new LinkedHashMap<>() : new LinkedHashMap<>(marks.byType());
+        TypeMark previous = byType.get(typeKey(meta));
+        TreeSet<Long> applied = new TreeSet<>(previous == null ? List.of() : previous.applied());
+        long mark;
+        if (previous == null) {
+            mark = version;
+        } else if (version > previous.mark()) {
+            applied.add(previous.mark());
+            mark = version;
+        } else {
+            applied.add(version);
+            mark = previous.mark();
+        }
+        // Past the window a version is skipped, so remembering it would only grow the state.
+        applied.removeIf(earlier -> earlier <= mark - reorderWindow);
+        byType.put(typeKey(meta), new TypeMark(mark, List.copyOf(applied)));
+        return new StreamMarks(floor, byType);
     }
 
     private static <C> void applyEffects(List<SagaEffect<C>> effects, List<C> commands, Map<String, TimerEntry> timers, Instant now) {
