@@ -644,17 +644,16 @@ class DomainEventFeedTest {
     }
 
     @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_waits_for_the_projection_to_go_live_and_folds_the_event_instead_of_deferring_it() throws Exception {
+    void accept_and_wait_waits_for_the_projection_to_go_live_and_folds_the_event_instead_of_deferring_it() throws Exception {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
-        CompletableFuture<Void> plain = feed.accept(new Counted("early")).toFuture();
-        CompletableFuture<Void> withMetadata = feed.accept(EventMetadata.empty(), new Counted("early-with-metadata")).toFuture();
+        CompletableFuture<Void> plain = feed.acceptAndWait(new Counted("early")).toFuture();
+        CompletableFuture<Void> withMetadata = feed.acceptAndWait(EventMetadata.empty(), new Counted("early-with-metadata")).toFuture();
 
-        assertThat(plain).as("accept(..) before the projection is live").isNotDone();
-        assertThat(withMetadata).as("accept(metadata, ..) before the projection is live").isNotDone();
+        assertThat(plain).as("acceptAndWait(..) before the projection is live").isNotDone();
+        assertThat(withMetadata).as("acceptAndWait(metadata, ..) before the projection is live").isNotDone();
         feed.catchUpAll().block(Duration.ofSeconds(5));
 
         plain.get(5, TimeUnit.SECONDS);
@@ -663,39 +662,15 @@ class DomainEventFeedTest {
     }
 
     @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_forwards_to_accept_and_wait_and_folds_the_event_live() {
-        CloudEventConverter<Counted> converter = countedConverter();
-        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
-        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
-        feed.register("positions", positionKeyedProjection(), ViewStateRepository.create(repo::get, repo::put));
+    void accept_and_wait_folds_the_event_live_once_the_projection_is_live() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), countedConverter(), Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
         feed.catchUpAll().block();
 
-        feed.accept(metadata("stream-1", 7L), new Counted("live")).block(Duration.ofSeconds(5));
+        feed.acceptAndWait(new Counted("1")).block(Duration.ofSeconds(5));
 
-        assertThat(repo.get("stream-1")).as("the metadata overload forwards its metadata").isEqualTo(7L);
-
-        DomainEventFeed<Counted> plainFeed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
-        ConcurrentHashMap<String, Integer> plainRepo = new ConcurrentHashMap<>();
-        plainFeed.register("counter", projection(), ViewStateRepository.create(plainRepo::get, plainRepo::put));
-        plainFeed.catchUpAll().block();
-
-        plainFeed.accept(new Counted("1")).block(Duration.ofSeconds(5));
-
-        assertThat(plainRepo.get("counter")).isEqualTo(1);
-    }
-
-    @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_errors_like_accept_and_wait_before_a_projection_is_registered() {
-        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), countedConverter(), Counted::eventId);
-
-        StepVerifier.create(feed.accept(new Counted("1")))
-                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered"))
-                .verify(Duration.ofSeconds(5));
-        StepVerifier.create(feed.accept(EventMetadata.empty(), new Counted("1")))
-                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered"))
-                .verify(Duration.ofSeconds(5));
+        assertThat(repo.get("counter")).isEqualTo(1);
     }
 
     @Test

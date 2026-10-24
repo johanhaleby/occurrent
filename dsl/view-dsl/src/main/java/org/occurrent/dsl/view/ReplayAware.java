@@ -70,8 +70,8 @@ public interface ReplayAware {
      * The default does nothing, which is what a view that only batches its replay wants.
      *
      * @param metadata What the feed knows about the event that was not delivered a second time. Empty when the live
-     *                 copy arrived through {@code accept(E)}, which carries no metadata, and there is then no append
-     *                 to write down.
+     *                 copy arrived through {@code acceptAndWait(E)} or {@code acceptOrDefer(E)}, which take no
+     *                 metadata, and there is then no append to write down.
      */
     default void alreadyDeliveredByReplay(EventMetadata metadata) {
     }

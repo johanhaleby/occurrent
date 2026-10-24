@@ -894,55 +894,32 @@ class DomainEventFeedTest {
     }
 
     @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_forwards_to_accept_and_wait_and_folds_the_event_live() {
+    void accept_and_wait_folds_the_event_live_once_the_projection_is_live() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
-        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
-        feed.register("positions", positionKeyedProjection(), ViewStateRepository.create(repo::get, repo::put));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
         feed.catchUpAll();
 
-        feed.accept(metadata("stream-1", 7L), new Counted("live"));
+        feed.acceptAndWait(new Counted("1"));
 
-        assertThat(repo.get("stream-1")).as("the metadata overload forwards its metadata").isEqualTo(7L);
-
-        DomainEventFeed<Counted> plainFeed = new DomainEventFeed<>(store, converter, Counted::eventId);
-        ConcurrentHashMap<String, Integer> plainRepo = new ConcurrentHashMap<>();
-        plainFeed.register("counter", projection(), ViewStateRepository.create(plainRepo::get, plainRepo::put));
-        plainFeed.catchUpAll();
-
-        plainFeed.accept(new Counted("1"));
-
-        assertThat(plainRepo.get("counter")).isEqualTo(1);
+        assertThat(repo.get("counter")).isEqualTo(1);
     }
 
     @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_waits_for_the_catch_up_and_folds_the_event_instead_of_deferring_it() {
+    void accept_and_wait_waits_for_the_catch_up_and_folds_the_event_instead_of_deferring_it() {
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(new InMemoryEventStore(), counterConverter(), Counted::eventId);
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
-        FutureTask<Void> plain = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("early")));
-        FutureTask<Void> withMetadata = feedWaitingForTheCatchUp(() -> feed.accept(metadata("early-stream", 7L), new Counted("early-with-metadata")));
+        FutureTask<Void> plain = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(new Counted("early")));
+        FutureTask<Void> withMetadata = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(metadata("early-stream", 7L), new Counted("early-with-metadata")));
 
         feed.catchUpAll();
 
         assertThat(plain).succeedsWithin(Duration.ofSeconds(5));
         assertThat(withMetadata).succeedsWithin(Duration.ofSeconds(5));
         assertThat(repo.get("counter")).as("both events accepted before the projection was live").isEqualTo(2);
-    }
-
-    @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_throws_like_accept_and_wait_before_a_projection_is_registered() {
-        DomainEventFeed<Counted> feed = new DomainEventFeed<>(new InMemoryEventStore(), counterConverter(), Counted::eventId);
-
-        Throwable plain = catchThrowable(() -> feed.accept(new Counted("1")));
-        Throwable withMetadata = catchThrowable(() -> feed.accept(EventMetadata.empty(), new Counted("1")));
-
-        assertThat(plain).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered");
-        assertThat(withMetadata).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered");
     }
 
     private static CloudEvent firstEventOf(InMemoryEventStore store) {
