@@ -48,15 +48,20 @@ public interface RepositionableSubscriptions extends SubscriptionModelCapability
 
     /**
      * Whether a subscription this model subscribes at {@code checkpoint}, as it does when a stored checkpoint is read
-     * back after a restart, starts reading there. A model that opens such a subscription somewhere else, for example
-     * at the present, answers {@code false}, so a model that stores positions on top of it, such as a durable
-     * subscription model, doesn't store one that makes a restart skip the events written in between.
+     * back after a restart, starts reading there. A model that stores positions on top of this one, such as a durable
+     * subscription model, stores the position of a resume at a position only when this answers {@code true}. A stored
+     * position that this model opens somewhere else, for example at the present, would make a restart skip the events
+     * written in between.
+     * <p>
+     * The default answers {@code false}, so nothing is stored for a model that doesn't override this. A restart then
+     * resumes from the checkpoint stored before the resume, which can deliver events again but skips none. Override
+     * it to answer {@code true} for every checkpoint this model starts reading at.
      *
      * @param checkpoint The position a subscription would be subscribed at.
-     * @return {@code true} unless a subscription subscribed at {@code checkpoint} starts somewhere else.
+     * @return {@code true} if a subscription subscribed at {@code checkpoint} starts reading there, {@code false} by default.
      */
     default boolean restartsAt(Checkpoint checkpoint) {
-        return true;
+        return false;
     }
 
     /**

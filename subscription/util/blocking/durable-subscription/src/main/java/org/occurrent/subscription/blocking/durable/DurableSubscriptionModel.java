@@ -813,7 +813,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * <li>A checkpoint the wrapped model's {@link RepositionableSubscriptions#restartsAt(Checkpoint)} answers
      * {@code false} for is passed on to the wrapped model and not stored. A restart subscribes the wrapped model at the
      * stored checkpoint, and it would start somewhere else for that one. The MongoDB subscription models answer
-     * {@code false} for a catch-up's position, a time, and any other checkpoint their change stream can't open at.</li>
+     * {@code false} for a catch-up's position, a time, and any other checkpoint their change stream can't open at. A
+     * model that doesn't override it answers {@code false} for every checkpoint, so nothing is stored over it.</li>
      * </ul>
      * The checkpoint is stored with the same write condition as every other checkpoint this model writes. When the
      * checkpoint storage refuses the write with {@link CheckpointWriteConditionNotFulfilledException}, because another
@@ -891,7 +892,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      */
     @Override
     public boolean restartsAt(Checkpoint checkpoint) {
-        return RepositionableSubscriptions.findIn(getWrappedSubscriptionModel()).map(model -> model.restartsAt(checkpoint)).orElse(true);
+        return RepositionableSubscriptions.findIn(getWrappedSubscriptionModel()).map(model -> model.restartsAt(checkpoint)).orElse(false);
     }
 
     private Checkpoint presentPositionToResumeAt(String subscriptionId) {

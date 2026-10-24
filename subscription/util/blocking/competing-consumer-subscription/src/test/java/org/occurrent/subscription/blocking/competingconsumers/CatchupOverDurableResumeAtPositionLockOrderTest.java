@@ -283,6 +283,11 @@ class CatchupOverDurableResumeAtPositionLockOrderTest {
         }
 
         @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return true;
+        }
+
+        @Override
         public Subscription resumeSubscription(String subscriptionId) {
             throw new UnsupportedOperationException("a plain resume is not expected");
         }

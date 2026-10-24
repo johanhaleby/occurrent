@@ -96,9 +96,11 @@ call holds the lock `DurableSubscriptionModel` already takes per subscription id
   made up. Storing it would make a restart skip the events written in between.
 
 The durable model can't tell those checkpoints apart itself, because only the wrapped model knows what it can open at.
-So blocking `RepositionableSubscriptions` gets a default method, `restartsAt(Checkpoint)`, that answers `true`. The
-MongoDB models answer `false` for every checkpoint their change stream can't open at, and the durable model stores a
-position only when the wrapped model answers `true`. The durable model answers what its wrapped model answers. The
+So blocking `RepositionableSubscriptions` gets a default method, `restartsAt(Checkpoint)`, that answers `false`. The
+MongoDB models override it and answer `true` for every checkpoint their change stream can open at, and the durable
+model stores a position only when the wrapped model answers `true`. A wrong `false` makes a restart resume from the
+checkpoint stored before, which delivers events again, and a wrong `true` makes it skip events, so a model that doesn't
+override the method has nothing stored, as in 0.34.0. The durable model answers what its wrapped model answers. The
 reactor `RepositionableSubscriptions` doesn't get the method, because `ReactorDurableSubscriptionModel` stores nothing
 on a resume at a position.
 
@@ -147,9 +149,9 @@ do. `resumeSubscription(subscriptionId, startAt)` throws `UnsupportedOperationEx
 * ADR 119 called these lookups purely additive because they hadn't shipped. They shipped in 0.33.0, so this is a
   breaking change, with a changelog entry and a section in the 0.35.0 upgrade guide. The only new method is a default one,
   so there is no OpenRewrite recipe.
-* A repositionable subscription model of an application's own that opens a subscription somewhere else for some
-  checkpoint should override `restartsAt(..)`. Until it does, a `DurableSubscriptionModel` over it stores every
-  position it is resumed at.
+* A `DurableSubscriptionModel` over a repositionable subscription model of an application's own stores nothing on a
+  resume at a position, as in 0.34.0, until that model overrides `restartsAt(..)` to answer `true` for the
+  checkpoints it starts reading at.
 * No stored document changes format. The `DurableSubscriptionModel` writes the same checkpoint with the same write
   condition, only earlier. A 0.34.0 node reads a checkpoint stored at a resume as an ordinary checkpoint.
 * The lock order on the starter's stack is the catch-up model's claim, then its hand-over lock, then the durable

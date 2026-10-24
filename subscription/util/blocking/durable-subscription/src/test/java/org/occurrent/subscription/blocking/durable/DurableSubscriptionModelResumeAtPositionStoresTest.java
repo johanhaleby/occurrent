@@ -102,6 +102,38 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
         }
 
         @Test
+        void a_resume_at_a_checkpoint_stores_nothing_when_the_wrapped_model_does_not_override_restartsAt() {
+            // Given
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
+            DurableSubscriptionModel model = new DurableSubscriptionModel(new RepositionableFakeWithoutRestartsAt(new RepositionableFake()), storage);
+            subscribeAndPause(model);
+
+            // When
+            repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER));
+
+            // Then
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(OLDER);
+        }
+
+        @Test
+        void a_resume_at_a_checkpoint_resumes_the_wrapped_model_there_when_it_does_not_override_restartsAt() {
+            // Given
+            RepositionableFake behind = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(new RepositionableFakeWithoutRestartsAt(behind), storageHolding(OLDER));
+            subscribeAndPause(model);
+
+            // When
+            repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER));
+
+            // Then
+            assertAll(
+                    () -> assertThat(behind.checkpointsResumedAt).containsExactly(NEWER),
+                    () -> assertThat(behind.isPaused(SUBSCRIPTION_ID)).as("paused").isFalse(),
+                    () -> assertThat(behind.isRunning(SUBSCRIPTION_ID)).as("running").isTrue()
+            );
+        }
+
+        @Test
         void a_resume_at_now_stores_the_wrapped_models_global_checkpoint_and_resumes_there() {
             // Given
             InMemoryCheckpointStorage storage = storageHolding(OLDER);
@@ -574,6 +606,72 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
                 throw deleteFailure;
             }
             super.delete(subscriptionId);
+        }
+    }
+
+    /**
+     * Forwards everything to a {@link RepositionableFake} but {@code restartsAt}, which it leaves at the interface default.
+     */
+    private static final class RepositionableFakeWithoutRestartsAt implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
+        private final RepositionableFake delegate;
+
+        private RepositionableFakeWithoutRestartsAt(RepositionableFake delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return delegate.resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            delegate.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            delegate.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return delegate.isPaused(subscriptionId);
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return delegate.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return delegate.isRunning();
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            return delegate.globalCheckpoint();
+        }
+
+        @Override
+        public void stop() {
+            delegate.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            delegate.start(resumeSubscriptionsAutomatically);
         }
     }
 

@@ -126,9 +126,10 @@ checkpoint, then resumes the wrapped model there.
 * A subscription subscribed without checkpointing, or one the wrapped model doesn't report as paused, is passed on to
   the wrapped model and nothing is stored.
 * A checkpoint the wrapped model's new `restartsAt(..)` answers `false` for is passed on to the wrapped model and
-  nothing is stored. The MongoDB subscription models answer `false` for a `GlobalCheckpoint`, a
-  `CatchupTimeCheckpoint`, a time and every other checkpoint their change stream can't open at. They open at the
-  present when they subscribe at one, so a stored one would make a restart skip events.
+  nothing is stored. The method answers `false` unless the model overrides it. The MongoDB subscription models answer
+  `false` for a `GlobalCheckpoint`, a `CatchupTimeCheckpoint`, a time and every other checkpoint their change stream
+  can't open at. They open at the present when they subscribe at one, so a stored one would make a restart skip
+  events.
 
 The checkpoint is written with the same write condition as every other checkpoint the durable model writes. A node
 whose write the checkpoint storage refuses, because another node has written with a newer lease, gets
@@ -142,9 +143,9 @@ durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34
 position or the quiet save. That section stays as it was released, and over a durable model it no longer holds.
 
 There is nothing to change in your code unless it depends on the checkpoint staying where it was after a resume at a
-position, or you wrote a repositionable subscription model that opens a subscription somewhere else for some
-checkpoint. Override `RepositionableSubscriptions.restartsAt(..)` in that model to answer `false` for those, or a
-`DurableSubscriptionModel` over it stores them. Nothing stored changes format, and there is no OpenRewrite recipe for this. See
+position. A `DurableSubscriptionModel` over a repositionable subscription model you wrote yourself stores nothing on a
+resume at a position, as in 0.34.0. To have the position stored, override `RepositionableSubscriptions.restartsAt(..)`
+in that model to answer `true` for every checkpoint a subscription it subscribes there starts reading at. Nothing stored changes format, and there is no OpenRewrite recipe for this. See
 [ADR 151](../architecture/decisions/0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md) and
 [#1253](https://github.com/johanhaleby/occurrent/issues/1253).
 

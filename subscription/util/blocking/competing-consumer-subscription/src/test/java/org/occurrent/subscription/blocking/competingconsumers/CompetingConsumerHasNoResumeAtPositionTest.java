@@ -167,6 +167,11 @@ class CompetingConsumerHasNoResumeAtPositionTest {
         }
 
         @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return true;
+        }
+
+        @Override
         public Subscription resumeSubscription(String subscriptionId) {
             paused.remove(subscriptionId);
             return new FakeSubscription(subscriptionId);

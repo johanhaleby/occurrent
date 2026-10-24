@@ -23,6 +23,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 
 import java.util.Optional;
@@ -94,6 +95,18 @@ class RepositionableSubscriptionsTest {
 
         // Then
         assertThat(found).isEmpty();
+    }
+
+    @Test
+    void restartsAt_is_false_for_a_model_that_does_not_override_it() {
+        // Given
+        RepositionableModel model = new RepositionableModel();
+
+        // When
+        boolean restartsAt = model.restartsAt(new StringBasedCheckpoint("position"));
+
+        // Then
+        assertThat(restartsAt).isFalse();
     }
 
     private static class PlainModel implements SubscriptionModel {
