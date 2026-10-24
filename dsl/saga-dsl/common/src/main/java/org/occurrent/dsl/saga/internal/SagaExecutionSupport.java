@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
  * The pure, stack-agnostic decision step of the saga executor: given the current envelope (or {@code null} for a new
@@ -34,9 +35,10 @@ import java.util.*;
  * a blocking or reactor runner can wrap it identically. The runner owns loading, the compare-and-set save, dispatch, and
  * timer polling.
  * <p>
- * Redelivery is deduplicated from the event's stream version (per stream) or its global position. An event that carries
- * neither, which Occurrent's own stored events always do, cannot be deduplicated and is re-folded on redelivery, so a
- * custom event source feeding a saga must carry the stream or position extension for the fold to be redelivery-safe.
+ * Redelivery is deduplicated from the event's stream version, per stream id. An event without a stream id and a stream
+ * version, which Occurrent's own stored events always carry, cannot be deduplicated and is re-folded on redelivery, so a
+ * custom event source feeding a saga must carry both extensions for the fold to be redelivery-safe. A global position is
+ * never used for this, because events can reach a saga in a different order than their positions.
  */
 public final class SagaExecutionSupport {
 
@@ -79,19 +81,19 @@ public final class SagaExecutionSupport {
         public static final EventMeta NONE = new EventMeta(null, null, null);
 
         /**
-         * The string that identifies this input across redeliveries, which is the stream id with its stream version
-         * when both are present and the global position otherwise, or {@code null} when the event carries neither.
-         * {@code isRedelivery} looks at the same two things, so the rule lives here instead of being written twice.
+         * The string that identifies this input across redeliveries, which is the stream id with its stream version,
+         * or {@code null} when the event lacks either. {@code isRedelivery} looks at the same two things, so the rule
+         * lives here instead of being written twice.
          * <p>
-         * A stream id with a version is preferred over a position because it belongs to the event, while a position is
-         * a number one subscription model assigns. An event store that assigns no position at all, one built with
-         * {@code withoutStreamPosition()} for instance, still gives every event both of the first two.
+         * The global position is not part of the key. A subscription model assigns it, and an event can commit at a
+         * lower position than one the saga has already folded. An event store that assigns no position at all, one
+         * built with {@code withoutStreamPosition()} for instance, still gives every event a stream id and version.
          */
         public @Nullable String redeliveryKey() {
             if (streamId != null && streamVersion != null) {
                 return streamId + "@" + streamVersion;
             }
-            return position == null ? null : "position:" + position;
+            return null;
         }
 
         /** Whether {@link #redeliveryKey()} exists, meaning a redelivery of this input can be told from a new one. */
@@ -202,11 +204,8 @@ public final class SagaExecutionSupport {
         long expectedVersion = isNew ? 0 : current.version();
         Instant createdAt = isNew ? now : current.createdAt();
         Map<String, Long> streamWatermarks = isNew ? new LinkedHashMap<>() : new LinkedHashMap<>(current.streamWatermarks());
-        Long positionWatermark = isNew ? null : current.positionWatermark();
         if (meta.streamId() != null && meta.streamVersion() != null) {
             streamWatermarks.merge(meta.streamId(), meta.streamVersion(), Math::max);
-        } else if (meta.position() != null) {
-            positionWatermark = positionWatermark == null ? meta.position() : Math.max(positionWatermark, meta.position());
         }
 
         SagaEnvelope<S> next = new SagaEnvelope<>(
@@ -216,7 +215,7 @@ public final class SagaExecutionSupport {
                 expectedVersion + 1,
                 List.copyOf(timers.values()),
                 streamWatermarks,
-                positionWatermark,
+                null,
                 createdAt,
                 now,
                 terminal ? now : null,
@@ -258,8 +257,12 @@ public final class SagaExecutionSupport {
      * clears the record only when it is the input the record names, and it is there for the same reason.
      * <p>
      * "The same input" is {@link EventMeta#redeliveryKey()}, not the global position, so an event from a store that
-     * assigns no position is recorded and quarantined like any other. An input carrying no key at all is refused here,
-     * because a record naming it could never be matched against the input that wrote it.
+     * assigns no position is recorded and quarantined like any other. An input carrying no key, which includes one that
+     * carries only a position, is refused here, because a record naming it could never be matched against the input
+     * that wrote it.
+     * <p>
+     * A stored record whose input is a position key, written by 0.31.0 to 0.34.0, is treated as no record at all. No
+     * input has that key any more, so keeping it would only let an unrelated failure find a budget that ran out long ago.
      * <p>
      * A successful input clears the record only when it is the input the record names. Any other one leaves it alone,
      * including {@code firstFailedAt}, because a saga re-arms its timers explicitly and a timer firing more often than
@@ -304,7 +307,7 @@ public final class SagaExecutionSupport {
             // is skipped as one, so keep the committed outcome instead.
             return null;
         }
-        SagaFailure existing = current == null ? null : current.failure();
+        SagaFailure existing = currentFailure(current);
         if (existing == null) {
             SagaFailure record = new SagaFailure(input, meta.position(), now, failure.getClass().getName(), shortened(failure.getMessage()));
             return failureRecord(saga, sagaId, current, record, SagaStatus.ACTIVE, now, false);
@@ -344,13 +347,23 @@ public final class SagaExecutionSupport {
     }
 
     private static <S extends @Nullable Object> @Nullable SagaFailure failureAfter(@Nullable SagaEnvelope<S> current, EventMeta meta, boolean terminal) {
-        SagaFailure existing = current == null ? null : current.failure();
+        SagaFailure existing = currentFailure(current);
         if (existing == null || terminal) {
             // A completed instance can never quarantine, so a record left on it would describe a budget that can no
             // longer run, and it would sit outside the two states SagaInstance.failure() describes.
             return null;
         }
         return existing.input().equals(meta.redeliveryKey()) ? null : existing;
+    }
+
+    // 0.31.0 to 0.34.0 keyed an event that carried only a position as "position:N". Nothing produces that key now, so a
+    // record holding one can never be matched or cleared by an input. A stream key always contains an "@", so a stream id
+    // that starts with "position:" does not match.
+    private static final Pattern LEGACY_POSITION_KEY = Pattern.compile("position:\\d+");
+
+    private static <S extends @Nullable Object> @Nullable SagaFailure currentFailure(@Nullable SagaEnvelope<S> current) {
+        SagaFailure stored = current == null ? null : current.failure();
+        return stored != null && LEGACY_POSITION_KEY.matcher(stored.input()).matches() ? null : stored;
     }
 
     private static <E, S extends @Nullable Object, C> FailureRecord<S> failureRecord(Saga<E, S, C> saga, String sagaId,
@@ -369,12 +382,13 @@ public final class SagaExecutionSupport {
         return new FailureRecord<>(withFailure(current, record, status, now), current.version(), quarantined);
     }
 
-    // Deliberately copies the watermarks and timers over untouched. A failure advances neither, because the input was not
-    // handled, and a quarantined instance's timers stop because the store's due-timer query asks for ACTIVE ones.
+    // Deliberately copies the stream watermarks and timers over untouched. A failure advances neither, because the input
+    // was not handled, and a quarantined instance's timers stop because the store's due-timer query asks for ACTIVE ones.
+    // The position watermark is dropped, as in process, since nothing reads it.
     private static <S extends @Nullable Object> SagaEnvelope<S> withFailure(SagaEnvelope<S> current, SagaFailure record,
                                                                            SagaStatus status, Instant now) {
         return new SagaEnvelope<>(current.sagaId(), current.state(), status, current.version() + 1, current.timers(),
-                current.streamWatermarks(), current.positionWatermark(), current.createdAt(), now, current.completedAt(),
+                current.streamWatermarks(), null, current.createdAt(), now, current.completedAt(),
                 current.currentStep(), current.started(), record);
     }
 
@@ -393,18 +407,15 @@ public final class SagaExecutionSupport {
     }
 
     /**
-     * Whether {@code current} has already handled the input {@code meta} describes, which is what its watermarks record.
-     * Public because the executor needs the same answer on a path where it could not load the instance, and two copies of
-     * this rule would be free to disagree about which instance is past which input.
+     * Whether {@code current} has already handled the input {@code meta} describes, which is what its stream watermarks
+     * record. An input without a stream id and a stream version is never a redelivery, whatever its position.
+     * Public because the executor needs the same answer on a path where it could not load the instance, and two copies
+     * of this rule would be free to disagree about which instance is past which input.
      */
     public static <S extends @Nullable Object> boolean isRedelivery(SagaEnvelope<S> current, EventMeta meta) {
         if (meta.streamId() != null && meta.streamVersion() != null) {
             Long watermark = current.streamWatermarks().get(meta.streamId());
             return watermark != null && meta.streamVersion() <= watermark;
-        }
-        if (meta.position() != null) {
-            Long watermark = current.positionWatermark();
-            return watermark != null && meta.position() <= watermark;
         }
         return false;
     }

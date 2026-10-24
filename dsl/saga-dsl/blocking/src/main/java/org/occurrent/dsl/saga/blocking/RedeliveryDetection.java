@@ -18,9 +18,9 @@ package org.occurrent.dsl.saga.blocking;
 
 /**
  * What a {@link SagaRunner} does with an event it cannot recognise a redelivery of. A saga tells a redelivered event
- * from a new one by its {@code streamid} together with its {@code streamversion}, or by its {@code position}. An event
- * carrying none of those leaves nothing to compare against, so the reaction runs again on every redelivery and issues
- * its commands again.
+ * from a new one by its {@code streamid} together with its {@code streamversion}. An event without both leaves nothing
+ * to compare against, so the reaction runs again on every redelivery and issues its commands again. A
+ * {@code position} does not help, because events can reach a saga in a different order than their positions.
  * <p>
  * Only a feed handing the runner events it did not read from the event store can produce such an event. Occurrent's
  * own stored events always carry the metadata, and so does a catch-up replay.
@@ -29,17 +29,17 @@ package org.occurrent.dsl.saga.blocking;
  */
 public enum RedeliveryDetection {
     /**
-     * The default. An event with no {@code streamid}/{@code streamversion} and no {@code position} is refused with a
-     * {@link SagaRedeliveryDetectionException} rather than reacted to, so the feed that dropped the metadata announces
-     * itself instead of quietly costing the saga its redelivery protection. The exception propagates to the
-     * subscription model, and whether the event is offered again is that model's own business. A push feed lets the
-     * listener that handed the event over decide, and on a broker source {@code DeliveryFailurePolicy} is where the
-     * choice is configured.
+     * The default. An event without both a {@code streamid} and a {@code streamversion} is refused with a
+     * {@link SagaRedeliveryDetectionException} rather than reacted to, and that includes an event carrying only a
+     * {@code position}. The feed that dropped the metadata announces itself instead of quietly costing the saga its
+     * redelivery protection. The exception propagates to the subscription model, and whether the event is offered
+     * again is that model's own business. A push feed lets the listener that handed the event over decide, and on a
+     * broker source {@code DeliveryFailurePolicy} is where the choice is configured.
      */
     REQUIRED,
     /**
-     * Take the event anyway, logging a warning the first time. Choose this for a feed that genuinely carries no such
-     * metadata, and only when every command the saga issues is safe to receive more than once, since a redelivery runs
+     * Take the event anyway, logging a warning the first time. Choose this for a feed that genuinely carries no stream
+     * key, and only when every command the saga issues is safe to receive more than once, since a redelivery runs
      * every reaction again.
      */
     BEST_EFFORT

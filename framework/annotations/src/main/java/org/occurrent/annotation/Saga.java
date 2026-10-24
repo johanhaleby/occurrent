@@ -186,11 +186,11 @@ public @interface Saga {
      * where there is no replay to wait for.
      * <p>
      * <strong>Forward the Occurrent CloudEvent extensions from your listener.</strong> A saga recognises a redelivered
-     * event by its {@code streamid} together with its {@code streamversion}, or by its {@code position}. Push delivery
-     * is at-least-once, so an event arriving with none of those would be reacted to a second time and its commands
-     * issued a second time. The catch-up leg is safe either way, because it replays from the event store, whose events
-     * always carry them. It is the live leg that depends on what the listener forwards, so the saga refuses an event
-     * that carries none of them unless {@link #redeliveryDetection()} says otherwise.
+     * event by its {@code streamid} together with its {@code streamversion}. Push delivery is at-least-once, so an
+     * event arriving without both would be reacted to a second time and its commands issued a second time. A
+     * {@code position} does not substitute for them. The catch-up leg is safe either way, because it replays from the
+     * event store, whose events always carry both. It is the live leg that depends on what the listener forwards, so
+     * the saga refuses an event without both unless {@link #redeliveryDetection()} says otherwise.
      */
     Source source() default Source.EVENT_STORE;
 
@@ -203,11 +203,11 @@ public @interface Saga {
     Catchup catchup() default Catchup.FROM_EVENT_STORE;
 
     /**
-     * What a {@link Source#PUSH} saga does with an event it cannot recognise a redelivery of, one carrying neither a
-     * {@code streamid} with a {@code streamversion} nor a {@code position}. {@link RedeliveryDetection#REQUIRED} (the
-     * default) refuses it, so the feed that dropped the metadata announces itself rather than quietly costing the saga
-     * its redelivery protection. {@link RedeliveryDetection#BEST_EFFORT} reacts to it anyway, warning once, for a feed
-     * that genuinely carries none of it and a saga whose commands are all safe to receive more than once. Setting this on a
+     * What a {@link Source#PUSH} saga does with an event it cannot recognise a redelivery of, one without both a
+     * {@code streamid} and a {@code streamversion}. {@link RedeliveryDetection#REQUIRED} (the default) refuses it, so
+     * the feed that dropped the metadata announces itself rather than quietly costing the saga its redelivery
+     * protection. {@link RedeliveryDetection#BEST_EFFORT} reacts to it anyway, warning once, for a feed that genuinely
+     * carries no stream key and a saga whose commands are all safe to receive more than once. Setting this on a
      * {@link Source#EVENT_STORE} saga is rejected, since the event store's own events always carry the metadata and
      * there would be nothing for it to change.
      */

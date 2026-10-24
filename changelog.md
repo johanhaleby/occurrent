@@ -8,6 +8,8 @@
 
 #### Breaking changes
 
+* **A saga no longer uses an event's global position to recognise a redelivery.** An event that has a `position` but no `streamid` and `streamversion` is refused under the default `RedeliveryDetection.REQUIRED`. Under `BEST_EFFORT` it is applied with a warning and can't be quarantined, and an unreadable `streamid` or `streamversion` fails the delivery under both settings. A stored `positionWatermark` still loads and is ignored. Events read from an Occurrent event store are not affected. This reverses position-based deduplication that shipped in 0.31.0. See [the upgrade guide](doc/migration/upgrading-to-0.35.0.md#a-global-position-is-no-longer-a-saga-redelivery-key), [ADR 150](doc/architecture/decisions/0150-a-global-position-is-not-a-saga-redelivery-key.md) and [#1298](https://github.com/johanhaleby/occurrent/issues/1298).
+
 ### 0.34.0 (2026-10-23)
 
 #### Highlights

@@ -1078,6 +1078,33 @@ class SagaQuarantineTest {
     }
 
     @Nested
+    class OnAnEventCarryingOnlyAPosition {
+
+        /**
+         * A position is not a redelivery key, so there is nothing to record a failure against. The exception goes back to
+         * the model on every delivery, and the instances queued behind it wait, which is what a feed with no key has
+         * always meant when quarantine cannot help.
+         */
+        @Test
+        void is_never_quarantined_under_BEST_EFFORT_so_the_instances_behind_it_keep_waiting() {
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG.withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT));
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            model.push(positionOnlyCloudEvent(new PaymentReserved("2", POISON)));
+            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("3", HEALTHY)));
+            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(subscription.instances().find(POISON)).isPresent());
+
+            // Held for several budgets, so a quarantine that was merely late would still show up.
+            await().during(BUDGET.multipliedBy(4)).atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull(),
+                    () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
+            ));
+        }
+    }
+
+    @Nested
     class WhenItsStateCanNoLongerBeDecoded {
 
         private final RefusesToDecodeOneInstance store = new RefusesToDecodeOneInstance();
@@ -1494,6 +1521,11 @@ class SagaQuarantineTest {
         return CloudEventBuilder.v1(converter.toCloudEvent(event))
                 .withExtension(OccurrentCloudEventExtension.occurrent(streamId, streamVersion))
                 .build();
+    }
+
+    /** What a feed that drops the stream extensions but keeps the position delivers, which is no redelivery key at all. */
+    private CloudEvent positionOnlyCloudEvent(OrderEvent event) {
+        return OccurrentCloudEventExtension.withPosition(converter.toCloudEvent(event), position.incrementAndGet());
     }
 
     /**
