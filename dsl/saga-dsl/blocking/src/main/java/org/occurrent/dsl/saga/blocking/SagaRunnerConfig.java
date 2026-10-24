@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
+
 import java.time.Duration;
 import java.util.Optional;
 
@@ -37,6 +39,14 @@ import static java.util.Objects.requireNonNull;
  * @param maxCasAttempts       the maximum compare-and-set attempts for one input before failing, also the maximum number
  *                             of times that input's commands can be re-dispatched
  * @param redeliveryDetection  what to do with an event the runner cannot recognise a redelivery of
+ * @param reorderWindow        how far behind the highest version it has applied of the same event type an event of a
+ *                             stream still has to be to be skipped, at least 1 and 256 by default. A feed that can
+ *                             deliver one stream's events of one type out of order, such as a broker consumer with
+ *                             several messages in flight, hands a saga version 7 before version 6, and the saga applies
+ *                             6 instead of taking it for a redelivery. An event fewer versions behind than this is
+ *                             applied unless the saga has applied that version already, and one this many versions
+ *                             behind or more is skipped with a warning. Each instance remembers up to this many applied
+ *                             versions per stream and event type, so the state it stores grows with the number
  * @param quarantineAfter      how long one instance has to keep failing before it can be quarantined on whichever
  *                             event it is failing on then, or empty to never quarantine. Empty is the default, and
  *                             {@link #withQuarantineAfter(Duration)} turns quarantine on. Reaching the budget is not
@@ -61,7 +71,8 @@ import static java.util.Objects.requireNonNull;
  *                             acknowledged
  */
 public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts,
-                               RedeliveryDetection redeliveryDetection, Optional<Duration> quarantineAfter) {
+                               RedeliveryDetection redeliveryDetection, Optional<Duration> quarantineAfter,
+                               int reorderWindow) {
 
     public SagaRunnerConfig {
         requireNonNull(timerPollInterval, "timerPollInterval cannot be null");
@@ -81,6 +92,16 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
         if (maxCasAttempts < 1) {
             throw new IllegalArgumentException("maxCasAttempts must be at least 1");
         }
+        if (reorderWindow < 1) {
+            throw new IllegalArgumentException("reorderWindow must be at least 1");
+        }
+    }
+
+    /** A configuration with the default reorder window. */
+    public SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts,
+                            RedeliveryDetection redeliveryDetection, Optional<Duration> quarantineAfter) {
+        this(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter,
+                SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
     }
 
     /**
@@ -104,17 +125,17 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * load low while firing well within tolerance. Lower it only when you rely on short timeouts firing promptly.
      */
     public static SagaRunnerConfig defaults() {
-        return new SagaRunnerConfig(Duration.ofSeconds(15), 100, 50, RedeliveryDetection.REQUIRED, Optional.empty());
+        return new SagaRunnerConfig(Duration.ofSeconds(15), 100, 50, RedeliveryDetection.REQUIRED, Optional.empty(), SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
     }
 
     /** A copy of this configuration with a different poll interval. */
     public SagaRunnerConfig withTimerPollInterval(Duration interval) {
-        return new SagaRunnerConfig(interval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter);
+        return new SagaRunnerConfig(interval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow);
     }
 
     /** A copy of this configuration with a different redelivery-detection posture. */
     public SagaRunnerConfig withRedeliveryDetection(RedeliveryDetection detection) {
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, detection, quarantineAfter);
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, detection, quarantineAfter, reorderWindow);
     }
 
     /**
@@ -134,7 +155,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      */
     public SagaRunnerConfig withQuarantineAfter(Duration quarantineAfter) {
         requireNonNull(quarantineAfter, "quarantineAfter cannot be null, use disableQuarantine() to never quarantine");
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.of(quarantineAfter));
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.of(quarantineAfter), reorderWindow);
     }
 
     /**
@@ -146,6 +167,15 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what that can be.
      */
     public SagaRunnerConfig disableQuarantine() {
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.empty());
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.empty(), reorderWindow);
+    }
+
+    /**
+     * A copy of this configuration with a different reorder window, see {@code reorderWindow} on this record.
+     *
+     * @throws IllegalArgumentException if {@code reorderWindow} is less than 1
+     */
+    public SagaRunnerConfig withReorderWindow(int reorderWindow) {
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow);
     }
 }

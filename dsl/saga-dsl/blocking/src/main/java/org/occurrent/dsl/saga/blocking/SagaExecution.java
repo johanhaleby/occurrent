@@ -42,6 +42,9 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -122,6 +125,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private final ConcurrentHashMap<String, UnroutableDelivery> unroutableDeliveries = new ConcurrentHashMap<>();
     // The extension names already reported as unreadable, so the warning is said once per name rather than per event.
     private final Set<String> unreadableExtensionsWarned = ConcurrentHashMap.newKeySet();
+    // The streams already warned about, so a stream replaying thousands of old events says it once. Capped, because a
+    // runner sees as many streams as the application has and this must not grow with them. A stream evicted from here
+    // is warned about again, which costs a line.
+    private final Set<String> behindWindowWarned = Collections.synchronizedSet(Collections.newSetFromMap(new LinkedHashMap<String, Boolean>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+            return size() > 1024;
+        }
+    }));
     // Where this class reads the current instant from, wherever it needs one, rather than calling Instant.now()
     // directly. Real wall-clock time in production. A test supplies its own so it can cross an interval or a
     // quarantine budget without sleeping out real minutes.
@@ -305,7 +317,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // decodes is the one that most needs to reach its budget. Loading it whole threw, the catch below swallowed
             // that, and no failure record was ever written.
             SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
-            FailureRecord<S> record = SagaExecutionSupport.onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter);
+            FailureRecord<S> record = SagaExecutionSupport.onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter, config.reorderWindow());
             if (record == null) {
                 return false;
             }
@@ -466,8 +478,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     if (requireTimerName != null && !hasDueTimer(current, requireTimerName, now)) {
                         return null; // stale/superseded/rescheduled timer, or the instance completed: nothing to fire.
                     }
-                    Outcome<S, C> outcome = SagaExecutionSupport.process(saga, sagaId, current, input, meta, now);
+                    Outcome<S, C> outcome = SagaExecutionSupport.process(saga, sagaId, current, input, meta, now, config.reorderWindow());
                     if (!outcome.processed()) {
+                        warnIfBehindTheReorderWindow(sagaId, current, meta);
                         return null;
                     }
                     // Dispatch before saving so a command is never lost. A lost compare-and-set retries this whole body,
@@ -501,13 +514,26 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             return withoutState.isCompleted() || withoutState.isQuarantined()
-                   || SagaExecutionSupport.isRedelivery(withoutState, meta);
+                   || SagaExecutionSupport.isRedelivery(withoutState, meta, config.reorderWindow());
         } catch (Throwable secondFailure) {
             rethrowIfNotTheInstances(secondFailure);
             if (secondFailure != loadFailure) {
                 loadFailure.addSuppressed(secondFailure);
             }
             return false;
+        }
+    }
+
+    // A skipped stream event further behind than the reorder window cannot be told from a redelivery, and a late arrival
+    // is the case where skipping it loses the event, so it is said once per stream rather than skipped silently.
+    private void warnIfBehindTheReorderWindow(String sagaId, @Nullable SagaEnvelope<S> current, EventMeta meta) {
+        if (current == null || current.isCompleted() || current.isQuarantined()
+            || SagaExecutionSupport.classify(current, meta, config.reorderWindow()) != SagaExecutionSupport.Delivery.BEHIND_WINDOW) {
+            return;
+        }
+        if (behindWindowWarned.add(sagaId + "/" + meta.streamId())) {
+            log.warn("Saga '{}' skipped version {} of stream '{}', event type '{}', because the instance has applied a version of that type {} or more ahead of it. It is either a redelivery or an event that arrived later than the reorder window covers, and the saga cannot tell which. Raise reorderWindow on the SagaRunnerConfig if the feed reorders further than that. This is logged once per stream.",
+                    sagaId, meta.streamVersion(), meta.streamId(), meta.eventType(), config.reorderWindow());
         }
     }
 
@@ -601,7 +627,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         Long streamVersion = readStreamKey(cloudEvent, extensions, OccurrentCloudEventExtension.STREAM_VERSION, OccurrentExtensionGetter::getStreamVersion, unreadableStreamKey);
         // Use the framework's own position accessor, which accepts a Number or String, rather than narrowing to Long.
         Long position = readPosition(cloudEvent, extensions);
-        return new ExtractedMeta(new EventMeta(streamId, streamVersion, position), unreadableStreamKey.isEmpty() ? null : unreadableStreamKey.getFirst());
+        return new ExtractedMeta(new EventMeta(streamId, streamVersion, position, cloudEvent.getType()), unreadableStreamKey.isEmpty() ? null : unreadableStreamKey.getFirst());
     }
 
     // RuntimeException rather than Throwable on purpose. An unreadable extension is a fact about the event rather than
