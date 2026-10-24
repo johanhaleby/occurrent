@@ -20,10 +20,12 @@ import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -810,14 +812,18 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * checkpoint.</li>
      * <li>A dynamic {@code StartAt} is asked once, and its answer is handled as above. When it answers {@code null},
      * nothing is stored or resumed and this throws {@link IllegalArgumentException}.</li>
+     * <li>A {@link GlobalCheckpoint} or a {@link CatchupTimeCheckpoint} is passed on to the wrapped model and not
+     * stored. A restart subscribes the wrapped model at the stored checkpoint, and a MongoDB subscription model given
+     * one of these opens at the present instead.</li>
      * </ul>
      * The checkpoint is stored with the same write condition as every other checkpoint this model writes. When the
      * checkpoint storage refuses the write with {@link CheckpointWriteConditionNotFulfilledException}, because another
      * node has written with a newer lease, the exception propagates and the subscription stays paused. When the wrapped
-     * model's resume throws after the write, the checkpoint stored before is put back, or removed when none was, and
-     * the exception propagates. A catch-up model that shares the checkpoint storage then replays from where it would
-     * have before the call. When putting it back throws too, that exception is added to the thrown one as a suppressed
-     * exception, and the position asked for here may still be the one stored.
+     * model's resume throws after the write, the checkpoint stored before is put back and the exception propagates, so
+     * a failed resume leaves the stored position as it was before the call. A catch-up model that shares the
+     * checkpoint storage then replays from where it would have before the call. When nothing was stored before, the
+     * position asked for here stays stored. When putting the old checkpoint back throws too, that exception is added
+     * to the thrown one as a suppressed exception, and the position asked for here may still be the one stored.
      * <p>
      * A subscription subscribed without checkpointing (see {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}),
      * or one the wrapped model doesn't report as paused, is passed on to the wrapped model as it is and nothing is
@@ -846,6 +852,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 return resumeFromStoredCheckpoint(subscriptionId);
             }
             Checkpoint position = resolved instanceof StartAt.StartAtCheckpoint at ? at.checkpoint : presentPositionToResumeAt(subscriptionId);
+            if (GlobalCheckpoint.isGlobalCheckpoint(position) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(position)) {
+                // Not stored, since a restart subscribes the wrapped model at the stored checkpoint and a MongoDB model
+                // opens one of these at the present
+                return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(position));
+            }
             // Stored before the resume, since an event delivered after the resume writes a newer checkpoint that this
             // write would otherwise overwrite
             Checkpoint previous = storage.read(subscriptionId);
@@ -859,14 +870,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         });
     }
 
-    // A catch-up model sharing the storage replays from what is stored, so a failed resume puts back what it found
+    // A catch-up model sharing the storage replays from what is stored, so a failed resume puts back what it found.
+    // With nothing found the new position stays, since a delete could remove a checkpoint written after the resume
+    // started, and a restart with nothing stored subscribes at the wrapped model's default
     private void putBack(String subscriptionId, @Nullable Checkpoint previous, Throwable resumeFailure) {
+        if (previous == null) {
+            return;
+        }
         try {
-            if (previous == null) {
-                storage.delete(subscriptionId);
-            } else {
-                storage.save(subscriptionId, previous, writeConditionFor(subscriptionId));
-            }
+            storage.save(subscriptionId, previous, writeConditionFor(subscriptionId));
         } catch (RuntimeException | Error putBackFailure) {
             resumeFailure.addSuppressed(putBackFailure);
         }

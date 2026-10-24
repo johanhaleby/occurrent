@@ -90,6 +90,9 @@ call holds the lock `DurableSubscriptionModel` already takes per subscription id
   checkpoint is this model's default.
 * A dynamic `StartAt` is resolved once and then handled as above. One that resolves to `null` throws
   `IllegalArgumentException`.
+* A `GlobalCheckpoint` or a `CatchupTimeCheckpoint` is forwarded to the wrapped model and nothing is stored. A restart
+  subscribes the wrapped model at the stored checkpoint, and the MongoDB models open at the present when given either
+  one, so storing it would make a restart skip the events written in between.
 
 The store comes first. The subscription is paused and the id lock is held, so no event's checkpoint can be written in
 between. Resuming first would let an event's checkpoint be written and then overwritten with an older position.
@@ -102,11 +105,16 @@ write throws `CheckpointWriteConditionNotFulfilledException`, nothing is resumed
 because a node another node has fenced out must not move the position.
 
 When the wrapped resume throws after the store, the model puts back the checkpoint stored before, under the same lock
-and with the same write condition, or deletes the new one when nothing was stored before. Then the exception
-propagates. A catch-up model that shares the checkpoint storage, as it does in the Spring Boot starter, replays from
-the stored checkpoint. Had the new position stayed, a later resume would make the catch-up model go live at it and
-skip the events written between its replay position and the new one. A failure to put the checkpoint back is added
-to the thrown exception as a suppressed exception.
+and with the same write condition, and the exception propagates. A failed reposition leaves the stored position as it
+was before the call. A catch-up model that shares the checkpoint storage, as it does in the Spring Boot starter, replays
+from the stored checkpoint. Had the new position stayed, a later resume would make the catch-up model go live at it
+and skip the events written between its replay position and the new one. The MongoDB models pause the subscription
+again before they throw, so no event was delivered from the new position when the old checkpoint goes back. A failure
+to put the checkpoint back is added to the thrown exception as a suppressed exception.
+
+When nothing was stored before, the new checkpoint stays. Deleting it could remove a checkpoint that another node, or
+the resumed subscription's own events, wrote in the meantime. With nothing stored, a restart subscribes the wrapped
+model at its default, which for the MongoDB models is the present.
 
 `capability(RepositionableSubscriptions.class)` on a `DurableSubscriptionModel` answers the model itself when the
 wrapped model can reposition and empty otherwise, as `ReactorDurableSubscriptionModel` and the catch-up models already
@@ -119,9 +127,10 @@ do. `resumeSubscription(subscriptionId, startAt)` throws `UnsupportedOperationEx
   resume a competing-consumer subscription at a position until #1304 is done. Over a `DurableSubscriptionModel`,
   pausing through the competing consumer and resuming through it starts from the stored checkpoint.
 * `RepositionableSubscriptions.findIn(..)` on a `DurableSubscriptionModel` answers the durable model, and a resume at
-  a position through it stores the checkpoint first. A catch-up model over a durable model therefore stores the
-  position at each live hand-over it repositions, which is the position it already stores for itself when both share
-  one checkpoint storage, as they do in the Spring Boot starter.
+  a position through it stores the checkpoint first, unless the position is a `GlobalCheckpoint` or a
+  `CatchupTimeCheckpoint`. A catch-up model over a durable model therefore stores the position at each live hand-over
+  it repositions, which is the position it already stores for itself when both share one checkpoint storage, as they
+  do in the Spring Boot starter.
 * `capability(..)` for `Subscribable`, `CancellableSubscriptions` or a model type built on them answers empty on a
   wrapper that doesn't implement it, where it used to answer the model beneath.
 * A `SubscriptionModelWrapper` of an application's own that should be found for an acting capability has to implement

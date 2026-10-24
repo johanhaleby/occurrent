@@ -23,9 +23,11 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -263,7 +265,7 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
         }
 
         @Test
-        void throws_what_the_wrapped_model_throws_and_removes_the_checkpoint_when_none_was_stored_before() {
+        void throws_what_the_wrapped_model_throws_and_keeps_the_new_checkpoint_when_none_was_stored_before() {
             // Given nothing stored for the subscription when the resume at a position runs
             InMemoryCheckpointStorage storage = storageHolding(OLDER);
             RepositionableFake wrapped = new RepositionableFake();
@@ -279,7 +281,7 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(wrappedFailure),
-                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isNull()
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(NEWER)
             );
         }
 
@@ -307,17 +309,16 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
         }
 
         @Test
-        void throws_what_the_wrapped_model_throws_with_the_failure_to_remove_the_checkpoint_as_suppressed() {
-            // Given nothing stored for the subscription, and a storage that fails the delete that removes the new position
+        void deletes_nothing_when_the_wrapped_model_throws_and_none_was_stored_before() {
+            // Given nothing stored for the subscription, and a storage that records every delete and fails it
             PutBackFailingStorage storage = new PutBackFailingStorage();
             RepositionableFake wrapped = new RepositionableFake();
             DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
             subscribeAndPause(model);
             storage.delete(SUBSCRIPTION_ID);
+            storage.failDeletes(new IllegalStateException("the storage lost its connection"));
             IllegalStateException wrappedFailure = new IllegalStateException("the wrapped model could not reopen its feed");
             wrapped.failResumeAtPositionWith = wrappedFailure;
-            IllegalStateException putBackFailure = new IllegalStateException("the storage lost its connection");
-            storage.failDelete(putBackFailure);
 
             // When
             Throwable thrown = catchThrowable(() -> repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER)));
@@ -325,7 +326,125 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(wrappedFailure),
-                    () -> assertThat(thrown.getSuppressed()).as("suppressed").containsExactly(putBackFailure)
+                    () -> assertThat(thrown.getSuppressed()).as("suppressed").isEmpty(),
+                    () -> assertThat(storage.deletesAttempted()).as("deletes attempted after the resume started").isZero()
+            );
+        }
+
+        @Test
+        void a_resume_at_a_GlobalCheckpoint_stores_nothing_and_resumes_the_wrapped_model_there() {
+            // Given
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            Checkpoint position = GlobalCheckpoint.of(42);
+
+            // When
+            repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(position));
+
+            // Then
+            assertAll(
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(OLDER),
+                    () -> assertThat(wrapped.checkpointsResumedAt).as("resumed at").containsExactly(position),
+                    () -> assertThat(wrapped.isRunning(SUBSCRIPTION_ID)).as("running").isTrue()
+            );
+        }
+
+        @Test
+        void a_resume_at_a_GlobalCheckpoint_leaves_the_storage_empty_when_nothing_was_stored_before() {
+            // Given
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            storage.delete(SUBSCRIPTION_ID);
+            Checkpoint position = GlobalCheckpoint.of(42);
+
+            // When
+            repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(position));
+
+            // Then
+            assertAll(
+                    () -> assertThat(storage.exists(SUBSCRIPTION_ID)).as("anything stored").isFalse(),
+                    () -> assertThat(wrapped.checkpointsResumedAt).as("resumed at").containsExactly(position)
+            );
+        }
+
+        @Test
+        void a_resume_at_a_GlobalCheckpoint_that_storage_read_back_as_a_string_stores_nothing_and_resumes_the_wrapped_model_there() {
+            // Given the string form of a GlobalCheckpoint, as a checkpoint storage reads it back
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            Checkpoint position = new StringBasedCheckpoint(GlobalCheckpoint.of(42).asString());
+
+            // When
+            repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(position));
+
+            // Then
+            assertAll(
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(OLDER),
+                    () -> assertThat(wrapped.checkpointsResumedAt).as("resumed at").containsExactly(position)
+            );
+        }
+
+        @Test
+        void a_resume_at_a_CatchupTimeCheckpoint_stores_nothing_and_resumes_the_wrapped_model_there() {
+            // Given
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            Checkpoint position = catchupTimeCheckpoint();
+
+            // When
+            repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(position));
+
+            // Then
+            assertAll(
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(OLDER),
+                    () -> assertThat(wrapped.checkpointsResumedAt).as("resumed at").containsExactly(position),
+                    () -> assertThat(wrapped.isRunning(SUBSCRIPTION_ID)).as("running").isTrue()
+            );
+        }
+
+        @Test
+        void a_resume_at_a_CatchupTimeCheckpoint_that_storage_read_back_as_a_string_stores_nothing_and_resumes_the_wrapped_model_there() {
+            // Given the string form of a CatchupTimeCheckpoint, as a checkpoint storage reads it back
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            Checkpoint position = new StringBasedCheckpoint(catchupTimeCheckpoint().asString());
+
+            // When
+            repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(position));
+
+            // Then
+            assertAll(
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(OLDER),
+                    () -> assertThat(wrapped.checkpointsResumedAt).as("resumed at").containsExactly(position)
+            );
+        }
+
+        @Test
+        void a_resume_at_now_stores_nothing_when_the_wrapped_models_global_checkpoint_is_a_GlobalCheckpoint() {
+            // Given a wrapped model whose present position is a GlobalCheckpoint
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            wrapped.globalCheckpoint = GlobalCheckpoint.of(7);
+
+            // When
+            repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.now());
+
+            // Then
+            assertAll(
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(OLDER),
+                    () -> assertThat(wrapped.checkpointsResumedAt).as("resumed at").containsExactly(GlobalCheckpoint.of(7))
             );
         }
     }
@@ -393,6 +512,10 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
         assertThat(found).isSameAs(model);
     }
 
+    private static CatchupTimeCheckpoint catchupTimeCheckpoint() {
+        return CatchupTimeCheckpoint.of("2026-01-01T00:00:05Z", new StringBasedCheckpoint("live"), "2026-01-01T00:00:00Z");
+    }
+
     private static InMemoryCheckpointStorage storageHolding(Checkpoint checkpoint) {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         storage.save(SUBSCRIPTION_ID, checkpoint);
@@ -410,20 +533,26 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
     }
 
     /**
-     * A storage that fails the nth save counted from {@link #failSaveNumber} and every delete after {@link #failDelete}.
+     * A storage that fails the nth save counted from {@link #failSaveNumber}, and every delete after {@link #failDeletes}
+     * while counting the deletes it is asked for.
      */
     private static class PutBackFailingStorage extends InMemoryCheckpointStorage {
         private int savesLeftBeforeFailure = Integer.MAX_VALUE;
         @Nullable private RuntimeException saveFailure = null;
         @Nullable private RuntimeException deleteFailure = null;
+        private final AtomicInteger deletesAttempted = new AtomicInteger();
 
         void failSaveNumber(int number, RuntimeException failure) {
             savesLeftBeforeFailure = number - 1;
             saveFailure = failure;
         }
 
-        void failDelete(RuntimeException failure) {
+        void failDeletes(RuntimeException failure) {
             deleteFailure = failure;
+        }
+
+        int deletesAttempted() {
+            return deletesAttempted.get();
         }
 
         @Override
@@ -437,6 +566,7 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
         @Override
         public void delete(String subscriptionId) {
             if (deleteFailure != null) {
+                deletesAttempted.incrementAndGet();
                 throw deleteFailure;
             }
             super.delete(subscriptionId);

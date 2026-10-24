@@ -30,12 +30,15 @@ checkpoint, then resumes the wrapped model there.
   does.
 * A subscription subscribed without checkpointing, or one the wrapped model doesn't report as paused, is passed on to
   the wrapped model and nothing is stored.
+* A `GlobalCheckpoint` or a `CatchupTimeCheckpoint` is passed on to the wrapped model and nothing is stored. The
+  MongoDB subscription models open at the present when they subscribe at either one, so a stored one would make a
+  restart skip events.
 
 The checkpoint is written with the same write condition as every other checkpoint the durable model writes. A node
 whose write the checkpoint storage refuses, because another node has written with a newer lease, gets
 `CheckpointWriteConditionNotFulfilledException` and the subscription stays paused. When the wrapped model's resume
-throws after the write, the checkpoint stored before is put back, or removed when none was, and the exception is
-thrown.
+throws after the write, the checkpoint stored before is put back and the exception is thrown, so a failed reposition
+leaves the stored position as it was before the call. When nothing was stored before, the new checkpoint stays.
 
 A catch-up model whose live delegate is a `DurableSubscriptionModel` now has the position stored when it resumes the
 durable model at one. Section 29 of the 0.34.0 upgrade guide says such a resume stores nothing until the first live
