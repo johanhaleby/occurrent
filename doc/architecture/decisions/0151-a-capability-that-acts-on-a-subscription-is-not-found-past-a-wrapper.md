@@ -90,9 +90,17 @@ call holds the lock `DurableSubscriptionModel` already takes per subscription id
   checkpoint is this model's default.
 * A dynamic `StartAt` is resolved once and then handled as above. One that resolves to `null` throws
   `IllegalArgumentException`.
-* A `GlobalCheckpoint` or a `CatchupTimeCheckpoint` is forwarded to the wrapped model and nothing is stored. A restart
-  subscribes the wrapped model at the stored checkpoint, and the MongoDB models open at the present when given either
-  one, so storing it would make a restart skip the events written in between.
+* A checkpoint the wrapped model can't subscribe at is forwarded to the wrapped model and nothing is stored. A restart
+  subscribes the wrapped model at the stored checkpoint, and a MongoDB model opens at the present for a checkpoint its
+  change stream can't open at, such as a `GlobalCheckpoint`, a `CatchupTimeCheckpoint`, a time or one an application
+  made up. Storing it would make a restart skip the events written in between.
+
+The durable model can't tell those checkpoints apart itself, because only the wrapped model knows what it can open at.
+So blocking `RepositionableSubscriptions` gets a default method, `restartsAt(Checkpoint)`, that answers `true`. The
+MongoDB models answer `false` for every checkpoint their change stream can't open at, and the durable model stores a
+position only when the wrapped model answers `true`. The durable model answers what its wrapped model answers. The
+reactor `RepositionableSubscriptions` doesn't get the method, because `ReactorDurableSubscriptionModel` stores nothing
+on a resume at a position.
 
 The store comes first. The subscription is paused and the id lock is held, so no event's checkpoint can be written in
 between. Resuming first would let an event's checkpoint be written and then overwritten with an older position.
@@ -105,7 +113,8 @@ write throws `CheckpointWriteConditionNotFulfilledException`, nothing is resumed
 because a node another node has fenced out must not move the position.
 
 When the wrapped resume throws after the store, the model puts back the checkpoint stored before, under the same lock
-and with the same write condition, and the exception propagates. A failed reposition leaves the stored position as it
+and with the write condition the new position was stored with, and the exception propagates. A checkpoint another
+lease holder wrote in the meantime then refuses the put-back. A failed reposition leaves the stored position as it
 was before the call. A catch-up model that shares the checkpoint storage, as it does in the Spring Boot starter, replays
 from the stored checkpoint. Had the new position stayed, a later resume would make the catch-up model go live at it
 and skip the events written between its replay position and the new one. The MongoDB models pause the subscription
@@ -127,8 +136,8 @@ do. `resumeSubscription(subscriptionId, startAt)` throws `UnsupportedOperationEx
   resume a competing-consumer subscription at a position until #1304 is done. Over a `DurableSubscriptionModel`,
   pausing through the competing consumer and resuming through it starts from the stored checkpoint.
 * `RepositionableSubscriptions.findIn(..)` on a `DurableSubscriptionModel` answers the durable model, and a resume at
-  a position through it stores the checkpoint first, unless the position is a `GlobalCheckpoint` or a
-  `CatchupTimeCheckpoint`. A catch-up model over a durable model therefore stores the position at each live hand-over
+  a position through it stores the checkpoint first, unless the wrapped model's `restartsAt(..)` answers
+  `false` for it. A catch-up model over a durable model therefore stores the position at each live hand-over
   it repositions, which is the position it already stores for itself when both share one checkpoint storage, as they
   do in the Spring Boot starter.
 * `capability(..)` for `Subscribable`, `CancellableSubscriptions` or a model type built on them answers empty on a
@@ -136,8 +145,11 @@ do. `resumeSubscription(subscriptionId, startAt)` throws `UnsupportedOperationEx
 * A `SubscriptionModelWrapper` of an application's own that should be found for an acting capability has to implement
   it. Observing capabilities are still found through it.
 * ADR 119 called these lookups purely additive because they hadn't shipped. They shipped in 0.33.0, so this is a
-  breaking change, with a changelog entry and a section in the 0.35.0 upgrade guide. No signature changes, so there is
-  no OpenRewrite recipe.
+  breaking change, with a changelog entry and a section in the 0.35.0 upgrade guide. The only new method is a default one,
+  so there is no OpenRewrite recipe.
+* A repositionable subscription model of an application's own that opens a subscription somewhere else for some
+  checkpoint should override `restartsAt(..)`. Until it does, a `DurableSubscriptionModel` over it stores every
+  position it is resumed at.
 * No stored document changes format. The `DurableSubscriptionModel` writes the same checkpoint with the same write
   condition, only earlier. A 0.34.0 node reads a checkpoint stored at a resume as an ordinary checkpoint.
 * The lock order on the starter's stack is the catch-up model's claim, then its hand-over lock, then the durable

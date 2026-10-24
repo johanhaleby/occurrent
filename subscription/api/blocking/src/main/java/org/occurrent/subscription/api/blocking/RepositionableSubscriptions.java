@@ -17,6 +17,7 @@
 package org.occurrent.subscription.api.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
@@ -44,6 +45,19 @@ public interface RepositionableSubscriptions extends SubscriptionModelCapability
      * @throws SubscriptionAlreadyRunningException If the subscription is already running.
      */
     Subscription resumeSubscription(String subscriptionId, StartAt startAt);
+
+    /**
+     * Whether a subscription this model subscribes at {@code checkpoint}, as it does when a stored checkpoint is read
+     * back after a restart, starts reading there. A model that opens such a subscription somewhere else, for example
+     * at the present, answers {@code false}, so a model that stores positions on top of it, such as a durable
+     * subscription model, doesn't store one that makes a restart skip the events written in between.
+     *
+     * @param checkpoint The position a subscription would be subscribed at.
+     * @return {@code true} unless a subscription subscribed at {@code checkpoint} starts somewhere else.
+     */
+    default boolean restartsAt(Checkpoint checkpoint) {
+        return true;
+    }
 
     /**
      * The repositionable model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper}
