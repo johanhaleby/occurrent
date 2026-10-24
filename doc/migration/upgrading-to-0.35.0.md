@@ -8,6 +8,10 @@ The compiler finds those for you. The other sections compile fine and behave dif
 
 ### Changes that can break the build
 
+- [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
+  `SagaEnvelope` gains a 14th record component and `SagaRunnerConfig` a 6th. **Breaks the build** if you use a record
+  pattern over either.
+
 ### Sagas
 
 - [A global position is no longer a saga redelivery key](#a-global-position-is-no-longer-a-saga-redelivery-key). A
@@ -15,7 +19,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
   under the default `REQUIRED`, and an unreadable `streamid` or `streamversion` fails the delivery. Compiles unchanged.
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   A saga keeps the highest applied version per stream and event type, and applies a late version instead of skipping
-  it. Saga instances store a new `streamMarks` field. Compiles unchanged.
+  it. Saga instances store a new `streamMarks` field. Breaks the build only for a record pattern over `SagaEnvelope` or
+  `SagaRunnerConfig`.
 
 ### DCB
 
@@ -132,12 +137,15 @@ SagaRunnerConfig config = SagaRunnerConfig.defaults().withReorderWindow(1024);
 
 A saga declared with `@Saga` always uses the default, since there is no annotation attribute or Spring property for it.
 An event further behind than the window is lost in the way it was lost before 0.35.0, and the warning says which stream
-it came from. A larger window keeps more numbers in every instance.
+it came from. A larger window keeps more numbers in every instance. Raising the window later does not bring back what an
+instance has already forgotten, because the `horizon` keeps every version at or below it skipped. The larger window
+applies to the versions that arrive after the change.
 
 ### Stored saga state
 
 A saga instance document gains a `streamMarks` field. It holds, per stream, a `floor` and a list of event types, and
-each type has its highest applied `mark` and the `applied` versions below it. It is a list rather than a map because
+each type has its highest applied `mark`, the `applied` versions below it and a `horizon`, the highest version it has
+stopped remembering. It is a list rather than a map because
 stream ids and event types can contain dots. An instance holds at most 256 `applied` versions per stream and event
 type, so a document grows by some kilobytes for an instance that listens to a few streams, and every save rewrites them.
 
@@ -150,7 +158,31 @@ is applied as before. Late versions are recognised from the instance's next save
 reads it as an old document. A rolling upgrade works, and so does going back to 0.34.0, which loses late events on that
 stretch as it did before.
 
+### A record pattern over `SagaEnvelope` or `SagaRunnerConfig` stops compiling
+
+A record pattern has to name every component of the canonical constructor. `SagaEnvelope` gains `streamMarks` as its
+14th component and `SagaRunnerConfig` gains `reorderWindow` as its 6th:
+
+```java
+// Before, stops compiling
+case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detection, var quarantineAfter) -> ...
+
+// After
+case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detection, var quarantineAfter, var reorderWindow) -> ...
+```
+
+The same applies to `SagaEnvelope`, which needs a `var streamMarks` after its `failure` binding, and to an
+`instanceof` pattern as much as a `switch` case. `SagaEnvelope.StreamMarks` and `SagaEnvelope.TypeMark` are new types
+and only matter to a `SagaStateStore` implemented outside this repository, which has to persist `streamMarks`. A store
+that ignores it keeps working, and every instance then reads as it did before 0.35.0, so late versions are not
+recognised.
+
+Constructor calls are not affected. The 13-argument `SagaEnvelope` constructor and the five-argument
+`SagaRunnerConfig` constructor stay, and fill in no marks and a window of 256. `SagaExecutionSupport.EventMeta` gains an
+`eventType` component too, and it lives in an `internal` package.
+
 ### Why there is no recipe
 
-`EventMeta`, `SagaEnvelope` and `SagaRunnerConfig` each gain a component, and the previous constructors stay. Nothing
-that compiled stops compiling, so there is nothing for `UpgradeToOccurrent_0_35` to rewrite.
+`UpgradeToOccurrent_0_35` does not rewrite these patterns. A record pattern's arity is a compiler-enforced fact, so
+the way `UpgradeToOccurrent_0_34` appends `var appendId` to a `WriteResult` pattern could be extended to these two
+records, but the 0.34.0 change to the same two records got a guide entry and no recipe, and this follows that.

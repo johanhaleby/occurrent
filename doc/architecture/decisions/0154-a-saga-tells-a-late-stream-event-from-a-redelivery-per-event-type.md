@@ -54,8 +54,14 @@ this decision, and what changes is that the skip now logs a warning naming the s
 lost this way is visible. A feed that reorders by more than the window loses those events, and the fix is a larger
 window.
 
+**The horizon keeps a raised window from undoing a skip.** Trimming `applied` forgets the versions at or below
+`mark - window`, and a version the saga forgot looks the same as one it never applied. If the window were only read from
+the configuration, raising it from 2 to 256 would turn every version just forgotten into a late arrival and run its
+reaction again. Each type mark therefore stores the horizon, the highest version it has stopped remembering, and a
+version at or below the larger of the horizon and `mark - window` is skipped. Lowering the window never lowers the horizon.
+
 **The stored instance gains one field, and the old one keeps its meaning.** `streamMarks` holds, per stream, a floor
-and the applied versions per type. The floor is the stream's watermark at the moment the stream first got marks, and
+and per type the highest applied version, the applied versions below it and a horizon. The floor is the stream's watermark at the moment the stream first got marks, and
 every version at or below it stays skipped whatever its type, which is what the instance did before. An instance stored
 by 0.34.0 or by the 0.35.0 build of ADR 150 has no `streamMarks`, and it reads as a floor equal to each stream's
 watermark and no marks. `streamWatermarks` is still written with the highest version of the stream across types, so a
@@ -75,7 +81,10 @@ every save rewrites them.
 `@Saga` sagas use the default window. There is no property or annotation attribute for it, and one can be added when
 someone needs a different value.
 
-`EventMeta`, `SagaEnvelope` and `SagaRunnerConfig` each gain a component. The previous constructors stay, so nothing
-that compiled stops compiling, and there is no rewrite recipe.
+`EventMeta`, `SagaEnvelope` and `SagaRunnerConfig` each gain a component. The previous constructors stay, so a call
+site compiles unchanged, but a record pattern over `SagaEnvelope` or `SagaRunnerConfig` has to name the new component and
+stops compiling. That is a break of the build for shipped types, and the upgrade guide lists it under the changes that
+can break the build with the before and after patterns. There is no rewrite recipe for it. The 0.34.0 change to the same
+two records got none either, and one could be added by extending `MigrateAppendResultRecordPattern`.
 
 ADR 109 gets a pointer in its Status section.
