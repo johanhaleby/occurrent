@@ -23,6 +23,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
@@ -36,6 +37,8 @@ import reactor.core.publisher.Mono;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -44,8 +47,9 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Bulk-then-reconcile-then-live handover shared by every position-ordered reactive catch-up model. A
- * {@link CatchupReader} supplies the window and head reads so this pipeline is store-agnostic, reused by both the
- * stream and DCB catch-up models.
+ * {@link CatchupScope} supplies the live start and the window and head reads so this pipeline is store-agnostic,
+ * reused by both the stream and DCB catch-up models. One scope covers one replay attempt, from resolving where it
+ * starts to its last read, and is closed when the attempt ends, however it ends.
  * <p>
  * The live resume token is captured before the bulk replay so an event committing during the replay is still
  * delivered live. The replay pages in {@code position} windows, then reconciles once, draining up to a head
@@ -84,12 +88,12 @@ final class PositionCatchupPipeline {
     // losing the token while the replay runs
     private static final int MAX_REPLAYS_AGAIN = 3;
 
-    private final CatchupReader reader;
+    private final CatchupScopes scopes;
     private final long windowSize;
     private final int handoverCacheSize;
 
-    public PositionCatchupPipeline(CatchupReader reader, long windowSize, int handoverCacheSize) {
-        this.reader = requireNonNull(reader, CatchupReader.class.getSimpleName() + " cannot be null");
+    public PositionCatchupPipeline(CatchupScopes scopes, long windowSize, int handoverCacheSize) {
+        this.scopes = requireNonNull(scopes, CatchupScopes.class.getSimpleName() + " cannot be null");
         if (windowSize <= 0) {
             throw new IllegalArgumentException("Window size must be greater than zero");
         }
@@ -112,47 +116,86 @@ final class PositionCatchupPipeline {
         Objects.requireNonNull(livePredicate, "livePredicate cannot be null");
         GlobalCheckpoint startCheckpoint = GlobalCheckpoint.parse(Objects.requireNonNull(start, "start cannot be null"));
         BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(handoverCacheSize);
-        return resolveStart(subscriptionModel, startCheckpoint, null)
-                .flatMapMany(replayStart -> replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, replayStart, cache, 0));
+        return replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, notBefore(startCheckpoint), scope -> resolveStart(subscriptionModel, startCheckpoint, null, scope.liveStart()), cache, 0);
     }
 
-    // Replays from replayStart and goes live from its token, or replays again first when the token left the change
-    // stream history during the replay. replaysAgain is how many times the replay already ran again.
+    // Replays from the start firstStart resolves and goes live from its token, or replays again first when the token left
+    // the change stream history during the replay. replaysAgain is how many times the replay already ran again. The
+    // start is resolved and the replay read in one scope, which is closed when the replay ends.
     private Flux<CloudEvent> replayThenLive(CheckpointAwareSubscriptionModel subscriptionModel, SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
-                                            ReplayStart replayStart, BoundedIdCache<CatchupEventKey> cache, int replaysAgain) {
-        return replay(replayStart, cache).concatWith(Flux.defer(() -> liveStartAfterReplay(subscriptionModel, replayStart, null, replaysAgain).flatMapMany(next -> {
-            if (next != replayStart) {
-                return replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, next, cache, replaysAgain + 1);
-            }
-            Checkpoint liveFrom = replayStart.liveFrom();
-            StartAt liveStartAt = StartAt.checkpoint(liveFrom);
-            Flux<CloudEvent> live = (subscriptionModel instanceof SubscriptionModelCapability capabilities ? HistoryLossReportingSubscriptions.findIn(capabilities) : Optional.<HistoryLossReportingSubscriptions>empty())
-                    .map(reporting -> reporting.subscribeFailingIfStartLost(liveSubscriptionFilter, liveStartAt))
-                    .orElseGet(() -> subscriptionModel.subscribe(liveSubscriptionFilter, liveStartAt));
-            return live
-                    .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)))
-                    .onErrorResume(throwable -> throwable instanceof HistoryLostException lost && samePosition(lost.lostFrom(), liveFrom),
-                            __ -> replayAgainAfterLiveStartLost(subscriptionModel, replayStart, null, replaysAgain)
-                                    .flatMapMany(again -> replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, again, cache, replaysAgain + 1)));
-        })));
+                                            @Nullable String notBefore, Function<CatchupScope, Mono<ReplayStart>> firstStart, BoundedIdCache<CatchupEventKey> cache, int replaysAgain) {
+        return Flux.defer(() -> {
+            AtomicReference<ReplayStart> replayed = new AtomicReference<>();
+            return inScope(notBefore, firstStart, (replayStart, reader) -> replay(reader, replayStart, cache), replayed)
+                    .concatWith(Flux.defer(() -> {
+                        ReplayStart replayStart = replayed.get();
+                        if (replayStart == null) {
+                            return Flux.<CloudEvent>empty();
+                        }
+                        return liveStartHolds(subscriptionModel, replayStart, null, replaysAgain).flatMapMany(holds -> {
+                            if (!holds) {
+                                return replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, null, fromOrigin(subscriptionModel, replayStart), cache, replaysAgain + 1);
+                            }
+                            Checkpoint liveFrom = replayStart.liveFrom();
+                            StartAt liveStartAt = StartAt.checkpoint(liveFrom);
+                            Flux<CloudEvent> live = (subscriptionModel instanceof SubscriptionModelCapability capabilities ? HistoryLossReportingSubscriptions.findIn(capabilities) : Optional.<HistoryLossReportingSubscriptions>empty())
+                                    .map(reporting -> reporting.subscribeFailingIfStartLost(liveSubscriptionFilter, liveStartAt))
+                                    .orElseGet(() -> subscriptionModel.subscribe(liveSubscriptionFilter, liveStartAt));
+                            return live
+                                    .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)))
+                                    .onErrorResume(throwable -> throwable instanceof HistoryLostException lost && samePosition(lost.lostFrom(), liveFrom),
+                                            __ -> replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, null, replayAgainAfterLiveStartLost(subscriptionModel, replayStart, null, replaysAgain), cache, replaysAgain + 1));
+                        });
+                    }));
+        });
     }
 
     /**
-     * The start a replay runs again from after the wrapped model lost the history from the token {@code lost} handed
-     * over, as it opened its change stream at it. It replays from the position the first attempt started from, with a
-     * token read now. Fails with {@link IllegalStateException} instead once the replay has already run again
-     * {@value #MAX_REPLAYS_AGAIN} times, as {@link #liveStartAfterReplay} does. {@code subscriptionId} only names the
-     * subscription in the warning and the failure, and may be null.
+     * Runs one replay attempt in a scope of its own. The scope is opened, {@code start} resolves where the attempt
+     * starts in it, and {@code replay} reads from there through it. The scope is closed when the replay completes,
+     * fails or is cancelled, so the start is not resolved after the scope that its live start came from has ended.
+     * The start is also stored in {@code resolved} for what follows the replay. It stays empty when {@code start}
+     * emits nothing, or fails.
+     *
+     * @param notBefore The live start an earlier attempt stored, which the scope's reads must see everything up to, or null
      */
-    Mono<ReplayStart> replayAgainAfterLiveStartLost(CheckpointAwareSubscriptionModel subscriptionModel, ReplayStart lost, @Nullable String subscriptionId, int replaysAgain) {
-        return Mono.defer(() -> {
+    <T> Flux<T> inScope(@Nullable String notBefore, Function<CatchupScope, Mono<ReplayStart>> start, BiFunction<ReplayStart, CatchupReader, Flux<T>> replay, AtomicReference<ReplayStart> resolved) {
+        return Flux.usingWhen(scopes.open(notBefore),
+                scope -> start.apply(scope).doOnNext(resolved::set).flatMapMany(replayStart -> replay.apply(replayStart, scope)),
+                CatchupScope::close);
+    }
+
+    // A start that stored a live start asks the scope for reads that see everything up to it. By the string
+    // form, as samePosition does.
+    static @Nullable String notBefore(GlobalCheckpoint start) {
+        return start.liveFrom().map(Checkpoint::asString).orElse(null);
+    }
+
+    /**
+     * Resolves, in the scope of the next attempt, the start a replay runs again from after the wrapped model lost the
+     * history from the token {@code lost} handed over, as it opened its change stream at it. It replays from the
+     * position the first attempt started from, with a token read in that scope. Fails with
+     * {@link IllegalStateException} instead once the replay has already run again {@value #MAX_REPLAYS_AGAIN} times,
+     * as {@link #liveStartHolds} does. {@code subscriptionId} only names the subscription in the warning and the
+     * failure, and may be null.
+     */
+    Function<CatchupScope, Mono<ReplayStart>> replayAgainAfterLiveStartLost(CheckpointAwareSubscriptionModel subscriptionModel, ReplayStart lost, @Nullable String subscriptionId, int replaysAgain) {
+        return scope -> Mono.defer(() -> {
             if (replaysAgain >= MAX_REPLAYS_AGAIN) {
                 return Mono.error(liveStartLostEachTime(subscriptionId, replaysAgain + 1, lost.liveFrom()));
             }
             log.warn("The subscription model lost the history from the live start of catch-up subscription {} as it opened, so the catch-up replays again from position {} and redelivers the events in between. Live start: {}",
                     subscriptionId == null ? "(unnamed)" : subscriptionId, lost.replayOrigin(), lost.liveFrom().asString());
-            return captureLiveToken(subscriptionModel).map(liveToken -> new ReplayStart(lost.replayOrigin(), liveToken, lost.replayOrigin(), null));
+            return fromOrigin(subscriptionModel, lost).apply(scope);
         });
+    }
+
+    /**
+     * Resolves, in the scope of the next attempt, the start that replays again from the position the first attempt at
+     * {@code replayed} started from, with a token read in that scope.
+     */
+    Function<CatchupScope, Mono<ReplayStart>> fromOrigin(CheckpointAwareSubscriptionModel subscriptionModel, ReplayStart replayed) {
+        return scope -> captureLiveToken(subscriptionModel, scope.liveStart()).map(liveToken -> new ReplayStart(replayed.replayOrigin(), liveToken, replayed.replayOrigin(), null));
     }
 
     // By the string form, since a live start is a typed checkpoint where the wrapped model reads it and a
@@ -169,12 +212,12 @@ final class PositionCatchupPipeline {
 
     /**
      * Checks, after a replay and before its handover, that {@code subscriptionModel} can still resume from the token
-     * {@code replayed} hands over to. Returns {@code replayed} itself when it can. Otherwise the token left the change
-     * stream history during the replay, and the returned start replays again from the position the first attempt
-     * started from, with a token read now. Handing the lost token over instead would leave it to the wrapped model,
-     * and a MongoDB model that restarts on lost history goes live from the present and skips every event between the
-     * token and the restart. A token read now is asked about after its own replay too, since a long replay can lose it
-     * as well.
+     * {@code replayed} hands over to. Emits {@code true} when it can. Otherwise the token left the change stream
+     * history during the replay, and this emits {@code false}, which tells the caller to replay again with
+     * {@link #fromOrigin}: from the position the first attempt started from, with a token read in the scope of that
+     * attempt. Handing the lost token over instead would leave it to the wrapped model, and a MongoDB model that
+     * restarts on lost history goes live from the present and skips every event between the token and the restart. A
+     * token read now is asked about after its own replay too, since a long replay can lose it as well.
      * <p>
      * {@code replaysAgain} is how many times the replay has already run again. Once that is
      * {@value #MAX_REPLAYS_AGAIN} and the token is lost once more, this fails with {@link IllegalStateException}
@@ -184,17 +227,17 @@ final class PositionCatchupPipeline {
      * token can still leave the history between them, which {@link #replayAgainAfterLiveStartLost} deals with when
      * the wrapped model reports it. {@code subscriptionId} only names the subscription in the warning and the failure, and may be null.
      */
-    Mono<ReplayStart> liveStartAfterReplay(CheckpointAwareSubscriptionModel subscriptionModel, ReplayStart replayed, @Nullable String subscriptionId, int replaysAgain) {
+    Mono<Boolean> liveStartHolds(CheckpointAwareSubscriptionModel subscriptionModel, ReplayStart replayed, @Nullable String subscriptionId, int replaysAgain) {
         return subscriptionModel.canResumeFrom(replayed.liveFrom()).flatMap(canResume -> {
             if (canResume) {
-                return Mono.just(replayed);
+                return Mono.just(true);
             }
             if (replaysAgain >= MAX_REPLAYS_AGAIN) {
                 return Mono.error(liveStartLostEachTime(subscriptionId, replaysAgain + 1, replayed.liveFrom()));
             }
             log.warn("The live start of catch-up subscription {} left the subscription model's history during the replay, so the catch-up replays again from position {} and redelivers the events in between. Live start: {}",
                     subscriptionId == null ? "(unnamed)" : subscriptionId, replayed.replayOrigin(), replayed.liveFrom().asString());
-            return captureLiveToken(subscriptionModel).map(liveToken -> new ReplayStart(replayed.replayOrigin(), liveToken, replayed.replayOrigin(), null));
+            return Mono.just(false);
         });
     }
 
@@ -236,12 +279,13 @@ final class PositionCatchupPipeline {
      * Resolves where a replay from {@code start} reads from and goes live from. A {@code start} that has a live
      * token keeps it while {@code subscriptionModel} can still resume from it. Otherwise the replay starts over from
      * the stored start position with a token read now. A {@code start} without a live token gets one read now, before
-     * the replay. {@code subscriptionId} only names the subscription in the warning and may be null.
+     * the replay. {@code subscriptionId} only names the subscription in the warning and may be null. {@code liveStart}
+     * is the one the scope the start is resolved in reports, see {@link #captureLiveToken}.
      */
-    Mono<ReplayStart> resolveStart(CheckpointAwareSubscriptionModel subscriptionModel, GlobalCheckpoint start, @Nullable String subscriptionId) {
+    Mono<ReplayStart> resolveStart(CheckpointAwareSubscriptionModel subscriptionModel, GlobalCheckpoint start, @Nullable String subscriptionId, @Nullable String liveStart) {
         Checkpoint storedLiveFrom = start.liveFrom().orElse(null);
         if (storedLiveFrom == null) {
-            return captureLiveToken(subscriptionModel).map(liveToken -> new ReplayStart(start.position(), liveToken, start.position(), null));
+            return captureLiveToken(subscriptionModel, liveStart).map(liveToken -> new ReplayStart(start.position(), liveToken, start.position(), null));
         }
         long replayOrigin = start.replayOrigin().orElse(start.position());
         long storedReplayTo = start.replayTo().orElseThrow();
@@ -251,17 +295,22 @@ final class PositionCatchupPipeline {
             }
             log.warn("The subscription model no longer has the history from the live start stored for catch-up subscription {}, so the catch-up replays again from position {} instead of {} and redelivers the events in between. Live start: {}",
                     subscriptionId == null ? "(unnamed)" : subscriptionId, replayOrigin, start.position(), storedLiveFrom.asString());
-            return captureLiveToken(subscriptionModel).map(liveToken -> new ReplayStart(replayOrigin, liveToken, replayOrigin, null));
+            return captureLiveToken(subscriptionModel, liveStart).map(liveToken -> new ReplayStart(replayOrigin, liveToken, replayOrigin, null));
         });
     }
 
     /**
      * Captures the live resume token before the bulk replay so an event committing during the replay is still
-     * delivered live. If the model reports no token (e.g. an empty oplog or a restricted cluster) a no-loss
-     * handover cannot be guaranteed, so it fails loudly instead of silently dropping events. Shared by the cold
-     * pipeline above and the named catch-up path in {@code NamedCatchupSupport}.
+     * delivered live. It is the {@code liveStart} the attempt's scope reports, which the event store read in the same
+     * session as the replay reads, or the wrapped model's global checkpoint when the store reports none. If there is
+     * no token (e.g. an empty oplog or a restricted cluster) a no-loss handover cannot be guaranteed, so it fails
+     * loudly instead of silently dropping events. Shared by the cold pipeline above and the named catch-up path in
+     * {@code NamedCatchupSupport}.
      */
-    Mono<Checkpoint> captureLiveToken(CheckpointAwareSubscriptionModel subscriptionModel) {
+    Mono<Checkpoint> captureLiveToken(CheckpointAwareSubscriptionModel subscriptionModel, @Nullable String liveStart) {
+        if (liveStart != null) {
+            return Mono.just(new StringBasedCheckpoint(liveStart));
+        }
         return subscriptionModel.globalCheckpoint()
                 .switchIfEmpty(Mono.error(() -> new IllegalStateException("Cannot run a catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.")));
     }
@@ -275,10 +324,10 @@ final class PositionCatchupPipeline {
      * cold pipeline above. The named catch-up path in {@code NamedCatchupSupport} uses {@link #replayApplying}
      * instead, which applies the same rule.
      */
-    Flux<CloudEvent> replay(ReplayStart start, BoundedIdCache<CatchupEventKey> cache) {
+    Flux<CloudEvent> replay(CatchupReader reader, ReplayStart start, BoundedIdCache<CatchupEventKey> cache) {
         return start.head(reader).flatMapMany(bulkHead -> {
-            Flux<CloudEvent> bulk = windows(start.replayFrom(), bulkHead, null);
-            Flux<CloudEvent> reconcile = start.reconciles() ? reconcile(bulkHead, cache) : Flux.empty();
+            Flux<CloudEvent> bulk = windows(reader, start.replayFrom(), bulkHead, null);
+            Flux<CloudEvent> reconcile = start.reconciles() ? reconcile(reader, bulkHead, cache) : Flux.empty();
             return Flux.concat(bulk, reconcile).map(cloudEvent -> start.stamp(cloudEvent, bulkHead));
         });
     }
@@ -295,12 +344,12 @@ final class PositionCatchupPipeline {
      * {@code keepReplaying} truncates each half, and the tail is skipped entirely once it answers {@code false}, so
      * a stop that lands after the history has drained costs no head read and no window read.
      */
-    Flux<Void> replayApplying(ReplayStart start, BoundedIdCache<CatchupEventKey> cache, BooleanSupplier keepReplaying,
+    Flux<Void> replayApplying(CatchupReader reader, ReplayStart start, BoundedIdCache<CatchupEventKey> cache, BooleanSupplier keepReplaying,
                               Function<CloudEvent, Mono<Void>> action, Runnable reconcileStarting) {
         return start.head(reader).flatMapMany(bulkHead -> {
             Function<CloudEvent, Mono<Void>> stampedAction = cloudEvent -> action.apply(start.stamp(cloudEvent, bulkHead));
             return Flux.concat(
-                    windows(start.replayFrom(), bulkHead, null).takeWhile(ignored -> keepReplaying.getAsBoolean()).concatMap(stampedAction),
+                    windows(reader, start.replayFrom(), bulkHead, null).takeWhile(ignored -> keepReplaying.getAsBoolean()).concatMap(stampedAction),
                     Mono.defer(() -> {
                         if (!keepReplaying.getAsBoolean()) {
                             return Mono.empty();
@@ -311,7 +360,7 @@ final class PositionCatchupPipeline {
                     // Called inside the defer rather than passed into it, since building the reconciliation Flux
                     // reads the head.
                     Flux.defer(() -> keepReplaying.getAsBoolean() && start.reconciles()
-                            ? reconcile(bulkHead, cache).takeWhile(ignored -> keepReplaying.getAsBoolean()).concatMap(stampedAction)
+                            ? reconcile(reader, bulkHead, cache).takeWhile(ignored -> keepReplaying.getAsBoolean()).concatMap(stampedAction)
                             : Flux.empty()));
         });
     }
@@ -319,7 +368,7 @@ final class PositionCatchupPipeline {
     // Emits events in (fromExclusive, toInclusive], paging in position windows. A null cache records nothing, which is
     // what the history windows pass, so the live stream can deliver a history event again. Used by both the bulk and
     // the reconciliation phases.
-    private Flux<CloudEvent> windows(long fromExclusive, long toInclusive, @Nullable BoundedIdCache<CatchupEventKey> cache) {
+    private Flux<CloudEvent> windows(CatchupReader reader, long fromExclusive, long toInclusive, @Nullable BoundedIdCache<CatchupEventKey> cache) {
         if (fromExclusive >= toInclusive) {
             return Flux.empty();
         }
@@ -328,13 +377,13 @@ final class PositionCatchupPipeline {
         if (cache != null) {
             window = window.doOnNext(event -> cache.add(CatchupEventKey.of(event)));
         }
-        return window.concatWith(Flux.defer(() -> windows(upTo, toInclusive, cache)));
+        return window.concatWith(Flux.defer(() -> windows(reader, upTo, toInclusive, cache)));
     }
 
     // Snapshot the head once and drain events up to it in position order. Re-reading a moving head would advance
     // forever under sustained writes and never hand over to live (livelock). Anything after the snapshot is
     // covered by the live change stream (resumes from the pre-bulk token), deduped by the (id, source) cache.
-    private Flux<CloudEvent> reconcile(long cursor, BoundedIdCache<CatchupEventKey> cache) {
-        return reader.currentHead().flatMapMany(snapshotHead -> windows(cursor, snapshotHead, cache));
+    private Flux<CloudEvent> reconcile(CatchupReader reader, long cursor, BoundedIdCache<CatchupEventKey> cache) {
+        return reader.currentHead().flatMapMany(snapshotHead -> windows(reader, cursor, snapshotHead, cache));
     }
 }

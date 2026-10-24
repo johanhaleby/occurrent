@@ -21,6 +21,7 @@ import com.mongodb.client.*;
 import com.mongodb.client.model.*;
 import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
@@ -30,8 +31,12 @@ import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.*;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventRepairValidator;
@@ -46,6 +51,7 @@ import org.occurrent.eventstore.mongodb.dcb.internal.DcbTagsIndexCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
+import org.occurrent.eventstore.mongodb.internal.OperationTimeLiveStart;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter;
@@ -59,6 +65,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -96,7 +103,7 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWith
  * primary that joins no session.
  */
 @NullMarked
-public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation {
+public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation, CatchupReads, DcbCatchupReads {
     private static final Logger log = LoggerFactory.getLogger(MongoEventStore.class);
     private static final String ID = "_id";
     private static final String NATURAL = "$natural";
@@ -262,7 +269,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private Stream<Document> readCloudEvents(Bson query, int skip, int limit, SortBy sortBy) {
-        final FindIterable<Document> documentsWithoutSkipAndLimit = findEvents(query);
+        return readCloudEvents(query, skip, limit, sortBy, this::findEvents);
+    }
+
+    // The find is passed in so a catch-up read scope can read the same way through its own session
+    private Stream<Document> readCloudEvents(Bson query, int skip, int limit, SortBy sortBy, Function<Bson, FindIterable<Document>> find) {
+        final FindIterable<Document> documentsWithoutSkipAndLimit = find.apply(query);
 
         final FindIterable<Document> documentsWithSkipAndLimit;
         if (skip != 0 || limit != Integer.MAX_VALUE) {
@@ -384,16 +396,21 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(null, criteria), this::currentPosition, this::findEvents);
+    }
+
+    // The token, the head and the find are passed in so a catch-up read scope can read all three through its own session
+    private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, LongSupplier consistencyToken, LongSupplier currentPosition, Function<Bson, FindIterable<Document>> find) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
         // false conflict that retries) rather than miss the conflict.
-        long consistencyTokenValue = consistencyToken(null, criteria);
-        long highWatermark = currentPosition();
+        long consistencyTokenValue = consistencyToken.getAsLong();
+        long highWatermark = currentPosition.getAsLong();
         long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
         Bson mongoQuery = toDcbBsonQuery(criteria, options.afterPosition().orElse(0), upperBound);
 
         boolean fetchDescending = options.direction() == DcbReadOptions.Direction.BACKWARD;
-        FindIterable<Document> documents = findEvents(mongoQuery)
+        FindIterable<Document> documents = find.apply(mongoQuery)
                 .sort(fetchDescending ? descending(OccurrentCloudEventExtension.POSITION) : ascending(OccurrentCloudEventExtension.POSITION));
         if (options.skip() > 0) {
             documents = documents.skip(options.skip());
@@ -550,10 +567,15 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     @Override
     public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
         requirePosition();
+        return readInPositionOrder(filter, range, this::currentPosition, this::findEvents);
+    }
+
+    // The head and the find are passed in so a catch-up read scope can read both through its own session
+    private Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range, LongSupplier currentPosition, Function<Bson, FindIterable<Document>> find) {
         requireNonNull(filter, "Filter cannot be null");
         requireNonNull(range, "Range cannot be null");
 
-        long highWatermark = currentPosition();
+        long highWatermark = currentPosition.getAsLong();
         long lowerBound = range.afterPosition().orElse(0);
         long upperBound = Math.min(highWatermark, range.upToPosition().orElse(highWatermark));
 
@@ -561,7 +583,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         Bson filterBson = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
         Bson query = and(positionFilter, filterBson);
 
-        FindIterable<Document> documents = findEvents(query).sort(ascending(OccurrentCloudEventExtension.POSITION));
+        FindIterable<Document> documents = find.apply(query).sort(ascending(OccurrentCloudEventExtension.POSITION));
         return StreamSupport.stream(queryOptions.apply(documents).spliterator(), false)
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
     }
@@ -952,6 +974,97 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         final Bson query = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
         return readCloudEvents(query, skip, limit, sortBy)
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
+    }
+
+    /**
+     * Internal. Opens a {@link CatchupReadScope}, see {@link CatchupReads#openCatchupReadScope(String)}. The scope
+     * reads through a causally consistent session of its own, never the caller's, and every read in it uses read
+     * concern majority. The session is closed with the scope.
+     */
+    @Override
+    public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+        return new MongoCatchupReadScope(notBefore);
+    }
+
+    /**
+     * Internal. Opens a {@link DcbCatchupReadScope}, see {@link DcbCatchupReads#openDcbCatchupReadScope(String)}.
+     *
+     * @throws UnsupportedOperationException if this store does not have the DCB capability.
+     */
+    @Override
+    public DcbCatchupReadScope openDcbCatchupReadScope(@Nullable String notBefore) {
+        requireDcbCapability();
+        return new MongoCatchupReadScope(notBefore);
+    }
+
+    // One causally consistent session for one replay attempt. The live start is the operation time of a majority read of
+    // the position counter on the primary, plus one increment, and every replay read is a majority read in the same
+    // session, so each of them sees every write that was majority-committed by then. A read preference configured on the
+    // collection is kept for the replay reads, and only the counter is read from the primary.
+    private final class MongoCatchupReadScope implements CatchupReadScope, DcbCatchupReadScope {
+        private final ClientSession session;
+        private final MongoCollection<Document> events = eventCollection.withReadConcern(ReadConcern.MAJORITY);
+        private final MongoCollection<Document> positions = dcbPositionCollection.withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary());
+        private final @Nullable String liveStart;
+
+        MongoCatchupReadScope(@Nullable String notBefore) {
+            this.session = mongoClient.startSession(ClientSessionOptions.builder().causallyConsistent(true).build());
+            try {
+                if (notBefore != null) {
+                    OperationTimeLiveStart.tryParse(notBefore).ifPresent(session::advanceOperationTime);
+                }
+                positions.find(session, eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first();
+                BsonTimestamp t0 = session.getOperationTime();
+                this.liveStart = OperationTimeLiveStart.liveStartAfterRead(t0);
+            } catch (RuntimeException e) {
+                session.close();
+                throw e;
+            }
+        }
+
+        @Override
+        public @Nullable String liveStart() {
+            return liveStart;
+        }
+
+        @Override
+        public long currentPosition() {
+            requirePosition();
+            Document document = positions.find(session, eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first();
+            return document == null ? 0 : ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue();
+        }
+
+        @Override
+        public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            requirePosition();
+            return MongoEventStore.this.readInPositionOrder(filter, range, this::currentPosition, this::findEvents);
+        }
+
+        @Override
+        public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+            requireStreamCapability();
+            requireNonNull(filter, "Filter cannot be null");
+            Bson query = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
+            return readCloudEvents(query, skip, limit, sortBy, this::findEvents)
+                    .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
+        }
+
+        @Override
+        public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+            requireDcbCapability();
+            requireNonNull(criteria, "Criteria cannot be null");
+            DcbCatchupReadScope.requirePositionRange(options);
+            return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(session, criteria), this::currentPosition, this::findEvents);
+        }
+
+        private FindIterable<Document> findEvents(Bson query) {
+            return events.find(session, query);
+        }
+
+        @Override
+        public void close() {
+            session.close();
+        }
     }
 
     @Override
