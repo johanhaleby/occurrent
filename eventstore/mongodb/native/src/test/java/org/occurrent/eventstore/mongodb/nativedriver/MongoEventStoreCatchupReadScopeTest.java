@@ -45,10 +45,12 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.tck.ConformanceEvents.event;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
@@ -153,6 +155,24 @@ class MongoEventStoreCatchupReadScopeTest {
                 }
             }
         }
+    }
+
+    @Test
+    void a_scope_resumed_from_a_live_start_nothing_has_been_written_since_reads_every_event_before_it() {
+        openStore(null);
+        eventStore.write("stream", List.of(event("first", "Happened"), event("second", "Happened")));
+        String liveStart;
+        try (CatchupReadScope first = eventStore.openCatchupReadScope(null)) {
+            liveStart = first.liveStart();
+        }
+
+        List<String> replayed = new ArrayList<>();
+        assertThatCode(() -> {
+            try (CatchupReadScope resumed = eventStore.openCatchupReadScope(liveStart)) {
+                replayed.addAll(idsInPositionOrder(resumed));
+            }
+        }).doesNotThrowAnyException();
+        assertThat(replayed).containsExactly("first", "second");
     }
 
     private void openStore(ReadConcern clientReadConcern) {

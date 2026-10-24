@@ -52,10 +52,12 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.UnaryOperator;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.occurrent.tck.ConformanceEvents.event;
 
 @Testcontainers
@@ -163,6 +165,30 @@ class ReactorMongoEventStoreCatchupReadScopeTest {
                         assertThat(scopeReads()).isNotEmpty().noneSatisfy(read -> assertThat(read.inTransaction()).as("%s", read).isTrue());
                     });
         }).blockLast(TIMEOUT);
+    }
+
+    @Test
+    void a_scope_resumed_from_a_live_start_nothing_has_been_written_since_reads_every_event_before_it() {
+        openStore(query -> query);
+        eventStore.write("stream", Flux.just(event("first", "Happened"), event("second", "Happened"))).block(TIMEOUT);
+        CatchupReadScope first = eventStore.openCatchupReadScope(null).block(TIMEOUT);
+        String liveStart;
+        try {
+            liveStart = first.liveStart();
+        } finally {
+            first.close().block(TIMEOUT);
+        }
+
+        List<String> replayed = new ArrayList<>();
+        assertThatCode(() -> {
+            CatchupReadScope resumed = eventStore.openCatchupReadScope(liveStart).block(TIMEOUT);
+            try {
+                replayed.addAll(idsInPositionOrder(resumed));
+            } finally {
+                resumed.close().block(TIMEOUT);
+            }
+        }).doesNotThrowAnyException();
+        assertThat(replayed).containsExactly("first", "second");
     }
 
     private void openStore(UnaryOperator<Query> queryOptions) {
