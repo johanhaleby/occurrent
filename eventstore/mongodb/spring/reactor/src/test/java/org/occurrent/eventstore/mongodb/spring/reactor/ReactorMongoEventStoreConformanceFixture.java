@@ -28,6 +28,10 @@ import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.transaction.reactive.TransactionCallback;
+import org.springframework.transaction.reactive.TransactionalOperator;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
@@ -47,6 +51,7 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
     private final ReactiveMongoTemplate mongoTemplate;
     private final ReactiveMongoTransactionManager transactionManager;
     private final BlockingEventStoreOverReactive bridge;
+    private final String collection;
     private final TimeRepresentation timeRepresentation;
 
     ReactorMongoEventStoreConformanceFixture(ConnectionString connectionString) {
@@ -57,6 +62,7 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
         this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
         String database = requireNonNull(connectionString.getDatabase());
+        this.collection = connectionString.getCollection();
         this.mongoTemplate = new ReactiveMongoTemplate(mongoClient, database);
         this.transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, database));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
@@ -122,6 +128,59 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
     @Override
     public DcbAppendConditionModel appendConditionModel() {
         return DcbAppendConditionModel.TAG_MARKER;
+    }
+
+    /**
+     * The store reserves the position block before the append transaction starts, so an append can be held between the
+     * two. The hold is a {@link TransactionalOperator} that parks the first transaction it is asked to wrap, without
+     * blocking a thread, which the store does after it has reserved its position and before it begins the transaction.
+     */
+    @Override
+    public LateCommits lateCommits() {
+        return LateCommits.holding(() -> {
+            AppendHold hold = new AppendHold();
+            EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
+                    .eventStoreCollectionName(collection)
+                    .transactionConfig(new HoldingTransactionalOperator(TransactionalOperator.create(transactionManager), hold))
+                    .timeRepresentation(timeRepresentation)
+                    .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                    .build();
+            BlockingEventStoreOverReactive holding = BlockingEventStoreOverReactive.of(new ReactorMongoEventStore(mongoTemplate, eventStoreConfig));
+            return HeldAppend.of(hold, holding, () -> {
+            });
+        });
+    }
+
+    private static final class HoldingTransactionalOperator implements TransactionalOperator {
+
+        private final TransactionalOperator delegate;
+        private final AppendHold hold;
+
+        HoldingTransactionalOperator(TransactionalOperator delegate, AppendHold hold) {
+            this.delegate = delegate;
+            this.hold = hold;
+        }
+
+        private Mono<Void> holdOnce() {
+            return Mono.defer(() -> hold.engage()
+                    ? Mono.fromFuture(hold.released()).timeout(AppendHold.RELEASE_TIMEOUT)
+                    : Mono.empty());
+        }
+
+        @Override
+        public <T> Mono<T> transactional(Mono<T> mono) {
+            return holdOnce().then(delegate.transactional(mono));
+        }
+
+        @Override
+        public <T> Flux<T> transactional(Flux<T> flux) {
+            return holdOnce().thenMany(delegate.transactional(flux));
+        }
+
+        @Override
+        public <T> Flux<T> execute(TransactionCallback<T> action) {
+            return holdOnce().thenMany(delegate.execute(action));
+        }
     }
 
     @Override
