@@ -419,9 +419,9 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Go live without a catch-up: drain whatever live events have buffered since {@link #acceptAndWait(Object)}
-     * was first called, then deliver events directly from here on. Use this instead of {@link #catchUp()} for a feed
-     * whose events are not in the local event store, so there is nothing to replay. No completion marker is written, since
+     * Go live without a catch-up: drain whatever live events have buffered since {@link #acceptAndWait(Object)} was
+     * first called, then deliver events directly from here on. Use this instead of {@link #catchUp()} for a feed whose
+     * events are not in the local event store, so there is nothing to replay. No completion marker is written, since
      * nothing was replayed, so a later {@link #catchUp()} still replays the full history.
      * <p>
      * A call while {@link #catchUp()} is still replaying returns only once that replay has ended. When a catch-up on

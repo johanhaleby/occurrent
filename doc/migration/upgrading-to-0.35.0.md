@@ -230,6 +230,9 @@ Run `UpgradeToOccurrent_0_34` while the project still depends on 0.33.0 or 0.34.
 `acceptAndWait(..)`, and does not touch an `accept(..)` on any other type. The renamed call does what the deprecated one
 did in 0.34.0. Section 12 of the 0.34.0 guide covers how that differs from 0.33.0.
 
+`acceptAndWait(..)` first appears in 0.34.0. A project on 0.33.0 stops compiling after the rename until the dependency
+moves up, so change the dependency right after the recipe has run.
+
 If the dependency is already 0.35.0, the build fails on each `accept(..)` call and the recipe no longer finds it, so
 rename each call to `acceptAndWait(..)` by hand. A broker listener that can have a message delivered again can call
 `acceptOrDefer(..)` instead, which the same section covers.

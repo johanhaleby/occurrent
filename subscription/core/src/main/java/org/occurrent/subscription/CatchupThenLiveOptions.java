@@ -38,12 +38,12 @@ package org.occurrent.subscription;
  * folds of events that were themselves fed from a fold. An event fed more than this many levels below an event fed
  * from outside or replayed is refused.
  * <p>
- * Which calls reach the cap differs by stack. On the blocking stack only the calls that wait or buffer reach it,
- * a push model's {@code accept(..)} and a feed's {@code acceptAndWait(..)}, since {@code acceptOrDefer(..)} returns
- * {@code DEFERRED} while the handover is not live and buffers nothing. On the reactor stack
- * {@code acceptOrDefer(..)} returns {@code DEFERRED} only while the handover is not live or is paused for a replay.
- * Once the handover is live, its events count toward the cap like any other live event. Reaching the cap errors the returned {@code Mono}, except that a push model's
- * {@code acceptOrDefer(..)} completes it with {@code NOT_DELIVERABLE} instead.
+ * Which calls reach the cap differs by stack. On the blocking stack only the calls that wait or buffer reach it, a
+ * push model's {@code accept(..)} and a feed's {@code acceptAndWait(..)}, since {@code acceptOrDefer(..)} returns
+ * {@code DEFERRED} while the handover is not live and buffers nothing. On the reactor stack {@code acceptOrDefer(..)}
+ * returns {@code DEFERRED} only while the handover is not live or is paused for a replay. Once the handover is live,
+ * its events count toward the cap like any other live event. Reaching the cap errors the returned {@code Mono}, except
+ * that a push model's {@code acceptOrDefer(..)} completes it with {@code NOT_DELIVERABLE} instead.
  * <p>
  * What reaching it costs depends on who made the call. A broker listener does not acknowledge the message when its
  * call throws or its {@code Mono} errors, and has the broker deliver it again, as
