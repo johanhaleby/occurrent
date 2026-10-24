@@ -340,30 +340,6 @@ public final class CatchupProjectionFeed<E> {
         return outcome(handover.acceptIfLive(new DeliveredEvent<>(metadata, event)));
     }
 
-    /**
-     * Forwards to {@link #acceptAndWait(Object)}.
-     *
-     * @deprecated Use {@link #acceptAndWait(Object)}, which completes once the event is folded, or
-     *             {@link #acceptOrDefer(Object)}, which completes with {@link RoutingOutcome#DEFERRED} instead of
-     *             waiting.
-     */
-    @Deprecated(since = "0.34.0", forRemoval = true)
-    public Mono<Void> accept(E event) {
-        return acceptAndWait(event);
-    }
-
-    /**
-     * Forwards to {@link #acceptAndWait(EventMetadata, Object)}.
-     *
-     * @deprecated Use {@link #acceptAndWait(EventMetadata, Object)}, which completes once the event is folded, or
-     *             {@link #acceptOrDefer(EventMetadata, Object)}, which completes with {@link RoutingOutcome#DEFERRED}
-     *             instead of waiting.
-     */
-    @Deprecated(since = "0.34.0", forRemoval = true)
-    public Mono<Void> accept(EventMetadata metadata, E event) {
-        return acceptAndWait(metadata, event);
-    }
-
     private static Mono<RoutingOutcome> outcome(Mono<Boolean> delivered) {
         return delivered.map(folded -> folded ? RoutingOutcome.DELIVERED : RoutingOutcome.DEFERRED);
     }

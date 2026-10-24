@@ -1031,53 +1031,6 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_forwards_to_accept_and_wait_and_completes_once_the_event_is_folded() {
-        List<String> streamIds = new CopyOnWriteArrayList<>();
-        BiFunction<EventMetadata, Counted, Mono<Void>> fold = (metadata, event) -> Mono.fromRunnable(() -> streamIds.add(
-                event.eventId() + "@" + (metadata.getStreamId())));
-        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", fold,
-                Filter.all(), metadataReader("1"), countedConverter(), Counted::eventId, null);
-        feed.catchUp().block(ofSeconds(5));
-
-        feed.accept(metadata("live-stream", 99L), new Counted("2")).block(ofSeconds(5));
-
-        assertThat(streamIds).as("the metadata overload forwards its metadata").containsExactly("1@s", "2@live-stream");
-    }
-
-    @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_without_metadata_folds_the_event_live_like_accept_and_wait() {
-        List<String> folded = new CopyOnWriteArrayList<>();
-        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
-                (Counted e) -> Mono.fromRunnable(() -> folded.add(e.eventId())),
-                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
-        feed.catchUp().block(ofSeconds(5));
-
-        feed.accept(new Counted("2")).block(ofSeconds(5));
-
-        assertThat(folded).containsExactly("1", "2");
-    }
-
-    @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_errors_like_accept_and_wait_when_the_feed_is_stopped_before_the_event_is_folded() throws Exception {
-        List<String> folded = new CopyOnWriteArrayList<>();
-        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
-                (Counted e) -> Mono.fromRunnable(() -> folded.add(e.eventId())),
-                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
-        CompletableFuture<Void> accepted = feed.accept(new Counted("live")).toFuture();
-
-        feed.stopCatchUp();
-
-        assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what the deprecated accept(..) errored with once the feed stopped")
-                .cause()
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
-        assertThat(folded).isEmpty();
-    }
-
-    @Test
     void a_catch_up_failure_fails_live_acks_instead_of_hanging() {
         CloudEventConverter<Counted> converter = countedConverter();
         Map<String, Integer> repo = new ConcurrentHashMap<>();
@@ -1321,17 +1274,16 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_waits_for_the_feed_to_go_live_and_folds_the_event_instead_of_deferring_it() throws Exception {
+    void accept_and_wait_waits_for_the_feed_to_go_live_and_folds_the_event_instead_of_deferring_it() throws Exception {
         List<String> folded = new CopyOnWriteArrayList<>();
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
                 (Counted e) -> Mono.fromRunnable(() -> folded.add(e.eventId())),
                 Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
-        CompletableFuture<Void> plain = feed.accept(new Counted("early")).toFuture();
-        CompletableFuture<Void> withMetadata = feed.accept(EventMetadata.empty(), new Counted("early-with-metadata")).toFuture();
+        CompletableFuture<Void> plain = feed.acceptAndWait(new Counted("early")).toFuture();
+        CompletableFuture<Void> withMetadata = feed.acceptAndWait(EventMetadata.empty(), new Counted("early-with-metadata")).toFuture();
 
-        assertThat(plain).as("accept(..) before the feed is live").isNotDone();
-        assertThat(withMetadata).as("accept(metadata, ..) before the feed is live").isNotDone();
+        assertThat(plain).as("acceptAndWait(..) before the feed is live").isNotDone();
+        assertThat(withMetadata).as("acceptAndWait(metadata, ..) before the feed is live").isNotDone();
         feed.catchUp().block(ofSeconds(5));
 
         plain.get(5, TimeUnit.SECONDS);

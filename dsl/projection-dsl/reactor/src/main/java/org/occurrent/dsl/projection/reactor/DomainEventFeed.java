@@ -380,30 +380,6 @@ public final class DomainEventFeed<E> {
                 (catchupFeed, event) -> catchupFeed.acceptOrDefer(EventMetadata.from(cloudEvent), event));
     }
 
-    /**
-     * Forwards to {@link #acceptAndWait(Object)}.
-     *
-     * @deprecated Use {@link #acceptAndWait(Object)}, which completes once the event is folded, or
-     *             {@link #acceptOrDefer(Object)}, which completes with {@link RoutingOutcome#DEFERRED} instead of
-     *             waiting.
-     */
-    @Deprecated(since = "0.34.0", forRemoval = true)
-    public Mono<Void> accept(E event) {
-        return acceptAndWait(event);
-    }
-
-    /**
-     * Forwards to {@link #acceptAndWait(EventMetadata, Object)}.
-     *
-     * @deprecated Use {@link #acceptAndWait(EventMetadata, Object)}, which completes once the event is folded, or
-     *             {@link #acceptOrDefer(EventMetadata, Object)}, which completes with {@link RoutingOutcome#DEFERRED}
-     *             instead of waiting.
-     */
-    @Deprecated(since = "0.34.0", forRemoval = true)
-    public Mono<Void> accept(EventMetadata metadata, E event) {
-        return acceptAndWait(metadata, event);
-    }
-
     // A non-matching event completes with filtered and is never decoded.
     private <R> Mono<R> decodeIfMatching(CloudEvent cloudEvent, Mono<R> filtered,
                                          BiFunction<CatchupProjectionFeed<E>, E, Mono<R>> matched) {

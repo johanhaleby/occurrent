@@ -39,10 +39,10 @@ package org.occurrent.subscription;
  * from outside or replayed is refused.
  * <p>
  * Which calls reach the cap differs by stack. On the blocking stack only the calls that wait or buffer reach it,
- * {@code accept(..)} and {@code acceptAndWait(..)}, since {@code acceptOrDefer(..)} returns {@code DEFERRED} while the
- * handover is not live and buffers nothing. On the reactor stack {@code acceptOrDefer(..)} returns {@code DEFERRED}
- * only while the handover is not live or is paused for a replay. Once the handover is live, its events count toward
- * the cap like any other live event. Reaching the cap errors the returned {@code Mono}, except that a push model's
+ * a push model's {@code accept(..)} and a feed's {@code acceptAndWait(..)}, since {@code acceptOrDefer(..)} returns
+ * {@code DEFERRED} while the handover is not live and buffers nothing. On the reactor stack
+ * {@code acceptOrDefer(..)} returns {@code DEFERRED} only while the handover is not live or is paused for a replay.
+ * Once the handover is live, its events count toward the cap like any other live event. Reaching the cap errors the returned {@code Mono}, except that a push model's
  * {@code acceptOrDefer(..)} completes it with {@code NOT_DELIVERABLE} instead.
  * <p>
  * What reaching it costs depends on who made the call. A broker listener does not acknowledge the message when its
