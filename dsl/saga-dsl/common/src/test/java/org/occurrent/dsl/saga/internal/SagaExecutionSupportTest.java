@@ -1194,6 +1194,142 @@ class SagaExecutionSupportTest {
         }
 
         @Nested
+        @DisplayName("when the instance holds a failure record and the input is behind the window")
+        class WhenTheInstanceHoldsAFailureRecordAndTheInputIsBehindTheWindow {
+
+            private final Duration budget = Duration.ofMinutes(5);
+            private final Throwable failure = new IllegalStateException("boom");
+
+            /** Type A is at 30 under a window of 4, so version 5 is far behind it and was never applied. */
+            private SagaEnvelope<OrderState> failingOn(String input, Instant firstFailedAt) {
+                SagaFailure record = new SagaFailure(input, null, firstFailedAt, IllegalStateException.class.getName(), "boom");
+                return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM, 30L), null,
+                        NOW, NOW, null, null, true, record, Map.of(STREAM, new StreamMarks(0, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)))));
+            }
+
+            private Outcome<OrderState, OrderCommand> applyOrderPlaced(SagaEnvelope<OrderState> current, EventMeta meta) {
+                return SagaExecutionSupport.process(orderFulfillment(), "o1", current, SagaInput.event(new OrderPlaced("o1", 100)), meta, NOW, WINDOW);
+            }
+
+            @Test
+            void the_input_the_record_names_is_new_however_far_behind_the_window_it_is() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW);
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, meta(TYPE_A, 5), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.NEW);
+            }
+
+            @Test
+            void the_input_the_record_names_is_applied_and_clears_the_record() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW);
+
+                // When
+                Outcome<OrderState, OrderCommand> outcome = applyOrderPlaced(current, meta(TYPE_A, 5));
+
+                // Then
+                assertAll(
+                        () -> assertThat(outcome.processed()).isTrue(),
+                        () -> assertThat(outcome.commands()).containsExactly(new NotifyWarehouse("o1")),
+                        () -> assertThat(outcome.envelope().failure()).isNull()
+                );
+            }
+
+            @Test
+            void the_input_the_record_named_is_behind_the_window_again_once_it_has_been_applied() {
+                // Given
+                SagaEnvelope<OrderState> afterApplied = applyOrderPlaced(failingOn(STREAM + "@5", NOW), meta(TYPE_A, 5)).envelope();
+
+                // When
+                Outcome<OrderState, OrderCommand> redelivery = applyOrderPlaced(afterApplied, meta(TYPE_A, 5));
+
+                // Then
+                assertAll(
+                        () -> assertThat(SagaExecutionSupport.classify(afterApplied, meta(TYPE_A, 5), WINDOW)).isEqualTo(Delivery.BEHIND_WINDOW),
+                        () -> assertThat(redelivery.processed()).isFalse(),
+                        () -> assertThat(redelivery.commands()).isEmpty()
+                );
+            }
+
+            @Test
+            void a_record_that_names_another_input_leaves_the_input_behind_the_window() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@6", NOW);
+
+                // When
+                Outcome<OrderState, OrderCommand> outcome = applyOrderPlaced(current, meta(TYPE_A, 5));
+
+                // Then
+                assertAll(
+                        () -> assertThat(SagaExecutionSupport.classify(current, meta(TYPE_A, 5), WINDOW)).isEqualTo(Delivery.BEHIND_WINDOW),
+                        () -> assertThat(outcome.processed()).isFalse(),
+                        () -> assertThat(outcome.commands()).isEmpty()
+                );
+            }
+
+            @Test
+            void a_record_written_before_0_35_0_with_a_position_key_leaves_the_input_behind_the_window() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn("position:5", NOW);
+
+                // When
+                Outcome<OrderState, OrderCommand> outcome = applyOrderPlaced(current, meta(TYPE_A, 5));
+
+                // Then
+                assertAll(
+                        () -> assertThat(SagaExecutionSupport.classify(current, meta(TYPE_A, 5), WINDOW)).isEqualTo(Delivery.BEHIND_WINDOW),
+                        () -> assertThat(outcome.processed()).isFalse()
+                );
+            }
+
+            @Test
+            void the_same_input_failing_again_after_the_budget_is_used_up_quarantines_the_instance() {
+                // Given a record that has been naming version 5 for as long as the budget
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW.minus(budget));
+
+                // When
+                FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, 5), failure, NOW, budget, WINDOW);
+
+                // Then
+                assertAll(
+                        () -> assertThat(record).isNotNull(),
+                        () -> assertThat(record.quarantined()).isTrue(),
+                        () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.QUARANTINED),
+                        () -> assertThat(record.envelope().failure().input()).isEqualTo(STREAM + "@5"),
+                        () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW.minus(budget))
+                );
+            }
+
+            @Test
+            void the_same_input_failing_again_inside_the_budget_produces_no_new_record() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW);
+
+                // When
+                FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, 5), failure, NOW, budget, WINDOW);
+
+                // Then
+                assertThat(record).isNull();
+            }
+
+            @Test
+            void another_input_behind_the_window_failing_produces_no_record() {
+                // Given a record naming version 6, so version 5 is a redelivery of nothing the record knows about
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@6", NOW.minus(budget));
+
+                // When
+                FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, 5), failure, NOW, budget, WINDOW);
+
+                // Then
+                assertThat(record).isNull();
+            }
+        }
+
+        @Nested
         @DisplayName("when an input fails")
         class WhenAnInputFails {
 

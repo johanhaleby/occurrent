@@ -54,6 +54,11 @@ this decision, and what changes is that the skip now logs a warning naming the s
 lost this way is visible. A feed that reorders by more than the window loses those events, and the fix is a larger
 window.
 
+The exception is the event the instance's failure record names. That record is cleared by the save that applies the
+event, so while it names the event the event was never applied, and the saga treats it as new however far behind it is.
+Skipping it would acknowledge an event whose reaction never ran, and a failing event that stays skipped could never reach
+quarantine.
+
 **The horizon keeps a raised window from undoing a skip.** Trimming `applied` forgets the versions at or below
 `mark - window`, and a version the saga forgot looks the same as one it never applied. If the window were only read from
 the configuration, raising it from 2 to 256 would turn every version just forgotten into a late arrival and run its

@@ -46,8 +46,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -363,6 +366,104 @@ class SagaLateStreamVersionTest {
 
             // Then
             assertThat(stored().streamMarks().get(STREAM).byType().get(ITEM_ADDED_TYPE)).isEqualTo(new TypeMark(10, List.of(9L), 8));
+        }
+    }
+
+    @Nested
+    @DisplayName("when a version that failed is redelivered after later versions moved the mark past the window")
+    class WhenAVersionThatFailedIsRedeliveredAfterLaterVersionsMovedTheMarkPastTheWindow {
+
+        private final Duration budget = Duration.ofMinutes(5);
+        private final AtomicReference<Instant> now = new AtomicReference<>(NOW);
+        private final AtomicBoolean reserveTwoFails = new AtomicBoolean(true);
+
+        /** The reaction to item "two" fails while {@code reserveTwoFails} is set, and nothing is applied then. */
+        private SagaExecution<BasketEvent, Basket, BasketCommand> execution() {
+            return new SagaExecution<>("baskets", basketSaga(), store, command -> {
+                if (reserveTwoFails.get() && command.equals(reserve("two"))) {
+                    throw new IllegalStateException("cannot reserve two");
+                }
+                issued.add(command);
+            }, converter, SagaRunnerConfig.defaults().withReorderWindow(2).withQuarantineAfter(budget), event -> true, now::get);
+        }
+
+        private CloudEvent itemAddedAt(long streamVersion, String item) {
+            return streamKeyed(STREAM, streamVersion, added(item));
+        }
+
+        /** Version 2 fails, then versions 3 to 5 apply, which puts the mark at 5 and the horizon at 3 under a window of 2. */
+        private SagaExecution<BasketEvent, Basket, BasketCommand> afterVersionTwoFailedAndThreeToFiveApplied() {
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = execution();
+            execution.onCloudEvent(streamKeyed(STREAM, 1, opened()));
+            assertThatThrownBy(() -> execution.onCloudEvent(itemAddedAt(2, "two"))).isInstanceOf(IllegalStateException.class);
+            execution.onCloudEvent(itemAddedAt(3, "three"));
+            execution.onCloudEvent(itemAddedAt(4, "four"));
+            execution.onCloudEvent(itemAddedAt(5, "five"));
+            return execution;
+        }
+
+        @Test
+        void the_failed_version_is_applied_once_when_it_succeeds_and_the_failure_record_is_cleared() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoFailedAndThreeToFiveApplied();
+            SagaEnvelope<Basket> beforeRetry = stored();
+            reserveTwoFails.set(false);
+
+            // When
+            execution.onCloudEvent(itemAddedAt(2, "two"));
+
+            // Then
+            SagaEnvelope<Basket> after = stored();
+            assertAll(
+                    () -> assertThat(beforeRetry.failure()).isNotNull(),
+                    () -> assertThat(beforeRetry.failure().input()).isEqualTo(STREAM + "@2"),
+                    () -> assertThat(beforeRetry.state()).isEqualTo(new Basket(3, false)),
+                    () -> assertThat(issued).containsExactly(new OpenLedger(BASKET), reserve("three"), reserve("four"), reserve("five"), reserve("two")),
+                    () -> assertThat(after.failure()).isNull(),
+                    () -> assertThat(after.status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(after.state()).isEqualTo(new Basket(4, false))
+            );
+        }
+
+        @Test
+        void a_redelivery_of_the_version_after_it_succeeded_is_skipped() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoFailedAndThreeToFiveApplied();
+            reserveTwoFails.set(false);
+            execution.onCloudEvent(itemAddedAt(2, "two"));
+
+            // When
+            execution.onCloudEvent(itemAddedAt(2, "two"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new OpenLedger(BASKET), reserve("three"), reserve("four"), reserve("five"), reserve("two")),
+                    () -> assertThat(stored().state()).isEqualTo(new Basket(4, false))
+            );
+        }
+
+        @Test
+        void a_version_that_keeps_failing_is_not_acknowledged_and_quarantines_the_instance_when_the_budget_is_used_up() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoFailedAndThreeToFiveApplied();
+            now.set(NOW.plus(budget).minusSeconds(1));
+
+            // When it fails again inside the budget
+            assertThatThrownBy(() -> execution.onCloudEvent(itemAddedAt(2, "two"))).isInstanceOf(IllegalStateException.class);
+            SagaEnvelope<Basket> insideBudget = stored();
+            now.set(NOW.plus(budget));
+            execution.onCloudEvent(itemAddedAt(2, "two"));
+
+            // Then
+            SagaEnvelope<Basket> after = stored();
+            assertAll(
+                    () -> assertThat(insideBudget.status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(insideBudget.failure().input()).isEqualTo(STREAM + "@2"),
+                    () -> assertThat(after.status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(after.failure().input()).isEqualTo(STREAM + "@2"),
+                    () -> assertThat(after.failure().firstFailedAt()).isEqualTo(NOW),
+                    () -> assertThat(issued).containsExactly(new OpenLedger(BASKET), reserve("three"), reserve("four"), reserve("five"))
+            );
         }
     }
 

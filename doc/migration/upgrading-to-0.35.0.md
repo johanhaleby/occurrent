@@ -125,7 +125,9 @@ The saga keeps the highest applied version per stream and event type. For an eve
 | Below it by less than the reorder window and not recorded | Applies it, since it arrived late |
 | Below it by the reorder window or more | Skips it and logs a warning once per stream |
 
-A reaction that ran for a late event runs once. A redelivery of that event is skipped.
+A reaction that ran for a late event runs once. A redelivery of that event is skipped. The one exception to the last row is
+the event that an instance's recorded failure names. That event was never applied, so the saga applies it when it comes
+again, however far behind it is.
 
 ### The reorder window
 

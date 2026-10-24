@@ -492,7 +492,9 @@ public final class SagaExecutionSupport {
      * Within one type, a version above the highest applied is new. A version at it, or among the {@code applied} ones
      * below it, was applied. Any other version less than {@code reorderWindow} below it is a late arrival and is new.
      * One further behind than that is skipped as {@link Delivery#BEHIND_WINDOW}, since remembering every version would
-     * make the state grow with the stream, and a restart that replays old events must not run their reactions again.
+     * make the state grow with the stream, and a restart that replays old events must not run their reactions again. The
+     * exception is the input the instance's failure record names, which is known not to have been applied and so stays
+     * new however far behind it is.
      * <p>
      * An instance stored before 0.35.0 has a watermark per stream and no marks. Everything at or below that watermark
      * was applied, so it stays skipped whatever its type, and the type marks start from the next event.
@@ -516,7 +518,17 @@ public final class SagaExecutionSupport {
             return Delivery.REDELIVERY;
         }
         // The horizon outlasts a window that is raised later, because the versions it forgot are not in applied any more.
-        return version <= Math.max(typeMark.horizon(), typeMark.mark() - reorderWindow) ? Delivery.BEHIND_WINDOW : Delivery.NEW;
+        if (version > Math.max(typeMark.horizon(), typeMark.mark() - reorderWindow)) {
+            return Delivery.NEW;
+        }
+        // A failure record naming this input says it was never applied, since the save that applies it clears the record.
+        // Skipping it as behind the window would acknowledge an event whose reaction never ran.
+        return namesFailureOf(current, meta) ? Delivery.NEW : Delivery.BEHIND_WINDOW;
+    }
+
+    private static <S extends @Nullable Object> boolean namesFailureOf(SagaEnvelope<S> current, EventMeta meta) {
+        SagaFailure failure = currentFailure(current);
+        return failure != null && failure.input().equals(meta.redeliveryKey());
     }
 
     // Everything at or below the floor was applied before versions were recorded per type. A stream the instance has
