@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.tck.eventstore.blocking;
+package org.occurrent.tck.latecommit;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.tck.internal.scaffolding.GuaranteeViolated;
@@ -30,12 +30,12 @@ import java.util.function.Supplier;
  * this method to an ordinary assertion.
  */
 @NullMarked
-final class LateCommitGuarantee {
+public final class LateCommitGuarantee {
 
     private LateCommitGuarantee() {
     }
 
-    static void require(boolean holds, String expected, Supplier<String> seen) {
+    public static void require(boolean holds, String expected, Supplier<String> seen) {
         if (!holds) {
             throw new GuaranteeViolated(expected, seen.get());
         }

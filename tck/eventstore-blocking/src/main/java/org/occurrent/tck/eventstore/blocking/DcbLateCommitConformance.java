@@ -29,6 +29,9 @@ import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.tck.latecommit.LateAppend;
+import org.occurrent.tck.latecommit.LateCommitGuarantee;
+import org.occurrent.tck.latecommit.LateCommits;
 
 import java.util.LinkedHashSet;
 import java.util.List;
