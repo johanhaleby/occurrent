@@ -43,9 +43,15 @@ public final class MarkerVersionsReadFailures {
 
     /**
      * The log message for a failure.
+     *
+     * @param refused whether the read is refused, which is what happens to a read after marker versions. Otherwise
+     *                the read returns without versions.
      */
-    public static String message(String phase, Throwable cause) {
+    public static String message(String phase, Throwable cause, boolean refused) {
+        String consequence = refused
+                ? "The read is refused, since a read after marker versions can't fall back to a full read."
+                : "The read returns no versions, so a snapshot over it is not saved this time.";
         return "A DCB read that asked for marker versions could not take them from a committed snapshot (" + phase + " failed with "
-                + cause.getClass().getSimpleName() + "). The read returns no versions, so a snapshot over it is not saved this time.";
+                + cause.getClass().getSimpleName() + "). " + consequence;
     }
 }
