@@ -17,7 +17,6 @@
 package org.occurrent.eventstore.mongodb.dcb.internal;
 
 import com.mongodb.ReadConcern;
-import com.mongodb.ReadConcernLevel;
 import com.mongodb.ReadPreference;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
@@ -51,7 +50,6 @@ import static org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel.*;
 public final class DcbMarkerVersionsDocuments {
 
     private static final String ID = "_id";
-    private static final String SHARDED_CLUSTER_HELLO_MESSAGE = "isdbgrid";
 
 
     /**
@@ -197,48 +195,6 @@ public final class DcbMarkerVersionsDocuments {
                 .maxCommitTime(millis, TimeUnit.MILLISECONDS)
                 .timeout(millis, TimeUnit.MILLISECONDS)
                 .build();
-    }
-
-    /**
-     * Whether a {@code hello} reply comes from a {@code mongos}.
-     */
-    public static boolean isShardedCluster(Document helloReply) {
-        return SHARDED_CLUSTER_HELLO_MESSAGE.equals(helloReply.get("msg"));
-    }
-
-    /**
-     * What a store found out at start about the deployment it talks to, for deciding whether a caller's transaction
-     * reads from one point in time.
-     */
-    public enum Topology {
-        /**
-         * Not a sharded cluster. A transaction there reads from one point in time whatever its read concern.
-         */
-        NOT_SHARDED,
-        /**
-         * A sharded cluster. Only read concern snapshot makes a transaction read from one point in time across shards.
-         */
-        SHARDED,
-        /**
-         * The store couldn't find out, or didn't ask.
-         */
-        UNKNOWN;
-
-        /**
-         * The topology a {@code hello} reply describes.
-         */
-        public static Topology of(Document helloReply) {
-            return isShardedCluster(helloReply) ? SHARDED : NOT_SHARDED;
-        }
-
-        /**
-         * Whether a caller's transaction with {@code readConcernLevel} reads markers, counter and events from one
-         * point in time. On a sharded cluster, or when the topology is unknown, only read concern snapshot does. A
-         * {@code null} level means it is unknown, which counts as not snapshot.
-         */
-        public boolean readsOnePointInTime(@Nullable ReadConcernLevel readConcernLevel) {
-            return this == NOT_SHARDED || readConcernLevel == ReadConcernLevel.SNAPSHOT;
-        }
     }
 
     /**

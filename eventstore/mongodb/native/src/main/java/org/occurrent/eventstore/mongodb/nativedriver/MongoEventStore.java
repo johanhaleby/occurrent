@@ -41,7 +41,6 @@ import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
-import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments.Topology;
 import org.occurrent.eventstore.mongodb.dcb.internal.MarkerVersionsReadFailures;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbTagsIndexCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
@@ -91,8 +90,9 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWith
  * For large production collections, create new indexes out-of-band before enabling a new capability.
  * <p>
  * A DCB read that asks for marker versions runs in a read-only snapshot transaction of its own, bounded by
- * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}, unless it runs inside a transaction the caller
- * bound with {@link ClientSessionHolder}. The store answers {@link DcbAppendConfirmation} with a majority read on the
+ * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a session the caller bound with
+ * {@link ClientSessionHolder} it reports no marker versions, since that transaction's writes may still abort, and a read
+ * after marker versions is refused. The store answers {@link DcbAppendConfirmation} with a majority read on the
  * primary that joins no session.
  */
 @NullMarked
@@ -115,7 +115,6 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final boolean requireBackfilledPosition;
     private final boolean resumeFromMarkerVersions;
     private final TransactionOptions markerVersionsTransactionOptions;
-    private final Topology topology;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
     /**
@@ -163,7 +162,6 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
         this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
-        this.topology = dcbEnabled && resumeFromMarkerVersions ? detectTopology(database) : Topology.UNKNOWN;
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
@@ -414,10 +412,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     // Markers, counter and events come from one point in time, so the reported versions cover exactly the events read
-    // and a read after them misses none. Outside a caller's transaction this runs in a read-only snapshot transaction
-    // of the store's own, never with the transaction options configured for writes, and commits it once by hand. The
-    // majority commit makes sure the snapshot was majority-committed. A failure reports no versions instead of failing
-    // the read, except for a read after versions, which can't fall back to a full read without double-applying events.
+    // and a read after them misses none. This runs in a read-only snapshot transaction of the store's own, never with
+    // the transaction options configured for writes, and commits it once by hand. The majority commit makes sure the
+    // snapshot was majority-committed. Inside a caller's session it reports no versions, since the session's own
+    // increments may still abort and a later append would reuse them. A failure reports no versions instead of failing
+    // the read. A read after versions can't fall back to a full read without double-applying events, so it is refused
+    // in both cases.
     private DcbEventStream readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -433,11 +433,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         ClientSession ambientSession = ClientSessionHolder.get();
         if (ambientSession != null) {
-            ReadConcern readConcern = ambientSession.hasActiveTransaction() ? ambientSession.getTransactionOptions().getReadConcern() : null;
-            if (!ambientSession.hasActiveTransaction() || !topology.readsOnePointInTime(readConcern == null ? null : readConcern.getLevel())) {
-                return markerVersionsUnavailable(criteria, options, "The caller's session doesn't read from one point in time", null);
-            }
-            return readMarkerVersionsInSession(ambientSession, criteria, options);
+            return markerVersionsUnavailable(criteria, options, "The read runs inside a session or transaction the caller owns, whose writes may still abort", null);
         }
 
         final ClientSession clientSession;
@@ -509,9 +505,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private DcbEventStream markerVersionsReadFailed(DcbCriteria criteria, DcbReadOptions options, String phase, RuntimeException cause) {
         if (markerVersionsReadFailures.recordAndCheckFirst(phase, cause)) {
-            log.warn(MarkerVersionsReadFailures.message(phase, cause), cause);
+            log.warn(MarkerVersionsReadFailures.message(phase, cause, options.afterVersions().isPresent()), cause);
         } else if (log.isDebugEnabled()) {
-            log.debug(MarkerVersionsReadFailures.message(phase, cause), cause);
+            log.debug(MarkerVersionsReadFailures.message(phase, cause, options.afterVersions().isPresent()), cause);
         }
         return markerVersionsUnavailable(criteria, options, "The event store could not take a consistent snapshot to compare the saved marker versions against (" + phase + " failed)", cause);
     }
@@ -540,15 +536,6 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         } catch (RuntimeException e) {
             log.debug("Could not confirm DCB append {}, so it counts as unconfirmed", appendId.get(), e);
             return false;
-        }
-    }
-
-    private static Topology detectTopology(MongoDatabase database) {
-        try {
-            return Topology.of(database.runCommand(new Document("hello", 1)));
-        } catch (RuntimeException e) {
-            log.debug("Could not run hello to find out whether the deployment is a sharded cluster", e);
-            return Topology.UNKNOWN;
         }
     }
 

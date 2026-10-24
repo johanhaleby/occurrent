@@ -53,7 +53,6 @@ import org.occurrent.eventstore.api.reactor.*;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
-import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments.Topology;
 import org.occurrent.eventstore.mongodb.dcb.internal.MarkerVersionsReadFailures;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbTagsIndexCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
@@ -116,7 +115,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * A DCB read that asks for marker versions runs in a read-only snapshot transaction of its own, on a session from the
  * template's {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory}, bounded by
  * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a reactive transaction the subscriber
- * context carries, it reads in that transaction instead. The store answers {@link DcbAppendConfirmation} with a
+ * context carries, it reports no marker versions, since that transaction's writes may still abort, and a read after
+ * marker versions is refused. The store answers {@link DcbAppendConfirmation} with a
  * majority read on the primary from {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory#getMongoDatabase()},
  * which joins no session. A store built on a template from {@link ReactiveMongoTemplate#withSession(ClientSession)}
  * isn't supported for DCB snapshot deciders.
@@ -160,7 +160,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final boolean requireRepairedEvents;
     private final boolean resumeFromMarkerVersions;
     private final TransactionOptions markerVersionsTransactionOptions;
-    private final Topology topology;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
     /**
@@ -190,7 +189,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
         this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
-        this.topology = dcbEnabled && resumeFromMarkerVersions ? detectTopology(mongoTemplate) : Topology.UNKNOWN;
         if (dcbEnabled && !resumeFromMarkerVersions) {
             LOGGER.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
@@ -323,11 +321,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     // Markers, counter and events come from one point in time, so the reported versions cover exactly the events read
-    // and a read after them misses none. Outside a reactive transaction this runs in a read-only snapshot transaction
-    // on a session of the store's own, never through the configured TransactionalOperator, and commits it once by
-    // hand. The majority commit makes sure the snapshot was majority-committed. A failure reports no versions instead
-    // of failing the read, except for a read after versions, which can't fall back to a full read without
-    // double-applying events.
+    // and a read after them misses none. This runs in a read-only snapshot transaction on a session of the store's own,
+    // never through the configured TransactionalOperator, and commits it once by hand. The majority commit makes sure
+    // the snapshot was majority-committed. Inside a reactive transaction it reports no versions, since the
+    // transaction's own increments may still abort and a later append would reuse them. A failure reports no versions
+    // instead of failing the read. A read after versions can't fall back to a full read without double-applying
+    // events, so it is refused in both cases.
     private Mono<DcbEventStream> readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -343,22 +342,18 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()).flatMap(callerTransactionActive -> {
             if (callerTransactionActive) {
-                // The template joins the caller's transaction (SessionSynchronization.ALWAYS). Its read concern can't
-                // be read from here, so only a deployment where every transaction reads from one point in time qualifies.
-                return topology.readsOnePointInTime(null)
-                        ? readMarkerVersionsWith(mongoTemplate, criteria, options)
-                        : markerVersionsUnavailable(criteria, options, "The caller's transaction isn't known to read from one point in time", null);
+                return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
             }
             Mono<DcbEventStream> ownTransaction = Mono.usingWhen(
                     mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build())
-                            .onErrorMap(e -> new MarkerVersionsReadFailure("start session", e)),
+                            .onErrorMap(RuntimeException.class, e -> new MarkerVersionsReadFailure("start session", e)),
                     clientSession -> Mono.defer(() -> {
                         clientSession.startTransaction(markerVersionsTransactionOptions);
                         return readMarkerVersionsWith(mongoTemplate.withSession(clientSession), criteria, options);
-                    }).onErrorMap(e -> !(e instanceof DcbSnapshotInvalidException), e -> new MarkerVersionsReadFailure("read", e))
+                    }).onErrorMap(e -> e instanceof RuntimeException && !(e instanceof DcbSnapshotInvalidException), e -> new MarkerVersionsReadFailure("read", e))
                             // A failed commit leaves the session in the committed state, so closing it sends no abort
                             .flatMap(eventStream -> Mono.from(clientSession.commitTransaction())
-                                    .onErrorMap(e -> new MarkerVersionsReadFailure("commit", e))
+                                    .onErrorMap(RuntimeException.class, e -> new MarkerVersionsReadFailure("commit", e))
                                     .thenReturn(eventStream)),
                     // Closing the session aborts a read-only transaction that is still open
                     clientSession -> Mono.fromRunnable(clientSession::close),
@@ -405,9 +400,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private Mono<DcbEventStream> markerVersionsReadFailed(DcbCriteria criteria, DcbReadOptions options, String phase, Throwable cause) {
         if (markerVersionsReadFailures.recordAndCheckFirst(phase, cause)) {
-            LOGGER.warn(MarkerVersionsReadFailures.message(phase, cause), cause);
+            LOGGER.warn(MarkerVersionsReadFailures.message(phase, cause, options.afterVersions().isPresent()), cause);
         } else if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug(MarkerVersionsReadFailures.message(phase, cause), cause);
+            LOGGER.debug(MarkerVersionsReadFailures.message(phase, cause, options.afterVersions().isPresent()), cause);
         }
         return markerVersionsUnavailable(criteria, options, "The event store could not take a consistent snapshot to compare the saved marker versions against (" + phase + " failed)", cause);
     }
@@ -449,18 +444,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     LOGGER.debug("Could not confirm DCB append {}, so it counts as unconfirmed", appendId.get(), e);
                     return Mono.just(false);
                 });
-    }
-
-    private static Topology detectTopology(ReactiveMongoTemplate mongoTemplate) {
-        try {
-            Document hello = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase()
-                    .flatMap(database -> Mono.from(database.runCommand(new Document("hello", 1))))
-                    .block();
-            return hello == null ? Topology.UNKNOWN : Topology.of(hello);
-        } catch (RuntimeException e) {
-            LOGGER.debug("Could not run hello to find out whether the deployment is a sharded cluster", e);
-            return Topology.UNKNOWN;
-        }
     }
 
     private static Query markersQuery(Set<String> markerKeys) {
