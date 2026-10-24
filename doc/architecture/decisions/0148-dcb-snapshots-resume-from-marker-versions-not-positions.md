@@ -488,29 +488,34 @@ The read path:
    The token is the sum of the versions it read over `keys(C)`, which is the key set the token already sums today
    (`MongoEventStore.java:580-605`). The counter that bounds the events and gives `lastSequencePosition` is read inside
    the same snapshot. The commit has a time bound, which the paragraphs after this list explain. Any failure before the
-   commit succeeds, a read error or a commit error, voids the versions and the token, and neither is returned. The read
-   falls back to today's path, the decider or view skips the save, and it logs one warning per instance that names the
-   cause.
-4. Inside a caller's transaction the read uses that transaction's snapshot. On a sharded cluster a transaction with read
-   concern `local` isn't one snapshot across shards, so there the read reports no versions unless the caller's
-   transaction reads at `snapshot`. The store detects a sharded cluster with `hello`, whose reply from a `mongos` has
-   `msg` set to `isdbgrid`, and reads the joined transaction's read concern. When either is unknown, the read reports no
-   versions.
+   commit succeeds, a read error or a commit error, voids the versions and the token, and neither is returned. A read
+   that only asked for versions falls back to today's path, the decider or view skips the save, and the store logs one
+   warning per instance and kind of cause. A read after saved versions is refused with `DcbSnapshotInvalid` instead.
+   Handing back a full read in its place would look like an incremental read to the caller, which would then apply the
+   boundary's events a second time on top of its saved state. The caller reads in full, as it does after a prune.
+4. Inside a session or transaction the caller owns, the read reports no versions, and a read after saved versions is
+   refused. That transaction's own increments may still abort. A view that saved a map over them would then hold a
+   version that the next append on that marker takes again, and its read after that map would never return that
+   append. The native store also reserves positions outside the caller's session, so a counter read inside it can miss
+   the caller's own append while the map counts it. A read there takes today's path and the caller reads in full, as a
+   decider there already does, since it never saves (#1307).
 5. The read runs on the primary, because transactions do. The read preference the Spring stores apply through
-   `queryOptions` doesn't apply to it.
+   `queryOptions` doesn't apply to it. The store sets read preference primary in the transaction's own options, so a
+   client or collection configured to read from a secondary doesn't make every such read fail.
 6. For each item of the criteria, the store picks one selection key. For an item with tags it's the item's first tag key
    in canonical order. An item without tags has no single key, so it gets one branch per type key. The filter is the
    criteria plus, per item, `mv` `$elemMatch` on that key, the saved epoch, and a version above the saved one.
 7. The read is refused with `DcbSnapshotInvalid`, and the caller reads the boundary in full, when the saved versions
    can't be compared with the read's. That's a saved epoch that differs from the marker's current epoch, which means the
    marker was pruned. It's a saved version above the version in the read's snapshot, which means the snapshot is ahead
-   of the read, after a prune or when a caller's transaction has a snapshot older than the one the decider saved. And
+   of the read, after a prune. And
    it's a marker written by 0.34 with no epoch, a key missing from the snapshot, or saved keys that differ from
    `keys(C)`. Last, it's a key whose count of increments without `mv`, `u`, differs from the saved one, which a section
    below explains.
 8. `DcbEventStream` gets an `Optional<DcbMarkerVersions>`, the versions of `keys(C)` in the snapshot the events came
-   from. It is present only when the read asked for versions and had no limit, skip, backward order or upper position. A
-   read that may have stopped early doesn't report versions it didn't read up to.
+   from. It is present only when the read asked for versions and had no limit, skip, backward order or position bound. A
+   read that may have stopped early doesn't report versions it didn't read up to. A lower bound counts too, because an
+   event that commits late below it is covered by the versions and the read never returned it.
 
 The read-only transaction commits with `TransactionOptions` of its own, with read concern `snapshot`, write concern
 `WriteConcern.MAJORITY.withWTimeout(bound)`, `maxCommitTime(bound)` and `timeout(bound)`. The last one stops a
@@ -518,23 +523,25 @@ client-wide `timeoutMS`, including 0, from replacing the bound. All three method
 driver version the project resolves is checked when it's built. It never reuses the options a user configured for
 writes, which are `EventStoreConfig.transactionOptions` (`EventStoreConfig.java:113`), the Spring store's
 `transactionTemplate` (`SpringMongoEventStore.java:117`) and the reactor store's `transactionalOperator`
-(`ReactorMongoEventStore.java:361`). The bound is a store setting, 5 seconds by default.
+(`ReactorMongoEventStore.java:361`). The bound is a store setting, `markerVersionsCommitTimeout`, 5 seconds by default.
 
 The native store starts and commits the read-only transaction by hand. `ClientSession.withTransaction` would retry a
 commit that timed out on its write concern for up to 120 seconds in the 5.8.0 driver (`ClientSessionImpl`), and
 committing by hand removes that loop. The driver still retries a commit once on a retryable error, such as a step-down,
 which matters for liveness only. After a failed commit the store closes the session and doesn't call `abortTransaction`.
-The Spring transaction managers don't loop on a commit either, and that the reactor store doesn't is checked when it's
-built. No versions or token reach the caller before the commit succeeds. The reactor store uses the `Mono` form of
-`transactional` over the collected read, which emits after the commit, never the `Flux` form, which emits before it.
+The Spring and reactor stores do the same by hand rather than through a transaction manager or `transactional`. Each
+takes a session from the template's database factory, starts the transaction with its own options, reads through the
+template bound to that session, commits once and closes the session. No versions or token reach the caller before the
+commit succeeds. The reactor store collects the read and emits it only after the commit, and closes the session on
+completion, error and cancellation.
 
 The bound decides liveness only. Take a set with a primary, a secondary and an arbiter, with the secondary down. Appends
 still commit there, because the implicit default write concern on such a set is w:1. A commit at majority can't be
 acknowledged, and without a bound it waits for ever, so every snapshot command would block where today it completes. The
 review of this design checked that against the MongoDB
 [write concern](https://www.mongodb.com/docs/manual/reference/write-concern/) documentation. With the bound, the commit
-times out, the read falls back to a full read on today's path that discards the base state, and the command completes
-without saving a snapshot. It takes up to the bound longer than it does today. Correctness doesn't depend on the bound,
+times out, the read after saved versions is refused, the decider reads in full on today's path and discards the base
+state, and the command completes without saving a snapshot. It takes up to the bound longer than it does today. Correctness doesn't depend on the bound,
 because a read whose commit failed returns no versions.
 
 Two claims in this section are unverified until a test with a `failCommand` fail point runs. One is that a read-only
@@ -635,7 +642,7 @@ say so. 0.35.0 doesn't detect it.
 
 The store answers the confirmation through a small SPI, `DcbAppendConfirmation`, which the decider reaches through the
 application service. A third-party store or a decorator that doesn't implement it answers unconfirmed, so a decider on
-it never saves a snapshot. `InMemoryEventStore` always confirms. An append result with no `AppendId` means the decider
+it never saves a snapshot. `InMemoryEventStore` confirms an append whose events it still holds. An append result with no `AppendId` means the decider
 skips the save. An error from the confirmation counts as not found, so the decider skips the save and the command
 doesn't fail.
 
@@ -706,9 +713,10 @@ write, inside the same transaction (`MongoEventStore.java:569`, `SpringMongoEven
 repository writes marker documents. Pruning a marker (ADR 21) resets v and s together, and the epoch already catches
 that.
 
-The setting stays, so an operator can turn resuming from versions off. With it off:
+The setting, `resumeFromMarkerVersions`, stays, so an operator can turn resuming from versions off. With it off:
 
-- No read reports versions. The deciders and the view read their boundary's full history and never save a DCB snapshot.
+- No read reports versions, and no append result does either. The deciders and the view read their boundary's full
+  history and never save a DCB snapshot.
 - A direct `afterVersions` or `fromVersions` call returns `DcbSnapshotInvalid`, the same result as after a prune. The
   javadoc of both says so.
 - The store logs one warning at start that names the setting.
@@ -773,8 +781,8 @@ The seventh review's lesson is that two values read at different read concerns c
 point in time. So here is every pair this design combines, and why each is safe. The argument rests on two facts. Marker
 versions only grow, and a prune changes the epoch. A majority-committed write is present on every later primary.
 
-- **The versions and the events after them** come from one snapshot, the store's read-only transaction or the caller's
-  transaction.
+- **The versions and the events after them** come from one snapshot, the store's read-only transaction. Inside a
+  caller's transaction no versions are reported (item 4 of the read path).
 - **The token and the events, in a read that asks for versions,** come from the same snapshot, because the token is
   computed from the versions.
 - **The position counter and the snapshot.** The counter is read inside the snapshot. Read before it, as `read()` does
@@ -853,6 +861,10 @@ above:
   snapshot command on a set with an arbiter and a secondary down.
 - **A confirmation outside the caller's transaction.** Found by a later review, because every existing read path joins
   the caller's transaction, and a confirmation through one would find its own uncommitted append.
+- **No versions inside a caller's transaction.** Found by the review of the implementation. A map read there can count
+  increments that abort, and on the native store it can count the caller's own append while the read doesn't return it. It
+  replaces the earlier rule that reported versions there unless the cluster was sharded and the transaction read at
+  `local`.
 - **Versions on every decider and view read, `mv` stripped from the CloudEvent and copied from the original document,
   the confirmation SPI, and the sharded check.** Smaller findings from the same later review.
 
@@ -902,8 +914,9 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
   element. The position counter write is unchanged, and each marker update sets one more field, `s`, in the same write.
 - Per DCB read that asks for versions, a short read-only transaction on the primary replaces today's separate reads, and
   the Spring stores' read preference doesn't apply to it. Only the deciders and the view ask, on every read. Its commit
-  is meant to wait at most the bound, 5 seconds by default, and a command whose commit times out falls back to today's
-  read and saves no snapshot. Every other read is unchanged.
+  is meant to wait at most the bound, 5 seconds by default. A command whose commit times out reads its boundary in full
+  on today's path, after a refusal when it resumed from saved versions, and saves no snapshot. Every other read is
+  unchanged.
 - Per saved DCB snapshot, the decider does one indexed read at majority. When the append isn't majority-committed by
   then, it skips the save with a warning, and the next command reads more of its boundary.
 - Resuming from versions is on by default in 0.35.0. A writer that increments markers without writing `mv`, such as
@@ -945,8 +958,8 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
 - `updateEvent` keeps `mv`. An event whose tags or type change through `updateEvent`, or that `delete(Filter)` removes,
   can still move between boundaries without a marker increment. The consistency token has the same blind spot today, and
   this ADR doesn't change it.
-- Inside a caller's transaction on a sharded cluster, a read reports no versions unless the transaction reads at
-  `snapshot`, so a decider there reads its boundary in full.
+- Inside a session or transaction the caller owns, a read reports no versions, so a decider or view there reads its
+  boundary in full on every command or delivery.
 - The `@Snapshot` view can lag behind the event that triggered it until the next delivery for that boundary. It never
   loses the event.
 - Store-wide positions stay as ADR 84 describes them. A catch-up that resumes from a bare position can still miss an
