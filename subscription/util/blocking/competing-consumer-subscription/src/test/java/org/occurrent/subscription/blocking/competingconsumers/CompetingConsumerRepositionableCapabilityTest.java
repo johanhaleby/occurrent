@@ -27,7 +27,6 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
@@ -47,56 +46,53 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * Which model {@link RepositionableSubscriptions#findIn(SubscriptionModelCapability)} finds on a competing consumer
- * model, for each catch-up model it can wrap, over a durable model.
+ * {@link RepositionableSubscriptions#findIn(SubscriptionModelCapability)} finds nothing on a competing consumer model,
+ * for each catch-up model it can wrap, over a durable model. A resume at a position through the model beneath it would
+ * go around the lease bookkeeping the competing consumer model keeps for the subscription (#1251).
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerRepositionableCapabilityTest {
 
     private static final DcbCriteria QUERY = DcbCriteria.tags(Tag.parse("name:1"));
 
-    // How the model a competing consumer model wraps is built over a durable model, and whether it is the model a lookup finds
-    record Wiring(Function<CheckpointAwareSubscriptionModel, SubscriptionModel> wrapping, boolean isFound) {
-    }
-
-    static Stream<Named<Wiring>> wirings() {
+    // How the model a competing consumer model wraps is built over a durable model
+    static Stream<Named<Function<CheckpointAwareSubscriptionModel, SubscriptionModel>>> wirings() {
         return Stream.concat(wiringsWithoutADispatcher(), dispatcherWirings());
     }
 
-    static Stream<Named<Wiring>> wiringsWithoutADispatcher() {
+    static Stream<Named<Function<CheckpointAwareSubscriptionModel, SubscriptionModel>>> wiringsWithoutADispatcher() {
         CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100);
         return Stream.of(
-                Named.of("a standalone stream catch-up model", new Wiring(live -> new StreamCatchupSubscriptionModel(live, unused(EventStoreQueries.class), config), true)),
-                Named.of("a durable model", new Wiring(live -> live, true)));
+                Named.of("a standalone stream catch-up model", live -> new StreamCatchupSubscriptionModel(live, unused(EventStoreQueries.class), config)),
+                Named.of("a durable model", live -> live));
     }
 
-    static Stream<Named<Wiring>> dispatcherWirings() {
+    static Stream<Named<Function<CheckpointAwareSubscriptionModel, SubscriptionModel>>> dispatcherWirings() {
         CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100);
         return Stream.of(
-                Named.of("the dispatching catch-up model over a stream", new Wiring(live -> new CatchupSubscriptionModel(live, unused(EventStoreQueries.class), config), true)),
-                Named.of("the dispatching catch-up model over a DCB event store", new Wiring(live -> new CatchupSubscriptionModel(live, unused(DcbEventStore.class), QUERY, config), true)));
+                Named.of("the dispatching catch-up model over a stream", live -> new CatchupSubscriptionModel(live, unused(EventStoreQueries.class), config)),
+                Named.of("the dispatching catch-up model over a DCB event store", live -> new CatchupSubscriptionModel(live, unused(DcbEventStore.class), QUERY, config)));
     }
 
     @ParameterizedTest
     @MethodSource("wirings")
-    void a_competing_consumer_model_over_a_durable_model_over_a_live_model_that_can_be_repositioned_finds_the_model_that_resumes_at_a_position(Wiring wiring) {
+    void a_competing_consumer_model_over_a_durable_model_over_a_live_model_that_can_be_repositioned_finds_nothing(Function<CheckpointAwareSubscriptionModel, SubscriptionModel> wiring) {
         // Given a competing consumer model over a model over a durable model over a live model that can be repositioned
-        CheckpointAwareSubscriptionModel live = live(true);
-        SubscriptionModel wrapped = wiring.wrapping().apply(new DurableSubscriptionModel(live, new InMemoryCheckpointStorage()));
+        SubscriptionModel wrapped = wiring.apply(new DurableSubscriptionModel(live(true), new InMemoryCheckpointStorage()));
         CompetingConsumerSubscriptionModel competingConsumer = new CompetingConsumerSubscriptionModel(wrapped, new NoLeases());
 
         // When the capability is looked up
         Optional<RepositionableSubscriptions> found = RepositionableSubscriptions.findIn(competingConsumer);
 
-        // Then the model it wraps is found when that model resumes at a position itself, and the live model underneath otherwise
-        assertThat(found.orElse(null)).as("the repositionable model found").isSameAs(wiring.isFound() ? wrapped : live);
+        // Then nothing is found, although the model it wraps can resume at a position
+        assertThat(found).as("the repositionable model found").isEmpty();
     }
 
     @ParameterizedTest
     @MethodSource("wiringsWithoutADispatcher")
-    void a_competing_consumer_model_over_a_durable_model_over_a_live_model_that_cannot_be_repositioned_finds_nothing(Wiring wiring) {
+    void a_competing_consumer_model_over_a_durable_model_over_a_live_model_that_cannot_be_repositioned_finds_nothing(Function<CheckpointAwareSubscriptionModel, SubscriptionModel> wiring) {
         // Given a competing consumer model over a model over a durable model over a live model that cannot be repositioned
-        SubscriptionModel wrapped = wiring.wrapping().apply(new DurableSubscriptionModel(live(false), new InMemoryCheckpointStorage()));
+        SubscriptionModel wrapped = wiring.apply(new DurableSubscriptionModel(live(false), new InMemoryCheckpointStorage()));
         CompetingConsumerSubscriptionModel competingConsumer = new CompetingConsumerSubscriptionModel(wrapped, new NoLeases());
 
         // When the capability is looked up
@@ -108,9 +104,9 @@ class CompetingConsumerRepositionableCapabilityTest {
 
     @ParameterizedTest
     @MethodSource("dispatcherWirings")
-    void a_competing_consumer_model_over_the_dispatching_catch_up_model_over_a_live_model_that_cannot_be_repositioned_finds_nothing_while_the_dispatching_model_refuses_a_resume_at_a_position_naming_the_live_model(Wiring wiring) {
+    void a_competing_consumer_model_over_the_dispatching_catch_up_model_over_a_live_model_that_cannot_be_repositioned_finds_nothing_while_the_dispatching_model_refuses_a_resume_at_a_position_naming_the_durable_model(Function<CheckpointAwareSubscriptionModel, SubscriptionModel> wiring) {
         // Given a competing consumer model over the dispatching model over a durable model over a live model that cannot be repositioned
-        SubscriptionModel wrapped = wiring.wrapping().apply(new DurableSubscriptionModel(live(false), new InMemoryCheckpointStorage()));
+        SubscriptionModel wrapped = wiring.apply(new DurableSubscriptionModel(live(false), new InMemoryCheckpointStorage()));
         CompetingConsumerSubscriptionModel competingConsumer = new CompetingConsumerSubscriptionModel(wrapped, new NoLeases());
 
         // When the capability is looked up, and the subscription is resumed at a position directly on the dispatching model
@@ -118,7 +114,7 @@ class CompetingConsumerRepositionableCapabilityTest {
         assertThat(wrapped).as("the dispatching model").isInstanceOf(RepositionableSubscriptions.class);
         Throwable failure = catchThrowable(() -> ((RepositionableSubscriptions) wrapped).resumeSubscription("id", StartAt.subscriptionModelDefault()));
 
-        // Then nothing is found, and the resume on the dispatching model is refused as unsupported, naming the live model
+        // Then nothing is found, and the resume on the dispatching model is refused as unsupported, naming the durable model
         assertThat(found).as("the repositionable model found").isEmpty();
         assertThat(failure).as("the resume at a position").isInstanceOf(UnsupportedOperationException.class).hasMessage("DurableSubscriptionModel is not repositionable");
     }
@@ -149,33 +145,5 @@ class CompetingConsumerRepositionableCapabilityTest {
             }
             throw new UnsupportedOperationException(method.getName());
         });
-    }
-
-    private static final class NoLeases implements CompetingConsumerStrategy {
-        @Override
-        public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
-            return false;
-        }
-
-        @Override
-        public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
-        }
-
-        @Override
-        public void releaseCompetingConsumer(String subscriptionId, String subscriberId) {
-        }
-
-        @Override
-        public boolean hasLock(String subscriptionId, String subscriberId) {
-            return false;
-        }
-
-        @Override
-        public void addListener(CompetingConsumerListener listenerConsumer) {
-        }
-
-        @Override
-        public void removeListener(CompetingConsumerListener listenerConsumer) {
-        }
     }
 }

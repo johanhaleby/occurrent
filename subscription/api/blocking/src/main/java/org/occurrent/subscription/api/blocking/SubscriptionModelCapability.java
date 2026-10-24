@@ -41,18 +41,28 @@ import java.util.Optional;
 public interface SubscriptionModelCapability {
 
     /**
-     * The capability of type {@code type} behind this object, unwrapping a {@link SubscriptionModelWrapper} chain
-     * until one is found. This is the instance-side counterpart to a facet's own static {@code findIn} method, for a
-     * caller that has a {@link Class} in hand rather than a single facet named at the call site.
+     * The capability of type {@code type} behind this object. This is the instance-side counterpart to a facet's own
+     * static {@code findIn} method, for a caller that has a {@link Class} in hand rather than a single facet named at the
+     * call site.
+     * <p>
+     * This object answers when it implements {@code type}. Past that, a {@link SubscriptionModelWrapper} is unwrapped
+     * only for {@link IntrospectableSubscriptions}, {@link ReplayAwareSubscriptions}, {@link HistoryRetainingSubscriptions},
+     * {@link QuietPositionReportingSubscriptions} and {@link Pushable}, which observe subscriptions or take events in at
+     * the bottom of the stack, and for {@link HistoryLossReportingSubscriptions}, which a catch-up model reaches under a
+     * durable model. Every other capability acts on a subscription, such as {@link Subscribable},
+     * {@link CancellableSubscriptions} and {@link RepositionableSubscriptions}, and is answered only by a model that
+     * implements it, since a wrapper that keeps state for a subscription would otherwise never hear about the action
+     * taken on the model beneath it. A wrapper is found for such a capability by implementing it.
      *
      * @param type The capability to look for.
      * @param <T>  The capability type.
-     * @return The capability, or empty if nothing in the chain implements {@code type}.
+     * @return The capability, or empty if this object doesn't implement {@code type} and, for a capability a wrapper is
+     * unwrapped for, nothing in the wrapper chain does either.
      */
     default <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
         if (type.isInstance(this)) {
             return Optional.of(type.cast(this));
-        } else if (this instanceof SubscriptionModelWrapper wrapper) {
+        } else if (this instanceof SubscriptionModelWrapper wrapper && isUnwrappedFor(type)) {
             return wrapper.getWrappedSubscriptionModel().capability(type);
         }
         return Optional.empty();
@@ -66,5 +76,13 @@ public interface SubscriptionModelCapability {
      */
     default boolean hasCapability(Class<? extends SubscriptionModelCapability> type) {
         return capability(type).isPresent();
+    }
+
+    // Each of these only observes subscriptions or takes events in, except HistoryLossReportingSubscriptions, whose
+    // listener can take a subscription over, but a catch-up model has to reach it under a durable model (ADR 151)
+    private static boolean isUnwrappedFor(Class<?> type) {
+        return type == IntrospectableSubscriptions.class || type == ReplayAwareSubscriptions.class
+                || type == HistoryRetainingSubscriptions.class || type == QuietPositionReportingSubscriptions.class
+                || type == Pushable.class || type == HistoryLossReportingSubscriptions.class;
     }
 }

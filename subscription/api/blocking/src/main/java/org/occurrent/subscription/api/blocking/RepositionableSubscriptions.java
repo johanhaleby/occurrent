@@ -60,14 +60,16 @@ public interface RepositionableSubscriptions extends SubscriptionModelCapability
     }
 
     /**
-     * The repositionable model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper}
-     * until one is found. An empty result means the model cannot be resumed at an explicit position.
+     * {@code subscriptionModel} when it can be resumed at an explicit position. A {@link SubscriptionModelWrapper} that
+     * doesn't implement this is not looked past, because a resume at a position through the model beneath it would go
+     * around the state the wrapper keeps for the subscription. An empty result means the model cannot be resumed at an
+     * explicit position.
      *
      * @param subscriptionModel A {@link Subscribable}, a {@link SubscriptionModelLifeCycle}, a whole {@link SubscriptionModel},
      *                          or a {@link SubscriptionModelWrapper} around one of these. Typed as {@link SubscriptionModelCapability}
      *                          because callers hold different subsets of a subscription model's capabilities, and no
      *                          existing type names their union.
-     * @return The repositionable model, or empty if nothing in the chain implements this.
+     * @return {@code subscriptionModel} as a repositionable model, or empty if it doesn't implement this.
      */
     static Optional<RepositionableSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
         return subscriptionModel.capability(RepositionableSubscriptions.class);

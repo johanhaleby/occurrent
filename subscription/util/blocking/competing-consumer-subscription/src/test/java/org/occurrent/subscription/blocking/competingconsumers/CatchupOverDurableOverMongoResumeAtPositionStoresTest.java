@@ -43,6 +43,7 @@ import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -57,6 +58,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -74,7 +76,9 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
  * #1253 over a real MongoDB. A resume at a position through the catch-up model of the stack the Spring Boot starter
  * builds below the competing consumer, a catch-up model over a durable model over the MongoDB model with one checkpoint
  * storage shared by the two, stores the position before the MongoDB model resumes there. The position is stored before
- * any event arrives after the resume, and a restart that follows resumes from it.
+ * any event arrives after the resume, and a restart that follows resumes from it. A competing consumer model over that
+ * stack, as the starter builds it, is not found for a resume at a position (#1251), and still pauses and resumes a
+ * subscription through its own resume with the lease kept right.
  */
 @Testcontainers
 @DisplayName("CatchupOverDurableOverMongoResumeAtPositionStores")
@@ -95,6 +99,7 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
     private SpringMongoCheckpointStorage checkpointStorage;
     private SpringMongoSubscriptionModel mongoModel;
     private CatchupSubscriptionModel catchup;
+    private CompetingConsumerSubscriptionModel competing;
     private final List<CloudEvent> delivered = new CopyOnWriteArrayList<>();
 
     @BeforeEach
@@ -115,7 +120,11 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
     @AfterEach
     void shutdown() {
         try {
-            catchup.shutdown();
+            if (competing != null) {
+                competing.shutdown();
+            } else {
+                catchup.shutdown();
+            }
         } finally {
             mongoClient.close();
         }
@@ -175,6 +184,51 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
         assertThat(deliveredAfterTheRestart).extracting(CloudEvent::getId).as("delivered after the restart").containsExactly("while-down");
     }
 
+    @Test
+    @Timeout(60)
+    void a_competing_consumer_model_over_the_stack_finds_no_model_to_resume_a_subscription_at_a_position() {
+        // Given a competing consumer model over the catch-up model, with a subscription paused through it
+        competing = competingOver(catchup);
+        competing.subscribe("node", subscriptionId, null, StartAt.subscriptionModelDefault(), delivered::add).waitUntilStarted();
+        competing.pauseSubscription(subscriptionId);
+
+        // When the model that resumes at a position is looked up on the competing consumer model
+        Optional<RepositionableSubscriptions> found = RepositionableSubscriptions.findIn(competing);
+
+        // Then nothing is found, while the catch-up model beneath it can resume at a position
+        assertAll(
+                () -> assertThat(found).as("the repositionable model found").isEmpty(),
+                () -> assertThat(RepositionableSubscriptions.findIn(catchup)).as("the repositionable model found on the catch-up model").isPresent()
+        );
+    }
+
+    @Test
+    @Timeout(60)
+    void a_subscription_paused_through_the_competing_consumer_model_resumes_through_it_with_its_lease_and_continues_from_the_stored_checkpoint() {
+        // Given a subscription that has delivered e1 through the competing consumer model, paused through it, with an event written while it was paused
+        competing = competingOver(catchup);
+        competing.subscribe("node", subscriptionId, null, StartAt.subscriptionModelDefault(), delivered::add).waitUntilStarted();
+        eventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "seed")));
+        await("e1 is delivered and its checkpoint stored").atMost(5, SECONDS).untilAsserted(() -> assertThat(ids()).containsExactly("e1"));
+        await("e1's checkpoint is stored").atMost(5, SECONDS).until(() -> checkpointStorage.exists(subscriptionId));
+        competing.pauseSubscription(subscriptionId);
+        eventStore.write(streamId, serialize(new NameWasChanged("while-paused", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "one")));
+        boolean pausedBeforeTheResume = competing.isPaused(subscriptionId);
+
+        // When it is resumed through the competing consumer model
+        competing.resumeSubscription(subscriptionId);
+
+        // Then the competing consumer model runs it again and it delivers the event written while it was paused, and one written after the resume
+        eventStore.write(streamId, serialize(new NameWasChanged("after", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "two")));
+        await("the events written while paused and after the resume are delivered").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(ids()).containsExactly("e1", "while-paused", "after"));
+        assertAll(
+                () -> assertThat(pausedBeforeTheResume).as("paused through the competing consumer model before the resume").isTrue(),
+                () -> assertThat(competing.isRunning(subscriptionId)).as("running in the competing consumer model after the resume").isTrue(),
+                () -> assertThat(competing.isPaused(subscriptionId)).as("paused in the competing consumer model after the resume").isFalse()
+        );
+    }
+
     private List<String> ids() {
         return delivered.stream().map(CloudEvent::getId).toList();
     }
@@ -184,6 +238,12 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
         DurableSubscriptionModel durable = new DurableSubscriptionModel(mongo, checkpointStorage);
         CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(useCheckpointStorage(checkpointStorage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000));
         return new CatchupSubscriptionModel(durable, eventStore, config);
+    }
+
+    // As the starter builds it, a competing consumer model on top of the stack, with a lease strategy of its own over the same database
+    private CompetingConsumerSubscriptionModel competingOver(CatchupSubscriptionModel catchupModel) {
+        SpringMongoLeaseCompetingConsumerStrategy strategy = new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).collectionName("competing-consumer-locks-" + UUID.randomUUID()).build();
+        return new CompetingConsumerSubscriptionModel(catchupModel, strategy);
     }
 
     private SpringMongoSubscriptionModel springModel() {

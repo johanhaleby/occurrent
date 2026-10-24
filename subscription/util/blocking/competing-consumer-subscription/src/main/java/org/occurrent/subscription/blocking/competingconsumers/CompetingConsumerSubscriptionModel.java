@@ -322,6 +322,12 @@ import static java.util.Objects.requireNonNull;
  * paused through {@code start(false)}.
  * <br>
  * <br>
+ * A competing subscription can't be resumed at a position through this model, so
+ * {@code RepositionableSubscriptions.findIn(..)} on it answers empty. A resume at a position through the wrapped model
+ * would run the subscription while this model still records it as paused and no lease is competed for, and on a node
+ * that doesn't hold the lease, a durable model beneath would store the position over the one the lease holder stored.
+ * <br>
+ * <br>
  * A model built over a wrapped model that is not running is stopped until its first {@code start(..)}, as
  * if {@code stop()} had been called on it. Until a {@code start(..)} has returned without throwing, each one resumes
  * every subscription that is paused, with either flag, also one {@code stop()} paused, except one the user paused and
