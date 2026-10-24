@@ -113,7 +113,9 @@ class SagaPendingStreamVersionTest {
     }
 
     private final IllegalStateException handlerFailure = new IllegalStateException("cannot reserve");
+    private final OutOfMemoryError outOfMemory = new OutOfMemoryError("Java heap space");
     private final Set<String> failingItems = ConcurrentHashMap.newKeySet();
+    private final Set<String> outOfMemoryItems = ConcurrentHashMap.newKeySet();
     private final List<BasketCommand> issued = new CopyOnWriteArrayList<>();
     private final AtomicReference<Instant> now = new AtomicReference<>(NOW);
     private final List<SagaSubscription> subscriptionsToClose = new ArrayList<>();
@@ -147,6 +149,9 @@ class SagaPendingStreamVersionTest {
     }
 
     private void dispatch(BasketCommand command) {
+        if (command instanceof Reserve reserve && outOfMemoryItems.contains(reserve.item())) {
+            throw outOfMemory;
+        }
         if (command instanceof Reserve reserve && failingItems.contains(reserve.item())) {
             throw handlerFailure;
         }
@@ -561,6 +566,83 @@ class SagaPendingStreamVersionTest {
             assertAll(
                     () -> assertThat(store.writeAttempts()).isEqualTo(2),
                     () -> assertThat(pending()).containsExactly(2L, 3L)
+            );
+        }
+    }
+
+    @Nested
+    @DisplayName("when quarantine is on and the store fails after the handler did")
+    class WhenQuarantineIsOnAndTheStoreFailsAfterTheHandlerDid {
+
+        private final IllegalStateException storeFailure = new IllegalStateException("store down");
+
+        private SagaExecution<BasketEvent, Basket, BasketCommand> afterOpenedWithAFailingStore() {
+            return afterOpenedWithAFailingStore(WINDOW_OF_2_WITH_QUARANTINE);
+        }
+
+        private SagaExecution<BasketEvent, Basket, BasketCommand> afterOpenedWithAFailingStore(SagaRunnerConfig config) {
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = execution(config);
+            deliver(execution, openedAt(1));
+            store.resetCounters();
+            store.failReadsAfter(1, storeFailure);
+            return execution;
+        }
+
+        @Test
+        void the_handler_exception_propagates_with_the_store_failure_suppressed_under_it() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterOpenedWithAFailingStore();
+            failingItems.add("two");
+
+            // When
+            deliverFailing(execution, itemAddedAt(2, "two"));
+
+            // Then
+            assertThat(handlerFailure.getSuppressed()).containsExactly(storeFailure);
+        }
+
+        @Test
+        void one_error_says_the_version_could_not_be_listed_as_pending_and_names_its_redelivery_key() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterOpenedWithAFailingStore();
+            failingItems.add("two");
+
+            // When
+            deliverFailing(execution, itemAddedAt(2, "two"));
+
+            // Then
+            assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("could not list it as pending", STREAM + "@2"));
+        }
+
+        @Test
+        void an_event_without_stream_metadata_logs_no_such_error() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterOpenedWithAFailingStore(WINDOW_OF_2_WITH_QUARANTINE.withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT));
+            failingItems.add("two");
+
+            // When
+            deliverFailing(execution, converter.toCloudEvent(added("two")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(errors()).isEmpty(),
+                    () -> assertThat(handlerFailure.getSuppressed()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_failure_that_is_not_the_instances_logs_no_such_error() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterOpenedWithAFailingStore();
+            outOfMemoryItems.add("two");
+
+            // When
+            assertThatThrownBy(() -> execution.onCloudEvent(itemAddedAt(2, "two"))).isSameAs(outOfMemory);
+
+            // Then
+            assertAll(
+                    () -> assertThat(errors()).isEmpty(),
+                    () -> assertThat(outOfMemory.getSuppressed()).isEmpty()
             );
         }
     }

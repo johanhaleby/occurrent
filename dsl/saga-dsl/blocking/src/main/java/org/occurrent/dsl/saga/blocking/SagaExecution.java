@@ -128,9 +128,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // The streams already warned about, so a stream replaying thousands of old events says it once. Capped, because a
     // runner sees as many streams as the application has and this must not grow with them. A stream evicted from here
     // is warned about again, which costs a line.
-    private final Set<String> behindWindowWarned = Collections.synchronizedSet(Collections.newSetFromMap(new LinkedHashMap<String, Boolean>() {
+    private final Set<List<String>> behindWindowWarned = Collections.synchronizedSet(Collections.newSetFromMap(new LinkedHashMap<List<String>, Boolean>() {
         @Override
-        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+        protected boolean removeEldestEntry(Map.Entry<List<String>, Boolean> eldest) {
             return size() > 1024;
         }
     }));
@@ -407,6 +407,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // check no longer reaches here, because a check that cannot answer is a refused quarantine with a warning
             // rather than a silent one.
             rethrowIfNotTheInstances(storeFailure);
+            // Only an attributable failure with a redelivery key gets here, and the version could not be listed as pending
+            // either, which is what a replay long after depends on.
+            log.error("Saga '{}' instance '{}' failed on the event '{}' and could not list it as pending, because the state store failed. "
+                            + "If the source skips the event and the instance moves {} versions of its type past it, a replay of it is skipped as behind the reorder window.",
+                    subscriptionId, sagaId, meta.redeliveryKey(), config.reorderWindow(), storeFailure);
             if (storeFailure != failure) {
                 // Java refuses to suppress an exception under itself, and a store that rethrows the very object that
                 // reached us here would otherwise replace the real failure with IllegalArgumentException.
@@ -579,7 +584,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             || SagaExecutionSupport.classify(current, meta, config.reorderWindow()) != SagaExecutionSupport.Delivery.BEHIND_WINDOW) {
             return;
         }
-        if (behindWindowWarned.add(sagaId + "/" + meta.streamId())) {
+        if (behindWindowWarned.add(List.of(sagaId, meta.streamId()))) {
             log.warn("Saga '{}' skipped version {} of stream '{}', event type '{}', because it is further behind than the instance remembers, which is the reorder window of {} or a smaller window it used earlier. It is either a redelivery or an event that arrived later than that, and the saga cannot tell which. Raise reorderWindow on the SagaRunnerConfig if the feed reorders further than that. A raised window does not bring back versions the instance has already forgotten. This is logged once per stream.",
                     sagaId, meta.streamVersion(), meta.streamId(), meta.eventType(), config.reorderWindow());
         }

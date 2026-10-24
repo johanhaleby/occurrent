@@ -179,6 +179,10 @@ class SagaLateStreamVersionTest {
         return new ItemAdded("added-" + item, BASKET, item);
     }
 
+    private static ItemAdded addedTo(String basketId, String item) {
+        return new ItemAdded("added-" + basketId + "-" + item, basketId, item);
+    }
+
     private static CheckedOut checkedOut() {
         return new CheckedOut("checked-out", BASKET);
     }
@@ -512,6 +516,27 @@ class SagaLateStreamVersionTest {
                     () -> assertThat(warnings()).hasSize(2),
                     () -> assertThat(warnings()).anySatisfy(warning -> assertThat(warning).contains("'first-stream'")),
                     () -> assertThat(warnings()).anySatisfy(warning -> assertThat(warning).contains("'second-stream'"))
+            );
+        }
+
+        @Test
+        void two_instances_whose_id_and_stream_join_to_the_same_text_are_each_warned_about() {
+            // Given
+            run(FAST_POLL_CONFIG.withReorderWindow(2));
+            deliverOn("basket", 1, addedTo("orders/eu", "one"));
+            deliverOn("basket", 10, addedTo("orders/eu", "ten"));
+            deliverOn("eu/basket", 1, addedTo("orders", "one"));
+            deliverOn("eu/basket", 10, addedTo("orders", "ten"));
+
+            // When
+            deliverOn("basket", 8, addedTo("orders/eu", "eight"));
+            deliverOn("eu/basket", 8, addedTo("orders", "eight"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(warnings()).hasSize(2),
+                    () -> assertThat(warnings()).anySatisfy(warning -> assertThat(warning).contains("Saga 'orders/eu'", "stream 'basket'")),
+                    () -> assertThat(warnings()).anySatisfy(warning -> assertThat(warning).contains("Saga 'orders'", "stream 'eu/basket'"))
             );
         }
 
