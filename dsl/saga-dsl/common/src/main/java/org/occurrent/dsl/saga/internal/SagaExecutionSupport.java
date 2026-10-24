@@ -537,7 +537,9 @@ public final class SagaExecutionSupport {
         Long watermark = current.streamWatermarks().get(meta.streamId());
         long floor = floorOf(marks, watermark);
         if (version <= floor) {
-            return Delivery.REDELIVERY;
+            // A failure record naming this input says it was never applied, whatever the floor says, because later
+            // deliveries keep an unrelated failure record and only the save that applies the input clears it.
+            return namesFailureOf(current, meta) ? Delivery.NEW : Delivery.REDELIVERY;
         }
         TypeMark typeMark = marks == null ? null : marks.byType().get(typeKey(meta));
         if (typeMark == null || version > typeMark.mark()) {

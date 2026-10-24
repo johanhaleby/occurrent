@@ -45,12 +45,14 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -769,6 +771,168 @@ class SagaLateStreamVersionTest {
                     () -> assertThat(stored().streamMarks().get(STREAM).floor()).isEqualTo(5L),
                     () -> assertThat(stored().streamWatermarks()).isEqualTo(Map.of(STREAM, 9L))
             );
+        }
+    }
+
+    @Nested
+    @DisplayName("when the full state cannot be loaded but the projected read works")
+    class WhenTheFullStateCannotBeLoadedButTheProjectedReadWorks {
+
+        private RefusesToLoadTheState refusing;
+
+        /** Version 1 and version 10 are applied under a window of 2, so version 8 is behind the window, and loading the full state fails from then on. */
+        private SagaExecution<BasketEvent, Basket, BasketCommand> afterVersionsOneAndTenApplied() {
+            refusing = new RefusesToLoadTheState(store);
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = new SagaExecution<>("baskets", basketSaga(), refusing,
+                    command -> issued.add(command), converter, FAST_POLL_CONFIG.withReorderWindow(2), event -> true);
+            execution.onCloudEvent(streamKeyed(STREAM, 1, added("one")));
+            execution.onCloudEvent(streamKeyed(STREAM, 10, added("ten")));
+            refusing.refuseFullLoads();
+            return execution;
+        }
+
+        @Test
+        void a_version_behind_the_window_is_skipped_and_the_delivery_returns_normally() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionsOneAndTenApplied();
+
+            // When
+            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(streamKeyed(STREAM, 8, added("eight"))));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(issued).containsExactly(reserve("one"), reserve("ten"))
+            );
+        }
+
+        @Test
+        void a_version_behind_the_window_logs_one_warning_that_names_the_stream_and_the_version() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionsOneAndTenApplied();
+
+            // When
+            execution.onCloudEvent(streamKeyed(STREAM, 8, added("eight")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(warnings()).hasSize(1),
+                    () -> assertThat(warnings().getFirst()).contains(STREAM, "version 8")
+            );
+        }
+
+        @Test
+        void the_warning_says_the_instance_forgot_the_version_and_does_not_claim_it_applied_one_ahead() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionsOneAndTenApplied();
+
+            // When
+            execution.onCloudEvent(streamKeyed(STREAM, 8, added("eight")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(warnings()).hasSize(1),
+                    () -> assertThat(warnings().getFirst()).contains("reorder window", "already forgotten"),
+                    () -> assertThat(warnings().getFirst()).doesNotContain("or more ahead")
+            );
+        }
+
+        @Test
+        void a_second_version_behind_the_window_on_the_same_stream_logs_no_second_warning() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionsOneAndTenApplied();
+            execution.onCloudEvent(streamKeyed(STREAM, 8, added("eight")));
+
+            // When
+            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(streamKeyed(STREAM, 7, added("seven"))));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(warnings()).hasSize(1)
+            );
+        }
+
+        @Test
+        void a_plain_redelivery_is_skipped_without_a_warning() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionsOneAndTenApplied();
+
+            // When
+            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(streamKeyed(STREAM, 10, added("ten"))));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(issued).containsExactly(reserve("one"), reserve("ten")),
+                    () -> assertThat(warnings()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_new_version_still_fails_with_the_load_failure_and_logs_no_warning() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionsOneAndTenApplied();
+
+            // When
+            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(streamKeyed(STREAM, 11, added("eleven"))));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isSameAs(refusing.loadFailure()),
+                    () -> assertThat(warnings()).isEmpty()
+            );
+        }
+    }
+
+    /**
+     * An in-memory store whose {@code find} can be made to throw, which is what a store whose converter no longer
+     * understands what it wrote does. {@code findWithoutState} keeps answering, because it decodes no state at all.
+     */
+    private static final class RefusesToLoadTheState implements SagaStateStore<Basket> {
+
+        private final SagaStateStore<Basket> delegate;
+        private final IllegalStateException loadFailure = new IllegalStateException("the state can no longer be decoded");
+        private volatile boolean refusing;
+
+        RefusesToLoadTheState(SagaStateStore<Basket> delegate) {
+            this.delegate = delegate;
+        }
+
+        void refuseFullLoads() {
+            refusing = true;
+        }
+
+        IllegalStateException loadFailure() {
+            return loadFailure;
+        }
+
+        @Override
+        public Optional<SagaEnvelope<Basket>> find(String sagaId) {
+            if (refusing) {
+                throw loadFailure;
+            }
+            return delegate.find(sagaId);
+        }
+
+        @Override
+        public Optional<SagaEnvelope<Basket>> findWithoutState(String sagaId) {
+            return delegate.find(sagaId);
+        }
+
+        @Override
+        public boolean compareAndSave(String sagaId, SagaEnvelope<Basket> envelope, long expectedVersion) {
+            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public List<SagaEnvelope<Basket>> findWithDueTimers(Instant now, int limit) {
+            return delegate.findWithDueTimers(now, limit);
+        }
+
+        @Override
+        public void delete(String sagaId) {
+            delegate.delete(sagaId);
         }
     }
 

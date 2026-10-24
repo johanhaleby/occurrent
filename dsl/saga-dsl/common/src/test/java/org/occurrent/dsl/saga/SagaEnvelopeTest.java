@@ -21,16 +21,19 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Verifies the {@link SagaInstance} view {@link SagaEnvelope} implements directly: {@link SagaEnvelope#nextTimerAt()}
@@ -123,6 +126,36 @@ class SagaEnvelopeTest {
             SagaEnvelope<String> envelope = new SagaEnvelope<>("s1", null, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, NOW, NOW, null, null);
 
             assertThat(envelope.state()).isNull();
+        }
+    }
+
+    @Nested
+    class StreamMarksConstruction {
+
+        @Test
+        void keeps_the_pending_versions_it_was_built_with_when_the_caller_mutates_its_list_afterwards() {
+            // Given
+            List<Long> versions = new ArrayList<>(List.of(5L, 7L));
+
+            // When
+            StreamMarks marks = new StreamMarks(0, Map.of(), Map.of("org.example.A", versions));
+            versions.add(9L);
+            versions.remove(5L);
+
+            // Then
+            assertThat(marks.pending().get("org.example.A")).containsExactly(5L, 7L);
+        }
+
+        @Test
+        void throws_UnsupportedOperationException_when_a_pending_list_is_added_to() {
+            // Given
+            StreamMarks marks = new StreamMarks(0, Map.of(), Map.of("org.example.A", new ArrayList<>(List.of(5L))));
+
+            // When
+            Throwable thrown = catchThrowable(() -> marks.pending().get("org.example.A").add(6L));
+
+            // Then
+            assertThat(thrown).isInstanceOf(UnsupportedOperationException.class);
         }
     }
 

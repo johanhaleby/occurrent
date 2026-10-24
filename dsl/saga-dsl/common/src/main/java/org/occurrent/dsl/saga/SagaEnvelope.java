@@ -20,6 +20,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.flow.FlowState;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
@@ -137,7 +138,9 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     public record StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending) {
         public StreamMarks {
             byType = Map.copyOf(byType);
-            pending = Map.copyOf(pending);
+            Map<String, List<Long>> copied = new HashMap<>();
+            pending.forEach((type, versions) -> copied.put(type, List.copyOf(versions)));
+            pending = Map.copyOf(copied);
         }
 
         /** Marks with nothing outstanding. */

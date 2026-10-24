@@ -1206,6 +1206,103 @@ class SagaExecutionSupportTest {
         }
 
         @Nested
+        @DisplayName("when the instance holds a failure record and the input is at or below the floor")
+        class WhenTheInstanceHoldsAFailureRecordAndTheInputIsAtOrBelowTheFloor {
+
+            private static final String OTHER_STREAM = "s2";
+
+            private SagaFailure failureOf(String input) {
+                return new SagaFailure(input, null, NOW, IllegalStateException.class.getName(), "boom");
+            }
+
+            /** An instance stored before 0.35.0, with a watermark of 30 for s1 and for s2 and no marks. */
+            private SagaEnvelope<OrderState> withoutMarksFailingOn(String input) {
+                return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(),
+                        Map.of(STREAM, 30L, OTHER_STREAM, 30L), null, NOW, NOW, null, null, true, failureOf(input), Map.of());
+            }
+
+            /** An instance with marks, which fixed a floor of 30 for s1 and for s2. */
+            private SagaEnvelope<OrderState> withMarksFailingOn(String input) {
+                StreamMarks marks = new StreamMarks(30, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)));
+                return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(),
+                        Map.of(STREAM, 30L, OTHER_STREAM, 30L), null, NOW, NOW, null, null, true, failureOf(input),
+                        Map.of(STREAM, marks, OTHER_STREAM, marks));
+            }
+
+            @Test
+            void the_input_the_record_names_is_new_for_an_instance_without_marks() {
+                // Given
+                SagaEnvelope<OrderState> current = withoutMarksFailingOn(STREAM + "@5");
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, meta(TYPE_A, 5), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.NEW);
+            }
+
+            @Test
+            void another_input_at_or_below_the_watermark_is_a_redelivery_for_an_instance_without_marks() {
+                // Given
+                SagaEnvelope<OrderState> current = withoutMarksFailingOn(STREAM + "@5");
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, meta(TYPE_A, 6), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.REDELIVERY);
+            }
+
+            @Test
+            void the_input_the_record_names_is_new_for_an_instance_with_marks() {
+                // Given
+                SagaEnvelope<OrderState> current = withMarksFailingOn(STREAM + "@5");
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, meta(TYPE_A, 5), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.NEW);
+            }
+
+            @Test
+            void another_input_at_or_below_the_floor_is_a_redelivery_for_an_instance_with_marks() {
+                // Given
+                SagaEnvelope<OrderState> current = withMarksFailingOn(STREAM + "@5");
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, meta(TYPE_A, 6), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.REDELIVERY);
+            }
+
+            @Test
+            void the_same_version_of_another_stream_is_a_redelivery_for_an_instance_without_marks() {
+                // Given
+                SagaEnvelope<OrderState> current = withoutMarksFailingOn(STREAM + "@5");
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, new EventMeta(OTHER_STREAM, 5L, null, TYPE_A), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.REDELIVERY);
+            }
+
+            @Test
+            void the_same_version_of_another_stream_is_a_redelivery_for_an_instance_with_marks() {
+                // Given
+                SagaEnvelope<OrderState> current = withMarksFailingOn(STREAM + "@5");
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(current, new EventMeta(OTHER_STREAM, 5L, null, TYPE_A), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.REDELIVERY);
+            }
+        }
+
+        @Nested
         @DisplayName("when the instance holds a failure record and the input is behind the window")
         class WhenTheInstanceHoldsAFailureRecordAndTheInputIsBehindTheWindow {
 

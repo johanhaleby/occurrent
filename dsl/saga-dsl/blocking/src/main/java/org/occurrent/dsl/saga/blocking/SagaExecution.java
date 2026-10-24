@@ -555,8 +555,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (withoutState == null) {
                 return false;
             }
-            return withoutState.isCompleted() || withoutState.isQuarantined()
-                   || SagaExecutionSupport.isRedelivery(withoutState, meta, config.reorderWindow());
+            if (withoutState.isCompleted() || withoutState.isQuarantined()) {
+                return true;
+            }
+            if (!SagaExecutionSupport.isRedelivery(withoutState, meta, config.reorderWindow())) {
+                return false;
+            }
+            warnIfBehindTheReorderWindow(sagaId, withoutState, meta);
+            return true;
         } catch (Throwable secondFailure) {
             rethrowIfNotTheInstances(secondFailure);
             if (secondFailure != loadFailure) {
@@ -574,7 +580,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return;
         }
         if (behindWindowWarned.add(sagaId + "/" + meta.streamId())) {
-            log.warn("Saga '{}' skipped version {} of stream '{}', event type '{}', because the instance has applied a version of that type {} or more ahead of it. It is either a redelivery or an event that arrived later than the reorder window covers, and the saga cannot tell which. Raise reorderWindow on the SagaRunnerConfig if the feed reorders further than that. This is logged once per stream.",
+            log.warn("Saga '{}' skipped version {} of stream '{}', event type '{}', because it is further behind than the instance remembers, which is the reorder window of {} or a smaller window it used earlier. It is either a redelivery or an event that arrived later than that, and the saga cannot tell which. Raise reorderWindow on the SagaRunnerConfig if the feed reorders further than that. A raised window does not bring back versions the instance has already forgotten. This is logged once per stream.",
                     sagaId, meta.streamVersion(), meta.streamId(), meta.eventType(), config.reorderWindow());
         }
     }
