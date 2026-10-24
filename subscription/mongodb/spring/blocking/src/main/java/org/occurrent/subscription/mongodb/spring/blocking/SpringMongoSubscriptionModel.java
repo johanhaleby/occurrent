@@ -374,6 +374,15 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         return subscriptions.resumeSubscription(subscriptionId, startAt);
     }
 
+    /**
+     * {@code false} for a checkpoint the change stream can't open at, such as a catch-up's position
+     * ({@code GlobalCheckpoint}) or a time, since a subscription subscribed at one starts at the present.
+     */
+    @Override
+    public boolean restartsAt(Checkpoint checkpoint) {
+        return !MongoCommons.opensAtThePresent(StartAt.checkpoint(checkpoint));
+    }
+
     // A model that is shut down has no subscriptions, so it answers as for an id it never had
     private void requireNotShutdown(String subscriptionId) {
         if (subscriptions.isShutdown()) {

@@ -26,6 +26,13 @@ The compiler finds those for you. The other sections compile fine and behave dif
 
 ### Subscriptions and catch-up
 
+- [A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint).
+  `RepositionableSubscriptions.findIn(durableModel)` finds the durable model, which stores the position before it
+  resumes there. Compiles unchanged.
+- [A capability that acts on a subscription is not found past a wrapper](#a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper).
+  `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
+  `ManualStartSubscriptionModel` answers empty. Compiles unchanged.
+
 ### Spring Boot starter
 
 ### Brokers
@@ -99,6 +106,95 @@ The [runbook for a quarantined saga instance](../runbooks/quarantined-saga-insta
 
 No signature changes, so there is nothing for `UpgradeToOccurrent_0_35` to rewrite. Whether a feed can supply the
 stream key, or should use `BEST_EFFORT`, depends on the feed.
+
+## A resume at a position through a `DurableSubscriptionModel` stores the checkpoint
+
+In 0.33.0 and 0.34.0, `RepositionableSubscriptions.findIn(durableModel)` answered the model the
+`DurableSubscriptionModel` wraps, since the durable model didn't implement `RepositionableSubscriptions` and the
+lookup went past it. A `resumeSubscription(subscriptionId, startAt)` through that answer resumed the subscription at
+`startAt` and stored nothing, so a restart before the next event resumed from the checkpoint stored earlier.
+
+From 0.35.0 the lookup answers the `DurableSubscriptionModel` itself when the model it wraps can resume at a position,
+and empty otherwise. Its `resumeSubscription(subscriptionId, startAt)` stores the position as the subscription's
+checkpoint, then resumes the wrapped model there.
+
+* `StartAt.checkpoint(..)` stores that checkpoint.
+* `StartAt.now()` stores the position the wrapped model's `globalCheckpoint()` answers. When it answers `null`, the
+  call throws `IllegalStateException`, nothing is stored and the subscription stays paused.
+* `StartAt.subscriptionModelDefault()` resumes from the stored checkpoint, as `resumeSubscription(subscriptionId)`
+  does.
+* A subscription subscribed without checkpointing, or one the wrapped model doesn't report as paused, is passed on to
+  the wrapped model and nothing is stored.
+* A checkpoint the wrapped model's new `restartsAt(..)` answers `false` for is passed on to the wrapped model and
+  nothing is stored. The method answers `false` unless the model overrides it. The MongoDB subscription models answer
+  `false` for a `GlobalCheckpoint`, a `CatchupTimeCheckpoint`, a time and every other checkpoint their change stream
+  can't open at. They open at the present when they subscribe at one, so a stored one would make a restart skip
+  events.
+
+The checkpoint is written with the same write condition as every other checkpoint the durable model writes. A node
+whose write the checkpoint storage refuses, because another node has written with a newer lease, gets
+`CheckpointWriteConditionNotFulfilledException` and the subscription stays paused. When the wrapped model's resume
+throws after the write, the checkpoint stored before is put back with the write condition the position was stored
+with and the exception is thrown, so a failed reposition leaves the stored position as it was before the call. When
+nothing was stored before, the new checkpoint stays.
+
+A catch-up model whose live delegate is a `DurableSubscriptionModel` now has the position stored when it resumes the
+durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it) says such a resume stores nothing until the first live
+position or the quiet save. That section stays as it was released, and over a durable model it no longer holds.
+
+There is nothing to change in your code unless it depends on the checkpoint staying where it was after a resume at a
+position. A `DurableSubscriptionModel` over a repositionable subscription model you wrote yourself stores nothing on a
+resume at a position, as in 0.34.0. To have the position stored, override `RepositionableSubscriptions.restartsAt(..)`
+in that model to answer `true` for every checkpoint a subscription it subscribes there starts reading at. Nothing stored changes format, and there is no OpenRewrite recipe for this. See
+[ADR 151](../architecture/decisions/0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md) and
+[#1253](https://github.com/johanhaleby/occurrent/issues/1253).
+
+## A capability that acts on a subscription is not found past a wrapper
+
+In 0.33.0 and 0.34.0 the blocking `capability(type)` answered the model itself when it implemented `type`, and
+otherwise unwrapped a `SubscriptionModelWrapper` and asked the model beneath. Every `findIn(..)` method calls it. So
+`RepositionableSubscriptions.findIn(competingConsumerModel)` answered the model the `CompetingConsumerSubscriptionModel`
+wraps, and a `resumeSubscription(subscriptionId, startAt)` through that answer ran the subscription while the competing
+consumer still had it as paused and held no lease for it. A node that didn't hold the lease could then run the
+subscription next to the node that did.
+
+From 0.35.0 a wrapper is unwrapped only for a capability that a wrapper's own state doesn't depend on:
+
+* `IntrospectableSubscriptions`, `ReplayAwareSubscriptions` and `HistoryRetainingSubscriptions`, which answer questions
+  about subscriptions.
+* `QuietPositionReportingSubscriptions`, which adds and removes a listener that is told positions.
+* `Pushable`, which takes events in at the bottom of the stack.
+* `HistoryLossReportingSubscriptions`, which a catch-up model reaches under a durable model.
+
+Every other capability is found only on a model that implements it. That is `RepositionableSubscriptions`,
+`Subscribable`, `CancellableSubscriptions`, `SubscriptionModelLifeCycle`, `SubscriptionModel`,
+`CheckpointAwareSubscriptionModel`, `StreamSubscriptionModel` and `DcbSubscriptionModel`.
+
+* `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
+  `ManualStartSubscriptionModel` answers empty. There is no way to resume a competing subscription at a position yet.
+  Pause and resume it through the `CompetingConsumerSubscriptionModel`. Over a `DurableSubscriptionModel` the resume
+  starts from the stored checkpoint. [#1304](https://github.com/johanhaleby/occurrent/issues/1304) decides how a resume at
+  a position through a competing consumer should work.
+* `capability(CheckpointAwareSubscriptionModel.class)`, or another model type, on a wrapper that doesn't implement it
+  answers empty where it used to answer the model beneath. On the stack the Spring Boot starter builds, a
+  `CompetingConsumerSubscriptionModel` over a `CatchupSubscriptionModel` over a `DurableSubscriptionModel`, it used to
+  answer the `DurableSubscriptionModel`, and a `subscribe` through it went around both the catch-up and the competing
+  consumer. Subscribe through the outermost model instead.
+* A `SubscriptionModelWrapper` of your own is found for an acting capability only if it implements it. Implement it on
+  the wrapper, update the wrapper's own state for the subscription and then forward to the model it wraps. The
+  observing capabilities are still found through your wrapper without any change. A wrapper of your own that a
+  `CatchupSubscriptionModel` or a `StreamCatchupSubscriptionModel` wraps has to implement `RepositionableSubscriptions`
+  and forward to the model beneath. Otherwise the catch-up model treats it as a model that can't be resumed at a
+  position, and resuming a subscription from a position the catch-up model stored throws `IllegalStateException`.
+
+[Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it) says a resume at a position reached through `RepositionableSubscriptions.findIn(..)`
+on a `CompetingConsumerSubscriptionModel` goes to the catch-up model under it. That section stays as it was released, and
+from 0.35.0 there is no such resume.
+
+The code compiles unchanged, and there is no OpenRewrite recipe, because the method signatures are the same and only
+what the lookup answers changes. Nothing stored changes. See
+[ADR 151](../architecture/decisions/0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md) and
+[#1251](https://github.com/johanhaleby/occurrent/issues/1251).
 
 ## A saga applies a stream version that arrives after a higher one
 

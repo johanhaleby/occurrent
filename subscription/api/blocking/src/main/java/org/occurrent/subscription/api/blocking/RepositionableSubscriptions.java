@@ -17,6 +17,7 @@
 package org.occurrent.subscription.api.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
@@ -46,14 +47,34 @@ public interface RepositionableSubscriptions extends SubscriptionModelCapability
     Subscription resumeSubscription(String subscriptionId, StartAt startAt);
 
     /**
-     * The repositionable model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper}
-     * until one is found. An empty result means the model cannot be resumed at an explicit position.
+     * Whether a subscription this model subscribes at {@code checkpoint}, as it does when a stored checkpoint is read
+     * back after a restart, starts reading there. A model that stores positions on top of this one, such as a durable
+     * subscription model, stores the position of a resume at a position only when this answers {@code true}. A stored
+     * position that this model opens somewhere else, for example at the present, would make a restart skip the events
+     * written in between.
+     * <p>
+     * The default answers {@code false}, so nothing is stored for a model that doesn't override this. A restart then
+     * resumes from the checkpoint stored before the resume, which can deliver events again but skips none. Override
+     * it to answer {@code true} for every checkpoint this model starts reading at.
+     *
+     * @param checkpoint The position a subscription would be subscribed at.
+     * @return {@code true} if a subscription subscribed at {@code checkpoint} starts reading there, {@code false} by default.
+     */
+    default boolean restartsAt(Checkpoint checkpoint) {
+        return false;
+    }
+
+    /**
+     * {@code subscriptionModel} when it can be resumed at an explicit position. A {@link SubscriptionModelWrapper} that
+     * doesn't implement this is not looked past, because a resume at a position through the model beneath it would go
+     * around the state the wrapper keeps for the subscription. An empty result means the model cannot be resumed at an
+     * explicit position.
      *
      * @param subscriptionModel A {@link Subscribable}, a {@link SubscriptionModelLifeCycle}, a whole {@link SubscriptionModel},
      *                          or a {@link SubscriptionModelWrapper} around one of these. Typed as {@link SubscriptionModelCapability}
      *                          because callers hold different subsets of a subscription model's capabilities, and no
      *                          existing type names their union.
-     * @return The repositionable model, or empty if nothing in the chain implements this.
+     * @return {@code subscriptionModel} as a repositionable model, or empty if it doesn't implement this.
      */
     static Optional<RepositionableSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
         return subscriptionModel.capability(RepositionableSubscriptions.class);
