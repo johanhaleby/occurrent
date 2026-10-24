@@ -30,6 +30,7 @@ import org.occurrent.eventstore.api.SortBy.SingleFieldImpl;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.*;
+import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
@@ -67,9 +68,12 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 /**
  * This is an {@link EventStore} that stores events in-memory. This is mainly useful for testing
  * and/or demo purposes. It also supports the {@link EventStoreOperations} contract.
+ * <p>
+ * DCB reads report marker versions and serve reads after them like the MongoDB stores do. A marker's epoch is minted
+ * when the store first increments it and again after {@link #deleteAll()}, and no marker has unstamped increments.
  */
 @NullMarked
-public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader {
+public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation {
 
     // We cannot use ConcurrentMap since it doesn't maintain insertion order
     private final Map<String, CopyOnWriteArrayList<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
@@ -90,6 +94,13 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     // Reads a field out of an event's data payload so Filter.data(..) can be answered. Refuses by default, since
     // reading a payload means parsing it and this store has no parser. Supply one with withDataFieldReader(..).
     private final DataFieldReader dataFieldReader;
+
+    // Marker versions (ADR 148), guarded by the "state" monitor like positions. A marker's version counts the appends
+    // that incremented it, and every event keeps the versions its append gave the markers of its tags and type, keyed
+    // by position, outside the CloudEvent the way the MongoDB stores keep them outside it too.
+    private final Map<String, Long> markerVersions = new HashMap<>();
+    private final Map<String, String> markerEpochs = new HashMap<>();
+    private final Map<Long, Map<String, Long>> markerVersionsByPosition = new HashMap<>();
 
     /**
      * Create an instance of {@link InMemoryEventStore}
@@ -311,7 +322,96 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                     .toList();
             // highWatermark (the store head) is the consistency boundary and is deliberately independent of the
             // direction, skip, and limit selection, so a partial read still protects an append from later matches.
-            return new DcbEventStream(applySelection(matchingEvents, options), highWatermark);
+            if (!options.versionsRequested()) {
+                return new DcbEventStream(applySelection(matchingEvents, options), highWatermark);
+            }
+            Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
+            if (criteria instanceof DcbCriteria.MatchAll) {
+                afterVersions.ifPresent(saved -> DcbMarkerVersionsSupport.requireResumable(criteria, saved, Map.of()));
+                return new DcbEventStream(applySelection(matchingEvents, options), highWatermark);
+            }
+            Set<String> markerKeys = DcbMarkerVersionsSupport.queryMarkerKeys(criteria);
+            Map<String, DcbMarkerVersionsSupport.ObservedMarker> observed = observedMarkers(markerKeys);
+            if (afterVersions.isPresent()) {
+                DcbMarkerVersionsSupport.requireResumable(criteria, afterVersions.get(), observed);
+                matchingEvents = matchingEvents.stream().filter(event -> appendedAfter(event, criteria, afterVersions.get())).toList();
+            }
+            Optional<DcbMarkerVersions> reported = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(markerKeys, observed) : Optional.empty();
+            return new DcbEventStream(applySelection(matchingEvents, options), highWatermark, DcbConsistencyToken.of(highWatermark), reported);
+        }
+    }
+
+    // Call while holding the "state" monitor
+    private Map<String, DcbMarkerVersionsSupport.ObservedMarker> observedMarkers(Set<String> markerKeys) {
+        Map<String, DcbMarkerVersionsSupport.ObservedMarker> observed = new HashMap<>();
+        for (String key : markerKeys) {
+            Long version = markerVersions.get(key);
+            if (version != null) {
+                observed.put(key, new DcbMarkerVersionsSupport.ObservedMarker(markerEpochs.get(key), version, 0));
+            }
+        }
+        return observed;
+    }
+
+    // Whether an event matching criteria was appended after saved, by the version its append gave the selection key of
+    // an item it matches. Call while holding the "state" monitor, after requireResumable accepted saved, so the
+    // epochs are the saved ones.
+    private boolean appendedAfter(CloudEvent event, DcbCriteria criteria, DcbMarkerVersions saved) {
+        Map<String, Long> eventVersions = markerVersionsByPosition.getOrDefault(position(event), Map.of());
+        for (DcbCriterion item : DcbMarkerVersionsSupport.items(criteria)) {
+            if (!DcbCloudEvents.matches(event, item)) {
+                continue;
+            }
+            for (String key : DcbMarkerVersionsSupport.selectionKeys(item)) {
+                Long eventVersion = eventVersions.get(key);
+                long savedVersion = saved.get(key).orElseThrow().version();
+                if (eventVersion != null && eventVersion > savedVersion) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Increments the markers of keys and returns the versions this append gave them. Call while holding the "state"
+    // monitor.
+    private Map<String, Long> incrementMarkers(Set<String> keys) {
+        Map<String, Long> incremented = new HashMap<>();
+        for (String key : keys) {
+            long version = markerVersions.merge(key, 1L, Long::sum);
+            markerEpochs.computeIfAbsent(key, __ -> UUID.randomUUID().toString());
+            incremented.put(key, version);
+        }
+        return incremented;
+    }
+
+    // Call while holding the "state" monitor
+    private void forgetMarkerVersions(Collection<CloudEvent> removedEvents) {
+        for (CloudEvent removed : removedEvents) {
+            if (removed.getExtension(OccurrentCloudEventExtension.POSITION) != null) {
+                markerVersionsByPosition.remove(position(removed));
+            }
+        }
+    }
+
+    /**
+     * Returns {@code true} when the store holds an event with the result's append id at a position from its first to
+     * its last sequence position. In-memory appends are durable as soon as they return, so that holds for every append
+     * the store made whose events are still there.
+     */
+    @Override
+    public boolean isConfirmed(DcbAppendResult appendResult) {
+        requireNonNull(appendResult, DcbAppendResult.class.getSimpleName() + " cannot be null");
+        Optional<AppendId> appendId = appendResult.appendId();
+        if (appendId.isEmpty()) {
+            return false;
+        }
+        String appendIdValue = appendId.get().toString();
+        synchronized (state) {
+            return allEvents()
+                    .filter(event -> event.getExtension(OccurrentCloudEventExtension.POSITION) != null)
+                    .filter(event -> position(event) >= appendResult.firstSequencePosition() && position(event) <= appendResult.lastSequencePosition())
+                    .anyMatch(event -> appendIdValue.equals(event.getExtension(OccurrentCloudEventExtension.APPEND_ID)));
         }
     }
 
@@ -415,9 +515,27 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             assignInsertionOrder(addedEvents);
             state.put(streamId, new CopyOnWriteArrayList<>(eventList));
             nextPosition.addAndGet(addedEvents.size());
+
+            // Increment the markers of the events' tags and types, and of the condition's for a conditional append,
+            // and keep the versions each event got
+            Set<String> markerKeys = new TreeSet<>(DcbMarkerVersionsSupport.eventMarkerKeys(eventsToAppend));
+            boolean reportsVersions = condition != null && condition.consistencyToken().isPresent() && !(condition.criteria() instanceof DcbCriteria.MatchAll);
+            if (condition != null && !(condition.criteria() instanceof DcbCriteria.MatchAll)) {
+                markerKeys.addAll(DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria()));
+            }
+            Map<String, Long> incremented = incrementMarkers(markerKeys);
+            for (CloudEvent added : addedEvents) {
+                Map<String, Long> eventVersions = new HashMap<>();
+                DcbMarkerVersionsSupport.eventMarkerKeys(added).forEach(key -> eventVersions.put(key, incremented.get(key)));
+                markerVersionsByPosition.put(position(added), Map.copyOf(eventVersions));
+            }
+            Optional<DcbMarkerVersions> appendedVersions = reportsVersions
+                    ? DcbMarkerVersionsSupport.versionsOf(DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria()), observedMarkers(DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria())))
+                    : Optional.empty();
+
             long firstPosition = position(addedEvents.getFirst());
             long lastPosition = position(addedEvents.getLast());
-            result = new DcbAppendResult(firstPosition, lastPosition, addedEvents.size(), Optional.of(appendId));
+            result = new DcbAppendResult(firstPosition, lastPosition, addedEvents.size(), Optional.of(appendId), appendedVersions);
         }
 
         listener.accept(addedEvents);
@@ -497,9 +615,12 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     @Override
     public void deleteEventStream(String streamId) {
         requireNonNull(streamId, "StreamId cannot be null");
-        CopyOnWriteArrayList<CloudEvent> removed = state.remove(streamId);
-        if (removed != null) {
-            removed.forEach(event -> insertionOrderByEventKey.remove(insertionKey(event)));
+        synchronized (state) {
+            CopyOnWriteArrayList<CloudEvent> removed = state.remove(streamId);
+            if (removed != null) {
+                removed.forEach(event -> insertionOrderByEventKey.remove(insertionKey(event)));
+                forgetMarkerVersions(removed);
+            }
         }
     }
 
@@ -512,13 +633,16 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             return;
         }
 
-        state.computeIfPresent(streamId, (__, events) -> {
-            CopyOnWriteArrayList<CloudEvent> newEvents = events.stream().filter(cloudEventMatchesInput.negate()).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
-            if (newEvents.isEmpty()) {
-                return null;
-            }
-            return newEvents;
-        });
+        synchronized (state) {
+            state.computeIfPresent(streamId, (__, events) -> {
+                forgetMarkerVersions(events.stream().filter(cloudEventMatchesInput).toList());
+                CopyOnWriteArrayList<CloudEvent> newEvents = events.stream().filter(cloudEventMatchesInput.negate()).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
+                if (newEvents.isEmpty()) {
+                    return null;
+                }
+                return newEvents;
+            });
+        }
         insertionOrderByEventKey.remove(insertionKey(cloudEventId, cloudEventSource));
     }
 
@@ -528,6 +652,11 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             insertionOrderByEventKey.clear();
             insertionSequence.set(0);
             nextPosition.set(1);
+            // Positions start over, so forget the markers too. Their next epochs differ, so marker versions saved
+            // before this are refused instead of matching events that reuse a position.
+            markerVersions.clear();
+            markerEpochs.clear();
+            markerVersionsByPosition.clear();
         }
     }
 
@@ -542,6 +671,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 Map<Boolean, List<CloudEvent>> partitioned = cloudEvents.stream()
                         .collect(Collectors.partitioningBy(cloudEvent -> matchesFilter(cloudEvent, filter, dataFieldReader)));
                 partitioned.get(true).forEach(removed -> insertionOrderByEventKey.remove(insertionKey(removed)));
+                forgetMarkerVersions(partitioned.get(true));
                 CopyOnWriteArrayList<CloudEvent> remaining = new CopyOnWriteArrayList<>(partitioned.get(false));
                 return remaining.isEmpty() ? null : remaining;
             }));

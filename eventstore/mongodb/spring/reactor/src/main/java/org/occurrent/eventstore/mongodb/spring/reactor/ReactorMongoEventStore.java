@@ -16,17 +16,24 @@
 
 package org.occurrent.eventstore.mongodb.spring.reactor;
 
+import com.mongodb.ClientSessionOptions;
 import com.mongodb.ErrorCategory;
 import com.mongodb.MongoBulkWriteException;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
+import com.mongodb.ReadConcern;
+import com.mongodb.ReadPreference;
+import com.mongodb.TransactionOptions;
+import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.Projections;
+import com.mongodb.reactivestreams.client.ClientSession;
 import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.bson.types.ObjectId;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.NullUnmarked;
 import org.jspecify.annotations.Nullable;
@@ -34,6 +41,8 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.dcb.*;
+import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
+import org.occurrent.eventstore.api.dcb.reactor.DcbAppendConfirmation;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventRepairValidator;
@@ -43,6 +52,9 @@ import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.api.reactor.*;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments.Topology;
+import org.occurrent.eventstore.mongodb.dcb.internal.MarkerVersionsReadFailures;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbTagsIndexCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
@@ -62,6 +74,7 @@ import org.springframework.data.mongodb.ReactiveMongoDatabaseUtils;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveBulkOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -99,9 +112,17 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * By default, only stream-based event-store operations are enabled. Configure
  * {@link EventStoreConfig.Builder#eventStoreCapabilities(Set)} to enable DCB, or to enable both stream and DCB
  * operations. Occurrent creates missing indexes for enabled capabilities, but it never removes indexes automatically.
+ * <p>
+ * A DCB read that asks for marker versions runs in a read-only snapshot transaction of its own, on a session from the
+ * template's {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory}, bounded by
+ * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a reactive transaction the subscriber
+ * context carries, it reads in that transaction instead. The store answers {@link DcbAppendConfirmation} with a
+ * majority read on the primary from {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory#getMongoDatabase()},
+ * which joins no session. A store built on a template from {@link ReactiveMongoTemplate#withSession(ClientSession)}
+ * isn't supported for DCB snapshot deciders.
  */
 @NullMarked
-public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader {
+public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ReactorMongoEventStore.class);
     private static final String ID = "_id";
@@ -137,6 +158,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final boolean streamPositionEnabled;
     private final boolean requireBackfilledPosition;
     private final boolean requireRepairedEvents;
+    private final boolean resumeFromMarkerVersions;
+    private final TransactionOptions markerVersionsTransactionOptions;
+    private final Topology topology;
+    private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
     /**
      * Create a new instance of {@code SpringReactorMongoEventStore}
@@ -162,6 +187,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventStoreCollectionName, mongoTemplate);
         this.requireBackfilledPosition = config.requireBackfilledPosition;
         this.requireRepairedEvents = config.requireRepairedEvents;
+        this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
+        this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
+        boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
+        this.topology = dcbEnabled && resumeFromMarkerVersions ? detectTopology(mongoTemplate) : Topology.UNKNOWN;
+        if (dcbEnabled && !resumeFromMarkerVersions) {
+            LOGGER.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
+        }
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate).block();
     }
 
@@ -259,6 +291,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
+        return options.versionsRequested() ? readWithMarkerVersions(criteria, options) : readWithoutMarkerVersions(criteria, options);
+    }
+
+    private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads,
         // the events may include it while the token does not, which only makes a later conditional append
         // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The token read
@@ -284,6 +320,161 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                             : cloudEvents.collectList();
                     return events.map(list -> new DcbEventStream(list, highWatermark, DcbConsistencyToken.of(token)));
                 });
+    }
+
+    // Markers, counter and events come from one point in time, so the reported versions cover exactly the events read
+    // and a read after them misses none. Outside a reactive transaction this runs in a read-only snapshot transaction
+    // on a session of the store's own, never through the configured TransactionalOperator, and commits it once by
+    // hand. The majority commit makes sure the snapshot was majority-committed. A failure reports no versions instead
+    // of failing the read, except for a read after versions, which can't fall back to a full read without
+    // double-applying events.
+    private Mono<DcbEventStream> readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
+        if (!resumeFromMarkerVersions) {
+            return afterVersions.isPresent()
+                    ? Mono.error(new DcbSnapshotInvalidException(criteria, afterVersions.get(), "Resuming from marker versions is turned off for this event store (resumeFromMarkerVersions)"))
+                    : readWithoutMarkerVersions(criteria, options);
+        }
+        if (criteria instanceof DcbCriteria.MatchAll) {
+            return Mono.defer(() -> {
+                afterVersions.ifPresent(saved -> DcbMarkerVersionsSupport.requireResumable(criteria, saved, Map.of()));
+                return readWithoutMarkerVersions(criteria, options);
+            });
+        }
+        return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()).flatMap(callerTransactionActive -> {
+            if (callerTransactionActive) {
+                // The template joins the caller's transaction (SessionSynchronization.ALWAYS). Its read concern can't
+                // be read from here, so only a deployment where every transaction reads from one point in time qualifies.
+                return topology.readsOnePointInTime(null)
+                        ? readMarkerVersionsWith(mongoTemplate, criteria, options)
+                        : markerVersionsUnavailable(criteria, options, "The caller's transaction isn't known to read from one point in time", null);
+            }
+            Mono<DcbEventStream> ownTransaction = Mono.usingWhen(
+                    mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build())
+                            .onErrorMap(e -> new MarkerVersionsReadFailure("start session", e)),
+                    clientSession -> Mono.defer(() -> {
+                        clientSession.startTransaction(markerVersionsTransactionOptions);
+                        return readMarkerVersionsWith(mongoTemplate.withSession(clientSession), criteria, options);
+                    }).onErrorMap(e -> !(e instanceof DcbSnapshotInvalidException), e -> new MarkerVersionsReadFailure("read", e))
+                            // A failed commit leaves the session in the committed state, so closing it sends no abort
+                            .flatMap(eventStream -> Mono.from(clientSession.commitTransaction())
+                                    .onErrorMap(e -> new MarkerVersionsReadFailure("commit", e))
+                                    .thenReturn(eventStream)),
+                    // Closing the session aborts a read-only transaction that is still open
+                    clientSession -> Mono.fromRunnable(clientSession::close),
+                    (clientSession, error) -> Mono.fromRunnable(clientSession::close),
+                    clientSession -> Mono.fromRunnable(clientSession::close));
+            return ownTransaction.onErrorResume(MarkerVersionsReadFailure.class, failure -> markerVersionsReadFailed(criteria, options, failure.phase, requireNonNull(failure.getCause())));
+        });
+    }
+
+    private Mono<DcbEventStream> readMarkerVersionsWith(ReactiveMongoOperations template, DcbCriteria criteria, DcbReadOptions options) {
+        Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
+        Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
+        return template.find(markersQuery(markerKeys), Document.class, dcbCheckpointCollectionName).collectList()
+                .map(DcbMarkerVersionsDocuments::markersByKey)
+                .flatMap(markers -> {
+                    Map<String, DcbMarkerVersionsSupport.ObservedMarker> observed = DcbMarkerVersionsDocuments.observe(markers);
+                    afterVersions.ifPresent(saved -> DcbMarkerVersionsSupport.requireResumable(criteria, saved, observed));
+                    long token = DcbMarkerVersionsDocuments.consistencyToken(markerKeys, markers);
+                    return template.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)
+                            .map(counter -> ((Number) counter.get(DcbMarkerModel.COUNTER_POSITION)).longValue())
+                            .defaultIfEmpty(0L)
+                            .flatMap(highWatermark -> {
+                                long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+                                Query mongoQuery = afterVersions
+                                        .map(saved -> toDcbMongoQuery(criteria, 0, upperBound, item -> afterVersionsCriteria(item, markers, saved)))
+                                        .orElseGet(() -> toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound));
+                                boolean backward = options.direction() == DcbReadOptions.Direction.BACKWARD;
+                                mongoQuery.with(Sort.by(backward ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
+                                mongoQuery.skip(options.skip());
+                                options.limit().ifPresent(mongoQuery::limit);
+                                Optional<DcbMarkerVersions> markerVersions = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(markerKeys, observed) : Optional.empty();
+                                return template.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName)
+                                        .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
+                                        .collectList()
+                                        .map(list -> {
+                                            if (backward) {
+                                                Collections.reverse(list);
+                                            }
+                                            return new DcbEventStream(list, highWatermark, DcbConsistencyToken.of(token), markerVersions);
+                                        });
+                            });
+                });
+    }
+
+    private Mono<DcbEventStream> markerVersionsReadFailed(DcbCriteria criteria, DcbReadOptions options, String phase, Throwable cause) {
+        if (markerVersionsReadFailures.recordAndCheckFirst(phase, cause)) {
+            LOGGER.warn(MarkerVersionsReadFailures.message(phase, cause), cause);
+        } else if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug(MarkerVersionsReadFailures.message(phase, cause), cause);
+        }
+        return markerVersionsUnavailable(criteria, options, "The event store could not take a consistent snapshot to compare the saved marker versions against (" + phase + " failed)", cause);
+    }
+
+    private Mono<DcbEventStream> markerVersionsUnavailable(DcbCriteria criteria, DcbReadOptions options, String reason, @Nullable Throwable cause) {
+        Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
+        return afterVersions.isPresent()
+                ? Mono.error(new DcbSnapshotInvalidException(criteria, afterVersions.get(), reason, cause))
+                : readWithoutMarkerVersions(criteria, options);
+    }
+
+    // Carries the phase a read with marker versions failed in to the fallback, and never leaves this class
+    private static final class MarkerVersionsReadFailure extends RuntimeException {
+        private final String phase;
+
+        private MarkerVersionsReadFailure(String phase, Throwable cause) {
+            super(phase, cause, false, false);
+            this.phase = phase;
+        }
+    }
+
+    @Override
+    public Mono<Boolean> isConfirmed(DcbAppendResult appendResult) {
+        requireNonNull(appendResult, DcbAppendResult.class.getSimpleName() + " cannot be null");
+        Optional<AppendId> appendId = appendResult.appendId();
+        if (appendId.isEmpty()) {
+            return Mono.just(false);
+        }
+        Bson filter = Filters.and(
+                Filters.eq(OccurrentCloudEventExtension.APPEND_ID, appendId.get().toString()),
+                Filters.gte(OccurrentCloudEventExtension.POSITION, appendResult.firstSequencePosition()),
+                Filters.lte(OccurrentCloudEventExtension.POSITION, appendResult.lastSequencePosition()));
+        return Mono.defer(() -> mongoTemplate.getMongoDatabaseFactory().getMongoDatabase())
+                .flatMap(database -> Mono.from(database.getCollection(eventStoreCollectionName)
+                        .withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary())
+                        .find(filter).projection(Projections.include(ID)).limit(1).first()))
+                .hasElement()
+                .onErrorResume(e -> {
+                    LOGGER.debug("Could not confirm DCB append {}, so it counts as unconfirmed", appendId.get(), e);
+                    return Mono.just(false);
+                });
+    }
+
+    private static Topology detectTopology(ReactiveMongoTemplate mongoTemplate) {
+        try {
+            Document hello = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase()
+                    .flatMap(database -> Mono.from(database.runCommand(new Document("hello", 1))))
+                    .block();
+            return hello == null ? Topology.UNKNOWN : Topology.of(hello);
+        } catch (RuntimeException e) {
+            LOGGER.debug("Could not run hello to find out whether the deployment is a sharded cluster", e);
+            return Topology.UNKNOWN;
+        }
+    }
+
+    private static Query markersQuery(Set<String> markerKeys) {
+        return new Query(where(ID).in(markerKeys.stream().map(DcbMarkerModel::markerId).toList()));
+    }
+
+    private static Criteria afterVersionsCriteria(DcbCriterion item, Map<String, Document> markers, DcbMarkerVersions saved) {
+        List<Criteria> elements = DcbMarkerVersionsDocuments.selections(item, markers, saved).stream()
+                .map(selection -> where(DcbMarkerModel.EVENT_MARKER_VERSIONS).elemMatch(
+                        where(DcbMarkerModel.EVENT_MARKER_VERSIONS_KEY).is(selection.key())
+                                .and(DcbMarkerModel.EVENT_MARKER_VERSIONS_EPOCH).is(selection.epoch())
+                                .and(DcbMarkerModel.EVENT_MARKER_VERSIONS_VERSION).gt(selection.version())))
+                .toList();
+        return elements.size() == 1 ? elements.getFirst() : new Criteria().orOperator(elements);
     }
 
     @Override
@@ -360,7 +551,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 long lastPosition = firstPosition + eventCount - 1;
                 Mono<DcbAppendResult> transaction = transactionalOperator.transactional(
                         currentStreamVersion(streamId).flatMap(currentStreamVersion -> {
-                            final Mono<Void> conditionAndMarkers;
+                            final Mono<Map<String, Document>> conditionAndMarkers;
                             if (condition != null) {
                                 conditionAndMarkers = enforceAppendCondition(condition, eventsToAppend, lastPosition);
                             } else {
@@ -370,10 +561,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                 // and a concurrent conditional append's snapshot could miss this append (write skew). See ADR 0021.
                                 conditionAndMarkers = incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
                             }
-                            return conditionAndMarkers.then(Mono.defer(() -> {
+                            return conditionAndMarkers.flatMap(markers -> {
                                 List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition, appendId);
-                                return insertAllDcb(streamId, currentStreamVersion, documents).thenReturn(new DcbAppendResult(firstPosition, lastPosition, eventCount, Optional.of(appendId)));
-                            }));
+                                DcbMarkerVersionsDocuments.stampMarkerVersions(documents, eventsToAppend, markers);
+                                Optional<DcbMarkerVersions> markerVersions = resumeFromMarkerVersions ? DcbMarkerVersionsDocuments.appendedVersions(condition, markers) : Optional.empty();
+                                return insertAllDcb(streamId, currentStreamVersion, documents).thenReturn(new DcbAppendResult(firstPosition, lastPosition, eventCount, Optional.of(appendId), markerVersions));
+                            });
                         }));
                 // The driver does not auto-retry a transient transaction conflict reactively, so retry it here, plus a
                 // DuplicateKeyException from two transactions first-creating the same conflict marker at once. A
@@ -383,7 +576,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         });
     }
 
-    private Mono<Void> enforceAppendCondition(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition) {
+    private Mono<Map<String, Document>> enforceAppendCondition(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition) {
         Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
         final Mono<Boolean> conflictMono;
         if (expectedToken.isPresent()) {
@@ -399,7 +592,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         return conflictMono.flatMap(conflict -> {
             if (conflict) {
-                return currentPosition().flatMap(position -> Mono.<Void>error(new DcbAppendConditionNotFulfilledException(condition, position)));
+                return currentPosition().flatMap(position -> Mono.<Map<String, Document>>error(new DcbAppendConditionNotFulfilledException(condition, position)));
             }
             // Increment a marker per key for the union of the query's keys and the appended events' keys. Always
             // increment the query's markers so a concurrent matching append is serialized even when this append's own
@@ -410,20 +603,31 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         });
     }
 
-    private Mono<Void> incrementConflictMarkers(Set<String> markerKeys, long lastPosition) {
+    // Emits the incremented markers as this transaction left them, keyed by marker key, so the append stamps its
+    // events with the versions it gave them (ADR 148).
+    private Mono<Map<String, Document>> incrementConflictMarkers(Set<String> markerKeys, long lastPosition) {
         if (markerKeys.isEmpty()) {
-            return Mono.empty();
+            return Mono.just(Map.of());
         }
-        // One unordered bulk write of upserts rather than one upsert round trip per key (previously sequential via
-        // concatMap), so a boundary with several tags and types costs one round trip inside the transaction instead
-        // of K serial ones.
+        // One unordered bulk write rather than one round trip per key (previously sequential via concatMap), so a
+        // boundary with several tags and types costs one round trip inside the transaction instead of K serial ones.
+        // Each marker gets its upsert and an update that gives a marker an older writer created an epoch. In either
+        // order the two leave it with one epoch.
         ReactiveBulkOperations bulkOperations = mongoTemplate.bulkOps(BulkOperations.BulkMode.UNORDERED, dcbCheckpointCollectionName);
         for (String key : markerKeys) {
             Query query = new Query(where(ID).is(DcbMarkerModel.markerId(key)));
-            Update update = new Update().inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L).set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition);
+            Update update = new Update()
+                    .inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L)
+                    .inc(DcbMarkerModel.CHECKPOINT_STAMPED, 1L)
+                    .set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition)
+                    .setOnInsert(DcbMarkerModel.CHECKPOINT_EPOCH, new ObjectId());
             bulkOperations.upsert(query, update);
+            Query withoutEpoch = new Query(where(ID).is(DcbMarkerModel.markerId(key)).and(DcbMarkerModel.CHECKPOINT_EPOCH).exists(false));
+            bulkOperations.updateOne(withoutEpoch, new Update().set(DcbMarkerModel.CHECKPOINT_EPOCH, new ObjectId()));
         }
-        return bulkOperations.execute().then();
+        return bulkOperations.execute()
+                .then(mongoTemplate.find(markersQuery(markerKeys), Document.class, dcbCheckpointCollectionName).collectList())
+                .map(DcbMarkerVersionsDocuments::markersByKey);
     }
 
     // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. Read the markers
@@ -612,13 +816,18 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private static Query toDcbMongoQuery(DcbCriteria criteria, long afterPosition, long upperSequencePosition) {
+        return toDcbMongoQuery(criteria, afterPosition, upperSequencePosition, null);
+    }
+
+    // itemRestriction narrows each item's criteria, so a read after marker versions selects every item by its own mv element
+    private static Query toDcbMongoQuery(DcbCriteria criteria, long afterPosition, long upperSequencePosition, @Nullable Function<DcbCriterion, Criteria> itemRestriction) {
         Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterPosition).lte(upperSequencePosition);
         Criteria dcbEventCriteria = where(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD).exists(true);
         if (criteria instanceof DcbCriteria.MatchAll) {
             return new Query(new Criteria().andOperator(positionCriteria, dcbEventCriteria));
         }
         List<Criteria> itemCriteria = DcbMarkerModel.dcbQueryItems(criteria).stream()
-                .map(ReactorMongoEventStore::toCriteria)
+                .map(item -> itemRestriction == null ? toCriteria(item) : new Criteria().andOperator(toCriteria(item), itemRestriction.apply(item)))
                 .toList();
         return new Query(new Criteria().andOperator(positionCriteria, dcbEventCriteria, new Criteria().orOperator(itemCriteria)));
     }
@@ -792,6 +1001,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     // skewed dataset (a plausible popular-tag boundary) showed a winning SORT stage over the dcbTags
                     // index without this compound index.
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true)))
+                    // A read after marker versions selects events by one mv element per criteria item (ADR 148).
+                    .then(createIndex(eventStoreCollectionName, mongoTemplate, DcbMarkerVersionsDocuments.markerVersionsIndex(), new IndexOptions().sparse(true)))
                     .then();
         }
 
@@ -993,6 +1204,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
                                 Document updatedDocument = OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, preservedUpdatedCloudEvent);
                                 DcbDocumentMapper.preservePositionAndDcbTags(currentCloudEvent, updatedDocument);
+                                DcbDocumentMapper.preserveMarkerVersions(document, updatedDocument);
                                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                                 result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(preservedUpdatedCloudEvent);
                             } else {
