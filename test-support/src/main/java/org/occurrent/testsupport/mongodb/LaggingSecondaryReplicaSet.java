@@ -101,7 +101,10 @@ public final class LaggingSecondaryReplicaSet implements AutoCloseable {
                     .withNetworkAliases(alias(i))
                     .withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
                     .withCommand("--replSet", REPLICA_SET, "--bind_ip_all", "--port", String.valueOf(port), "--setParameter", "enableTestCommands=1")
-                    .withCreateContainerCmdModifier(command -> command.getHostConfig()
+                    // Docker 28 drops a port binding unless the port is also exposed
+                    .withCreateContainerCmdModifier(command -> command
+                            .withExposedPorts(new ExposedPort(port))
+                            .getHostConfig()
                             .withPortBindings(new PortBinding(Ports.Binding.bindPort(port), new ExposedPort(port))))
                     .waitingFor(Wait.forLogMessage(".*Waiting for connections.*", 1));
             containers.add(container);
