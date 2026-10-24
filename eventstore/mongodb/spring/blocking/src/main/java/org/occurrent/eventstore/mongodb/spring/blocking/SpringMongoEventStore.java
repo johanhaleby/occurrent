@@ -52,7 +52,6 @@ import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
-import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments.Topology;
 import org.occurrent.eventstore.mongodb.dcb.internal.MarkerVersionsReadFailures;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbTagsIndexCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
@@ -115,8 +114,9 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * <p>
  * A DCB read that asks for marker versions runs in a read-only snapshot transaction of its own, on a session from the
  * template's {@link org.springframework.data.mongodb.MongoDatabaseFactory}, bounded by
- * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a Spring-managed transaction it reads in
- * that transaction instead. The store answers {@link DcbAppendConfirmation} with a majority read on the primary from
+ * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a Spring-managed transaction it reports
+ * no marker versions, since that transaction's writes may still abort, and a read after marker versions is refused. The
+ * store answers {@link DcbAppendConfirmation} with a majority read on the primary from
  * {@link org.springframework.data.mongodb.MongoDatabaseFactory#getMongoDatabase()}, which joins no session. A store
  * built on a template from {@link MongoTemplate#withSession(ClientSession)} isn't supported for DCB snapshot deciders.
  */
@@ -140,7 +140,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final boolean streamPositionEnabled;
     private final boolean resumeFromMarkerVersions;
     private final TransactionOptions markerVersionsTransactionOptions;
-    private final Topology topology;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
     /**
@@ -166,7 +165,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
         this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
-        this.topology = dcbEnabled && resumeFromMarkerVersions ? detectTopology(mongoTemplate) : Topology.UNKNOWN;
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
@@ -298,11 +296,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // Markers, counter and events come from one point in time, so the reported versions cover exactly the events read
-    // and a read after them misses none. Outside a Spring-managed transaction this runs in a read-only snapshot
-    // transaction on a session of the store's own, never through the configured TransactionTemplate, and commits it
-    // once by hand. The majority commit makes sure the snapshot was majority-committed. A failure reports no versions
-    // instead of failing the read, except for a read after versions, which can't fall back to a full read without
-    // double-applying events.
+    // and a read after them misses none. This runs in a read-only snapshot transaction on a session of the store's own,
+    // never through the configured TransactionTemplate, and commits it once by hand. The majority commit makes sure the
+    // snapshot was majority-committed. Inside a Spring-managed transaction it reports no versions, since the
+    // transaction's own increments may still abort and a later append would reuse them. A failure reports no versions
+    // instead of failing the read. A read after versions can't fall back to a full read without double-applying
+    // events, so it is refused in both cases.
     private DcbEventStream readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -317,12 +316,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
 
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            // The template joins the caller's transaction (SessionSynchronization.ALWAYS). Its read concern can't be
-            // read from here, so only a deployment where every transaction reads from one point in time qualifies.
-            if (!topology.readsOnePointInTime(null)) {
-                return markerVersionsUnavailable(criteria, options, "The caller's transaction isn't known to read from one point in time", null);
-            }
-            return readMarkerVersionsWith(mongoTemplate, criteria, options);
+            return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
         }
 
         final ClientSession clientSession;
@@ -392,9 +386,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     private DcbEventStream markerVersionsReadFailed(DcbCriteria criteria, DcbReadOptions options, String phase, RuntimeException cause) {
         if (markerVersionsReadFailures.recordAndCheckFirst(phase, cause)) {
-            log.warn(MarkerVersionsReadFailures.message(phase, cause), cause);
+            log.warn(MarkerVersionsReadFailures.message(phase, cause, options.afterVersions().isPresent()), cause);
         } else if (log.isDebugEnabled()) {
-            log.debug(MarkerVersionsReadFailures.message(phase, cause), cause);
+            log.debug(MarkerVersionsReadFailures.message(phase, cause, options.afterVersions().isPresent()), cause);
         }
         return markerVersionsUnavailable(criteria, options, "The event store could not take a consistent snapshot to compare the saved marker versions against (" + phase + " failed)", cause);
     }
@@ -425,15 +419,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         } catch (RuntimeException e) {
             log.debug("Could not confirm DCB append {}, so it counts as unconfirmed", appendId.get(), e);
             return false;
-        }
-    }
-
-    private static Topology detectTopology(MongoTemplate mongoTemplate) {
-        try {
-            return Topology.of(mongoTemplate.getMongoDatabaseFactory().getMongoDatabase().runCommand(new Document("hello", 1)));
-        } catch (RuntimeException e) {
-            log.debug("Could not run hello to find out whether the deployment is a sharded cluster", e);
-            return Topology.UNKNOWN;
         }
     }
 
