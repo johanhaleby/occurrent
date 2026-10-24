@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.tck.eventstore.blocking;
+package org.occurrent.tck.latecommit;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
@@ -35,6 +35,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * One append that commits late, started on its own thread so the suite can do other work while it is held.
@@ -54,9 +55,11 @@ import java.util.function.Function;
  * </ul>
  * A hold that never engages times out with a message, and the append's own failure is rethrown unchanged by
  * {@link #release()}.
+ * <p>
+ * Shared by the TCK suites that hold an append, and not meant for an implementation under test.
  */
 @NullMarked
-final class LateAppend<T> implements AutoCloseable {
+public final class LateAppend<T> implements AutoCloseable {
 
     private static final Duration HOLD_TIMEOUT = Duration.ofSeconds(20);
     private static final Duration JOIN_TIMEOUT = Duration.ofSeconds(30);
@@ -79,23 +82,32 @@ final class LateAppend<T> implements AutoCloseable {
      * Starts a DCB append that commits late. {@code ownStore} is the fixture's store, used when the store commits in
      * position order and there is nothing to hold. {@code visibleNow} answers whether the event is visible to a reader.
      */
-    static LateAppend<DcbAppendResult> dcbAppend(LateCommits lateCommits, DcbEventStore ownStore,
+    public static LateAppend<DcbAppendResult> dcbAppend(LateCommits lateCommits, DcbEventStore ownStore,
                                                  List<CloudEvent> events, BooleanSupplier visibleNow) {
         return start(lateCommits, held -> () -> held.dcbEventStore().append(events),
-                () -> ownStore.append(events), visibleNow);
+                () -> ownStore.append(events), held -> visibleNow.getAsBoolean());
     }
 
     /**
      * Starts a stream write that commits late, as {@link #dcbAppend}.
      */
-    static LateAppend<WriteResult> streamWrite(LateCommits lateCommits, EventStore ownStore, String streamId,
+    public static LateAppend<WriteResult> streamWrite(LateCommits lateCommits, EventStore ownStore, String streamId,
                                                List<CloudEvent> events, BooleanSupplier visibleNow) {
         return start(lateCommits, held -> () -> held.eventStore().write(streamId, events),
-                () -> ownStore.write(streamId, events), visibleNow);
+                () -> ownStore.write(streamId, events), held -> visibleNow.getAsBoolean());
     }
 
-    private static <T> LateAppend<T> start(LateCommits lateCommits, Function<HeldAppend, Callable<T>> heldAppend,
-                                           Callable<T> ownAppend, BooleanSupplier visibleNow) {
+    /**
+     * Starts an append that commits late, for a suite whose append is neither a DCB append nor a stream write.
+     *
+     * @param heldAppend builds the append from the hold, for a store that holds
+     * @param ownAppend  the same append through the fixture's own path, for a store that commits in position order
+     * @param visibleNow whether the appended events are visible to a reader. Given the hold for a store that holds, so
+     *                   it can read through the store the hold handed out, and {@code null} for a store that commits in
+     *                   position order
+     */
+    public static <T> LateAppend<T> start(LateCommits lateCommits, Function<HeldAppend, Callable<T>> heldAppend,
+                                          Callable<T> ownAppend, Predicate<@Nullable HeldAppend> visibleNow) {
         HeldAppend held = lateCommits.commitsInPositionOrder() ? null : lateCommits.holdNextAppend();
         LateAppend<T> late = new LateAppend<>(held, held == null ? ownAppend : heldAppend.apply(held));
         try {
@@ -114,14 +126,14 @@ final class LateAppend<T> implements AutoCloseable {
     /**
      * Whether the store declared that it commits in position order.
      */
-    boolean commitsInPositionOrder() {
+    public boolean commitsInPositionOrder() {
         return held == null;
     }
 
     /**
      * Lets the append commit, joins it and returns its result. The append's own failure is rethrown unchanged.
      */
-    T release() {
+    public T release() {
         if (held != null) {
             held.release();
         }
@@ -132,7 +144,7 @@ final class LateAppend<T> implements AutoCloseable {
      * The check that the hold entered the window. A store that holds must have given the held append a position below
      * the append that overtook it, or the suite has tested a store that commits in order.
      */
-    void requireWindowEntered(long heldPosition, long laterPosition) {
+    public void requireWindowEntered(long heldPosition, long laterPosition) {
         if (held != null && heldPosition >= laterPosition) {
             throw new IllegalStateException("the hold did not enter the window; declare commitsInPositionOrder if this "
                     + "store commits in position order. The held append got position " + heldPosition
@@ -145,7 +157,7 @@ final class LateAppend<T> implements AutoCloseable {
      * The same check for a test with no append that overtakes: a store that holds must already have assigned the held
      * append a position, so the head a reader sees is above zero.
      */
-    void requirePositionReserved(long headSeenWhileHeld) {
+    public void requirePositionReserved(long headSeenWhileHeld) {
         if (held != null && headSeenWhileHeld <= 0) {
             throw new IllegalStateException("the hold did not enter the window; declare commitsInPositionOrder if this "
                     + "store commits in position order. No position was assigned while the append was held");
@@ -160,16 +172,16 @@ final class LateAppend<T> implements AutoCloseable {
         executor.shutdownNow();
     }
 
-    private void awaitCommit(BooleanSupplier visibleNow) {
+    private void awaitCommit(Predicate<@Nullable HeldAppend> visibleNow) {
         join();
-        if (!visibleNow.getAsBoolean()) {
+        if (!visibleNow.test(null)) {
             throw new IllegalStateException("the fixture declares commitsInPositionOrder but the append was not "
                     + "visible once it had returned. Either the store does not commit in position order, or its "
                     + "fixture should hold the append instead");
         }
     }
 
-    private void awaitHold(HeldAppend held, BooleanSupplier visibleNow) {
+    private void awaitHold(HeldAppend held, Predicate<@Nullable HeldAppend> visibleNow) {
         long deadline = System.nanoTime() + HOLD_TIMEOUT.toNanos();
         try {
             while (!held.awaitHeld(POLL)) {
@@ -188,7 +200,7 @@ final class LateAppend<T> implements AutoCloseable {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while waiting for the append to be held", e);
         }
-        if (visibleNow.getAsBoolean()) {
+        if (visibleNow.test(held)) {
             throw new IllegalStateException("the hold did not enter the window; declare commitsInPositionOrder if this "
                     + "store commits in position order. The append was visible while it was held");
         }

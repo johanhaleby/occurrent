@@ -37,12 +37,17 @@ import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
+import org.occurrent.tck.internal.scaffolding.ExpectedGuaranteeViolation;
+import org.occurrent.tck.latecommit.AppendHold;
+import org.occurrent.tck.latecommit.LateCommitGuarantee;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.HoldingTransactionalOperator;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -57,7 +62,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,6 +73,9 @@ import static org.awaitility.Awaitility.await;
 @Timeout(120)
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
+@ExpectedGuaranteeViolation(
+        tests = "an_event_that_committed_below_a_position_the_application_stored_itself_is_delivered_by_a_catch_up_started_at_that_position",
+        issue = "https://github.com/johanhaleby/occurrent/issues/1297")
 class ReactorDcbCatchupSubscriptionModelMongoTest {
 
     @Container
@@ -76,6 +86,8 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     OccurrentMongoFlush flush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private ReactorMongoEventStore eventStore;
+    private ReactiveMongoTemplate mongoTemplate;
+    private ReactiveMongoTransactionManager tx;
     private ReactorMongoSubscriptionModel subscriptionModel;
     private CloudEventConverter<DomainEvent> converter;
     private MongoClient mongoClient;
@@ -85,8 +97,8 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     void create_instances() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcbcatchup");
         mongoClient = MongoClients.create(connectionString);
-        ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
-        ReactiveMongoTransactionManager tx = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        tx = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig config = new EventStoreConfig.Builder()
                 .eventStoreCollectionName("events")
                 .transactionConfig(tx)
@@ -196,6 +208,46 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
         });
     }
 
+    @Test
+    void an_event_that_committed_below_a_position_the_application_stored_itself_is_delivered_by_a_catch_up_started_at_that_position() {
+        // The first append reserves its position and parks before its transaction starts, without blocking a thread
+        AppendHold hold = new AppendHold();
+        CountDownLatch parked = new CountDownLatch(1);
+        EventStoreConfig holdingConfig = new EventStoreConfig.Builder()
+                .eventStoreCollectionName("events")
+                .transactionConfig(new HoldingTransactionalOperator(TransactionalOperator.create(tx), () -> {
+                    if (!hold.engage()) {
+                        return Mono.empty();
+                    }
+                    parked.countDown();
+                    return Mono.fromFuture(hold.released()).timeout(AppendHold.RELEASE_TIMEOUT);
+                }))
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                .build();
+        ReactorMongoEventStore holdingStore = new ReactorMongoEventStore(mongoTemplate, holdingConfig);
+        AtomicReference<DcbAppendResult> appendedA = new AtomicReference<>();
+        disposables.add(holdingStore.append(tagged(name("A"), "name:a")).doOnNext(appendedA::set).subscribe());
+        await().atMost(Duration.ofSeconds(20)).until(() -> parked.getCount() == 0);
+        DcbAppendResult appendedB = holdingStore.append(tagged(name("B"), "name:b")).block();
+        DcbAppendResult appendedC = holdingStore.append(tagged(name("C"), "name:c")).block();
+
+        // A commits below the position the application stored for C
+        hold.released().complete(null);
+        await().atMost(Duration.ofSeconds(20)).until(() -> appendedA.get() != null);
+        assertThat(appendedA.get().firstSequencePosition()).as("A reserved its position before B did").isLessThan(requireNonNull(appendedB).firstSequencePosition());
+
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(DcbCriteria.all(), DcbStartAt.afterPosition(requireNonNull(appendedC).lastSequencePosition())), received);
+
+        appendTagged(name("D"), "name:d");
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).as("the catch-up is delivering").contains("D"));
+        LateCommitGuarantee.require(received.contains("A"),
+                "the event that committed below the position the application stored is delivered",
+                () -> "the subscription was delivered " + received);
+    }
+
     private void subscribe(Flux<CloudEvent> flux, CopyOnWriteArrayList<String> received) {
         disposables.add(flux.map(ce -> ((NameDefined) converter.toDomainEvent(ce)).name()).doOnNext(received::add).subscribe());
         // Give the change-stream subscription a moment to start before the test writes more events.
@@ -207,8 +259,12 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     }
 
     private void appendTagged(DomainEvent event, String tag) {
+        eventStore.append(tagged(event, tag)).block();
+    }
+
+    private List<CloudEvent> tagged(DomainEvent event, String tag) {
         CloudEvent cloudEvent = converter.toCloudEvents(List.of(event)).get(0);
-        eventStore.append(List.of(DcbCloudEvents.withTags(cloudEvent, Set.of(Tag.parse(tag))))).block();
+        return List.of(DcbCloudEvents.withTags(cloudEvent, Set.of(Tag.parse(tag))));
     }
 
     private static void sleep(long millis) {

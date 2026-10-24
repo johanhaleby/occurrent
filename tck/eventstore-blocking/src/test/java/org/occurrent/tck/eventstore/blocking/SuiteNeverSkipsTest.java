@@ -25,6 +25,7 @@ import org.junit.platform.testkit.engine.Events;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.tck.latecommit.LateCommits;
 
 import java.util.List;
 import java.util.Set;

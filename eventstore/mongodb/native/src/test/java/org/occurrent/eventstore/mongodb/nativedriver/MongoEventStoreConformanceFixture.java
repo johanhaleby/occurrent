@@ -24,9 +24,11 @@ import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.*;
+import org.occurrent.tck.latecommit.AppendHold;
+import org.occurrent.tck.latecommit.HeldAppend;
+import org.occurrent.tck.latecommit.LateCommits;
+import org.occurrent.testsupport.mongodb.HoldingMongoClient;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.Set;
@@ -122,22 +124,14 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
     public LateCommits lateCommits() {
         return LateCommits.holding(() -> {
             AppendHold hold = new AppendHold();
-            MongoEventStore holding = new MongoEventStore(holdingFirstSessionOf(mongoClient, hold), database, "events", eventStoreConfig);
+            MongoClient holdingClient = HoldingMongoClient.beforeEachSession(mongoClient, () -> {
+                if (hold.engage()) {
+                    hold.awaitRelease();
+                }
+            });
+            MongoEventStore holding = new MongoEventStore(holdingClient, database, "events", eventStoreConfig);
             return HeldAppend.of(hold, holding, () -> {
             });
-        });
-    }
-
-    private static MongoClient holdingFirstSessionOf(MongoClient delegate, AppendHold hold) {
-        return (MongoClient) Proxy.newProxyInstance(MongoClient.class.getClassLoader(), new Class<?>[]{MongoClient.class}, (proxy, method, args) -> {
-            if (method.getName().equals("startSession") && hold.engage()) {
-                hold.awaitRelease();
-            }
-            try {
-                return method.invoke(delegate, args);
-            } catch (InvocationTargetException e) {
-                throw e.getCause();
-            }
         });
     }
 

@@ -28,9 +28,13 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
+import org.occurrent.tck.latecommit.AppendHold;
+import org.occurrent.tck.latecommit.HeldAppend;
+import org.occurrent.tck.latecommit.LateCommits;
 import org.occurrent.tck.subscription.blocking.RestartConformance;
 import org.occurrent.tck.subscription.blocking.RestartableSubscriptionModelFixture;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
+import org.occurrent.testsupport.mongodb.HoldingMongoClient;
 
 import java.time.Duration;
 import java.util.List;
@@ -55,10 +59,12 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 class NativeMongoSubscriptionModelFixture implements RestartableSubscriptionModelFixture {
 
+    private final MongoClient mongoClient;
     private final MongoDatabase database;
     private final MongoCollection<Document> eventCollection;
     private final MongoEventStore eventStore;
     private final TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
+    private final EventStoreConfig eventStoreConfig = new EventStoreConfig(timeRepresentation);
     private final String streamId = UUID.randomUUID().toString();
     private final AtomicLong streamVersion = new AtomicLong(0);
 
@@ -66,9 +72,10 @@ class NativeMongoSubscriptionModelFixture implements RestartableSubscriptionMode
     private NativeMongoSubscriptionModel subscriptionModel;
 
     NativeMongoSubscriptionModelFixture(MongoClient mongoClient, MongoDatabase database) {
+        this.mongoClient = mongoClient;
         this.database = database;
         this.eventCollection = database.getCollection("events-" + UUID.randomUUID());
-        this.eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(timeRepresentation));
+        this.eventStore = new MongoEventStore(mongoClient, database, eventCollection, eventStoreConfig);
         buildModel();
     }
 
@@ -120,6 +127,36 @@ class NativeMongoSubscriptionModelFixture implements RestartableSubscriptionMode
     @Override
     public boolean resumesAfterARestart() {
         return false;
+    }
+
+    /**
+     * False. The change stream opens at a resume token, and a {@code GlobalCheckpoint} is not one, so the model starts
+     * at the present.
+     */
+    @Override
+    public boolean honoursAGlobalPosition() {
+        return false;
+    }
+
+    /**
+     * The event store in front of the model reserves an event's position before the transaction that writes it begins,
+     * so a write can be held between the two. The hold is a client that blocks the first {@code startSession}, which
+     * the store calls after it has reserved its position and before it begins the transaction, on the same event
+     * collection as {@link #eventStore}, so the change stream sees the held write once it commits.
+     */
+    @Override
+    public LateCommits lateCommits() {
+        return LateCommits.holding(() -> {
+            AppendHold hold = new AppendHold();
+            MongoClient holdingClient = HoldingMongoClient.beforeEachSession(mongoClient, () -> {
+                if (hold.engage()) {
+                    hold.awaitRelease();
+                }
+            });
+            MongoEventStore holding = new MongoEventStore(holdingClient, database, eventCollection, eventStoreConfig);
+            return HeldAppend.of(hold, holding, () -> {
+            });
+        });
     }
 
     @Override
