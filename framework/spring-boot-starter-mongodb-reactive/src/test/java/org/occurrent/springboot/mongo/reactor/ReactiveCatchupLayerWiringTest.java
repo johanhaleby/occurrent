@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscriptionModel;
@@ -75,7 +76,7 @@ class ReactiveCatchupLayerWiringTest {
     }
 
     private static EventStore positionOrderedEventStore(boolean writesPosition) {
-        EventStore eventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class));
+        EventStore eventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class, CatchupReads.class));
         when(((PositionOrderedReader) eventStore).writesPosition()).thenReturn(writesPosition);
         return eventStore;
     }

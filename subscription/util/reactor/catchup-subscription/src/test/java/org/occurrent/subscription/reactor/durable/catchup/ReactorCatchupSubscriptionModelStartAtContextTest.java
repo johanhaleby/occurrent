@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.reactor.durable.catchup;
 
+import org.occurrent.eventstore.api.reactor.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -220,7 +224,12 @@ class ReactorCatchupSubscriptionModelStartAtContextTest {
         }
     }
 
-    private static final class UnusedPositionOrderedReader implements PositionOrderedReader {
+    private static final class UnusedPositionOrderedReader implements PositionOrderedReader, CatchupReads {
+        @Override
+        public Mono<CatchupReadScope> openCatchupReadScope(@Nullable String notBefore) {
+            return CatchupReads.unscoped(this).openCatchupReadScope(notBefore);
+        }
+
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
             return Flux.error(new AssertionError("readInPositionOrder must not be called when the subscription starts live"));
@@ -237,7 +246,12 @@ class ReactorCatchupSubscriptionModelStartAtContextTest {
         }
     }
 
-    private static final class UnusedDcbEventStore implements DcbEventStore {
+    private static final class UnusedDcbEventStore implements DcbEventStore, DcbCatchupReads {
+        @Override
+        public Mono<DcbCatchupReadScope> openDcbCatchupReadScope(@Nullable String notBefore) {
+            return DcbCatchupReads.unscoped(this).openDcbCatchupReadScope(notBefore);
+        }
+
         @Override
         public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
             return Mono.error(new AssertionError("read must not be called when the subscription starts live"));

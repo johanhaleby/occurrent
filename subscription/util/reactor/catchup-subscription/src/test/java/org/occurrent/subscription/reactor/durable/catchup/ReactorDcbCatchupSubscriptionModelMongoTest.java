@@ -32,6 +32,9 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -65,6 +68,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -279,7 +283,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     // the head probe (afterPosition == upToPosition), so the delay is applied to the first real window read after it.
     // The event committed during the delay lands above the captured bulk head and must be recovered exactly once
     // through reconciliation or the live subscription, which resumes from a token captured before the replay.
-    private static final class DelayFirstReadDcbEventStore implements DcbEventStore {
+    private static final class DelayFirstReadDcbEventStore implements DcbEventStore, DcbCatchupReads {
         private final DcbEventStore delegate;
         private final Duration delay;
         private final AtomicBoolean firstReadStarted;
@@ -293,14 +297,39 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
 
         @Override
         public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
+            return delayedUnlessHeadProbe(options, () -> delegate.read(criteria, options));
+        }
+
+        // The reads of the catch-up go through the scope the delegate opens, so the first window read of the scope is delayed
+        @Override
+        public Mono<DcbCatchupReadScope> openDcbCatchupReadScope(@Nullable String notBefore) {
+            return ((DcbCatchupReads) delegate).openDcbCatchupReadScope(notBefore).map(scope -> new DcbCatchupReadScope() {
+                @Override
+                public @Nullable String liveStart() {
+                    return scope.liveStart();
+                }
+
+                @Override
+                public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
+                    return delayedUnlessHeadProbe(options, () -> scope.read(criteria, options));
+                }
+
+                @Override
+                public Mono<Void> close() {
+                    return scope.close();
+                }
+            });
+        }
+
+        private Mono<DcbEventStream> delayedUnlessHeadProbe(DcbReadOptions options, Supplier<Mono<DcbEventStream>> read) {
             boolean isHeadProbe = options.afterPosition().orElse(0) == options.upToPosition().orElse(0);
             if (!isHeadProbe && windowDelayed.compareAndSet(false, true)) {
                 return Mono.defer(() -> {
                     firstReadStarted.set(true);
-                    return delegate.read(criteria, options).delayElement(delay);
+                    return read.get().delayElement(delay);
                 });
             }
-            return delegate.read(criteria, options);
+            return read.get();
         }
 
         @Override
