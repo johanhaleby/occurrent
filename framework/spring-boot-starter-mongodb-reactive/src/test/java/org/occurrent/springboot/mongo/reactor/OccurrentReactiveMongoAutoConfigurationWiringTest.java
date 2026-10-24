@@ -34,6 +34,9 @@ import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.reactor.EventStore;
+import org.occurrent.eventstore.api.reactor.EventStoreQueries;
+import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
@@ -69,6 +72,8 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 @Testcontainers
 class OccurrentReactiveMongoAutoConfigurationWiringTest {
@@ -126,6 +131,26 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
                 .withBean(ReactiveMongoDatabaseFactory.class, () -> databaseFactory)
                 .withBean(ReactiveMongoTemplate.class, () -> mongoTemplate)
                 .withPropertyValues("occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:test");
+    }
+
+    @Test
+    void a_user_event_store_that_reads_in_position_order_but_does_not_implement_catchup_reads_fails_the_context_at_startup() {
+        EventStore userEventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class, EventStoreQueries.class));
+        when(((PositionOrderedReader) userEventStore).writesPosition()).thenReturn(true);
+
+        contextRunner().withBean(EventStore.class, () -> userEventStore).run(context ->
+                assertThat(context).getFailure().rootCause()
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("CatchupReads"));
+    }
+
+    @Test
+    void a_user_event_store_that_reads_in_position_order_and_implements_catchup_reads_starts() {
+        EventStore userEventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class, EventStoreQueries.class, CatchupReads.class));
+        when(((PositionOrderedReader) userEventStore).writesPosition()).thenReturn(true);
+
+        contextRunner().withBean(EventStore.class, () -> userEventStore).run(context ->
+                assertThat(context).hasNotFailed());
     }
 
     @Test

@@ -27,6 +27,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -35,6 +36,8 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.filter.Filter;
@@ -473,7 +476,7 @@ public class CatchupSubscriptionModelTest {
      * four-argument {@code query} represents the reconciliation read; the second {@code count} call is the post-replay
      * count whose result the reconciliation read is sized from.
      */
-    private static final class HandoverRaceInducingQueries implements EventStoreQueries {
+    private static final class HandoverRaceInducingQueries implements EventStoreQueries, CatchupReads {
         private final EventStoreQueries delegate;
         private final Runnable injectDuringBulkReplay;
         private final Runnable injectBetweenCountAndRead;
@@ -494,10 +497,28 @@ public class CatchupSubscriptionModelTest {
 
         @Override
         public Stream<CloudEvent> query(Filter filter, SortBy sortBy) {
-            // Bulk replay: materialise the snapshot the cursor would have returned, then simulate events that are
-            // written after the cursor passed but before the post-replay count, so they fall to the reconciliation.
+            return bulkReplay(() -> delegate.query(filter, sortBy));
+        }
+
+        // The reads of the catch-up go through the scope the delegate opens, so the writes are injected into those
+        @Override
+        public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+            return new ForwardingCatchupReadScope(((CatchupReads) delegate).openCatchupReadScope(notBefore)) {
+                @Override
+                public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+                    if (skip == 0 && limit == Integer.MAX_VALUE) {
+                        return bulkReplay(() -> super.query(filter, skip, limit, sortBy));
+                    }
+                    return super.query(filter, skip, limit, sortBy);
+                }
+            };
+        }
+
+        // Bulk replay: materialise the snapshot the cursor would have returned, then simulate events that are
+        // written after the cursor passed but before the post-replay count, so they fall to the reconciliation.
+        private Stream<CloudEvent> bulkReplay(Supplier<Stream<CloudEvent>> read) {
             final List<CloudEvent> bulkReplaySnapshot;
-            try (Stream<CloudEvent> bulkReplay = delegate.query(filter, sortBy)) {
+            try (Stream<CloudEvent> bulkReplay = read.get()) {
                 bulkReplaySnapshot = bulkReplay.collect(Collectors.toList());
             }
             if (!bulkReplayInjectionDone) {

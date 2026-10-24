@@ -31,6 +31,8 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -91,7 +93,7 @@ class DcbCatchupHandoverTest {
     // uses for currentHead()) answers a scripted sequence (bulk head, then reconcile snapshot), so a test can make
     // the head advance mid-replay. A real window read never uses that degenerate range (the pipeline skips an
     // empty window without reading), so this only ever intercepts the head check.
-    private static final class FakeDcbEventStore implements DcbEventStore {
+    private static final class FakeDcbEventStore implements DcbEventStore, DcbCatchupReads {
         private final TreeMap<Long, CloudEvent> byPosition = new TreeMap<>();
         private long[] heads = {0L};
         private int headIndex = 0;
@@ -107,6 +109,12 @@ class DcbCatchupHandoverTest {
         FakeDcbEventStore heads(long... heads) {
             this.heads = heads;
             return this;
+        }
+
+        // Positions and events are in memory and become visible together, so the scope reads the fake directly
+        @Override
+        public DcbCatchupReadScope openDcbCatchupReadScope(@Nullable String notBefore) {
+            return DcbCatchupReads.unscoped(this).openDcbCatchupReadScope(notBefore);
         }
 
         private synchronized long nextHead() {

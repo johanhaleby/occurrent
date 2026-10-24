@@ -321,7 +321,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
     }
 
     // Three events at positions 1 to 3, and a head that stays at 3
-    private static final class ThreeEventReader implements PositionOrderedReader {
+    private static final class ThreeEventReader implements UnscopedPositionOrderedReader {
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
             long from = range.afterPosition().orElse(0L) + 1;
@@ -348,7 +348,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
     // One event already there and one more written while the history is being read, so the catch-up has a history to
     // read and something to deliver afterwards. The head grows on the second read, which is what the reconciliation
     // sees.
-    private static final class GrowingPositionOrderedReader implements PositionOrderedReader {
+    private static final class GrowingPositionOrderedReader implements UnscopedPositionOrderedReader {
         private final java.util.concurrent.atomic.AtomicInteger headReads = new java.util.concurrent.atomic.AtomicInteger();
 
         @Override
@@ -392,7 +392,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         }
     }
 
-    private static final class UnusedPositionOrderedReader implements PositionOrderedReader {
+    private static final class UnusedPositionOrderedReader implements UnscopedPositionOrderedReader {
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
             return Flux.error(new AssertionError("readInPositionOrder must not be called when the catch-up fails loudly"));
@@ -413,7 +413,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
     // Flux.never() registers a subscriber and then neither emits nor terminates. subscribe() itself still returns
     // immediately (registering a subscriber is not blocking), so the calling thread is never stuck, and the replay
     // is simply left in flight, exactly as if a slow store had not answered the first page yet.
-    private static final class StuckPositionOrderedReader implements PositionOrderedReader {
+    private static final class StuckPositionOrderedReader implements UnscopedPositionOrderedReader {
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
             return Flux.never();
@@ -432,7 +432,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
     // Like StuckPositionOrderedReader until release(), after which every window it reads is empty, so the replay
     // finishes and hands over.
-    private static final class ReleasablePositionOrderedReader implements PositionOrderedReader {
+    private static final class ReleasablePositionOrderedReader implements UnscopedPositionOrderedReader {
         private final Sinks.Empty<Void> released = Sinks.empty();
 
         void release() {
@@ -550,7 +550,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
     // Bulk head 0, so the bulk read (startPosition, 0] is empty, then reconcile head 1, so reconcile (0, 1] reads
     // one event, "e1" from producer A. Mirrors GrowingPositionOrderedReader's two-read shape with a fixed id instead
     // of one derived from position, so a live event sharing only that id can be built against it.
-    private static final class BulkEmptyThenOneReconciledEventReader implements PositionOrderedReader {
+    private static final class BulkEmptyThenOneReconciledEventReader implements UnscopedPositionOrderedReader {
         private final java.util.concurrent.atomic.AtomicInteger headReads = new java.util.concurrent.atomic.AtomicInteger();
 
         @Override

@@ -28,6 +28,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
@@ -630,13 +632,19 @@ class CatchupSubscriptionModelStopAndStartTest {
     }
 
     // A history read waits until the gate opens, which it is unless a test closes it, and counts down queried first
-    private static final class GatedHistory implements EventStoreQueries {
+    private static final class GatedHistory implements EventStoreQueries, CatchupReads {
         private final List<CloudEvent> events;
         volatile CountDownLatch gate = new CountDownLatch(0);
         final CountDownLatch queried = new CountDownLatch(1);
 
         private GatedHistory(List<CloudEvent> events) {
             this.events = events;
+        }
+
+        // The fake serves its list directly and has no position, so the scope reads it as the time-ordered path does
+        @Override
+        public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+            return TimeOrderedCatchupReads.over(this).openCatchupReadScope(notBefore);
         }
 
         @Override
