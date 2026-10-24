@@ -41,6 +41,7 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -159,9 +160,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         EventMeta meta = EventMeta.NONE;
         String sagaId = null;
         try {
-            // NONE until this returns, so an event whose extensions cannot be read is an event carrying no redelivery
+            // NONE until this returns, so a failure to read the extensions at all is an event carrying no redelivery
             // key, which is what the conditions below already say about an event nothing can tell a redelivery of.
-            meta = extractMeta(cloudEvent);
+            ExtractedMeta extracted = extractMeta(cloudEvent);
+            meta = extracted.meta();
             E event = converter.toDomainEvent(cloudEvent);
             sagaId = saga.sagaId(event);
             // Routing worked, whatever the id turned out to be. Cleared here rather than after the delivery, because an
@@ -170,6 +172,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (sagaId == null) {
                 return;
             }
+            refuseIfStreamKeyIsUnreadable(extracted);
             refuseOrWarnIfRedeliveryCannotBeDetected(meta);
             // The full delivery metadata (stream id and version, position, and any CloudEvent extensions) rides on the
             // input so reactions can read it. The separate EventMeta drives redelivery dedup and is derived
@@ -534,10 +537,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         return envelope.timers().stream().anyMatch(timer -> timer.name().equals(timerName) && timer.firesAtEpochMilli() <= nowMillis);
     }
 
-    // An event carrying neither a stream id with a version nor a position leaves nothing to compare a redelivery
-    // against, so the reaction would run again and issue its commands again. Occurrent's own stored events always carry
-    // one, so this means a feed that dropped the extensions on the way in, which it does for every event, not just this
-    // one. Under REQUIRED that is refused rather than reacted to, so the throw reaches the subscription model.
+    // An event without a stream id and a stream version leaves nothing to compare a redelivery against, so the reaction
+    // would run again and issue its commands again. A position does not help, because events can reach the saga in a
+    // different order than their positions. Occurrent's own stored events always carry both extensions, so this means a
+    // feed that dropped them on the way in, which it does for every event, not just this one. Under REQUIRED that is
+    // refused rather than reacted to, so the throw reaches the subscription model.
     // Whether the event comes back until somebody looks is the model's own business. On a push feed the listener
     // decides, and on a broker source the choice is set with DeliveryFailurePolicy. Under BEST_EFFORT the duplication
     // is accepted knowingly, so the warning says so once per runner rather than once per event.
@@ -547,46 +551,88 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
         if (config.redeliveryDetection() == RedeliveryDetection.REQUIRED) {
             throw new SagaRedeliveryDetectionException(
-                    "Saga subscription '" + subscriptionId + "' received an event with no streamid, streamversion or position. " +
-                    "A redelivered event cannot be recognised as one, so reacting to it would run the reaction again and issue " +
-                    "its commands again. Forward the Occurrent CloudEvent extensions from the listener feeding this saga, or " +
-                    "set redeliveryDetection to BEST_EFFORT if the feed carries none of them and every reaction is idempotent.");
+                    "Saga subscription '" + subscriptionId + "' received an event without both a streamid and a streamversion. " +
+                    "A redelivered event cannot be recognised as one, and a position does not help because events can arrive out of " +
+                    "position order, so reacting to it would run the reaction again and issue its commands again. Forward the " +
+                    "Occurrent CloudEvent extensions streamid and streamversion from the listener feeding this saga, or " +
+                    "set redeliveryDetection to BEST_EFFORT if the feed carries neither and every reaction is idempotent.");
         }
         if (dedupUnavailableWarningLogged.compareAndSet(false, true)) {
-            log.warn("Saga subscription '{}' received an event with no streamid, streamversion or position, and " +
+            log.warn("Saga subscription '{}' received an event without both a streamid and a streamversion, and " +
                      "redeliveryDetection is BEST_EFFORT. A redelivered event cannot be recognised as one, so it will run the " +
                      "reaction again and issue its commands again.", subscriptionId);
         }
+    }
+
+    // A stream key extension that is present and cannot be read is refused under both settings. BEST_EFFORT accepts a
+    // feed that carries no key, and this feed wrote one that nothing can compare, so reacting to the event would hide
+    // that behind duplicate commands. Checked after routing like the refusal above, so an event that belongs to no
+    // instance of this saga is still ignored. Never quarantined, because with no key there is nothing to record a
+    // failure against.
+    private void refuseIfStreamKeyIsUnreadable(ExtractedMeta extracted) {
+        UnreadableExtension unreadable = extracted.unreadableStreamKey();
+        if (unreadable == null) {
+            return;
+        }
+        throw new SagaRedeliveryDetectionException(
+                "Saga subscription '" + subscriptionId + "' received an event whose '" + unreadable.name() + "' extension " +
+                "could not be read, so the saga cannot tell whether the event is a redelivery. Reacting to it would run the " +
+                "reaction again and issue its commands again on every redelivery. Fix the feed that writes the extension. " +
+                "redeliveryDetection does not apply, because the event does carry a stream key.", unreadable.cause());
+    }
+
+    // The delivery metadata, and the first stream key extension that was present and unreadable, if there was one.
+    private record ExtractedMeta(EventMeta meta, @Nullable UnreadableExtension unreadableStreamKey) {
+    }
+
+    private record UnreadableExtension(String name, RuntimeException cause) {
     }
 
     // Each extension is read on its own, because one that cannot be read must not take the others with it. An event
     // carrying a good streamid and streamversion beside a position that is not a number has a redelivery key, and
     // reading the three together threw before either of the first two reached the record, so the event looked like one
     // carrying no key at all and blocked the channel with nothing able to budget it.
-    private EventMeta extractMeta(CloudEvent cloudEvent) {
+    // An unreadable stream key extension is handed back rather than read as absent, because an event with a bad
+    // streamversion would otherwise be handled as one that carries no key.
+    private ExtractedMeta extractMeta(CloudEvent cloudEvent) {
         Set<String> extensions = cloudEvent.getExtensionNames();
-        String streamId = readExtension(cloudEvent, extensions, OccurrentCloudEventExtension.STREAM_ID, OccurrentExtensionGetter::getStreamId);
-        Long streamVersion = readExtension(cloudEvent, extensions, OccurrentCloudEventExtension.STREAM_VERSION, OccurrentExtensionGetter::getStreamVersion);
+        List<UnreadableExtension> unreadableStreamKey = new ArrayList<>();
+        String streamId = readStreamKey(cloudEvent, extensions, OccurrentCloudEventExtension.STREAM_ID, OccurrentExtensionGetter::getStreamId, unreadableStreamKey);
+        Long streamVersion = readStreamKey(cloudEvent, extensions, OccurrentCloudEventExtension.STREAM_VERSION, OccurrentExtensionGetter::getStreamVersion, unreadableStreamKey);
         // Use the framework's own position accessor, which accepts a Number or String, rather than narrowing to Long.
-        Long position = readExtension(cloudEvent, extensions, OccurrentCloudEventExtension.POSITION, OccurrentCloudEventExtension::getPosition);
-        return new EventMeta(streamId, streamVersion, position);
+        Long position = readPosition(cloudEvent, extensions);
+        return new ExtractedMeta(new EventMeta(streamId, streamVersion, position), unreadableStreamKey.isEmpty() ? null : unreadableStreamKey.getFirst());
     }
 
-    // An extension that is absent and one that cannot be read both answer null, and the difference is said once per
-    // runner rather than per event, because a feed writing one badly writes every one of them badly.
-    // RuntimeException rather than Throwable on purpose. This is the one catch on the delivery path that is meant to
-    // absorb what it caught, since an unreadable extension is a fact about the event rather than a failure to deliver
-    // it, and keeping it narrow is what lets a failure of the process reach the delivery's own catch.
-    private <T> @Nullable T readExtension(CloudEvent cloudEvent, Set<String> extensions, String name, Function<CloudEvent, @Nullable T> read) {
+    // RuntimeException rather than Throwable on purpose. An unreadable extension is a fact about the event rather than
+    // a failure to deliver it, and keeping the catch narrow is what lets a failure of the process reach the delivery's
+    // own catch.
+    private <T> @Nullable T readStreamKey(CloudEvent cloudEvent, Set<String> extensions, String name, Function<CloudEvent, @Nullable T> read,
+                                          List<UnreadableExtension> unreadable) {
         if (!extensions.contains(name)) {
             return null;
         }
         try {
             return read.apply(cloudEvent);
         } catch (RuntimeException e) {
-            if (unreadableExtensionsWarned.add(name)) {
-                log.warn("Saga subscription '{}' received an event whose '{}' extension could not be read, so it is treated as absent. A redelivery is still recognised from whichever of streamid with streamversion, or position, this event does carry, and the event is refused or warned about as one carrying nothing if it carries neither.",
-                        subscriptionId, name, e);
+            unreadable.add(new UnreadableExtension(name, e));
+            return null;
+        }
+    }
+
+    // The position does not identify the event, so an unreadable one is treated as absent and said once per runner
+    // rather than per event, because a feed writing one badly writes every one of them badly. It still goes on
+    // SagaFailure.position() and the event metadata when it can be read.
+    private @Nullable Long readPosition(CloudEvent cloudEvent, Set<String> extensions) {
+        if (!extensions.contains(OccurrentCloudEventExtension.POSITION)) {
+            return null;
+        }
+        try {
+            return OccurrentCloudEventExtension.getPosition(cloudEvent);
+        } catch (RuntimeException e) {
+            if (unreadableExtensionsWarned.add(OccurrentCloudEventExtension.POSITION)) {
+                log.warn("Saga subscription '{}' received an event whose '{}' extension could not be read, so it is treated as absent. The event is still recognised as a redelivery from its streamid with its streamversion.",
+                        subscriptionId, OccurrentCloudEventExtension.POSITION, e);
             }
             return null;
         }
