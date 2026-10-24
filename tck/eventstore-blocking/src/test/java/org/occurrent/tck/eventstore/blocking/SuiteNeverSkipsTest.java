@@ -103,12 +103,42 @@ class SuiteNeverSkipsTest {
     }
 
     @Test
+    void the_dcb_late_commit_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbLateCommitConformance.class);
+    }
+
+    @Test
+    void the_stream_late_commit_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingStreamLateCommitConformance.class);
+    }
+
+    @Test
+    void the_late_commit_suites_fail_before_their_first_assertion_against_a_fixture_that_has_no_lateCommits() {
+        for (Class<?> suite : List.of(DeclinesLateCommitsDcbConformance.class, DeclinesLateCommitsStreamConformance.class)) {
+            Events tests = EngineTestKit.engine("junit-jupiter")
+                    .selectors(selectClass(suite))
+                    .execute()
+                    .testEvents();
+
+            assertThat(tests.started().count()).isPositive();
+            assertThat(tests.succeeded().count()).isZero();
+            assertThat(tests.failed().stream())
+                    .describedAs("every test of %s must fail on the missing lateCommits() and nothing else", suite.getSimpleName())
+                    .allSatisfy(event -> assertThat(event.getRequiredPayload(org.junit.platform.engine.TestExecutionResult.class)
+                            .getThrowable().orElseThrow())
+                            .isInstanceOf(UnsupportedOperationException.class)
+                            .hasMessageContaining("lateCommits"));
+        }
+    }
+
+    @Test
     void names_nothing_that_could_skip_a_test_in_any_suite_it_compiles() {
         assertThat(SkipMechanismScan.classesScannedAlongside(EventStoreConformance.class))
                 .describedAs("the scan must reach the suites, or a clean verdict means only that it looked nowhere")
                 .contains(EventStoreConformance.class.getName(), StreamEventStoreConformance.class.getName(),
                         EventStoreQueriesConformance.class.getName(), EventStoreOperationsConformance.class.getName(),
-                        EventStoreTimePrecisionConformance.class.getName());
+                        EventStoreTimePrecisionConformance.class.getName(),
+                        DcbLateCommitConformance.class.getName(), StreamLateCommitConformance.class.getName());
 
         SortedMap<String, List<String>> offenders = SkipMechanismScan.of(EventStoreConformance.class);
 
@@ -352,6 +382,153 @@ class SuiteNeverSkipsTest {
                 @Override
                 public DcbAppendConditionModel appendConditionModel() {
                     return DcbAppendConditionModel.EXACT_CRITERIA;
+                }
+            };
+        }
+    }
+
+    /**
+     * As {@link HonoursNothingConformance}, but for {@link DcbLateCommitConformance}. The fixture declares that it
+     * commits in position order, so the held append runs straight into {@link NoopStore}, which throws
+     * {@link UnsupportedOperationException}. Every test must fail rather than pass or skip.
+     */
+    static class HonoursNothingDcbLateCommitConformance extends DcbLateCommitConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.DCB);
+                }
+
+                @Override
+                public DcbEventStore dcbEventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbAppendConditionModel appendConditionModel() {
+                    return DcbAppendConditionModel.EXACT_CRITERIA;
+                }
+
+                @Override
+                public LateCommits lateCommits() {
+                    return LateCommits.inPositionOrder();
+                }
+            };
+        }
+    }
+
+    /**
+     * As {@link HonoursNothingDcbLateCommitConformance}, but for {@link StreamLateCommitConformance}.
+     */
+    static class HonoursNothingStreamLateCommitConformance extends StreamLateCommitConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.STREAM);
+                }
+
+                @Override
+                public EventStore eventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreQueries queries() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreOperations operations() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public ReadEventStreamWithFilter filteredReader() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public PositionOrderedReader positionOrderedReader() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public LateCommits lateCommits() {
+                    return LateCommits.inPositionOrder();
+                }
+            };
+        }
+    }
+
+    /**
+     * A DCB fixture that never overrides {@link EventStoreFixture#lateCommits()}. The suite touches it in setup, so
+     * every test fails there with the default's message.
+     */
+    static class DeclinesLateCommitsDcbConformance extends DcbLateCommitConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.DCB);
+                }
+
+                @Override
+                public DcbEventStore dcbEventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbAppendConditionModel appendConditionModel() {
+                    return DcbAppendConditionModel.EXACT_CRITERIA;
+                }
+            };
+        }
+    }
+
+    /**
+     * As {@link DeclinesLateCommitsDcbConformance}, for the stream suite.
+     */
+    static class DeclinesLateCommitsStreamConformance extends StreamLateCommitConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.STREAM);
+                }
+
+                @Override
+                public EventStore eventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreQueries queries() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreOperations operations() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public ReadEventStreamWithFilter filteredReader() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public PositionOrderedReader positionOrderedReader() {
+                    return NoopStore.INSTANCE;
                 }
             };
         }

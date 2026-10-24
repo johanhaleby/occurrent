@@ -23,6 +23,7 @@ import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.tck.eventstore.blocking.DcbAppendConditionModel;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.blocking.EventStoreWithoutPosition;
+import org.occurrent.tck.eventstore.blocking.LateCommits;
 
 import java.util.Optional;
 import java.util.Set;
@@ -88,6 +89,15 @@ class InMemoryEventStoreConformanceFixture implements EventStoreFixture {
     @Override
     public PositionOrderedReader positionOrderedReader() {
         return eventStore;
+    }
+
+    /**
+     * The store assigns a position and commits the event under one lock, so a lower position is never visible after a
+     * higher one and there is no window to hold an append in.
+     */
+    @Override
+    public LateCommits lateCommits() {
+        return LateCommits.inPositionOrder();
     }
 
     @Override
