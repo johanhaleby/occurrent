@@ -2577,7 +2577,7 @@ class SagaExecutionSupportTest {
             }
 
             @ParameterizedTest(name = "record input {0}")
-            @ValueSource(strings = {"position:7", "nothing-with-at", "s1@notanumber", "s1@", "@5"})
+            @ValueSource(strings = {"position:7", "nothing-with-at", "s1@notanumber", "s1@"})
             @DisplayName("keeps nothing and does not throw when the replaced record does not name a stream version")
             void keeps_nothing_and_does_not_throw_when_the_replaced_record_does_not_name_a_stream_version(String input) {
                 // Given
@@ -2608,6 +2608,131 @@ class SagaExecutionSupportTest {
                 assertAll(
                         () -> assertThat(legacyFailedOf(record.envelope(), "s2")).containsExactly(5L),
                         () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).isEmpty()
+                );
+            }
+
+            private static final String EMPTY_STREAM = "";
+
+            private EventMeta onEmptyStream(String type, long version) {
+                return new EventMeta(EMPTY_STREAM, version, null, type);
+            }
+
+            /** An instance stored before pending existed. It is failing on the redelivery key @5 of the empty stream id, with a watermark of 4 for that stream. */
+            private SagaEnvelope<OrderState> storedBeforePendingOnEmptyStream() {
+                return failingOn(EMPTY_STREAM + "@5", NOW, Map.of(EMPTY_STREAM, 4L), Map.of());
+            }
+
+            /** The same, with a watermark and a floor of 30, so version 5 is well below the floor. */
+            private SagaEnvelope<OrderState> storedBeforePendingOnEmptyStreamBelowTheFloor() {
+                return failingOn(EMPTY_STREAM + "@5", NOW, Map.of(EMPTY_STREAM, 30L),
+                        Map.of(EMPTY_STREAM, new StreamMarks(30, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)))));
+            }
+
+            /** The given versions of the empty stream id are known to have failed with an event type that is not known, and type A is applied up to 32. */
+            private SagaEnvelope<OrderState> withLegacyFailedOnEmptyStream(List<Long> legacyFailed) {
+                return envelope(Map.of(EMPTY_STREAM, 32L), Map.of(EMPTY_STREAM, new StreamMarks(4,
+                        Map.of(TYPE_A, new TypeMark(32, List.of(), 28)), Map.of(), legacyFailed)));
+            }
+
+            @ParameterizedTest(name = "replaced by a failure on stream \"{0}\"")
+            @ValueSource(strings = {EMPTY_STREAM, STREAM})
+            @DisplayName("keeps the version a record naming the empty stream id named as a failure of unknown type")
+            void keeps_the_version_a_record_naming_the_empty_stream_id_named_as_a_failure_of_unknown_type(String replacingStream) {
+                // Given
+                SagaEnvelope<OrderState> current = storedBeforePendingOnEmptyStream();
+
+                // When
+                FailureRecord<OrderState> record = failing(current, new EventMeta(replacingStream, 31L, null, TYPE_A), NOW, WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(record.envelope().failure().input()).isEqualTo(replacingStream + "@31"),
+                        () -> assertThat(legacyFailedOf(record.envelope(), EMPTY_STREAM)).containsExactly(5L)
+                );
+            }
+
+            @ParameterizedTest(name = "type {0}")
+            @NullSource
+            @ValueSource(strings = TYPE_A)
+            @DisplayName("treats the kept version of the empty stream id as new when the instance is far ahead of it")
+            void treats_the_kept_version_of_the_empty_stream_id_as_new_when_the_instance_is_far_ahead_of_it(String type) {
+                // Given version 32 applied after 31 failed, so version 5 is 27 behind the highest applied
+                SagaEnvelope<OrderState> failed = failing(storedBeforePendingOnEmptyStream(), onEmptyStream(type, 31), NOW, WINDOW).envelope();
+                SagaEnvelope<OrderState> ahead = applying(failed, onEmptyStream(type, 32), WINDOW);
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(ahead, onEmptyStream(type, 5), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.NEW);
+            }
+
+            @Test
+            void another_version_of_the_empty_stream_id_behind_the_window_is_still_skipped() {
+                // Given
+                SagaEnvelope<OrderState> failed = failing(storedBeforePendingOnEmptyStream(), onEmptyStream(TYPE_A, 31), NOW, WINDOW).envelope();
+                SagaEnvelope<OrderState> ahead = applying(failed, onEmptyStream(TYPE_A, 32), WINDOW);
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(ahead, onEmptyStream(TYPE_A, 6), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.BEHIND_WINDOW);
+            }
+
+            @ParameterizedTest(name = "type {0}")
+            @NullSource
+            @ValueSource(strings = TYPE_A)
+            @DisplayName("treats the kept version of the empty stream id as new when it is at or below the floor")
+            void treats_the_kept_version_of_the_empty_stream_id_as_new_when_it_is_at_or_below_the_floor(String type) {
+                // Given
+                SagaEnvelope<OrderState> failed = failing(storedBeforePendingOnEmptyStreamBelowTheFloor(), onEmptyStream(type, 31), NOW, WINDOW).envelope();
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(failed, onEmptyStream(type, 5), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.NEW);
+            }
+
+            @Test
+            void another_version_of_the_empty_stream_id_at_or_below_the_floor_is_still_a_redelivery() {
+                // Given
+                SagaEnvelope<OrderState> failed = failing(storedBeforePendingOnEmptyStreamBelowTheFloor(), onEmptyStream(TYPE_A, 31), NOW, WINDOW).envelope();
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(failed, onEmptyStream(TYPE_A, 6), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.REDELIVERY);
+            }
+
+            @Test
+            void applying_a_kept_version_of_the_empty_stream_id_removes_it_and_keeps_the_others() {
+                // Given
+                SagaEnvelope<OrderState> current = withLegacyFailedOnEmptyStream(List.of(5L, 6L));
+
+                // When
+                SagaEnvelope<OrderState> applied = applying(current, onEmptyStream(TYPE_A, 5), WINDOW);
+
+                // Then
+                assertThat(legacyFailedOf(applied, EMPTY_STREAM)).containsExactly(6L);
+            }
+
+            @Test
+            void a_kept_version_of_the_empty_stream_id_that_fails_again_with_its_type_known_moves_to_pending() {
+                // Given
+                SagaEnvelope<OrderState> current = withLegacyFailedOnEmptyStream(List.of(5L, 6L));
+
+                // When
+                FailureRecord<OrderState> record = failing(current, onEmptyStream(TYPE_A, 5), NOW, WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(pendingOf(record.envelope(), EMPTY_STREAM, TYPE_A)).containsExactly(5L),
+                        () -> assertThat(legacyFailedOf(record.envelope(), EMPTY_STREAM)).containsExactly(6L)
                 );
             }
 

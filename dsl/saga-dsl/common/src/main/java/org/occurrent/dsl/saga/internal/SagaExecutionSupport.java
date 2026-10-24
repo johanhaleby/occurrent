@@ -500,7 +500,7 @@ public final class SagaExecutionSupport {
             return streamMarks;
         }
         int at = replaced.input().lastIndexOf('@');
-        if (at <= 0) {
+        if (at < 0) {
             return streamMarks;
         }
         String streamId = replaced.input().substring(0, at);
