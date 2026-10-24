@@ -62,4 +62,19 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- Read by ScaffoldingNeverShipsInAReleaseTest, which fails a release build that still contains
+                             org.occurrent.tck.internal.scaffolding. -->
+                        <occurrent.tck.project.version>${project.version}</occurrent.tck.project.version>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

@@ -229,6 +229,18 @@ public interface EventStoreFixture {
     }
 
     /**
+     * How this store answers the late-commit suites, {@link DcbLateCommitConformance} and
+     * {@link StreamLateCommitConformance}. Required by those suites, with no default, because there is no answer that
+     * is right often enough to inherit. A store that reserves a position before its append commits can hold an append
+     * in that window, while a store that assigns and commits under one lock declares that instead, see
+     * {@link LateCommits}.
+     */
+    default LateCommits lateCommits() {
+        throw new UnsupportedOperationException(getClass().getName() + " runs a late-commit suite but does not override "
+                + "lateCommits(). Either override it, or stop extending the late-commit suites.");
+    }
+
+    /**
      * Releases whatever the fixture holds. Called after every test method, including a failing one.
      */
     default void close() {
