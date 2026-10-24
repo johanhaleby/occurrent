@@ -84,6 +84,12 @@ class SpringMongoSagaStateStoreStreamMarksTest {
                     PAID_TYPE, new TypeMark(5, List.of(), 1)),
                     Map.of(PLACED_TYPE, List.of(4L, 6L), PAID_TYPE, List.of(2L))),
             "other", new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(PLACED_TYPE, List.of(1L))));
+    // Versions that failed before the event type was listed with them, next to versions that are pending and so have a type.
+    private static final Map<String, StreamMarks> LEGACY_FAILED_MARKS = Map.of(
+            STREAM_ID, new StreamMarks(3, Map.of(
+                    PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L), 8)),
+                    Map.of(PLACED_TYPE, List.of(4L)), List.of(5L, 7L)),
+            "other", new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(), List.of(2L)));
 
     private MongoOperations mongoOperations;
     private SagaStateStore<String> stateStore;
@@ -653,6 +659,179 @@ class SpringMongoSagaStateStoreStreamMarksTest {
                     () -> assertThat(read.started()).isFalse(),
                     () -> assertThat(read.streamMarks()).isEqualTo(insertedMarks)
             );
+        }
+    }
+
+    @Nested
+    @DisplayName("when an instance with failed versions of unknown type is saved")
+    class WhenAnInstanceWithFailedVersionsOfUnknownTypeIsSaved {
+
+        private Document streamDocument(Document raw, String streamId) {
+            return raw.getList("streamMarks", Document.class).stream().filter(s -> streamId.equals(s.getString("streamId"))).findFirst().orElseThrow();
+        }
+
+        @Test
+        void find_reads_back_the_failed_versions_of_every_stream() {
+            // Given
+            save(instanceWith(LEGACY_FAILED_MARKS, 1), 0);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertThat(read.streamMarks()).isEqualTo(LEGACY_FAILED_MARKS);
+        }
+
+        @Test
+        void findWithoutState_reads_back_the_failed_versions() {
+            // Given
+            save(instanceWith(LEGACY_FAILED_MARKS, 1), 0);
+
+            // When
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // Then
+            assertAll(
+                    () -> assertThat(read.state()).isNull(),
+                    () -> assertThat(read.streamMarks()).isEqualTo(LEGACY_FAILED_MARKS)
+            );
+        }
+
+        @Test
+        void the_failed_versions_are_stored_as_a_legacyFailed_array_of_versions_on_each_stream() {
+            // Given
+            save(instanceWith(LEGACY_FAILED_MARKS, 1), 0);
+
+            // When
+            Document raw = rawDocument();
+
+            // Then
+            assertAll(
+                    () -> assertThat(streamDocument(raw, STREAM_ID).getList("legacyFailed", Long.class)).containsExactly(5L, 7L),
+                    () -> assertThat(streamDocument(raw, "other").getList("legacyFailed", Long.class)).containsExactly(2L)
+            );
+        }
+
+        @Test
+        void an_update_replaces_the_failed_versions_it_had_before() {
+            // Given
+            save(instanceWith(LEGACY_FAILED_MARKS, 1), 0);
+            Map<String, StreamMarks> later = Map.of(STREAM_ID, new StreamMarks(3,
+                    Map.of(PLACED_TYPE, new TypeMark(13, List.of(10L, 12L), 9)), Map.of(), List.of(7L)));
+
+            // When
+            save(instanceWith(later, 2), 1);
+
+            // Then
+            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(later);
+        }
+
+        @Test
+        void a_save_with_no_failed_versions_takes_away_the_ones_the_document_had() {
+            // Given
+            save(instanceWith(LEGACY_FAILED_MARKS, 1), 0);
+
+            // When
+            save(instanceWith(MARKS, 2), 1);
+
+            // Then
+            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).legacyFailed()).isEmpty();
+        }
+
+        @Test
+        void a_write_without_the_state_that_carries_the_marks_over_keeps_the_failed_versions() {
+            // Given
+            save(instanceWith(LEGACY_FAILED_MARKS, 1), 0);
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> carried = new SagaEnvelope<>(SAGA_ID, read.state(), read.status(), read.version() + 1, read.timers(), read.streamWatermarks(),
+                    null, read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), read.streamMarks());
+
+            // When
+            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, carried, read.version());
+
+            // Then
+            assertAll(
+                    () -> assertThat(written).isTrue(),
+                    () -> assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(LEGACY_FAILED_MARKS)
+            );
+        }
+    }
+
+    @Nested
+    @DisplayName("when a stored stream entry has no legacyFailed field")
+    class WhenAStoredStreamEntryHasNoLegacyFailedField {
+
+        private Document typeEntry() {
+            return new Document("type", PLACED_TYPE).append("mark", 12L).append("applied", List.of(9L, 10L, 11L)).append("horizon", 8L);
+        }
+
+        // A stream entry as an earlier 0.35.0 build wrote it, with pending versions and no legacyFailed.
+        private Document documentWithPendingAndNoLegacyFailed() {
+            Document pending = new Document("type", PLACED_TYPE).append("versions", List.of(4L, 6L));
+            Document stream = new Document("streamId", STREAM_ID).append("floor", 3L).append("types", List.of(typeEntry())).append("pending", List.of(pending));
+            return documentWrittenBy0_34().append("streamMarks", List.of(stream));
+        }
+
+        private Document documentWithLegacyFailedWrittenAsIntegers() {
+            Document stream = new Document("streamId", STREAM_ID).append("floor", 3L).append("types", List.of(typeEntry()))
+                    .append("pending", List.of()).append("legacyFailed", List.of(5, 7));
+            return documentWrittenBy0_34().append("streamMarks", List.of(stream));
+        }
+
+        @Test
+        void find_reads_it_with_no_failed_versions_and_keeps_its_pending_versions() {
+            // Given
+            mongoOperations.insert(documentWithPendingAndNoLegacyFailed(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            StreamMarks marks = read.streamMarks().get(STREAM_ID);
+            assertAll(
+                    () -> assertThat(marks.legacyFailed()).isEmpty(),
+                    () -> assertThat(marks.pending()).isEqualTo(Map.of(PLACED_TYPE, List.of(4L, 6L)))
+            );
+        }
+
+        @Test
+        void findWithoutState_reads_it_with_no_failed_versions_and_keeps_its_pending_versions() {
+            // Given
+            mongoOperations.insert(documentWithPendingAndNoLegacyFailed(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // Then
+            StreamMarks marks = read.streamMarks().get(STREAM_ID);
+            assertAll(
+                    () -> assertThat(marks.legacyFailed()).isEmpty(),
+                    () -> assertThat(marks.pending()).isEqualTo(Map.of(PLACED_TYPE, List.of(4L, 6L)))
+            );
+        }
+
+        @Test
+        void a_stream_entry_written_by_hand_with_integer_versions_reads_them_as_longs() {
+            // Given
+            mongoOperations.insert(documentWithLegacyFailedWrittenAsIntegers(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertThat(read.streamMarks().get(STREAM_ID).legacyFailed()).containsExactly(5L, 7L);
+        }
+
+        @Test
+        void the_first_save_after_it_writes_the_failed_versions() {
+            // Given
+            mongoOperations.insert(documentWithPendingAndNoLegacyFailed(), COLLECTION);
+
+            // When
+            save(instanceWith(LEGACY_FAILED_MARKS, 2), 1);
+
+            // Then
+            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(LEGACY_FAILED_MARKS);
         }
     }
 }

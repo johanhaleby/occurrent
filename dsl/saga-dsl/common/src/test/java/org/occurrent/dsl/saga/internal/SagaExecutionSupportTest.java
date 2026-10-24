@@ -2381,5 +2381,378 @@ class SagaExecutionSupportTest {
                         Map.of(STREAM, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(TYPE_A, List.of(1L)))));
             }
         }
+
+        @Nested
+        @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+        @DisplayName("when a failure record from before pending existed is replaced by another input")
+        class WhenAFailureRecordFromBeforePendingExistedIsReplacedByAnotherInput {
+
+            private static final int NARROW_WINDOW = 2;
+
+            private final Duration budget = Duration.ofMinutes(5);
+            private final Throwable failure = new IllegalStateException("boom");
+
+            private ListAppender<ILoggingEvent> appender;
+            private ch.qos.logback.classic.Logger logger;
+
+            @BeforeEach
+            void attachAppender() {
+                LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+                logger = context.getLogger(SagaExecutionSupport.class);
+                appender = new ListAppender<>();
+                appender.start();
+                logger.addAppender(appender);
+            }
+
+            @AfterEach
+            void detachAppender() {
+                logger.detachAppender(appender);
+            }
+
+            Stream<Arguments> storedShapes() {
+                return Stream.of(false, true).flatMap(withMarks -> Stream.of(4, 2).map(window -> Arguments.of(withMarks, window)));
+            }
+
+            Stream<Arguments> storedShapesAndTypes() {
+                return Stream.of(false, true).flatMap(withMarks -> Stream.of(4, 2).flatMap(window ->
+                        Stream.of(TYPE_A, null).map(type -> Arguments.of(withMarks, window, type))));
+            }
+
+            private SagaEnvelope<OrderState> failingOn(String input, Instant firstFailedAt, Map<String, Long> streamWatermarks,
+                                                      Map<String, StreamMarks> streamMarks) {
+                SagaFailure record = new SagaFailure(input, null, firstFailedAt, IllegalStateException.class.getName(), "boom");
+                return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(), streamWatermarks, null,
+                        NOW, NOW, null, null, true, record, streamMarks);
+            }
+
+            /** An instance stored before pending existed. It is failing on s1@5 with nothing pending and a watermark of 4, with or without marks of floor 4. */
+            private SagaEnvelope<OrderState> storedBeforePending(boolean withMarks) {
+                Map<String, StreamMarks> marks = withMarks ? Map.of(STREAM, new StreamMarks(4, Map.of())) : Map.of();
+                return failingOn(STREAM + "@5", NOW, Map.of(STREAM, 4L), marks);
+            }
+
+            /** The same, with a watermark and a floor of 30, so version 5 is well below the floor. */
+            private SagaEnvelope<OrderState> storedBeforePendingBelowTheFloor() {
+                return failingOn(STREAM + "@5", NOW, Map.of(STREAM, 30L),
+                        Map.of(STREAM, new StreamMarks(30, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)))));
+            }
+
+            /** The given versions of s1 are known to have failed with an event type that is not known, and type A is applied up to 32. */
+            private SagaEnvelope<OrderState> withLegacyFailed(List<Long> legacyFailed) {
+                return envelope(Map.of(STREAM, 32L), Map.of(STREAM, new StreamMarks(4,
+                        Map.of(TYPE_A, new TypeMark(32, List.of(), 28)), Map.of(), legacyFailed)));
+            }
+
+            private FailureRecord<OrderState> failing(SagaEnvelope<OrderState> current, EventMeta meta, Instant now, int window) {
+                return SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta, failure, now, budget, window);
+            }
+
+            private SagaEnvelope<OrderState> applying(SagaEnvelope<OrderState> current, EventMeta meta, int window) {
+                Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(orderFulfillment(), "o1", current,
+                        SagaInput.event(new OrderPlaced("o1", 100)), meta, NOW, window);
+                assertThat(outcome.processed()).isTrue();
+                return outcome.envelope();
+            }
+
+            private List<Long> legacyFailedOf(SagaEnvelope<OrderState> envelope, String stream) {
+                StreamMarks marks = envelope.streamMarks().get(stream);
+                return marks == null ? List.of() : marks.legacyFailed();
+            }
+
+            private List<String> errors() {
+                return appender.list.stream()
+                        .filter(event -> event.getLevel() == Level.ERROR)
+                        .map(ILoggingEvent::getFormattedMessage)
+                        .toList();
+            }
+
+            @ParameterizedTest(name = "stored with marks {0}, window {1}")
+            @MethodSource("storedShapes")
+            @DisplayName("keeps the version the replaced record named as a failure of unknown type")
+            void keeps_the_version_the_replaced_record_named_as_a_failure_of_unknown_type(boolean withMarks, int window) {
+                // Given
+                SagaEnvelope<OrderState> current = storedBeforePending(withMarks);
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW, window);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(record.envelope().failure().input()).isEqualTo("s1@31"),
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).containsExactly(5L),
+                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(31L)
+                );
+            }
+
+            @ParameterizedTest(name = "stored with marks {0}, window {1}, type {2}")
+            @MethodSource("storedShapesAndTypes")
+            @DisplayName("treats the kept version as new when the instance is far ahead of it")
+            void treats_the_kept_version_as_new_when_the_instance_is_far_ahead_of_it(boolean withMarks, int window, String type) {
+                // Given version 32 applied after 31 failed, so version 5 is 27 behind the highest applied
+                SagaEnvelope<OrderState> failed = failing(storedBeforePending(withMarks), meta(type, 31), NOW, window).envelope();
+                SagaEnvelope<OrderState> ahead = applying(failed, meta(type, 32), window);
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(ahead, meta(type, 5), window);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.NEW);
+            }
+
+            @ParameterizedTest(name = "stored with marks {0}")
+            @ValueSource(booleans = {false, true})
+            @DisplayName("still skips another version behind the window")
+            void still_skips_another_version_behind_the_window(boolean withMarks) {
+                // Given
+                SagaEnvelope<OrderState> failed = failing(storedBeforePending(withMarks), meta(TYPE_A, 31), NOW, WINDOW).envelope();
+                SagaEnvelope<OrderState> ahead = applying(failed, meta(TYPE_A, 32), WINDOW);
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(ahead, meta(TYPE_A, 6), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.BEHIND_WINDOW);
+            }
+
+            @ParameterizedTest(name = "type {0}")
+            @NullSource
+            @ValueSource(strings = TYPE_A)
+            @DisplayName("treats the kept version as new when it is at or below the floor")
+            void treats_the_kept_version_as_new_when_it_is_at_or_below_the_floor(String type) {
+                // Given
+                SagaEnvelope<OrderState> failed = failing(storedBeforePendingBelowTheFloor(), meta(type, 31), NOW, WINDOW).envelope();
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(failed, meta(type, 5), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.NEW);
+            }
+
+            @Test
+            void another_version_at_or_below_the_floor_is_still_a_redelivery() {
+                // Given
+                SagaEnvelope<OrderState> failed = failing(storedBeforePendingBelowTheFloor(), meta(TYPE_A, 31), NOW, WINDOW).envelope();
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(failed, meta(TYPE_A, 6), WINDOW);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.REDELIVERY);
+            }
+
+            @Test
+            void a_record_whose_input_is_pending_already_under_the_same_type_keeps_nothing() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW, Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(10,
+                        Map.of(TYPE_A, new TypeMark(30, List.of(), 26)), Map.of(TYPE_A, List.of(5L)))));
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW, WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).isEmpty(),
+                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(5L, 31L)
+                );
+            }
+
+            @Test
+            void a_record_whose_input_is_pending_already_under_another_type_keeps_nothing() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW, Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(10,
+                        Map.of(TYPE_A, new TypeMark(30, List.of(), 26)), Map.of(TYPE_B, List.of(5L)))));
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW, WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).isEmpty(),
+                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_B)).containsExactly(5L)
+                );
+            }
+
+            @ParameterizedTest(name = "record input {0}")
+            @ValueSource(strings = {"position:7", "nothing-with-at", "s1@notanumber", "s1@", "@5"})
+            @DisplayName("keeps nothing and does not throw when the replaced record does not name a stream version")
+            void keeps_nothing_and_does_not_throw_when_the_replaced_record_does_not_name_a_stream_version(String input) {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn(input, NOW, Map.of(STREAM, 30L), Map.of());
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW, WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(record.envelope().failure().input()).isEqualTo("s1@31"),
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).isEmpty(),
+                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(31L)
+                );
+            }
+
+            @Test
+            void a_record_naming_a_version_of_another_stream_is_kept_under_that_stream() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn("s2@5", NOW, Map.of(STREAM, 30L), Map.of());
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW, WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(legacyFailedOf(record.envelope(), "s2")).containsExactly(5L),
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).isEmpty()
+                );
+            }
+
+            @Test
+            void applying_a_kept_version_removes_it_and_keeps_the_others() {
+                // Given
+                SagaEnvelope<OrderState> current = withLegacyFailed(List.of(5L, 6L));
+
+                // When
+                SagaEnvelope<OrderState> applied = applying(current, meta(TYPE_A, 5), WINDOW);
+
+                // Then
+                assertThat(legacyFailedOf(applied, STREAM)).containsExactly(6L);
+            }
+
+            @Test
+            void applying_another_version_keeps_every_kept_version() {
+                // Given a late arrival that is new whether or not it is kept
+                SagaEnvelope<OrderState> current = withLegacyFailed(List.of(5L, 6L));
+
+                // When
+                SagaEnvelope<OrderState> applied = applying(current, meta(TYPE_A, 31), WINDOW);
+
+                // Then
+                assertThat(legacyFailedOf(applied, STREAM)).containsExactly(5L, 6L);
+            }
+
+            @Test
+            void a_kept_version_that_fails_again_with_its_type_known_moves_to_pending() {
+                // Given
+                SagaEnvelope<OrderState> current = withLegacyFailed(List.of(5L, 6L));
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 5), NOW, WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(5L),
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).containsExactly(6L)
+                );
+            }
+
+            @Test
+            void a_kept_version_that_the_failure_record_names_and_fails_again_moves_to_pending() {
+                // Given
+                SagaEnvelope<OrderState> kept = withLegacyFailed(List.of(5L));
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW, kept.streamWatermarks(), kept.streamMarks());
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 5), NOW, WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(5L),
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).isEmpty()
+                );
+            }
+
+            @Test
+            void the_smallest_kept_version_is_dropped_and_logged_with_the_stream_when_more_than_the_window_would_be_kept() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW, Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0,
+                        Map.of(TYPE_A, new TypeMark(30, List.of(), 20)), Map.of(), List.of(3L, 4L))));
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW, NARROW_WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).containsExactly(4L, 5L),
+                        () -> assertThat(errors()).hasSize(1),
+                        () -> assertThat(errors()).allMatch(message -> message.contains("Stream s1") && message.contains("version 3 is no longer remembered"))
+                );
+            }
+
+            @Test
+            void nothing_is_dropped_or_logged_when_the_kept_versions_just_fit_the_window() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW, Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0,
+                        Map.of(TYPE_A, new TypeMark(30, List.of(), 20)), Map.of(), List.of(4L))));
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW, NARROW_WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).containsExactly(4L, 5L),
+                        () -> assertThat(errors()).isEmpty()
+                );
+            }
+
+            @Test
+            void the_replacement_that_quarantines_the_instance_keeps_the_version_as_well() {
+                // Given the instance has been failing on s1@5 for as long as the budget
+                SagaEnvelope<OrderState> current = storedBeforePending(false);
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW.plus(budget), WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(record.quarantined()).isTrue(),
+                        () -> assertThat(record.envelope().failure().input()).isEqualTo("s1@31"),
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).containsExactly(5L)
+                );
+            }
+
+            @Test
+            void the_record_that_quarantines_the_instance_on_the_input_it_names_keeps_nothing_since_the_input_becomes_pending() {
+                // Given the instance has been failing on s1@31 for as long as the budget
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@31", NOW, Map.of(STREAM, 30L), Map.of());
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW.plus(budget), WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(record.quarantined()).isTrue(),
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).isEmpty(),
+                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(31L)
+                );
+            }
+
+            @Test
+            void the_record_that_quarantines_the_instance_on_the_input_it_names_does_not_push_a_kept_version_out_of_a_full_list() {
+                // Given
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@31", NOW, Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0,
+                        Map.of(TYPE_A, new TypeMark(30, List.of(), 20)), Map.of(), List.of(3L, 4L))));
+
+                // When
+                FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW.plus(budget), NARROW_WINDOW);
+
+                // Then
+                assertThat(record).isNotNull();
+                assertAll(
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).containsExactly(3L, 4L),
+                        () -> assertThat(errors()).isEmpty()
+                );
+            }
+        }
     }
 }

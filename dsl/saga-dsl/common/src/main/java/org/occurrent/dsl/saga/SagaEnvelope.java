@@ -134,13 +134,25 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      *                outstanding. A version in here is applied when it arrives again however far behind the highest
      *                one applied it is, because it is known not to have been applied. Applying it removes it. At
      *                most the reorder window many are kept per type
+     * @param legacyFailed the versions of the stream whose failure was recorded before the executor listed failed versions
+     *                as pending, ascending, so the event type is not known. A stream version names exactly one event, so
+     *                the version is enough to recognise it. It is treated like a pending version and removed when the
+     *                version is applied. It is filled only when such a failure record is replaced by another input's, so
+     *                it holds at most the one record an instance carried over from before, and at most the reorder window
+     *                many are kept
      */
-    public record StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending) {
+    public record StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending, List<Long> legacyFailed) {
         public StreamMarks {
+            legacyFailed = List.copyOf(legacyFailed);
             byType = Map.copyOf(byType);
             Map<String, List<Long>> copied = new HashMap<>();
             pending.forEach((type, versions) -> copied.put(type, List.copyOf(versions)));
             pending = Map.copyOf(copied);
+        }
+
+        /** Marks with no failure recorded before pending existed. */
+        public StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending) {
+            this(floor, byType, pending, List.of());
         }
 
         /** Marks with nothing outstanding. */

@@ -134,6 +134,11 @@ not lose it. An operator who replays the parked event after the instance has app
 versions still gets it applied, once. An instance keeps at most as many pending versions per stream and event type as the
 window, and when one more fails it drops the smallest and logs an error naming the stream.
 
+An instance that failed on an event under 0.34.0 or earlier holds that failure in its failure record, which names the
+event but not its type. If another event fails before the first is offered again, the failure record is replaced, and the
+instance keeps the first event's stream version in `legacyFailed` for its stream. The version is applied when it comes
+back however far behind it is, and it is removed from the list once it is applied or fails again with its type known.
+
 ### The reorder window
 
 The window is 256 by default. Change it with `SagaRunnerConfig.withReorderWindow(int)` when the feed reorders further:
@@ -156,7 +161,8 @@ applies to the versions that arrive after the change.
 A saga instance document gains a `streamMarks` field. It holds, per stream, a `floor` and a list of event types, and
 each type has its highest applied `mark`, the `applied` versions below it and a `horizon`, the highest version it has
 stopped remembering, and a `pending` list of event types with the `versions` of each that failed. A document without
-`pending` reads as nothing pending. It is a list rather than a map because
+`pending` reads as nothing pending. A `legacyFailed` list of stream versions, kept per stream beside `floor`, holds the
+failures described above, and a document without it reads as an empty list. `pending` is a list rather than a map because
 stream ids and event types can contain dots. An instance holds at most 256 `applied` versions per stream and event
 type, so a document grows by some kilobytes for an instance that listens to a few streams, and every save rewrites them.
 

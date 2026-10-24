@@ -106,6 +106,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String MARKS_HORIZON = "horizon";
     private static final String MARKS_PENDING = "pending";
     private static final String MARKS_VERSIONS = "versions";
+    private static final String MARKS_LEGACY_FAILED = "legacyFailed";
     private static final String CREATED_AT = "createdAt";
     private static final String UPDATED_AT = "updatedAt";
     private static final String COMPLETED_AT = "completedAt";
@@ -600,7 +601,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             List<Document> pending = new ArrayList<>();
             marks.pending().forEach((type, versions) -> pending.add(new Document(MARKS_TYPE, type).append(MARKS_VERSIONS, versions)));
             streams.add(new Document(MARKS_STREAM_ID, streamId).append(MARKS_FLOOR, marks.floor()).append(MARKS_TYPES, types)
-                    .append(MARKS_PENDING, pending));
+                    .append(MARKS_PENDING, pending).append(MARKS_LEGACY_FAILED, marks.legacyFailed()));
         });
         return streams;
     }
@@ -629,7 +630,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 }
                 pending.put(entry.getString(MARKS_TYPE), versions);
             }
-            streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType, pending));
+            // The same for a stream stored before failures of unknown type were kept.
+            List<Long> legacyFailed = new ArrayList<>();
+            for (Object version : stream.getList(MARKS_LEGACY_FAILED, Object.class, List.of())) {
+                legacyFailed.add(((Number) version).longValue());
+            }
+            streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType, pending, legacyFailed));
         }
         return streamMarks;
     }

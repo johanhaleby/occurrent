@@ -80,10 +80,16 @@ back after the instance has moved that far ahead, which is today's behaviour for
 
 The failure record keeps its older role as a fallback. A record naming an event still says that the event was never
 applied, so the saga treats that event as new however far behind it is, and at or below the floor too. This covers an
-instance whose record was written before pending existed. When quarantine is on and that event is offered again, the
-saga lists it as pending, so replacing the record with another input's failure no longer forgets it. An instance holds
-one failure record, so a different input that fails before the legacy event is offered again replaces it, which is the
-last row of the table.
+instance whose record was written before pending existed. When quarantine is on and that event is offered again and
+fails, the saga lists it as pending.
+
+An instance holds one failure record, so a different input that fails replaces it. The saga then moves the replaced
+event to `legacyFailed`, a list of stream versions kept per stream. It holds versions without an event type, because a
+record written before pending does not say which type failed, and a stream version identifies exactly one event. A
+version in that list is new however far behind it is, like a pending one. Applying it removes it from the list, and if
+it fails again with its type known it moves to pending. A record written since pending existed is already pending when
+it is replaced, so the list only ever holds the record an instance already had when it was upgraded. It is capped at the reorder
+window per stream, and the saga logs an error naming the stream if it has to drop the smallest.
 
 **The horizon keeps a raised window from undoing a skip.** Trimming `applied` forgets the versions at or below
 `mark - window`, and a version the saga forgot looks the same as one it never applied. If the window were only read from
@@ -93,8 +99,9 @@ version at or below the larger of the horizon and `mark - window` is skipped. Lo
 
 **The stored instance gains one field, and the old one keeps its meaning.** `streamMarks` holds, per stream, a floor
 and per type the highest applied version, the applied versions below it and a horizon, and it holds the pending
-versions per type. A document stored without the pending field reads as nothing pending. The floor is the stream's watermark at the moment the stream first got marks, and
-every version at or below it stays skipped whatever its type, which is what the instance did before. An instance stored
+versions per type, and the legacy failed versions of the stream. A document stored without the pending field or
+without `legacyFailed` reads as nothing pending and nothing legacy. The floor is the stream's watermark at the moment
+the stream first got marks, and every version at or below it stays skipped whatever its type, which is what the instance did before. An instance stored
 by 0.34.0 or by the 0.35.0 build of ADR 150 has no `streamMarks`, and it reads as a floor equal to each stream's
 watermark and no marks. `streamWatermarks` is still written with the highest version of the stream across types, so a
 0.34.0 node reads a document it understands.
@@ -112,7 +119,6 @@ failed in the saga.** That is the precondition, and these are the cases that fal
 | The instance is completed or quarantined | Inert by design | Quarantine logs |
 | A version that did not fail arrives more than the window behind, without a restart replaying it | Skipped as a redelivery | One warning per stream |
 | More than the window many versions are pending on one stream and type | The smallest is dropped | Error |
-| A failure record written before 0.35.0 is replaced by another input's failure before its own input is offered again | The record was the only memory of that input, so it is skipped when it comes back behind the window | No |
 
 The fifth row is the one this design cannot close. A restart from an old checkpoint delivers a long run of behind-window
 versions that are all correct skips, and a reordered version looks the same. Throwing on each would block the replay, and

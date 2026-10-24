@@ -212,6 +212,10 @@ class SagaPendingStreamVersionTest {
         return appender.list.stream().filter(e -> e.getLevel() == Level.ERROR).map(ILoggingEvent::getFormattedMessage).toList();
     }
 
+    private List<String> warnings() {
+        return appender.list.stream().filter(e -> e.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
     private static BasketOpened opened() {
         return new BasketOpened("opened", BASKET);
     }
@@ -462,6 +466,32 @@ class SagaPendingStreamVersionTest {
                     () -> assertThat(stored().state()).isEqualTo(new Basket(8)),
                     () -> assertThat(stored().failure()).isNull(),
                     () -> assertThat(pending()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_failed_version_is_applied_on_retry_after_later_versions_replaced_the_failure_record_and_moved_the_mark_past_the_window() {
+            // Given version 3 replaced the failure record of version 2, and versions 4 and 5 put the mark at 5, which makes 2 three behind it
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = execution(WINDOW_OF_2_WITH_QUARANTINE);
+            deliver(execution, openedAt(1));
+            failingItems.addAll(Set.of("two", "three"));
+            deliverFailing(execution, itemAddedAt(2, "two"));
+            deliverFailing(execution, itemAddedAt(3, "three"));
+            deliver(execution, itemAddedAt(4, "four"));
+            deliver(execution, itemAddedAt(5, "five"));
+            failingItems.clear();
+            SagaEnvelope<Basket> before = stored();
+
+            // When
+            deliver(execution, itemAddedAt(2, "two"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(before.failure().input()).isEqualTo(STREAM + "@3"),
+                    () -> assertThat(issued).containsOnlyOnce(reserve("two")),
+                    () -> assertThat(stored().state()).isEqualTo(new Basket(3)),
+                    () -> assertThat(pending()).containsExactly(3L),
+                    () -> assertThat(warnings()).noneMatch(message -> message.contains("skipped version 2 of stream"))
             );
         }
     }
