@@ -24,7 +24,9 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
@@ -63,15 +65,15 @@ class CompetingConsumerRepositionableCapabilityTest {
     static Stream<Named<Function<CheckpointAwareSubscriptionModel, SubscriptionModel>>> wiringsWithoutADispatcher() {
         CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100);
         return Stream.of(
-                Named.of("a standalone stream catch-up model", live -> new StreamCatchupSubscriptionModel(live, unused(EventStoreQueries.class), config)),
+                Named.of("a standalone stream catch-up model", live -> new StreamCatchupSubscriptionModel(live, unused(EventStoreQueries.class, CatchupReads.class), config)),
                 Named.of("a durable model", live -> live));
     }
 
     static Stream<Named<Function<CheckpointAwareSubscriptionModel, SubscriptionModel>>> dispatcherWirings() {
         CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100);
         return Stream.of(
-                Named.of("the dispatching catch-up model over a stream", live -> new CatchupSubscriptionModel(live, unused(EventStoreQueries.class), config)),
-                Named.of("the dispatching catch-up model over a DCB event store", live -> new CatchupSubscriptionModel(live, unused(DcbEventStore.class), QUERY, config)));
+                Named.of("the dispatching catch-up model over a stream", live -> new CatchupSubscriptionModel(live, unused(EventStoreQueries.class, CatchupReads.class), config)),
+                Named.of("the dispatching catch-up model over a DCB event store", live -> new CatchupSubscriptionModel(live, unused(DcbEventStore.class, DcbCatchupReads.class), QUERY, config)));
     }
 
     @ParameterizedTest
