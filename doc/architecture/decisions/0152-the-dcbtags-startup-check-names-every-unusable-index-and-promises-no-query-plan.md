@@ -17,17 +17,19 @@ collection holds a stream event with a numeric `position` and has no usable inde
 - **The usable-index test is too narrow.** MongoDB returns a `partialFilterExpression` as it was given. The filter
   `{ $and: [ { dcbTags: { $exists: true } } ] }` holds the same documents as `{ dcbTags: { $exists: true } }`, and the
   released check called an index with it unusable.
-- **The warning names one index.** A collection can hold several indexes on `dcbTags` alone, for example a partial
-  one named `dcbTags_1` and a sparse one with another name. The released warning named the first, and its command
-  fixed that one only. The fix could leave the collection with no usable index, and a `createIndex` for `dcbTags_1`
-  fails with `IndexKeySpecsConflict` while another index still has that name.
+- **The warning names one index.** A collection can hold several indexes on `dcbTags` alone, for example a
+  `legacy_tags` index with no options followed by a `dcbTags_1` index with a `partialFilterExpression` that isn't the
+  match-all one. The released warning named the first, `legacy_tags`, and its command fixed that one only. After the
+  `dropIndex` it printed, the `createIndex` failed with `IndexKeySpecsConflict` on MongoDB 8.0.29, because
+  `dcbTags_1` still had the name, and the collection kept an index the warning never mentioned.
 - **The check reads in the wrong order.** The released stores called `listIndexes` first and sent the find for a
   positioned stream event only when the indexes had no usable one. A role that can read the collection but can't list
   its indexes got a failed check on every start, even on a collection that holds no stream event.
 - **The warning says too much.** ADR 145 says that the match-all queries use the index, in the Decision table row
   for `dcbTags` and in its summary of the measurements. The warning said that a read, `count` or `exists` with
   `DcbCriteria.all()` and the append check of `DcbAppendCondition.wholeStoreLock()` read the DCB events without the
-  stream events. That holds for some of them and not for the others.
+  stream events. No store sends a hint for these four, so MongoDB chooses the plan for each of them, and in the runs
+  below it didn't choose the index for some reads.
 
 ### What I measured
 
@@ -68,11 +70,11 @@ The check changes on these four points. Nothing else in ADR 145 changes.
    the indexes only when that find returns a stream event, which is the condition ADR 145 already set for the warning.
    A role without `listIndexes` on a collection that holds no stream event never sends it, and the store logs nothing
    for that collection. The store constructors still need `listCollections` on the database, as before.
-3. **The warning says which reads the index helps and promises no plan.** `count`, `exists` and the append check of
-   `wholeStoreLock()` read only DCB events with the index, and a read with `DcbCriteria.all()` reads only DCB events
-   when MongoDB uses the index. The text says it may not for a backward read or a read with a limit, which can still
-   walk `position_1`. The two places in ADR 145 that say the match-all queries use the index describe what the
-   planner did in its runs, not something the stores guarantee.
+3. **The warning says which reads the index helps and promises no plan.** `count`, `exists`, the append check of
+   `wholeStoreLock()` and a read with `DcbCriteria.all()` read only DCB events when MongoDB uses the index. The text
+   says it may not for a backward read or a read with a limit, which can still walk `position_1`. The two places in
+   ADR 145 that say the match-all queries use the index describe what the planner did in its runs, not something the
+   stores guarantee.
 4. **The warning names every unusable index, and its commands leave exactly one usable index.** When the collection
    has indexes on `dcbTags` alone and none is usable, the warning names each one with its reasons. If one of them
    holds only DCB events and is hidden, the commands unhide that one with `collMod` and drop the others. Otherwise
