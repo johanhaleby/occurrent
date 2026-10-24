@@ -555,7 +555,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     "A redelivered event cannot be recognised as one, and a position does not help because events can arrive out of " +
                     "position order, so reacting to it would run the reaction again and issue its commands again. Forward the " +
                     "Occurrent CloudEvent extensions streamid and streamversion from the listener feeding this saga, or " +
-                    "set redeliveryDetection to BEST_EFFORT if the feed carries neither and every reaction is idempotent.");
+                    "set redeliveryDetection to BEST_EFFORT if the feed carries no stream key and every reaction is idempotent.");
         }
         if (dedupUnavailableWarningLogged.compareAndSet(false, true)) {
             log.warn("Saga subscription '{}' received an event without both a streamid and a streamversion, and " +

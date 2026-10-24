@@ -96,6 +96,11 @@ class SagaQuarantineSupportTest {
         return new SagaFailure("o1@" + position, position, firstFailedAt, IllegalStateException.class.getName(), "boom");
     }
 
+    /** What 0.31.0 to 0.34.0 wrote for an event that had only a position, a key nothing produces any more. */
+    private static SagaFailure failedOnLegacyPositionKey(long position, Instant firstFailedAt) {
+        return new SagaFailure("position:" + position, position, firstFailedAt, IllegalStateException.class.getName(), "boom");
+    }
+
     /** What an event store that assigns no global position gives a saga: a stream id and a stream version, nothing else. */
     private static EventMeta streamOnly(long streamVersion) {
         return new EventMeta("o1", streamVersion, null);
@@ -204,7 +209,7 @@ class SagaQuarantineSupportTest {
         }
 
         @Test
-        void quarantining_advances_neither_watermark_so_a_replay_can_still_deliver_the_event() {
+        void quarantining_advances_no_stream_watermark_and_drops_the_position_watermark_so_a_replay_can_still_deliver_the_event() {
             SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(5))));
 
             FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
@@ -212,7 +217,7 @@ class SagaQuarantineSupportTest {
 
             assertAll(
                     () -> assertThat(record.envelope().streamWatermarks()).isEqualTo(Map.of("o1", 6L)),
-                    () -> assertThat(record.envelope().positionWatermark()).isEqualTo(6L),
+                    () -> assertThat(record.envelope().positionWatermark()).isNull(),
                     // Timers stay armed so a release restores them; the store's due-timer query is what stops them firing.
                     () -> assertThat(record.envelope().timers()).hasSize(1)
             );
@@ -323,6 +328,128 @@ class SagaQuarantineSupportTest {
                     saga(), "o1", failing, new EventMeta("o1", null, null), new IllegalStateException("boom"), NOW, BUDGET);
 
             assertThat(record).isNull();
+        }
+
+        @Test
+        void an_event_carrying_only_a_position_records_nothing_because_a_position_is_not_a_redelivery_key() {
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", active(3, Map.of("o1", 6L), null), new EventMeta(null, null, 7L), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertThat(record).isNull();
+        }
+
+        @Test
+        void an_event_carrying_only_a_position_does_not_quarantine_an_instance_whose_budget_has_run_out() {
+            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(6, NOW.minus(Duration.ofHours(1))));
+
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", failing, new EventMeta(null, null, 7L), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertThat(record).isNull();
+        }
+    }
+
+    @Nested
+    class AFailureRecordFromBefore0_35_0 {
+
+        @Test
+        void counts_as_no_record_so_a_new_failure_starts_a_fresh_budget_instead_of_quarantining_at_once() {
+            SagaEnvelope<OrderState> legacy = withFailure(SagaStatus.ACTIVE, failedOnLegacyPositionKey(7, NOW.minus(Duration.ofHours(1))));
+
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", legacy, at(8), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertAll(
+                    () -> assertThat(record).isNotNull(),
+                    () -> assertThat(record.quarantined()).isFalse(),
+                    () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(record.envelope().failure().input()).isEqualTo("o1@8"),
+                    () -> assertThat(record.envelope().failure().position()).isEqualTo(8),
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW),
+                    () -> assertThat(record.expectedVersion()).isEqualTo(4)
+            );
+        }
+
+        @Test
+        void does_not_make_a_second_failure_of_the_new_input_inside_the_fresh_budget_quarantine() {
+            SagaEnvelope<OrderState> legacy = withFailure(SagaStatus.ACTIVE, failedOnLegacyPositionKey(7, NOW.minus(Duration.ofHours(1))));
+            SagaEnvelope<OrderState> afterFirst = SagaExecutionSupport.onFailure(
+                    saga(), "o1", legacy, at(8), new IllegalStateException("boom"), NOW, BUDGET).envelope();
+
+            FailureRecord<OrderState> second = SagaExecutionSupport.onFailure(
+                    saga(), "o1", afterFirst, at(8), new IllegalStateException("boom"), NOW.plus(Duration.ofMinutes(4)), BUDGET);
+
+            assertThat(second).isNull();
+        }
+
+        @Test
+        void does_not_stop_the_fresh_budget_from_running_out() {
+            SagaEnvelope<OrderState> legacy = withFailure(SagaStatus.ACTIVE, failedOnLegacyPositionKey(7, NOW.minus(Duration.ofHours(1))));
+            SagaEnvelope<OrderState> afterFirst = SagaExecutionSupport.onFailure(
+                    saga(), "o1", legacy, at(8), new IllegalStateException("boom"), NOW, BUDGET).envelope();
+
+            FailureRecord<OrderState> second = SagaExecutionSupport.onFailure(
+                    saga(), "o1", afterFirst, at(8), new IllegalStateException("boom"), NOW.plus(BUDGET), BUDGET);
+
+            assertAll(
+                    () -> assertThat(second).isNotNull(),
+                    () -> assertThat(second.quarantined()).isTrue(),
+                    () -> assertThat(second.envelope().failure().firstFailedAt()).isEqualTo(NOW)
+            );
+        }
+
+        @Test
+        void is_cleared_by_the_next_successful_stream_keyed_delivery() {
+            SagaEnvelope<OrderState> legacy = withFailure(SagaStatus.ACTIVE, failedOnLegacyPositionKey(7, NOW.minusSeconds(30)));
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    saga(), "o1", legacy, SagaInput.event(new PaymentReserved("o1")), at(8), NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope().failure()).isNull()
+            );
+        }
+
+        @Test
+        void is_cleared_by_a_successful_keyless_delivery_because_no_input_can_match_it() {
+            SagaEnvelope<OrderState> legacy = withFailure(SagaStatus.ACTIVE, failedOnLegacyPositionKey(7, NOW.minusSeconds(30)));
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    saga(), "o1", legacy, SagaInput.event(new PaymentReserved("o1")), new EventMeta(null, null, 7L), NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope().failure()).isNull()
+            );
+        }
+
+        @Test
+        void is_cleared_by_a_timer_firing_successfully() {
+            SagaEnvelope<OrderState> legacy = withFailure(SagaStatus.ACTIVE, failedOnLegacyPositionKey(7, NOW.minusSeconds(30)));
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    saga(), "o1", legacy, SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(TIMER))), EventMeta.NONE, NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope().failure()).isNull()
+            );
+        }
+
+        @Test
+        void is_not_confused_with_a_stream_key_whose_stream_id_merely_starts_like_it() {
+            // A stream id such as "position:orders" gives the key "position:orders@3", and that is the current format.
+            SagaFailure current = new SagaFailure("position:orders@3", null, NOW.minus(Duration.ofMinutes(2)), IllegalStateException.class.getName(), "boom");
+            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, current);
+
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", failing, new EventMeta("position:orders", 4L, null), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertAll(
+                    () -> assertThat(record).isNotNull(),
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(2)))
+            );
         }
     }
 

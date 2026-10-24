@@ -22,6 +22,9 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
@@ -210,17 +213,53 @@ class SagaExecutionSupportTest {
         }
 
         @Test
-        void skips_a_positioned_event_at_or_below_the_stored_position_watermark() {
-            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1, List.of(), Map.of(), 5L);
+        void processes_a_stream_event_with_a_lower_position_than_an_earlier_one_when_its_stream_version_is_above_the_watermark() {
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1, List.of(), Map.of("s1", 5L), null);
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
-                    orderFulfillment(), "o1", current, SagaInput.event(new PaymentReserved("o1")), new EventMeta(null, null, 5L), NOW);
+                    orderFulfillment(), "o1", current, SagaInput.event(new PaymentReserved("o1")), new EventMeta("s1", 6L, 3L), NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope().streamWatermarks()).containsEntry("s1", 6L)
+            );
+        }
+
+        @Test
+        void skips_a_stream_event_at_or_below_the_watermark_whatever_its_position_is() {
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1, List.of(), Map.of("s1", 5L), null);
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    orderFulfillment(), "o1", current, SagaInput.event(new PaymentReserved("o1")), new EventMeta("s1", 5L, Long.MAX_VALUE), NOW);
 
             assertThat(outcome.processed()).isFalse();
         }
 
         @Test
-        void processes_a_positioned_event_above_the_stored_position_watermark_and_advances_it() {
+        void tracks_the_watermark_per_stream_id() {
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1, List.of(), Map.of("s1", 5L), null);
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    orderFulfillment(), "o1", current, SagaInput.event(new PaymentReserved("o1")), new EventMeta("s2", 1L, 2L), NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope().streamWatermarks()).containsEntry("s1", 5L).containsEntry("s2", 1L)
+            );
+        }
+
+        @Test
+        void processes_a_position_only_event_whose_position_is_at_the_stored_position_watermark() {
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1, List.of(), Map.of(), 5L);
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    orderFulfillment(), "o1", current, SagaInput.event(new PaymentReserved("o1")), new EventMeta(null, null, 5L), NOW);
+
+            assertThat(outcome.processed()).isTrue();
+        }
+
+        @Test
+        void does_not_advance_a_position_watermark_for_a_position_only_event() {
             SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1, List.of(), Map.of(), 5L);
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
@@ -228,8 +267,15 @@ class SagaExecutionSupportTest {
 
             assertAll(
                     () -> assertThat(outcome.processed()).isTrue(),
-                    () -> assertThat(outcome.envelope().positionWatermark()).isEqualTo(6L)
+                    () -> assertThat(outcome.envelope().positionWatermark()).isNull()
             );
+        }
+
+        @Test
+        void a_position_only_event_is_not_a_redelivery_of_anything() {
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1, List.of(), Map.of("s1", 5L), Long.MAX_VALUE);
+
+            assertThat(SagaExecutionSupport.isRedelivery(current, new EventMeta(null, null, 1L))).isFalse();
         }
 
         @Test
@@ -251,12 +297,85 @@ class SagaExecutionSupportTest {
         }
 
         @Test
-        void treats_a_stream_id_without_a_version_as_no_dedup_key() {
+        void treats_an_event_without_both_a_stream_id_and_a_version_as_no_dedup_key() {
             assertAll(
                     () -> assertThat(new EventMeta("s1", 5L, null).carriesRedeliveryKey()).isTrue(),
-                    () -> assertThat(new EventMeta(null, null, 6L).carriesRedeliveryKey()).isTrue(),
+                    () -> assertThat(new EventMeta(null, null, 6L).carriesRedeliveryKey()).isFalse(),
+                    () -> assertThat(new EventMeta(null, 5L, 6L).carriesRedeliveryKey()).isFalse(),
                     () -> assertThat(new EventMeta("s1", null, null).carriesRedeliveryKey()).isFalse(),
                     () -> assertThat(EventMeta.NONE.carriesRedeliveryKey()).isFalse()
+            );
+        }
+    }
+
+    @Nested
+    class RedeliveryKey {
+
+        @Test
+        void is_the_stream_id_with_the_stream_version() {
+            assertThat(new EventMeta("s1", 5L, 99L).redeliveryKey()).isEqualTo("s1@5");
+        }
+
+        @Test
+        void does_not_exist_for_a_position_only_event() {
+            assertThat(new EventMeta(null, null, 7L).redeliveryKey()).isNull();
+        }
+
+        @Test
+        void does_not_exist_for_a_stream_id_without_a_version_whatever_the_position_is() {
+            assertThat(new EventMeta("s1", null, 7L).redeliveryKey()).isNull();
+        }
+    }
+
+    @Nested
+    class AStoredPositionWatermark {
+
+        private static SagaEnvelope<OrderState> envelopeWith(Long positionWatermark) {
+            return activeEnvelope("o1", new AwaitingPayment("o1"), 1, List.of(), Map.of("s1", 5L), positionWatermark);
+        }
+
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(longs = {1L, 7L, Long.MAX_VALUE})
+        @DisplayName("does not change whether a stream event is a redelivery")
+        void does_not_change_whether_a_stream_event_is_a_redelivery(Long positionWatermark) {
+            SagaEnvelope<OrderState> current = envelopeWith(positionWatermark);
+
+            assertAll(
+                    () -> assertThat(SagaExecutionSupport.isRedelivery(current, new EventMeta("s1", 5L, 0L))).isTrue(),
+                    () -> assertThat(SagaExecutionSupport.isRedelivery(current, new EventMeta("s1", 6L, 0L))).isFalse(),
+                    () -> assertThat(SagaExecutionSupport.isRedelivery(current, new EventMeta(null, null, 7L))).isFalse(),
+                    () -> assertThat(SagaExecutionSupport.isRedelivery(current, EventMeta.NONE)).isFalse()
+            );
+        }
+
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(longs = {1L, 7L, Long.MAX_VALUE})
+        @DisplayName("is not written back by process")
+        void is_not_written_back_by_process(Long positionWatermark) {
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    orderFulfillment(), "o1", envelopeWith(positionWatermark), SagaInput.event(new PaymentReserved("o1")), new EventMeta("s1", 6L, 8L), NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope().positionWatermark()).isNull(),
+                    () -> assertThat(outcome.envelope().streamWatermarks()).containsEntry("s1", 6L)
+            );
+        }
+
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(longs = {1L, 7L, Long.MAX_VALUE})
+        @DisplayName("does not change what process decides about a position-only event")
+        void does_not_change_what_process_decides_about_a_position_only_event(Long positionWatermark) {
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    orderFulfillment(), "o1", envelopeWith(positionWatermark), SagaInput.event(new PaymentReserved("o1")), new EventMeta(null, null, 7L), NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.commands()).containsExactly(new ShipOrder("o1")),
+                    () -> assertThat(outcome.envelope().positionWatermark()).isNull()
             );
         }
     }

@@ -82,7 +82,7 @@ treats it as no record, so the next failure starts a fresh budget and the next s
 A `QUARANTINED` instance keeps its record and stays quarantined. This finds the ones that hold such a record:
 
 ```javascript
-db.<collection>.find({ failureInput: /^position:/ })
+db.<collection>.find({ failureInput: /^position:\d+$/ })
 ```
 
 The [runbook for a quarantined saga instance](../runbooks/quarantined-saga-instance.md) says what to do with them.

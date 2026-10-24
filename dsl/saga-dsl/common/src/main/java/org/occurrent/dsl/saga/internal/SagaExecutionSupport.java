@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
  * The pure, stack-agnostic decision step of the saga executor: given the current envelope (or {@code null} for a new
@@ -356,12 +357,13 @@ public final class SagaExecutionSupport {
     }
 
     // 0.31.0 to 0.34.0 keyed an event that carried only a position as "position:N". Nothing produces that key now, so a
-    // record holding one can never be matched or cleared by an input.
-    private static final String LEGACY_POSITION_KEY_PREFIX = "position:";
+    // record holding one can never be matched or cleared by an input. A stream key always contains an "@", so a stream id
+    // that starts with "position:" does not match.
+    private static final Pattern LEGACY_POSITION_KEY = Pattern.compile("position:\\d+");
 
     private static <S extends @Nullable Object> @Nullable SagaFailure currentFailure(@Nullable SagaEnvelope<S> current) {
         SagaFailure stored = current == null ? null : current.failure();
-        return stored != null && stored.input().startsWith(LEGACY_POSITION_KEY_PREFIX) ? null : stored;
+        return stored != null && LEGACY_POSITION_KEY.matcher(stored.input()).matches() ? null : stored;
     }
 
     private static <E, S extends @Nullable Object, C> FailureRecord<S> failureRecord(Saga<E, S, C> saga, String sagaId,
