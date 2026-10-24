@@ -868,9 +868,10 @@ For 0.35, a bare position is documented as unsafe to resume from on MongoDB:
 - The javadoc, the documentation and the migration guide say that a position on its own is not a safe resume point on
   MongoDB. The thing to persist is the opaque `Checkpoint` a catch-up stores, which has its live start with it (ADR
   144).
-- The entry points that take a bare position as a place to resume from are deprecated. Those I know of are
-  `GlobalCheckpoint.of(long)` (`GlobalCheckpoint.java:88`), the `startAtGlobalPosition` annotation attribute, and
-  `DcbStartAt.afterPosition` (`DcbStartAt.java:74-75`). `DcbExecuteOptions.fromPosition` and
+- The entry points that take a bare position as a place to resume from are deprecated. Those I know of are the
+  `startAtGlobalPosition` annotation attribute and `DcbStartAt.afterPosition` (`DcbStartAt.java:74-75`).
+  `GlobalCheckpoint.of(long)` (`GlobalCheckpoint.java:88`) isn't deprecated. It gets javadoc saying that a bare position
+  is no place to resume from. `DcbExecuteOptions.fromPosition` and
   `DomainEventQueries.afterPosition` are deprecated in favour of the version forms above. The pull request that adds the
   deprecations lists every public method that takes a position as a lower bound for reading or subscribing, and every
   method that hands out a position meant to resume from.
