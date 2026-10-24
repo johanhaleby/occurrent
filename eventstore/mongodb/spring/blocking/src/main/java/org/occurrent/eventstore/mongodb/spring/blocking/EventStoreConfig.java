@@ -23,12 +23,14 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbStreamIdGenerator;
 import org.occurrent.eventstore.api.dcb.PartitionedDcbStreamIdGenerator;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.function.Function;
 
@@ -52,6 +54,7 @@ public class EventStoreConfig {
     // Default to a warning rather than a hard fail on events that pre-0.34.0 updateEvent damaged, so an operator can
     // opt into failing while any are left.
     private static final boolean DEFAULT_REQUIRE_REPAIRED_EVENTS = false;
+    private static final boolean DEFAULT_RESUME_FROM_MARKER_VERSIONS = true;
 
     public final String eventStoreCollectionName;
     public final TransactionTemplate transactionTemplate;
@@ -72,6 +75,11 @@ public class EventStoreConfig {
     // When true, construction fails instead of warning if the event collection holds events whose position or tag
     // index is wrong, such as the ones pre-0.34.0 updateEvent damaged.
     public final boolean requireRepairedEvents;
+    // When false, a DCB read reports no marker versions and a read after marker versions is refused. See
+    // Builder.resumeFromMarkerVersions(boolean).
+    public final boolean resumeFromMarkerVersions;
+    // The bound on the read-only transaction that reports marker versions. See Builder.markerVersionsCommitTimeout(Duration).
+    public final Duration markerVersionsCommitTimeout;
 
     /**
      * Create a new instance of {@code EventStoreConfig}.
@@ -81,10 +89,10 @@ public class EventStoreConfig {
      * @param timeRepresentation       How time should be represented in the database
      */
     public EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation) {
-        this(eventStoreCollectionName, transactionTemplate, timeRepresentation, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_READ_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES, new PartitionedDcbStreamIdGenerator(), DEFAULT_STREAM_POSITION_ENABLED, false, false, DEFAULT_REQUIRE_BACKFILLED_POSITION, DEFAULT_REQUIRE_REPAIRED_EVENTS);
+        this(eventStoreCollectionName, transactionTemplate, timeRepresentation, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_READ_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES, new PartitionedDcbStreamIdGenerator(), DEFAULT_STREAM_POSITION_ENABLED, false, false, DEFAULT_REQUIRE_BACKFILLED_POSITION, DEFAULT_REQUIRE_REPAIRED_EVENTS, DEFAULT_RESUME_FROM_MARKER_VERSIONS, DcbMarkerVersionsDocuments.DEFAULT_MARKER_VERSIONS_COMMIT_TIMEOUT);
     }
 
-    private EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation, Function<Query, Query> queryOptions, Function<Query, Query> readOptions, Set<EventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled, boolean streamPositionExplicitlyEnabled, boolean streamPositionOptedOut, boolean requireBackfilledPosition, boolean requireRepairedEvents) {
+    private EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation, Function<Query, Query> queryOptions, Function<Query, Query> readOptions, Set<EventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled, boolean streamPositionExplicitlyEnabled, boolean streamPositionOptedOut, boolean requireBackfilledPosition, boolean requireRepairedEvents, boolean resumeFromMarkerVersions, Duration markerVersionsCommitTimeout) {
         requireNonNull(eventStoreCollectionName, "Event store collection name cannot be null");
         requireNonNull(transactionTemplate, TransactionTemplate.class.getSimpleName() + " cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
@@ -108,6 +116,8 @@ public class EventStoreConfig {
         this.streamPositionExplicitlyEnabled = streamPositionExplicitlyEnabled;
         this.requireBackfilledPosition = requireBackfilledPosition;
         this.requireRepairedEvents = requireRepairedEvents;
+        this.resumeFromMarkerVersions = resumeFromMarkerVersions;
+        this.markerVersionsCommitTimeout = DcbMarkerVersionsDocuments.requireValidCommitTimeout(markerVersionsCommitTimeout);
     }
 
     /**
@@ -121,12 +131,12 @@ public class EventStoreConfig {
     public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig that)) return false;
-        return Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionTemplate, that.transactionTemplate) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(readOptions, that.readOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator) && streamPositionEnabled == that.streamPositionEnabled && streamPositionExplicitlyEnabled == that.streamPositionExplicitlyEnabled && requireBackfilledPosition == that.requireBackfilledPosition && requireRepairedEvents == that.requireRepairedEvents;
+        return Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionTemplate, that.transactionTemplate) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(readOptions, that.readOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator) && streamPositionEnabled == that.streamPositionEnabled && streamPositionExplicitlyEnabled == that.streamPositionExplicitlyEnabled && requireBackfilledPosition == that.requireBackfilledPosition && requireRepairedEvents == that.requireRepairedEvents && resumeFromMarkerVersions == that.resumeFromMarkerVersions && Objects.equals(markerVersionsCommitTimeout, that.markerVersionsCommitTimeout);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventStoreCollectionName, transactionTemplate, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionExplicitlyEnabled, requireBackfilledPosition, requireRepairedEvents);
+        return Objects.hash(eventStoreCollectionName, transactionTemplate, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionExplicitlyEnabled, requireBackfilledPosition, requireRepairedEvents, resumeFromMarkerVersions, markerVersionsCommitTimeout);
     }
 
     @Override
@@ -143,6 +153,8 @@ public class EventStoreConfig {
                 .add("streamPositionExplicitlyEnabled=" + streamPositionExplicitlyEnabled)
                 .add("requireBackfilledPosition=" + requireBackfilledPosition)
                 .add("requireRepairedEvents=" + requireRepairedEvents)
+                .add("resumeFromMarkerVersions=" + resumeFromMarkerVersions)
+                .add("markerVersionsCommitTimeout=" + markerVersionsCommitTimeout)
                 .toString();
     }
 
@@ -160,6 +172,8 @@ public class EventStoreConfig {
         private boolean streamPositionOptedOut = false;
         private boolean requireBackfilledPosition = DEFAULT_REQUIRE_BACKFILLED_POSITION;
         private boolean requireRepairedEvents = DEFAULT_REQUIRE_REPAIRED_EVENTS;
+        private boolean resumeFromMarkerVersions = DEFAULT_RESUME_FROM_MARKER_VERSIONS;
+        private Duration markerVersionsCommitTimeout = DcbMarkerVersionsDocuments.DEFAULT_MARKER_VERSIONS_COMMIT_TIMEOUT;
 
         /**
          * @param eventStoreCollectionName The collection in which the events are persisted
@@ -366,8 +380,38 @@ public class EventStoreConfig {
             return this;
         }
 
+        /**
+         * Whether a DCB read that asks for marker versions reports them, and whether a read after marker versions is
+         * served. On by default. Turned off, a read reports no marker versions, a read after marker versions throws
+         * {@link org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException}, and the store logs one warning at
+         * start naming this setting. Turn it off when the deployment can't run the read-only snapshot transaction
+         * the versions need, and DCB snapshots then fall back to reading their boundary in full.
+         *
+         * @return The same {@code Builder} instance.
+         */
+        @NullMarked
+        public Builder resumeFromMarkerVersions(boolean resumeFromMarkerVersions) {
+            this.resumeFromMarkerVersions = resumeFromMarkerVersions;
+            return this;
+        }
+
+        /**
+         * How long the read-only transaction that reports marker versions may run and take to commit. Defaults to
+         * 5 seconds. A read that doesn't commit within it reports no marker versions. The transaction never uses the
+         * {@link Builder#transactionConfig(TransactionTemplate) transaction template} configured for writes.
+         *
+         * @param markerVersionsCommitTimeout at least 1 millisecond
+         * @return The same {@code Builder} instance.
+         * @throws IllegalArgumentException if the timeout is below 1 millisecond
+         */
+        @NullMarked
+        public Builder markerVersionsCommitTimeout(Duration markerVersionsCommitTimeout) {
+            this.markerVersionsCommitTimeout = DcbMarkerVersionsDocuments.requireValidCommitTimeout(markerVersionsCommitTimeout);
+            return this;
+        }
+
         public EventStoreConfig build() {
-            return new EventStoreConfig(eventStoreCollectionName, transactionTemplate, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionExplicitlyEnabled, streamPositionOptedOut, requireBackfilledPosition, requireRepairedEvents);
+            return new EventStoreConfig(eventStoreCollectionName, transactionTemplate, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionExplicitlyEnabled, streamPositionOptedOut, requireBackfilledPosition, requireRepairedEvents, resumeFromMarkerVersions, markerVersionsCommitTimeout);
         }
     }
 }
