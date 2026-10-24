@@ -189,9 +189,9 @@ public final class DcbTagsIndexCheck {
     private static String whatTheIndexDoes() {
         return " Without a usable index, count, exists and the append check of DcbAppendCondition.wholeStoreLock() read"
                 + " stream events as well as DCB events, and so can a read with DcbCriteria.all(). The results are correct,"
-                + " only slower. With one, those three read only DCB events, and so does a read with DcbCriteria.all()"
-                + " when MongoDB uses the index. It may not for a backward read or a read with a limit, which can still"
-                + " walk the position index.";
+                + " only slower. With one, those three and a read with DcbCriteria.all() read only DCB events when"
+                + " MongoDB uses the index. It may not for a backward read or a read with a limit, which can still walk"
+                + " the position index.";
     }
 
     // Leaves one usable index. A hidden index that holds only DCB events is unhidden, since that builds nothing,
