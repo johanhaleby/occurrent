@@ -41,7 +41,8 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass
  * <p>
  * <strong>Running a suite against a store that honours nothing.</strong> {@link StreamEventStoreConformance},
  * {@link StreamConcurrencyConformance}, {@link StreamPositionConformance}, {@link StreamPositionDisabledConformance},
- * {@link DcbEventStoreConformance}, {@link DcbStreamInteropConformance}, {@link DcbConcurrencyConformance} and
+ * {@link DcbEventStoreConformance}, {@link DcbStreamInteropConformance}, {@link DcbConcurrencyConformance},
+ * {@link DcbMarkerVersionsConformance}, {@link DcbAppendConfirmationConformance} and
  * {@link CapabilityGuardConformance} are each run against {@link NoopStore} and must notice: every test fails, none
  * passes, none is skipped or aborted. That establishes each suite has tests and that they really do assert something.
  * It does not establish the no-skipping rule, because every test dies on its first call into the store, so an
@@ -96,6 +97,16 @@ class SuiteNeverSkipsTest {
     @Test
     void the_dcb_concurrency_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
         assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbConcurrencyConformance.class);
+    }
+
+    @Test
+    void the_dcb_marker_versions_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbMarkerVersionsConformance.class);
+    }
+
+    @Test
+    void the_dcb_append_confirmation_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbAppendConfirmationConformance.class);
     }
 
     @Test
@@ -530,6 +541,85 @@ class SuiteNeverSkipsTest {
                 @Override
                 public PositionOrderedReader positionOrderedReader() {
                     return NoopStore.INSTANCE;
+                }
+            };
+        }
+    }
+
+    /**
+     * As {@link HonoursNothingDcbConformance}, but for {@link DcbMarkerVersionsConformance}. Every DCB call against
+     * {@link NoopStore} throws {@link UnsupportedOperationException}, so every test must fail rather than pass or skip.
+     */
+    static class HonoursNothingDcbMarkerVersionsConformance extends DcbMarkerVersionsConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.DCB);
+                }
+
+                @Override
+                public DcbEventStore dcbEventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbAppendConditionModel appendConditionModel() {
+                    return DcbAppendConditionModel.EXACT_CRITERIA;
+                }
+            };
+        }
+    }
+
+    /**
+     * As {@link HonoursNothingDcbStreamInteropConformance}, but for {@link DcbAppendConfirmationConformance}, which
+     * needs both {@link EventStoreCapability#STREAM} and {@link EventStoreCapability#DCB}.
+     */
+    static class HonoursNothingDcbAppendConfirmationConformance extends DcbAppendConfirmationConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.STREAM, EventStoreCapability.DCB);
+                }
+
+                @Override
+                public EventStore eventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreQueries queries() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreOperations operations() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public ReadEventStreamWithFilter filteredReader() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public PositionOrderedReader positionOrderedReader() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbEventStore dcbEventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbAppendConditionModel appendConditionModel() {
+                    return DcbAppendConditionModel.EXACT_CRITERIA;
                 }
             };
         }

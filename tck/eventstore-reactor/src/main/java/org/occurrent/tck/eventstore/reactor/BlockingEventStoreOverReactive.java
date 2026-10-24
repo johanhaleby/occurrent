@@ -48,7 +48,8 @@ import static java.util.Objects.requireNonNull;
  */
 @NullMarked
 public final class BlockingEventStoreOverReactive
-        implements EventStore, EventStoreQueries, EventStoreOperations, ReadEventStreamWithFilter, PositionOrderedReader, DcbEventStore {
+        implements EventStore, EventStoreQueries, EventStoreOperations, ReadEventStreamWithFilter, PositionOrderedReader, DcbEventStore,
+                   DcbAppendConfirmation {
 
     private final org.occurrent.eventstore.api.reactor.EventStore eventStore;
     private final org.occurrent.eventstore.api.reactor.EventStoreQueries queries;
@@ -213,6 +214,18 @@ public final class BlockingEventStoreOverReactive
     @Override
     public DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition) {
         return blockRequiringAValue(dcbEventStore.append(events, condition), "append(List, DcbAppendCondition)");
+    }
+
+    /**
+     * Confirms through the reactive store when it can, and answers {@code false} when it can't, which is how
+     * {@link DcbAppendConfirmation} treats a store that doesn't implement it.
+     */
+    @Override
+    public boolean isConfirmed(DcbAppendResult appendResult) {
+        if (!(dcbEventStore instanceof org.occurrent.eventstore.api.dcb.reactor.DcbAppendConfirmation confirmation)) {
+            return false;
+        }
+        return Boolean.TRUE.equals(block(confirmation.isConfirmed(appendResult)));
     }
 
     /**

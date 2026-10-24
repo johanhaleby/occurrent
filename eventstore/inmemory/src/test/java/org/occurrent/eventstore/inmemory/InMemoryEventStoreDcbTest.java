@@ -28,6 +28,9 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
+import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.net.URI;
@@ -108,6 +111,26 @@ class InMemoryEventStoreDcbTest {
         DcbAppendResult next = eventStore.append(List.of(taggedEvent("NameChanged", "name:2")));
         assertThat(next.firstSequencePosition()).isEqualTo(first.lastSequencePosition() + 1);
         assertThat(next.lastSequencePosition()).isEqualTo(next.firstSequencePosition());
+    }
+
+    @Test
+    void refuses_a_read_after_marker_versions_saved_before_delete_all_although_the_new_marker_has_the_same_version() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
+        DcbMarkerVersions saved = eventStore.read(tags(tag("name:1")), DcbReadOptions.fromBeginning().withVersions()).markerVersions().orElseThrow();
+        assertThat(eventStore.read(tags(tag("name:1")), DcbReadOptions.afterVersions(saved)).events())
+                .as("the saved versions are resumable until delete all, or this proves nothing")
+                .isEmpty();
+
+        eventStore.deleteAll();
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
+
+        assertThat(eventStore.read(tags(tag("name:1")), DcbReadOptions.fromBeginning().withVersions()).markerVersions().orElseThrow().get("tag:name:1").orElseThrow().version())
+                .as("the marker is at the version it was saved at, so only the epoch tells them apart")
+                .isEqualTo(saved.get("tag:name:1").orElseThrow().version());
+        assertThatThrownBy(() -> eventStore.read(tags(tag("name:1")), DcbReadOptions.afterVersions(saved)))
+                .isExactlyInstanceOf(DcbSnapshotInvalidException.class)
+                .hasMessageContaining("differs from the saved epoch");
     }
 
     private static Tag tag(String canonical) {

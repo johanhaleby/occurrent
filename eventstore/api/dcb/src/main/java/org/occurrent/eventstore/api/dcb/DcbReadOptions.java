@@ -19,6 +19,7 @@ package org.occurrent.eventstore.api.dcb;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.PositionRange;
 
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 
@@ -39,9 +40,15 @@ import static java.util.Objects.requireNonNull;
  * @param direction     which end of the matching events to start selecting from
  * @param skip          number of matching events to skip from the selected end
  * @param limit         optional cap on the number of matching events returned, when present it must be positive
+ * @param versionsRequested whether the read asks the store to report the marker versions of its criteria in
+ *                      {@link DcbEventStream#markerVersions()}, see {@link #withVersions()}
+ * @param afterVersions optional marker versions to resume after, see {@link #afterVersions(DcbMarkerVersions)}. When
+ *                      present, {@code versionsRequested} must be {@code true} and the position range must have neither
+ *                      bound.
  */
 @NullMarked
-public record DcbReadOptions(PositionRange positionRange, Direction direction, int skip, OptionalInt limit) {
+public record DcbReadOptions(PositionRange positionRange, Direction direction, int skip, OptionalInt limit,
+                             boolean versionsRequested, Optional<DcbMarkerVersions> afterVersions) {
 
     /**
      * Selects which end of the matching events to start from before applying skip and limit. The returned events stay
@@ -68,6 +75,23 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
         if (limit.isPresent() && limit.getAsInt() <= 0) {
             throw new IllegalArgumentException("Limit must be greater than 0");
         }
+        requireNonNull(afterVersions, "After versions cannot be null");
+        if (afterVersions.isPresent()) {
+            if (!versionsRequested) {
+                throw new IllegalArgumentException("Reading after marker versions requires the read to ask for versions");
+            }
+            if (positionRange.afterPosition().isPresent() || positionRange.upToPosition().isPresent()) {
+                throw new IllegalArgumentException("Reading after marker versions cannot be combined with a position bound");
+            }
+        }
+    }
+
+    /**
+     * Reads the position window in the supplied direction, skipping {@code skip} matching events and keeping at most
+     * {@code limit}, without asking for marker versions.
+     */
+    public DcbReadOptions(PositionRange positionRange, Direction direction, int skip, OptionalInt limit) {
+        this(positionRange, direction, skip, limit, false, Optional.empty());
     }
 
     /**
@@ -105,7 +129,7 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * (see {@link Direction#BACKWARD}). The returned events are always in ascending position order regardless.
      */
     public DcbReadOptions backwards() {
-        return new DcbReadOptions(positionRange, Direction.BACKWARD, skip, limit);
+        return new DcbReadOptions(positionRange, Direction.BACKWARD, skip, limit, versionsRequested, afterVersions);
     }
 
     /**
@@ -113,21 +137,36 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * (see {@link Direction#FORWARD}). The returned events are always in ascending position order regardless.
      */
     public DcbReadOptions forwards() {
-        return new DcbReadOptions(positionRange, Direction.FORWARD, skip, limit);
+        return new DcbReadOptions(positionRange, Direction.FORWARD, skip, limit, versionsRequested, afterVersions);
     }
 
     /**
      * Returns a copy of these options that skips {@code count} matching events from the selected end.
      */
     public DcbReadOptions skip(int count) {
-        return new DcbReadOptions(positionRange, direction, count, limit);
+        return new DcbReadOptions(positionRange, direction, count, limit, versionsRequested, afterVersions);
     }
 
     /**
      * Returns a copy of these options capped to at most {@code max} matching events.
      */
     public DcbReadOptions limit(int max) {
-        return new DcbReadOptions(positionRange, direction, skip, OptionalInt.of(max));
+        return new DcbReadOptions(positionRange, direction, skip, OptionalInt.of(max), versionsRequested, afterVersions);
+    }
+
+    /**
+     * Returns a copy of these options that asks the store to report the marker versions of the read's criteria in
+     * {@link DcbEventStream#markerVersions()}. A snapshot saves those versions and resumes from them with
+     * {@link #afterVersions(DcbMarkerVersions)}.
+     * <p>
+     * The store reports them only when the read has no limit, no skip, no position bound and doesn't read backwards,
+     * because such a read may stop before the end of the boundary, or start after an event that commits late below
+     * its lower bound. A MongoDB store reads the markers, the head and the
+     * events in one short read-only transaction, so asking for versions costs a commit. A read that doesn't ask takes
+     * the same path as before.
+     */
+    public DcbReadOptions withVersions() {
+        return new DcbReadOptions(positionRange, direction, skip, limit, true, afterVersions);
     }
 
     /**
@@ -156,6 +195,20 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      */
     public static DcbReadOptions between(long afterPosition, long upToPosition) {
         return new DcbReadOptions(PositionRange.between(afterPosition, upToPosition));
+    }
+
+    /**
+     * Reads only the matching events appended after {@code markerVersions}, the versions a previous read or append
+     * reported, and asks for the versions of this read as {@link #withVersions()} does. No position of the previous read
+     * is compared, so an event that committed late, below a position the previous read saw, is still returned.
+     * <p>
+     * The read throws {@link DcbSnapshotInvalidException} when the store can't compare the versions with its own, for
+     * example after its markers were pruned or when resuming from versions is turned off. Read the boundary in full
+     * with {@link #withVersions()} then. Combining this with a position bound throws {@link IllegalArgumentException}.
+     */
+    public static DcbReadOptions afterVersions(DcbMarkerVersions markerVersions) {
+        requireNonNull(markerVersions, "Marker versions cannot be null");
+        return new DcbReadOptions(PositionRange.fromBeginning(), Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(markerVersions));
     }
 
 }
