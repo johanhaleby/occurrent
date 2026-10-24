@@ -461,10 +461,11 @@ The write path, on the three MongoDB stores:
    strips the DCB tags and the position (`DcbDocumentMapper.java:65-73`). So `mv` never shows up as a string extension
    on an event a read returns.
 7. `updateEvent` keeps `mv` and its epochs, the way it already keeps the position and the DCB tags
-   (`SpringMongoEventStore.java:368-374`). It copies the `mv` array from the original document, because the CloudEvent
-   no longer has it. Today `updateEvent` replaces the whole document (`MongoEventStore.java:744-756`), so without this
-   an updated event would have no `mv` and no read after versions would ever select it again. A TCK test covers it in
-   all three stores.
+   (`SpringMongoEventStore.java:368-374`). It copies the original document's raw `mv` value, whatever its type, never
+   through a typed cast, because the CloudEvent no longer has it and a 0.34 `updateEvent` may have left a string there.
+   Today `updateEvent` replaces the whole document (`MongoEventStore.java:744-756`), so without this an updated event
+   would have no `mv` and no read after versions would ever select it again. A TCK test covers it in all three stores,
+   with a case for a string `mv`. Whether the `mv` index accepts a string is unverified, and that case checks it.
 
 The read path:
 
@@ -482,11 +483,12 @@ The read path:
    third blocker and its caller-transaction findings can't be reached through it.
 3. A read that asks for versions takes the marker documents, the consistency token, the position counter and the events
    from one point-in-time read. In default mode the store runs a short read-only transaction with read concern
-   `snapshot`, in a session it opens itself, and commits it with write concern majority, so the snapshot it read is
-   majority-committed. The token is the sum of the versions it read over `keys(C)`, which is the key set the token
-   already sums today (`MongoEventStore.java:580-605`). The counter that bounds the events and gives
-   `lastSequencePosition` is read inside the same snapshot. The commit has a time bound, which the paragraphs after this
-   list explain. A timeout or any other commit error voids the versions and the token, and neither is returned. The read
+   `snapshot`, in a session it opens itself, and commits it with write concern majority, so that the snapshot it read is
+   majority-committed. That a read-only commit waits for majority is unverified, as the paragraphs after this list say.
+   The token is the sum of the versions it read over `keys(C)`, which is the key set the token already sums today
+   (`MongoEventStore.java:580-605`). The counter that bounds the events and gives `lastSequencePosition` is read inside
+   the same snapshot. The commit has a time bound, which the paragraphs after this list explain. Any failure before the
+   commit succeeds, a read error or a commit error, voids the versions and the token, and neither is returned. The read
    falls back to today's path, the decider or view skips the save, and it logs one warning per instance that names the
    cause.
 4. Inside a caller's transaction the read uses that transaction's snapshot. On a sharded cluster a transaction with read
@@ -511,16 +513,18 @@ The read path:
    read that may have stopped early doesn't report versions it didn't read up to.
 
 The read-only transaction commits with `TransactionOptions` of its own, with read concern `snapshot`, write concern
-`WriteConcern.MAJORITY.withWTimeout(bound)` and `maxCommitTime(bound)`. Both methods exist in the 5.8.0 driver, and the
+`WriteConcern.MAJORITY.withWTimeout(bound)`, `maxCommitTime(bound)` and `timeout(bound)`. The last one stops a
+client-wide `timeoutMS`, including 0, from replacing the bound. All three methods exist in the 5.8.0 driver, and the
 driver version the project resolves is checked when it's built. It never reuses the options a user configured for
 writes, which are `EventStoreConfig.transactionOptions` (`EventStoreConfig.java:113`), the Spring store's
 `transactionTemplate` (`SpringMongoEventStore.java:117`) and the reactor store's `transactionalOperator`
 (`ReactorMongoEventStore.java:361`). The bound is a store setting, 5 seconds by default.
 
-The native store starts and commits the read-only transaction by hand, with one commit attempt.
-`ClientSession.withTransaction` would retry a commit that timed out on its write concern for up to 120 seconds in the
-5.8.0 driver (`ClientSessionImpl`), so it isn't used here. Any exception on the commit voids the versions and the token.
-The Spring transaction managers already commit once, and that the reactor commit is one attempt is checked when it's
+The native store starts and commits the read-only transaction by hand. `ClientSession.withTransaction` would retry a
+commit that timed out on its write concern for up to 120 seconds in the 5.8.0 driver (`ClientSessionImpl`), and
+committing by hand removes that loop. The driver still retries a commit once on a retryable error, such as a step-down,
+which matters for liveness only. After a failed commit the store closes the session and doesn't call `abortTransaction`.
+The Spring transaction managers don't loop on a commit either, and that the reactor store doesn't is checked when it's
 built. No versions or token reach the caller before the commit succeeds. The reactor store uses the `Mono` form of
 `transactional` over the collected read, which emits after the commit, never the `Flux` form, which emits before it.
 
@@ -532,6 +536,9 @@ review of this design checked that against the MongoDB
 times out, the read falls back to a full read on today's path that discards the base state, and the command completes
 without saving a snapshot. It takes up to the bound longer than it does today. Correctness doesn't depend on the bound,
 because a read whose commit failed returns no versions.
+
+Two claims in this section are unverified until a test with a `failCommand` fail point runs. One is that a read-only
+transaction's commit waits for majority at all. The other is that the bound stops that wait.
 
 A snapshot read outside a transaction isn't an alternative. It has no commit to wait on, but when the majority point
 stalls, its token trails the primary's markers, so a conditional append fails its check, reads the same token again, and
@@ -615,8 +622,9 @@ filter is the `AppendId` and a position from the append's first to its last, and
 
 That a collection from either Spring factory stays out of a Spring transaction is unverified. A TCK test settles it. It
 runs a snapshot decider inside a caller's transaction on each store, rolls the transaction back, and asserts that no
-snapshot was saved. It also asserts on the `DcbAppendConfirmation` answer itself, so it fails if the confirmation joins
-the transaction. It saves to `InMemorySnapshotStore`, because a Spring snapshot store's save joins the caller's
+snapshot was saved. It also asserts on the `DcbAppendConfirmation` answer itself while the caller's transaction is still
+open, so it fails if the confirmation joins the transaction. It saves to `InMemorySnapshotStore`, or to
+`InMemoryReactiveSnapshotStore` for the reactor store, because a Spring snapshot store's save joins the caller's
 transaction by default and would hide that defect. A second case runs the decider on a committed path and asserts that
 the snapshot was saved. If a factory's collection does join the transaction, that store runs its confirmation under
 `PROPAGATION_NOT_SUPPORTED` instead.
@@ -668,13 +676,16 @@ operator said every writer ran 0.35. A counter on the marker now detects such a 
 by default in 0.35.0.
 
 Every 0.35 writer adds `$inc` of a field `s` to the marker update that increments `version`, so `s` counts the
-increments that also wrote `mv`. The invariant is that a 0.35 marker write increments `s` exactly when the same
-transaction writes `mv`, with that marker's epoch and new version, on every event of the append. Writing `mv`, `s` and
-the epoch happens on every 0.35 write, whatever the setting below says. A 0.34 writer, or any other writer that doesn't
-know about `s`, increments `version` and doesn't touch `s`. Each element of a `DcbMarkerVersions` holds `{k, e, v, u}`,
-where u is v minus s, the number of increments that wrote no `mv`, with a missing `s` read as 0. `afterVersions` refuses
-with `DcbSnapshotInvalid` when u has changed for any key, and the built-in consumers then read in full and save a fresh
-map. A decider's own append raises v and s together, so u stays the same in the versions it saves.
+increments that also wrote `mv`. Every marker increment a 0.35 append makes also increments `s`, and every event a 0.35
+append writes has `mv` for each of its marker keys. So only an increment that `s` doesn't count can come with an event
+that lacks `mv`. A conditional append also increments the markers of its query's keys that none of its events has
+(`MongoEventStore.java:548-550`). Those increments are counted in `s` and miss nothing, because no event of that append
+has the key. Writing `mv`, `s` and the epoch happens on every 0.35 write, whatever the setting below says. A 0.34
+writer, or any other writer that doesn't know about `s`, increments `version` and doesn't touch `s`. Each element of a
+`DcbMarkerVersions` holds `{k, e, v, u}`, where u is v minus s, the number of increments that wrote no `mv`, with a
+missing `s` read as 0. `afterVersions` refuses with `DcbSnapshotInvalid` when u has changed for any key, and the
+built-in consumers then read in full and save a fresh map. A decider's own append raises v and s together, so u stays
+the same in the versions it saves. The decider saves u from its append's read-back, not from its read.
 
 The schedule above again, with instance A on 0.35, instance B on 0.34, and `tag:account:a1` at version 8 with `s` at 3:
 
@@ -702,18 +713,22 @@ The setting stays, so an operator can turn resuming from versions off. With it o
   javadoc of both says so.
 - The store logs one warning at start that names the setting.
 
-An upgrade from 0.34 needs no manual step, provided `updateEvent` isn't called while 0.34 and 0.35 nodes run side by
-side. Nothing has to be switched during it. The migration guide explains the detection and the setting, and the
-changelog names the setting and its default. Events written before the upgrade have no `mv` and are reached only by a
-full read, and every 0.35 snapshot starts from one, because 0.34 DCB snapshots are invalid.
+An upgrade from 0.34 needs no manual step, provided no 0.34 `updateEvent` ever runs on an event a 0.35 node wrote. That
+covers the rolling overlap, a rollback to 0.34 followed by a re-upgrade, and a 0.34 tool that shares the event
+collection. Nothing has to be switched during the upgrade. The migration guide explains the detection and the setting,
+and the changelog names the setting and its default. Events written before the upgrade have no `mv` and are reached only
+by a full read, and every 0.35 snapshot starts from one, because 0.34 DCB snapshots are invalid.
 
-If a 0.34 node calls `updateEvent` during that overlap, on an event a 0.35 node wrote, 0.34.0 reads `mv` as a string
-extension through `DocumentCloudEventReader` (`DocumentCloudEventReader.java:68-83` at 0.34.0) and writes it back as a
-string. No marker changes, so u doesn't move. The event keeps its tags and its position, so full reads, subscriptions
-and catch-ups still return it, because they read by position. It drops out of every read that resumes after saved
-versions. A snapshot decider or `@Snapshot` view whose saved versions are below the event's never applies it, until
-something forces that boundary back to a full read, such as a prune or a change in u. I chose a documented precondition
-over a repair step, and the migration guide states the precondition and what happens when it isn't met.
+If a 0.34 `updateEvent` does run on such an event, 0.34.0 reads `mv` as a string extension through
+`DocumentCloudEventReader` (`DocumentCloudEventReader.java:68-83` at 0.34.0) and, when the update function changed the
+event, writes it back as a string. A function that builds a fresh event drops `mv` instead, with the same consequence.
+No marker changes, so u doesn't move, and nothing moves it afterwards. The miss is permanent until something forces a
+full read of that boundary, such as a prune or another increment without `mv`. A snapshot decider or `@Snapshot` view
+whose saved versions are below the event's never applies it. And the decider's token counts the event's marker
+increment, so its next append passes its condition without the event. That's a lost update, not only an event missing
+from the state. Full reads, subscriptions and catch-ups select by tags, type and position, never by `mv`, so they still
+return the event. I chose a documented precondition over a repair step, and the migration guide states the precondition
+and what happens when it isn't met.
 
 ### Why a late append can't be missed
 
@@ -770,10 +785,11 @@ versions only grow, and a prune changes the epoch. A majority-committed write is
   events read applies `queryOptions` (`SpringMongoEventStore.java:259`) and the token read doesn't (`:596`). The seventh
   review raised that as a hypothesis, and whether it routes to a secondary while a primary is up is unchecked.
 - **The token a decider read and the token inside its append.** The token it read comes from snapshot P, which is
-  majority-committed once the read transaction has committed. The append transaction's snapshot S is later, on the
-  primary, so it contains everything in P. Equal sums then mean no key in `keys(C)` moved, since each key only grows,
-  and an append after S write-conflicts with the decider's append. The unsafe case is a token newer than the events,
-  which is the seventh review's second blocker, and reading both from one snapshot removes it.
+  majority-committed once the read transaction has committed, if that commit waits for majority, which is unverified.
+  The append transaction's snapshot S is later, on the primary, so it contains everything in P. Equal sums then mean no
+  key in `keys(C)` moved, since each key only grows, and an append after S write-conflicts with the decider's append.
+  The unsafe case is a token newer than the events, which is the seventh review's second blocker, and reading both from
+  one snapshot removes it.
 - **The versions an append reports and the decider's state.** The versions are each read version plus one, and the state
   is the base, the events after it in P and the decider's own events. That's the argument above. The epoch check covers
   a prune in between, and the confirmation covers durability.
@@ -876,24 +892,29 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
 ## Consequences
 
 - #1230 is fixed for the snapshot deciders and the `@Snapshot` view on every store in this repository, without a new
-  shared write, a background task or a clock. The one timeout bounds how long a read waits, not what it returns.
+  shared write, a background task or a clock. The one timeout is meant to bound how long a read waits, not what it
+  returns, and that it does is unverified until a fail-point test runs.
 - Per DCB append, the store does one more `find` by `_id` of a few marker documents inside the transaction. Each event
   grows by one `mv` element per tag and type, roughly 40 to 60 bytes each (an estimate), with one more index entry per
   element. The position counter write is unchanged, and each marker update sets one more field, `s`, in the same write.
 - Per DCB read that asks for versions, a short read-only transaction on the primary replaces today's separate reads, and
   the Spring stores' read preference doesn't apply to it. Only the deciders and the view ask, on every read. Its commit
-  waits at most the bound, 5 seconds by default, and a command whose commit times out falls back to today's read and
-  saves no snapshot. Every other read is unchanged.
+  is meant to wait at most the bound, 5 seconds by default, and a command whose commit times out falls back to today's
+  read and saves no snapshot. Every other read is unchanged.
 - Per saved DCB snapshot, the decider does one indexed read at majority. When the append isn't majority-committed by
   then, it skips the save with a warning, and the next command reads more of its boundary.
 - Resuming from versions is on by default in 0.35.0. A writer that increments markers without writing `mv`, such as
   0.34, moves u, the count of increments without `mv`, and the snapshots it affects are rebuilt from a full read. With
   the setting off, every decision reads its boundary's full history, no DCB snapshot is saved, a direct `afterVersions`
   or `fromVersions` call returns `DcbSnapshotInvalid`, and the store names the setting in a warning at start.
-- An upgrade from 0.34 needs no manual step, provided `updateEvent` isn't called while 0.34 and 0.35 nodes run side by
-  side. An event a 0.34 node updates in that time drops out of every read that resumes after saved versions, while full
-  reads, subscriptions and catch-ups still return it. The migration guide states the precondition and explains the
-  detection and the setting, and the changelog names the setting and its default.
+- An upgrade from 0.34 needs no manual step, provided no 0.34 `updateEvent` ever runs on an event a 0.35 node wrote,
+  whether during the rolling overlap, after a rollback to 0.34 and a re-upgrade, or from a 0.34 tool that shares the
+  event collection. Such an event drops out of every read that resumes after saved versions, and nothing moves u, so the
+  miss is permanent until something forces a full read of that boundary. The decider's token counts the event's marker
+  increment, so its next append passes its condition without the event, which is a lost update. An update function that
+  builds a fresh event drops `mv` with the same consequence. Full reads, subscriptions and catch-ups select by tags,
+  type and position, never by `mv`, so they still return the event. The migration guide states the precondition and
+  explains the detection and the setting, and the changelog names the setting and its default.
 - The first command on a boundary that existed before the upgrade reads in full and saves nothing, because its markers
   have no epoch yet. Its append gives them one, and the next command can save.
 - A decider inside a transaction the caller owns never saves a snapshot. Saving after that transaction commits isn't in
@@ -929,11 +950,12 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
 - Some things can't be settled until the code exists, and are checked when it's built:
   - The in-transaction read-back returns the transaction's own increments.
   - The Spring store can open its own session for the read-only transaction when no caller transaction is active.
-    - MongoDB picks the `mv` index for the read after versions. A wrong plan there is slow, not wrong.
+  - MongoDB picks the `mv` index for the read after versions. A wrong plan there is slow, not wrong.
   - A collection from either Spring database factory stays out of a Spring transaction. The TCK test above settles it.
   - A read-only transaction with read concern `snapshot` on the primary reads at the primary's latest applied point, and
-    its majority commit waits for that point to be majority-committed. Only liveness depends on it, because an older
-    majority snapshot is still consistent.
+    its majority commit waits for that point to be majority-committed. Whether the commit of a read-only transaction
+    waits for majority at all, and whether the bound stops that wait, is settled by a test with a `failCommand` fail
+    point.
 - Whether a failover can roll back a counter increment made at w:1 while the event's transaction survives is unchecked.
   If it can, a replay-only catch-up's head can sit below a committed event, and the head has to be the highest committed
   position instead of the counter.
