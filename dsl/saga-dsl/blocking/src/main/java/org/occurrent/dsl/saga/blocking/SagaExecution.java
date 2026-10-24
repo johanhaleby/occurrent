@@ -215,11 +215,50 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             refuseUnroutableDelivery(meta, cloudEvent, failure);
             return false;
         }
+        if (!meta.carriesRedeliveryKey() || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
+            return false;
+        }
         Optional<Duration> quarantineAfter = config.quarantineAfter();
-        if (quarantineAfter.isEmpty() || !meta.carriesRedeliveryKey() || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
+        if (quarantineAfter.isEmpty()) {
+            // Nothing is quarantined, but the version did not apply, and the source may park it and move on. It is
+            // listed on the instance before the exception reaches the source, so a replay long after is still applied.
+            recordPending(sagaId, meta, failure);
             return false;
         }
         return quarantine(sagaId, cloudEvent, meta, failure, quarantineAfter.get());
+    }
+
+    /**
+     * List the stream version of the failed delivery as pending on the instance, without a failure record, so quarantine
+     * never counts it. Written without the state like the failure record is, and never throws what the store throws,
+     * because the exception that matters is the one that made the delivery fail.
+     * <p>
+     * An input that is pending already costs one read and no write, so a source that offers a failing event again every
+     * few milliseconds reads the instance each time, as the quarantine path does. A lost compare-and-set is read again and retried up to {@link SagaRunnerConfig#maxCasAttempts()} times. A write
+     * that cannot be made leaves the version unrecorded, and the log says so at ERROR with the key to replay from. Such a
+     * version is applied on a replay only while the instance has not moved the reorder window ahead of it.
+     */
+    private void recordPending(String sagaId, EventMeta meta, Throwable failure) {
+        try {
+            for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
+                SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
+                FailureRecord<S> record = SagaExecutionSupport.pendingRecord(saga, sagaId, current, meta, clock.get(), config.reorderWindow());
+                if (record == null || stateStore.compareAndSaveWithoutState(sagaId, record.envelope(), record.expectedVersion())) {
+                    return;
+                }
+            }
+            log.error("Saga '{}' instance '{}' failed on the event '{}' and could not list it as pending, because the instance kept changing under {} attempts. "
+                            + "If the source skips the event and the instance moves {} versions of its type past it, a replay of it is skipped as behind the reorder window.",
+                    subscriptionId, sagaId, meta.redeliveryKey(), config.maxCasAttempts(), config.reorderWindow());
+        } catch (Throwable storeFailure) {
+            rethrowIfNotTheInstances(storeFailure);
+            log.error("Saga '{}' instance '{}' failed on the event '{}' and could not list it as pending, because the state store failed. "
+                            + "If the source skips the event and the instance moves {} versions of its type past it, a replay of it is skipped as behind the reorder window.",
+                    subscriptionId, sagaId, meta.redeliveryKey(), config.reorderWindow(), storeFailure);
+            if (storeFailure != failure) {
+                failure.addSuppressed(storeFailure);
+            }
+        }
     }
 
     // The redelivery key where the event has one, and otherwise its CloudEvent id and source, which also stay the same
@@ -336,6 +375,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This delivery is rethrown instead. What the event holds up is decided by whatever feeds this subscription. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                             subscriptionId, sagaId, failingFor, quarantineAfter, meta.redeliveryKey(), failure);
                 }
+                recordPending(sagaId, meta, failure);
                 return false;
             }
             // A refusal that later turns into a quarantine never reaches the clearing in onCloudEvent, because the
@@ -348,6 +388,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 // fired successfully. The failing event now meets different state and may well succeed, so discard this
                 // write rather than retry one whose premise has gone. Only a first failure loses its budget that way.
                 // A later one keeps the record the winning write left in place, since only the failing input clears it.
+                // The pending version has no such premise, it is true whatever the instance looks like now.
+                recordPending(sagaId, meta, failure);
                 return false;
             }
             if (!record.quarantined()) {

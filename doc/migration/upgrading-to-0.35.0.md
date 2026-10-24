@@ -123,11 +123,16 @@ The saga keeps the highest applied version per stream and event type. For an eve
 | Above the highest applied version of its event type | Applies it |
 | Equal to that version, or one the saga recorded as applied | Skips it as a redelivery |
 | Below it by less than the reorder window and not recorded | Applies it, since it arrived late |
-| Below it by the reorder window or more | Skips it and logs a warning once per stream |
+| Below it by the reorder window or more, and not pending | Skips it and logs a warning once per stream |
+| Pending, however far below it | Applies it and removes it from pending |
 
-A reaction that ran for a late event runs once. A redelivery of that event is skipped. The one exception to the last row is
-the event that an instance's recorded failure names. That event was never applied, so the saga applies it when it comes
-again, however far behind it is.
+A reaction that ran for a late event runs once. A redelivery of that event is skipped.
+
+An event is pending when it was handed to the saga and failed. The instance records its stream version before the
+exception reaches the subscription, whether or not quarantine is on, so a broker that parks the event afterwards does
+not lose it. An operator who replays the parked event after the instance has applied more than a window of later
+versions still gets it applied, once. An instance keeps at most as many pending versions per stream and event type as the
+window, and when one more fails it drops the smallest and logs an error naming the stream.
 
 ### The reorder window
 
@@ -138,8 +143,11 @@ SagaRunnerConfig config = SagaRunnerConfig.defaults().withReorderWindow(1024);
 ```
 
 A saga declared with `@Saga` always uses the default, since there is no annotation attribute or Spring property for it.
-An event further behind than the window is lost in the way it was lost before 0.35.0, and the warning says which stream
-it came from. A larger window keeps more numbers in every instance. Raising the window later does not bring back what an
+An event further behind than the window that did not fail in the saga is lost in the way it was lost before 0.35.0, and
+the warning says which stream it came from. That is the precondition for exactly-once. The feed keeps a stream's order to
+within the window per event type, or the event failed in the saga. Feeds that can reorder deeper than 256 versions are a
+listener that delivers from several threads, a Kafka topic whose partition count was raised after events were produced,
+and a RabbitMQ `prefetchCount` larger than the window. A larger window keeps more numbers in every instance. Raising the window later does not bring back what an
 instance has already forgotten, because the `horizon` keeps every version at or below it skipped. The larger window
 applies to the versions that arrive after the change.
 
@@ -147,7 +155,8 @@ applies to the versions that arrive after the change.
 
 A saga instance document gains a `streamMarks` field. It holds, per stream, a `floor` and a list of event types, and
 each type has its highest applied `mark`, the `applied` versions below it and a `horizon`, the highest version it has
-stopped remembering. It is a list rather than a map because
+stopped remembering, and a `pending` list of event types with the `versions` of each that failed. A document without
+`pending` reads as nothing pending. It is a list rather than a map because
 stream ids and event types can contain dots. An instance holds at most 256 `applied` versions per stream and event
 type, so a document grows by some kilobytes for an instance that listens to a few streams, and every save rewrites them.
 

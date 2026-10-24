@@ -77,6 +77,13 @@ class SpringMongoSagaStateStoreStreamMarksTest {
                     PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L), 8),
                     PAID_TYPE, new TypeMark(5, List.of(), 1))),
             "other", new StreamMarks(Long.MIN_VALUE, Map.of(PLACED_TYPE, new TypeMark(1, List.of(), Long.MIN_VALUE))));
+    // Stream "other" is what the failure of a first event inserts, a stream with a floor of nothing seen, no type marks and a pending version.
+    private static final Map<String, StreamMarks> PENDING_MARKS = Map.of(
+            STREAM_ID, new StreamMarks(3, Map.of(
+                    PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L), 8),
+                    PAID_TYPE, new TypeMark(5, List.of(), 1)),
+                    Map.of(PLACED_TYPE, List.of(4L, 6L), PAID_TYPE, List.of(2L))),
+            "other", new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(PLACED_TYPE, List.of(1L))));
 
     private MongoOperations mongoOperations;
     private SagaStateStore<String> stateStore;
@@ -382,6 +389,270 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
             // Then
             assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(other);
+        }
+    }
+
+    @Nested
+    @DisplayName("when an instance with pending versions is saved")
+    class WhenAnInstanceWithPendingVersionsIsSaved {
+
+        private Document streamDocument(Document raw, String streamId) {
+            return raw.getList("streamMarks", Document.class).stream().filter(s -> streamId.equals(s.getString("streamId"))).findFirst().orElseThrow();
+        }
+
+        @Test
+        void find_reads_back_the_pending_versions_of_every_stream_and_type() {
+            // Given
+            save(instanceWith(PENDING_MARKS, 1), 0);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertThat(read.streamMarks()).isEqualTo(PENDING_MARKS);
+        }
+
+        @Test
+        void findWithoutState_reads_back_the_pending_versions() {
+            // Given
+            save(instanceWith(PENDING_MARKS, 1), 0);
+
+            // When
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // Then
+            assertAll(
+                    () -> assertThat(read.state()).isNull(),
+                    () -> assertThat(read.streamMarks()).isEqualTo(PENDING_MARKS)
+            );
+        }
+
+        @Test
+        void the_pending_versions_are_stored_as_a_pending_array_of_type_and_versions_on_each_stream() {
+            // Given
+            save(instanceWith(PENDING_MARKS, 1), 0);
+
+            // When
+            Document raw = rawDocument();
+
+            // Then
+            List<Document> pending = streamDocument(raw, STREAM_ID).getList("pending", Document.class);
+            assertThat(pending).isNotNull();
+            assertAll(
+                    () -> assertThat(pending).extracting(entry -> entry.getString("type")).containsExactlyInAnyOrder(PLACED_TYPE, PAID_TYPE),
+                    () -> assertThat(pending).filteredOn(entry -> PLACED_TYPE.equals(entry.getString("type"))).singleElement()
+                            .satisfies(entry -> assertThat(entry.getList("versions", Long.class)).containsExactly(4L, 6L)),
+                    () -> assertThat(pending).filteredOn(entry -> PAID_TYPE.equals(entry.getString("type"))).singleElement()
+                            .satisfies(entry -> assertThat(entry.getList("versions", Long.class)).containsExactly(2L))
+            );
+        }
+
+        @Test
+        void a_stream_that_holds_nothing_but_a_pending_version_is_stored_and_read_back() {
+            // Given
+            save(instanceWith(PENDING_MARKS, 1), 0);
+
+            // When
+            Document raw = rawDocument();
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            Document other = streamDocument(raw, "other");
+            assertAll(
+                    () -> assertThat(other.getList("pending", Document.class)).hasSize(1),
+                    () -> assertThat(read.streamMarks().get("other").byType()).isEmpty(),
+                    () -> assertThat(read.streamMarks().get("other").pending()).isEqualTo(Map.of(PLACED_TYPE, List.of(1L))),
+                    () -> assertThat(read.streamMarks().get("other").floor()).isEqualTo(Long.MIN_VALUE)
+            );
+        }
+
+        @Test
+        void an_update_replaces_the_pending_versions_it_had_before() {
+            // Given
+            save(instanceWith(PENDING_MARKS, 1), 0);
+            Map<String, StreamMarks> later = Map.of(STREAM_ID, new StreamMarks(3,
+                    Map.of(PLACED_TYPE, new TypeMark(13, List.of(10L, 12L), 9)), Map.of(PLACED_TYPE, List.of(6L))));
+
+            // When
+            save(instanceWith(later, 2), 1);
+
+            // Then
+            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(later);
+        }
+
+        @Test
+        void a_save_with_nothing_pending_takes_away_the_pending_versions_the_document_had() {
+            // Given
+            save(instanceWith(PENDING_MARKS, 1), 0);
+            SagaEnvelope<String> before = stateStore.find(SAGA_ID).orElseThrow();
+
+            // When
+            save(instanceWith(MARKS, 2), 1);
+
+            // Then
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            assertAll(
+                    () -> assertThat(before.streamMarks().get(STREAM_ID).pending()).isNotEmpty(),
+                    () -> assertThat(read.streamMarks()).isEqualTo(MARKS),
+                    () -> assertThat(read.streamMarks().get(STREAM_ID).pending()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_later_write_that_changes_other_fields_and_carries_the_marks_over_keeps_the_pending_versions() {
+            // Given
+            save(instanceWith(PENDING_MARKS, 1), 0);
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> changed = new SagaEnvelope<>(SAGA_ID, "paid", SagaStatus.ACTIVE, 2, read.timers(), Map.of(STREAM_ID, 13L, "other", 1L),
+                    null, NOW, NOW.plusSeconds(60), null, null, true, null, read.streamMarks());
+
+            // When
+            save(changed, 1);
+
+            // Then
+            SagaEnvelope<String> after = stateStore.find(SAGA_ID).orElseThrow();
+            assertAll(
+                    () -> assertThat(after.state()).isEqualTo("paid"),
+                    () -> assertThat(after.streamMarks()).isEqualTo(PENDING_MARKS)
+            );
+        }
+    }
+
+    @Nested
+    @DisplayName("when a stored stream entry has no pending field")
+    class WhenAStoredStreamEntryHasNoPendingField {
+
+        private Document typeEntry() {
+            return new Document("type", PLACED_TYPE).append("mark", 12L).append("applied", List.of(9L, 10L, 11L)).append("horizon", 8L);
+        }
+
+        private Document documentWithAStreamEntryWithoutPending() {
+            Document stream = new Document("streamId", STREAM_ID).append("floor", 3L).append("types", List.of(typeEntry()));
+            return documentWrittenBy0_34().append("streamMarks", List.of(stream));
+        }
+
+        // A stream entry as the store writes it once a version is pending, written by hand so the shape is pinned from the reading side too.
+        private Document documentWithAStreamEntryWithPending() {
+            Document pending = new Document("type", PLACED_TYPE).append("versions", List.of(4L, 6L));
+            Document stream = new Document("streamId", STREAM_ID).append("floor", 3L).append("types", List.of(typeEntry())).append("pending", List.of(pending));
+            return documentWrittenBy0_34().append("streamMarks", List.of(stream));
+        }
+
+        @Test
+        void find_reads_it_with_nothing_pending() {
+            // Given
+            mongoOperations.insert(documentWithAStreamEntryWithoutPending(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertAll(
+                    () -> assertThat(read.streamMarks().get(STREAM_ID).pending()).isEmpty(),
+                    () -> assertThat(read.streamMarks().get(STREAM_ID).byType().get(PLACED_TYPE)).isEqualTo(new TypeMark(12, List.of(9L, 10L, 11L), 8))
+            );
+        }
+
+        @Test
+        void findWithoutState_reads_it_with_nothing_pending() {
+            // Given
+            mongoOperations.insert(documentWithAStreamEntryWithoutPending(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // Then
+            assertThat(read.streamMarks().get(STREAM_ID).pending()).isEmpty();
+        }
+
+        @Test
+        void a_stream_entry_written_by_hand_with_a_pending_field_reads_its_versions_per_type() {
+            // Given
+            mongoOperations.insert(documentWithAStreamEntryWithPending(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> viaFind = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> viaFindWithoutState = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // Then
+            assertAll(
+                    () -> assertThat(viaFind.streamMarks().get(STREAM_ID).pending()).isEqualTo(Map.of(PLACED_TYPE, List.of(4L, 6L))),
+                    () -> assertThat(viaFindWithoutState.streamMarks().get(STREAM_ID).pending()).isEqualTo(Map.of(PLACED_TYPE, List.of(4L, 6L)))
+            );
+        }
+
+        @Test
+        void the_first_save_after_it_writes_the_pending_versions() {
+            // Given
+            mongoOperations.insert(documentWithAStreamEntryWithoutPending(), COLLECTION);
+
+            // When
+            save(instanceWith(PENDING_MARKS, 2), 1);
+
+            // Then
+            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(PENDING_MARKS);
+        }
+    }
+
+    @Nested
+    @DisplayName("when a pending version is written without the state")
+    class WhenAPendingVersionIsWrittenWithoutTheState {
+
+        private SagaEnvelope<String> withMarks(SagaEnvelope<String> read, Map<String, StreamMarks> marks) {
+            return new SagaEnvelope<>(SAGA_ID, read.state(), read.status(), read.version() + 1, read.timers(), read.streamWatermarks(), null,
+                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), marks);
+        }
+
+        @Test
+        void the_pending_version_is_stored_and_the_state_stays_where_it_was() {
+            // Given
+            save(instanceWith(MARKS, 1), 0);
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // When
+            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, withMarks(read, PENDING_MARKS), read.version());
+
+            // Then
+            SagaEnvelope<String> after = stateStore.find(SAGA_ID).orElseThrow();
+            assertAll(
+                    () -> assertThat(written).isTrue(),
+                    () -> assertThat(after.streamMarks()).isEqualTo(PENDING_MARKS),
+                    () -> assertThat(after.state()).isEqualTo("awaiting-payment"),
+                    () -> assertThat(after.status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(after.failure()).isNull()
+            );
+        }
+
+        @Test
+        void a_write_that_carries_the_pending_versions_over_keeps_them() {
+            // Given
+            save(instanceWith(PENDING_MARKS, 1), 0);
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // When
+            stateStore.compareAndSaveWithoutState(SAGA_ID, withMarks(read, read.streamMarks()), read.version());
+
+            // Then
+            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(PENDING_MARKS);
+        }
+
+        @Test
+        void an_insert_of_an_instance_whose_first_event_failed_stores_the_pending_version() {
+            // Given
+            Map<String, StreamMarks> insertedMarks = Map.of(STREAM_ID, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(PLACED_TYPE, List.of(1L))));
+            SagaEnvelope<String> inserted = new SagaEnvelope<>(SAGA_ID, "initial", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null,
+                    NOW, NOW, null, null, false, null, insertedMarks);
+
+            // When
+            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, inserted, 0);
+
+            // Then
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            assertAll(
+                    () -> assertThat(written).isTrue(),
+                    () -> assertThat(read.started()).isFalse(),
+                    () -> assertThat(read.streamMarks()).isEqualTo(insertedMarks)
+            );
         }
     }
 }

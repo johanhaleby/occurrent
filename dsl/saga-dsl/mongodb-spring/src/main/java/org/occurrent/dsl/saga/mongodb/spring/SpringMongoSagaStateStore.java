@@ -104,6 +104,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String MARKS_MARK = "mark";
     private static final String MARKS_APPLIED = "applied";
     private static final String MARKS_HORIZON = "horizon";
+    private static final String MARKS_PENDING = "pending";
+    private static final String MARKS_VERSIONS = "versions";
     private static final String CREATED_AT = "createdAt";
     private static final String UPDATED_AT = "updatedAt";
     private static final String COMPLETED_AT = "completedAt";
@@ -595,7 +597,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     .append(MARKS_MARK, typeMark.mark())
                     .append(MARKS_APPLIED, typeMark.applied())
                     .append(MARKS_HORIZON, typeMark.horizon())));
-            streams.add(new Document(MARKS_STREAM_ID, streamId).append(MARKS_FLOOR, marks.floor()).append(MARKS_TYPES, types));
+            List<Document> pending = new ArrayList<>();
+            marks.pending().forEach((type, versions) -> pending.add(new Document(MARKS_TYPE, type).append(MARKS_VERSIONS, versions)));
+            streams.add(new Document(MARKS_STREAM_ID, streamId).append(MARKS_FLOOR, marks.floor()).append(MARKS_TYPES, types)
+                    .append(MARKS_PENDING, pending));
         });
         return streams;
     }
@@ -615,7 +620,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 byType.put(type.getString(MARKS_TYPE), new TypeMark(((Number) type.get(MARKS_MARK)).longValue(), applied,
                         horizon == null ? Long.MIN_VALUE : ((Number) horizon).longValue()));
             }
-            streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType));
+            // A stream stored before pending existed has no field, which reads as nothing outstanding.
+            Map<String, List<Long>> pending = new LinkedHashMap<>();
+            for (Document entry : stream.getList(MARKS_PENDING, Document.class, List.of())) {
+                List<Long> versions = new ArrayList<>();
+                for (Object version : entry.getList(MARKS_VERSIONS, Object.class, List.of())) {
+                    versions.add(((Number) version).longValue());
+                }
+                pending.put(entry.getString(MARKS_TYPE), versions);
+            }
+            streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType, pending));
         }
         return streamMarks;
     }

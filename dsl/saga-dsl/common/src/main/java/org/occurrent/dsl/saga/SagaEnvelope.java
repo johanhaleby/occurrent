@@ -129,10 +129,20 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      * @param floor  every version at or below this was applied before the executor started recording versions per
      *               event type, so it is skipped whatever its type
      * @param byType the versions applied per cloud event type
+     * @param pending the versions per cloud event type that were handed to the executor and failed, ascending, so still
+     *                outstanding. A version in here is applied when it arrives again however far behind the highest
+     *                one applied it is, because it is known not to have been applied. Applying it removes it. At
+     *                most the reorder window many are kept per type
      */
-    public record StreamMarks(long floor, Map<String, TypeMark> byType) {
+    public record StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending) {
         public StreamMarks {
             byType = Map.copyOf(byType);
+            pending = Map.copyOf(pending);
+        }
+
+        /** Marks with nothing outstanding. */
+        public StreamMarks(long floor, Map<String, TypeMark> byType) {
+            this(floor, byType, Map.of());
         }
     }
 

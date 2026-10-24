@@ -45,8 +45,12 @@ import static java.util.Objects.requireNonNull;
  *                             several messages in flight, hands a saga version 7 before version 6, and the saga applies
  *                             6 instead of taking it for a redelivery. An event fewer versions behind than this is
  *                             applied unless the saga has applied that version already, and one this many versions
- *                             behind or more is skipped with a warning. Each instance remembers up to this many applied
- *                             versions per stream and event type, so the state it stores grows with the number
+ *                             behind or more is skipped with a warning, unless it failed in the saga. A failed version is
+ *                             recorded as pending on the instance and applied when it arrives again however far behind
+ *                             it is, at most this many per stream and event type. A version that did not fail and is
+ *                             delivered more than this far behind, by a feed that reorders that deeply, is
+ *                             indistinguishable from a redelivery and is lost. Each instance remembers up to this many
+ *                             applied versions per stream and event type, so the state it stores grows with the number
  * @param quarantineAfter      how long one instance has to keep failing before it can be quarantined on whichever
  *                             event it is failing on then, or empty to never quarantine. Empty is the default, and
  *                             {@link #withQuarantineAfter(Duration)} turns quarantine on. Reaching the budget is not
