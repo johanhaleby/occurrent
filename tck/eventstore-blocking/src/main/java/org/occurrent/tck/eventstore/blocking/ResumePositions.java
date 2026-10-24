@@ -18,34 +18,18 @@ package org.occurrent.tck.eventstore.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
-import org.occurrent.eventstore.api.dcb.DcbAppendResult;
-import org.occurrent.eventstore.api.dcb.DcbEventStream;
 
 /**
- * The position a caller may resume from, read through one place so the late-commit suites ask the same question of
- * every store. A fixture cannot override it, which is what stops a store from picking a weaker answer for itself.
+ * The position a stream catch-up reader may resume from, read through one place so the stream late-commit suite asks the
+ * same question of every store. A fixture cannot override it, which is what stops a store from picking a weaker answer
+ * for itself.
  * <p>
- * Today it answers with what callers use now, the position an append or a read reports. The layer that changes what a
- * caller may resume from repoints these methods and nothing else in the suites.
+ * A DCB caller resumes from marker versions rather than from a position, so no DCB suite uses this class.
  */
 @NullMarked
 final class ResumePositions {
 
     private ResumePositions() {
-    }
-
-    /**
-     * The position a decider resumes from after its own append.
-     */
-    static long after(DcbAppendResult append) {
-        return append.lastSequencePosition();
-    }
-
-    /**
-     * The position a view resumes from after a read.
-     */
-    static long after(DcbEventStream read) {
-        return read.lastSequencePosition();
     }
 
     /**

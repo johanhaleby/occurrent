@@ -28,6 +28,7 @@ import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.tck.latecommit.LateAppend;
 import org.occurrent.tck.latecommit.LateCommitGuarantee;
@@ -47,11 +48,13 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
 /**
  * What a DCB caller sees when an append is still in flight. One append, A, has been assigned a position and has not
  * committed yet. A later append, B, is assigned the next position and commits first. A caller that saw B and resumes
- * "after B" must still get A once A commits, or A is lost to it for good.
+ * from the marker versions B reported must still get A once A commits, or A is lost to it for good.
  * <p>
- * The two resume patterns are the ones the DCB helpers use. A decider appends and takes the resume position from its own
- * {@link DcbAppendResult}. A view reads and takes it from the {@link DcbEventStream}. A third test checks that the
- * consistency token of a read taken while A is in flight still refuses a condition A matches.
+ * The two resume patterns are the ones the DCB helpers use. A decider appends and takes the marker versions from its
+ * own {@link DcbAppendResult}. A view reads with {@link DcbReadOptions#withVersions()} and takes them from the
+ * {@link DcbEventStream}. Both resume with {@link DcbReadOptions#afterVersions(DcbMarkerVersions)}, never from a
+ * position. A third test checks that the consistency token of a read taken while A is in flight still refuses a
+ * condition A matches.
  * <p>
  * Every test holds A through {@link EventStoreFixture#lateCommits()}. A store that commits in position order cannot
  * have A in flight, so its tests run the same steps with A already committed, where the guarantee holds by
@@ -87,20 +90,22 @@ public abstract class DcbLateCommitConformance extends LateCommitConformance {
             DcbEventStream decidedOn = dcbEventStore().read(boundary);
             DcbAppendResult overtook = dcbEventStore().append(List.of(overtaking),
                     failIfEventsMatch(boundary, decidedOn.consistencyToken()));
-            long resumeFrom = ResumePositions.after(overtook);
+            DcbMarkerVersions resumeFrom = overtook.markerVersions().orElseThrow(() -> new AssertionError(
+                    "A conditional append with a consistency token over a tag boundary must report its marker versions, "
+                            + "so a decider has the versions to resume from. The append reported none"));
 
             DcbAppendResult committedLate = late.release();
             late.requireWindowEntered(committedLate.firstSequencePosition(), overtook.firstSequencePosition());
 
-            DcbEventStream afterResume = dcbEventStore().read(boundary, DcbReadOptions.afterPosition(resumeFrom));
+            DcbEventStream afterResume = dcbEventStore().read(boundary, DcbReadOptions.afterVersions(resumeFrom));
 
             Set<String> seen = new LinkedHashSet<>(idsOf(decidedOn.events()));
             seen.add(overtaking.getId());
             seen.addAll(idsOf(afterResume.events()));
             LateCommitGuarantee.require(seen.contains(inFlight.getId()),
                     "the append that was in flight is in what the decider read before it appended, in its own append, "
-                            + "or in a read after the position its append reported",
-                    () -> "the decider saw " + seen + ", resumed from position " + resumeFrom
+                            + "or in a read after the marker versions its append reported",
+                    () -> "the decider saw " + seen + ", resumed from marker versions " + resumeFrom
                             + " and the in-flight append committed at position " + committedLate.firstSequencePosition());
         }
     }
@@ -115,20 +120,22 @@ public abstract class DcbLateCommitConformance extends LateCommitConformance {
         try (LateAppend<DcbAppendResult> late = LateAppend.dcbAppend(lateCommits(), dcbEventStore(),
                 List.of(inFlight), () -> isVisible(boundary, inFlight))) {
             DcbAppendResult overtook = dcbEventStore().append(List.of(overtaking));
-            DcbEventStream firstRead = dcbEventStore().read(boundary);
-            long resumeFrom = ResumePositions.after(firstRead);
+            DcbEventStream firstRead = dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions());
+            DcbMarkerVersions resumeFrom = firstRead.markerVersions().orElseThrow(() -> new AssertionError(
+                    "A full forward read of a tag boundary that asks for versions must report its marker versions, "
+                            + "so a view has the versions to resume from. The read reported none"));
 
             DcbAppendResult committedLate = late.release();
             late.requireWindowEntered(committedLate.firstSequencePosition(), overtook.firstSequencePosition());
 
-            DcbEventStream secondRead = dcbEventStore().read(boundary, DcbReadOptions.afterPosition(resumeFrom));
+            DcbEventStream secondRead = dcbEventStore().read(boundary, DcbReadOptions.afterVersions(resumeFrom));
 
             Set<String> seen = new LinkedHashSet<>(idsOf(firstRead.events()));
             seen.addAll(idsOf(secondRead.events()));
             LateCommitGuarantee.require(seen.contains(inFlight.getId()),
-                    "the append that was in flight is in the first read or in the read after the position the first "
-                            + "read reported",
-                    () -> "the view saw " + seen + ", resumed from position " + resumeFrom
+                    "the append that was in flight is in the first read or in the read after the marker versions the "
+                            + "first read reported",
+                    () -> "the view saw " + seen + ", resumed from marker versions " + resumeFrom
                             + " and the in-flight append committed at position " + committedLate.firstSequencePosition());
         }
     }
