@@ -151,7 +151,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * </ul>
  */
 @NullMarked
-public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
+public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions {
 
     private static final Logger log = LoggerFactory.getLogger(DurableSubscriptionModel.class);
 
@@ -780,18 +780,86 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     public Subscription resumeSubscription(String subscriptionId) {
         // Held for the whole decision, reposition call included, so a concurrent subscribe or cancelSubscription
         // for this id cannot land between the marker check and acting on it.
-        return underLockFor(subscriptionId, () -> {
-            if (!notCheckpointedSubscriptions.contains(subscriptionId)) {
-                Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
-                if (repositionable.isPresent()) {
-                    Checkpoint checkpoint = storage.read(subscriptionId);
-                    if (checkpoint != null) {
-                        return repositionable.get().resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint));
-                    }
+        return underLockFor(subscriptionId, () -> resumeFromStoredCheckpoint(subscriptionId));
+    }
+
+    // Callers hold the id lock
+    private Subscription resumeFromStoredCheckpoint(String subscriptionId) {
+        if (!notCheckpointedSubscriptions.contains(subscriptionId)) {
+            Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
+            if (repositionable.isPresent()) {
+                Checkpoint checkpoint = storage.read(subscriptionId);
+                if (checkpoint != null) {
+                    return repositionable.get().resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint));
                 }
             }
-            return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
+        }
+        return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
+    }
+
+    /**
+     * Resume a paused subscription at {@code startAt}, and store that position as the subscription's checkpoint before
+     * the wrapped model resumes there. A restart before the next event then resumes from it, instead of from the
+     * checkpoint stored before.
+     * <ul>
+     * <li>{@link StartAt#checkpoint(Checkpoint)} stores that checkpoint.</li>
+     * <li>{@link StartAt#now()} stores the position the wrapped model's {@link CheckpointAwareSubscriptionModel#globalCheckpoint()}
+     * answers, and resumes there, so the stored and the actual start agree. When it answers {@code null}, nothing is
+     * stored or resumed and this throws {@link IllegalStateException}.</li>
+     * <li>{@link StartAt#subscriptionModelDefault()} resumes as {@link #resumeSubscription(String)} does, from the stored
+     * checkpoint.</li>
+     * <li>A dynamic {@code StartAt} is asked once, and its answer is handled as above. When it answers {@code null},
+     * nothing is stored or resumed and this throws {@link IllegalArgumentException}.</li>
+     * </ul>
+     * The checkpoint is stored with the same write condition as every other checkpoint this model writes. When the
+     * checkpoint storage refuses the write with {@link CheckpointWriteConditionNotFulfilledException}, because another
+     * node has written with a newer lease, the exception propagates and the subscription stays paused. When the wrapped
+     * model's resume throws after the write, the stored checkpoint stays and the exception propagates, so a later
+     * {@link #resumeSubscription(String)} or a restart starts from the position asked for here.
+     * <p>
+     * A subscription subscribed without checkpointing (see {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}),
+     * or one the wrapped model doesn't report as paused, is passed on to the wrapped model as it is and nothing is
+     * stored. The wrapped model then throws for a subscription it doesn't hold paused.
+     * <p>
+     * Holds the same lock per subscription id as {@link #resumeSubscription(String)} for the whole call.
+     *
+     * @throws UnsupportedOperationException if the wrapped model is not repositionable, in which case
+     *                                       {@link RepositionableSubscriptions#findIn} doesn't find this model either.
+     */
+    @Override
+    public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel())
+                .orElseThrow(() -> new UnsupportedOperationException(getWrappedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"));
+        return underLockFor(subscriptionId, () -> {
+            if (notCheckpointedSubscriptions.contains(subscriptionId) || !getWrappedSubscriptionModel().isPaused(subscriptionId)) {
+                return repositionable.resumeSubscription(subscriptionId, startAt);
+            }
+            StartAt resolved = startAt.get(new SubscriptionModelContext(DurableSubscriptionModel.class));
+            if (resolved == null) {
+                throw new IllegalArgumentException("The StartAt passed to resume subscription " + subscriptionId + " answered null, so there is no position to resume it at");
+            }
+            if (resolved.isDefault()) {
+                return resumeFromStoredCheckpoint(subscriptionId);
+            }
+            Checkpoint position = resolved instanceof StartAt.StartAtCheckpoint at ? at.checkpoint : presentPositionToResumeAt(subscriptionId);
+            // Stored before the resume, since an event delivered after the resume writes a newer checkpoint that this
+            // write would otherwise overwrite
+            storage.save(subscriptionId, position, writeConditionFor(subscriptionId));
+            return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(position));
         });
+    }
+
+    private Checkpoint presentPositionToResumeAt(String subscriptionId) {
+        Checkpoint present = subscriptionModel.globalCheckpoint();
+        if (present == null) {
+            throw new IllegalStateException("The wrapped subscription model " + subscriptionModel.getClass().getName() +
+                                            " answered nothing when asked for the current position, so subscription " +
+                                            subscriptionId + " can't be resumed at StartAt.now() with the position stored. " +
+                                            "Nothing was stored and the subscription is still paused.");
+        }
+        return present;
     }
 
     @Override
@@ -856,6 +924,19 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     @Override
     public CheckpointAwareSubscriptionModel getWrappedSubscriptionModel() {
         return subscriptionModel;
+    }
+
+    /**
+     * Answers {@link RepositionableSubscriptions} only when the wrapped model has it, since
+     * {@link #resumeSubscription(String, StartAt)} resumes the subscription there. Answers every other capability as any
+     * model does.
+     */
+    @Override
+    public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+        if (type == RepositionableSubscriptions.class && !subscriptionModel.hasCapability(RepositionableSubscriptions.class)) {
+            return Optional.empty();
+        }
+        return CheckpointAwareSubscriptionModel.super.capability(type);
     }
 
     @Override

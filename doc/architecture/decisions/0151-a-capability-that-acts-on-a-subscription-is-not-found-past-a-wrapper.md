@@ -79,6 +79,9 @@ decision 7 names the same question as open work for releasing a quarantined saga
 call holds the lock `DurableSubscriptionModel` already takes per subscription id for its plain `resumeSubscription`.
 
 * A subscription subscribed without checkpointing is forwarded to the wrapped model and nothing is stored.
+* A subscription the wrapped model doesn't report as paused is forwarded too, and nothing is stored. The wrapped model
+  then throws its own exception for an id it doesn't know or one that is already running, and no checkpoint is stored
+  for either.
 * `StartAt.checkpoint(..)` stores that checkpoint, then resumes there.
 * `StartAt.now()` asks the wrapped model's `globalCheckpoint()` for the current position, stores it, then resumes
   there, so the stored and the actual start agree. When the wrapped model answers `null`, nothing is stored, the
