@@ -22,6 +22,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -72,11 +73,21 @@ class OperationTimeLiveStartTest {
 
     @Test
     void text_that_is_not_json_is_not_an_operation_time() {
-        assertThat(OperationTimeLiveStart.tryParse("operationTime but not json")).isEmpty();
+        String notJson = "operationTime but not json";
+
+        assertThatCode(() -> OperationTimeLiveStart.tryParse(notJson))
+                .as("tryParse must not throw for text that is not JSON")
+                .doesNotThrowAnyException();
+        assertThat(OperationTimeLiveStart.tryParse(notJson)).isEmpty();
     }
 
     @Test
     void a_document_whose_operation_time_is_not_a_timestamp_is_not_an_operation_time() {
-        assertThat(OperationTimeLiveStart.tryParse("{\"operationTime\": \"yesterday\"}")).isEmpty();
+        String notATimestamp = "{\"operationTime\": \"yesterday\"}";
+
+        assertThatCode(() -> OperationTimeLiveStart.tryParse(notATimestamp))
+                .as("tryParse must not throw for an operationTime that is not a timestamp")
+                .doesNotThrowAnyException();
+        assertThat(OperationTimeLiveStart.tryParse(notATimestamp)).isEmpty();
     }
 }
