@@ -23,7 +23,7 @@ import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.tck.eventstore.blocking.DcbAppendConditionModel;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.blocking.EventStoreWithoutPosition;
-import org.occurrent.tck.eventstore.blocking.LateCommits;
+import org.occurrent.tck.latecommit.LateCommits;
 
 import java.util.Optional;
 import java.util.Set;

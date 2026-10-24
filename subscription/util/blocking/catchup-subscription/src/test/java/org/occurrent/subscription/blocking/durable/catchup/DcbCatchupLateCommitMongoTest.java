@@ -31,6 +31,7 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
+import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
@@ -44,6 +45,8 @@ import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig;
+import org.occurrent.tck.internal.scaffolding.ExpectedGuaranteeViolation;
+import org.occurrent.tck.latecommit.LateCommitGuarantee;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.ChangeStreamHistory;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -63,6 +66,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -83,6 +87,9 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
 @Timeout(240)
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
+@ExpectedGuaranteeViolation(
+        tests = "an_event_that_committed_below_a_position_the_application_stored_itself_is_delivered_by_a_catch_up_started_at_that_position",
+        issue = "https://github.com/johanhaleby/occurrent/issues/1297")
 class DcbCatchupLateCommitMongoTest {
 
     private static final Duration AT_MOST = Duration.ofSeconds(20);
@@ -374,6 +381,39 @@ class DcbCatchupLateCommitMongoTest {
     }
 
     // The Spring Boot starter's default
+    @Test
+    void an_event_that_committed_below_a_position_the_application_stored_itself_is_delivered_by_a_catch_up_started_at_that_position() throws Exception {
+        // Writer A reserves a position and holds its transaction open, B and C take higher positions and commit
+        AtomicReference<DcbAppendResult> appendedA = new AtomicReference<>();
+        Thread writerA = new Thread(() -> appendedA.set(append(changedTo("A"))), HELD_WRITER);
+        writerA.start();
+        assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
+        DcbAppendResult appendedB = append(named("B"));
+        DcbAppendResult appendedC = append(named("C"));
+
+        // A commits below the position the application stored for C
+        releaseA.countDown();
+        writerA.join(20_000);
+        assertThat(appendedA.get().firstSequencePosition()).as("A reserved its position before B did").isLessThan(appendedB.firstSequencePosition());
+
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        SpringMongoSubscriptionModel live = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        CatchupSubscriptionModel catchup = new CatchupSubscriptionModel(live, eventStore, CRITERIA, config);
+        try {
+            Subscription subscription = catchup.subscribe("sub", StartAt.checkpoint(GlobalCheckpoint.of(appendedC.lastSequencePosition())), cloudEvent -> received.add(nameOf(cloudEvent)));
+            subscription.waitUntilStarted();
+            append(named("D"));
+            await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).as("the catch-up is delivering").contains("D"));
+            LateCommitGuarantee.require(received.contains("A"),
+                    "the event that committed below the position the application stored is delivered",
+                    () -> "the subscription was delivered " + received);
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
     private SpringMongoSubscriptionModel liveModelThatRestartsOnLostHistory() {
         return new SpringMongoSubscriptionModel(mongoTemplate, SpringMongoSubscriptionModelConfig.withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true));
     }
@@ -407,10 +447,10 @@ class DcbCatchupLateCommitMongoTest {
         return new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "user", name);
     }
 
-    private void append(DomainEvent event) {
+    private DcbAppendResult append(DomainEvent event) {
         List<CloudEvent> cloudEvents = converter.toCloudEvents(List.of(event)).stream()
                 .map(cloudEvent -> DcbCloudEvents.withTags(cloudEvent, List.of(Tag.parse("name:" + nameOf(cloudEvent)))))
                 .toList();
-        eventStore.append(cloudEvents);
+        return eventStore.append(cloudEvents);
     }
 }

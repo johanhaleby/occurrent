@@ -25,12 +25,12 @@ import org.junit.platform.testkit.engine.EngineTestKit;
 import org.junit.platform.testkit.engine.Events;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
-import org.occurrent.tck.eventstore.blocking.AppendHold;
 import org.occurrent.tck.eventstore.blocking.DcbLateCommitConformance;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
-import org.occurrent.tck.eventstore.blocking.HeldAppend;
-import org.occurrent.tck.eventstore.blocking.LateCommits;
 import org.occurrent.tck.eventstore.blocking.StreamLateCommitConformance;
+import org.occurrent.tck.latecommit.AppendHold;
+import org.occurrent.tck.latecommit.HeldAppend;
+import org.occurrent.tck.latecommit.LateCommits;
 
 import org.jspecify.annotations.Nullable;
 
