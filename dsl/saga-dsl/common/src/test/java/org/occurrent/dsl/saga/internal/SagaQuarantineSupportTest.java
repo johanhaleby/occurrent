@@ -19,6 +19,7 @@ package org.occurrent.dsl.saga.internal;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.dsl.saga.*;
+import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.FailureRecord;
@@ -90,6 +91,13 @@ class SagaQuarantineSupportTest {
     private static SagaEnvelope<OrderState> withFailure(SagaStatus status, SagaFailure failure) {
         return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), status, 4, List.of(new TimerEntry(TIMER, NOW.toEpochMilli())),
                 Map.of("o1", 6L), 6L, NOW.minusSeconds(60), NOW, null, null, true, failure);
+    }
+
+    /** As {@link #withFailure}, with the given version listed as pending for the stream, as an instance written by 0.35.0 or later has it. */
+    private static SagaEnvelope<OrderState> withFailureAndPending(SagaStatus status, SagaFailure failure, long pendingVersion) {
+        return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), status, 4, List.of(new TimerEntry(TIMER, NOW.toEpochMilli())),
+                Map.of("o1", 6L), 6L, NOW.minusSeconds(60), NOW, null, null, true, failure,
+                Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(pendingVersion)))));
     }
 
     private static SagaFailure failedOn(long position, Instant firstFailedAt) {
@@ -180,13 +188,29 @@ class SagaQuarantineSupportTest {
         }
 
         @Test
-        void a_later_failure_of_the_same_input_inside_the_budget_writes_nothing_at_all() {
-            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(4))));
+        void a_later_failure_of_the_same_input_inside_the_budget_writes_nothing_at_all_when_it_is_pending_already() {
+            SagaEnvelope<OrderState> failing = withFailureAndPending(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(4))), 7);
 
             FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
                     saga(), "o1", failing, at(7), new IllegalStateException("boom"), NOW, BUDGET);
 
             assertThat(record).isNull();
+        }
+
+        @Test
+        void a_later_failure_of_the_same_input_inside_the_budget_only_lists_it_as_pending_when_the_record_was_written_before_pending_existed() {
+            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(4))));
+
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", failing, at(7), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertAll(
+                    () -> assertThat(record).isNotNull(),
+                    () -> assertThat(record.envelope().streamMarks().get("o1").pending()).isEqualTo(Map.of("", List.of(7L))),
+                    () -> assertThat(record.envelope().failure()).isEqualTo(failing.failure()),
+                    () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(record.quarantined()).isFalse()
+            );
         }
 
         @Test

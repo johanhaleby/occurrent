@@ -20,6 +20,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.flow.FlowState;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
@@ -59,6 +60,11 @@ import static java.util.Objects.requireNonNull;
  *                          store answers {@link SagaInstance#currentStep()} from a projected read without loading the
  *                          state at all. Whenever {@code state} is present the constructor re-derives this and ignores
  *                          what was passed, so the two can never disagree.
+ * @param streamMarks       what the executor knows about the versions it has applied per stream and event type, beyond the
+ *                          highest one in {@code streamWatermarks}. It lets an event that arrives after a higher version
+ *                          of the same type, which a feed that reorders can deliver, be told from a redelivery. Empty
+ *                          for an instance stored before 0.35.0, which reads as every type of a stream being applied up to
+ *                          that stream's watermark
  * @param <S>               the user state type
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
@@ -73,19 +79,33 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        @Nullable Instant completedAt,
                                                        @Nullable String currentStep,
                                                        boolean started,
-                                                       @Nullable SagaFailure failure) implements SagaInstance {
+                                                       @Nullable SagaFailure failure,
+                                                       Map<String, StreamMarks> streamMarks) implements SagaInstance {
 
     public SagaEnvelope {
         requireNonNull(sagaId, "sagaId cannot be null");
         requireNonNull(status, "status cannot be null");
         timers = List.copyOf(timers);
         streamWatermarks = Map.copyOf(streamWatermarks);
+        streamMarks = Map.copyOf(streamMarks);
         if (state != null) {
             // currentStep duplicates something state already knows, which is the kind of field that drifts. Re-derive it
             // here rather than trusting callers to keep the two aligned: a passed value is honoured only when there is no
             // state to derive from, which is exactly the projected-read case a store needs it for.
             currentStep = state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
         }
+    }
+
+    /**
+     * An envelope with no stream marks, which is every instance stored before 0.35.0. It reads as every event type of a
+     * stream being applied up to that stream's watermark.
+     */
+    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
+                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
+                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep,
+                        boolean started, @Nullable SagaFailure failure) {
+        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
+                completedAt, currentStep, started, failure, Map.of());
     }
 
     /**
@@ -102,6 +122,59 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                         @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep) {
         this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
                 completedAt, currentStep, true, null);
+    }
+
+    /**
+     * What is known of one stream's versions beyond its watermark.
+     *
+     * @param floor  every version at or below this was applied before the executor started recording versions per
+     *               event type, so it is skipped whatever its type
+     * @param byType the versions applied per cloud event type
+     * @param pending the versions per cloud event type that were handed to the executor and failed, ascending, so still
+     *                outstanding. A version in here is applied when it arrives again however far behind the highest
+     *                one applied it is, because it is known not to have been applied. Applying it removes it. At
+     *                most the reorder window many are kept per type
+     * @param legacyFailed the versions of the stream whose failure was recorded before the executor listed failed versions
+     *                as pending, ascending, so the event type is not known. A stream version names exactly one event, so
+     *                the version is enough to recognise it. It is treated like a pending version and removed when the
+     *                version is applied. It is filled only when such a failure record is replaced by another input's, so
+     *                it holds at most the one record an instance carried over from before, and at most the reorder window
+     *                many are kept
+     */
+    public record StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending, List<Long> legacyFailed) {
+        public StreamMarks {
+            legacyFailed = List.copyOf(legacyFailed);
+            byType = Map.copyOf(byType);
+            Map<String, List<Long>> copied = new HashMap<>();
+            pending.forEach((type, versions) -> copied.put(type, List.copyOf(versions)));
+            pending = Map.copyOf(copied);
+        }
+
+        /** Marks with no failure recorded before pending existed. */
+        public StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending) {
+            this(floor, byType, pending, List.of());
+        }
+
+        /** Marks with nothing outstanding. */
+        public StreamMarks(long floor, Map<String, TypeMark> byType) {
+            this(floor, byType, Map.of());
+        }
+    }
+
+    /**
+     * The versions of one event type applied from one stream.
+     *
+     * @param mark    the highest version applied
+     * @param applied the versions below {@code mark} that were applied, ascending. A version below {@code mark} that is
+     *                not in here and not too far behind it was never applied, so it is applied when it arrives
+     * @param horizon the highest version this mark has stopped remembering, under the reorder window in force when it was
+     *                recorded. A version at or below it is skipped even if a larger window is configured later, since
+     *                the versions between the two windows are no longer in {@code applied}
+     */
+    public record TypeMark(long mark, List<Long> applied, long horizon) {
+        public TypeMark {
+            applied = List.copyOf(applied);
+        }
     }
 
     /** A pending timer: its name and when it should fire (epoch millis). */

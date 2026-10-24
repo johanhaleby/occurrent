@@ -42,6 +42,9 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -122,6 +125,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private final ConcurrentHashMap<String, UnroutableDelivery> unroutableDeliveries = new ConcurrentHashMap<>();
     // The extension names already reported as unreadable, so the warning is said once per name rather than per event.
     private final Set<String> unreadableExtensionsWarned = ConcurrentHashMap.newKeySet();
+    // The streams already warned about, so a stream replaying thousands of old events says it once. Capped, because a
+    // runner sees as many streams as the application has and this must not grow with them. A stream evicted from here
+    // is warned about again, which costs a line.
+    private final Set<List<String>> behindWindowWarned = Collections.synchronizedSet(Collections.newSetFromMap(new LinkedHashMap<List<String>, Boolean>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<List<String>, Boolean> eldest) {
+            return size() > 1024;
+        }
+    }));
     // Where this class reads the current instant from, wherever it needs one, rather than calling Instant.now()
     // directly. Real wall-clock time in production. A test supplies its own so it can cross an interval or a
     // quarantine budget without sleeping out real minutes.
@@ -203,11 +215,50 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             refuseUnroutableDelivery(meta, cloudEvent, failure);
             return false;
         }
+        if (!meta.carriesRedeliveryKey() || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
+            return false;
+        }
         Optional<Duration> quarantineAfter = config.quarantineAfter();
-        if (quarantineAfter.isEmpty() || !meta.carriesRedeliveryKey() || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
+        if (quarantineAfter.isEmpty()) {
+            // Nothing is quarantined, but the version did not apply, and the source may park it and move on. It is
+            // listed on the instance before the exception reaches the source, so a replay long after is still applied.
+            recordPending(sagaId, meta, failure);
             return false;
         }
         return quarantine(sagaId, cloudEvent, meta, failure, quarantineAfter.get());
+    }
+
+    /**
+     * List the stream version of the failed delivery as pending on the instance, without a failure record, so quarantine
+     * never counts it. Written without the state like the failure record is, and never throws what the store throws,
+     * because the exception that matters is the one that made the delivery fail.
+     * <p>
+     * An input that is pending already costs one read and no write, so a source that offers a failing event again every
+     * few milliseconds reads the instance each time, as the quarantine path does. A lost compare-and-set is read again and retried up to {@link SagaRunnerConfig#maxCasAttempts()} times. A write
+     * that cannot be made leaves the version unrecorded, and the log says so at ERROR with the key to replay from. Such a
+     * version is applied on a replay only while the instance has not moved the reorder window ahead of it.
+     */
+    private void recordPending(String sagaId, EventMeta meta, Throwable failure) {
+        try {
+            for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
+                SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
+                FailureRecord<S> record = SagaExecutionSupport.pendingRecord(saga, sagaId, current, meta, clock.get(), config.reorderWindow());
+                if (record == null || stateStore.compareAndSaveWithoutState(sagaId, record.envelope(), record.expectedVersion())) {
+                    return;
+                }
+            }
+            log.error("Saga '{}' instance '{}' failed on the event '{}' and could not list it as pending, because the instance kept changing under {} attempts. "
+                            + "If the source skips the event and the instance moves {} versions of its type past it, a replay of it is skipped as behind the reorder window.",
+                    subscriptionId, sagaId, meta.redeliveryKey(), config.maxCasAttempts(), config.reorderWindow());
+        } catch (Throwable storeFailure) {
+            rethrowIfNotTheInstances(storeFailure);
+            log.error("Saga '{}' instance '{}' failed on the event '{}' and could not list it as pending, because the state store failed. "
+                            + "If the source skips the event and the instance moves {} versions of its type past it, a replay of it is skipped as behind the reorder window.",
+                    subscriptionId, sagaId, meta.redeliveryKey(), config.reorderWindow(), storeFailure);
+            if (storeFailure != failure) {
+                failure.addSuppressed(storeFailure);
+            }
+        }
     }
 
     // The redelivery key where the event has one, and otherwise its CloudEvent id and source, which also stay the same
@@ -305,7 +356,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // decodes is the one that most needs to reach its budget. Loading it whole threw, the catch below swallowed
             // that, and no failure record was ever written.
             SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
-            FailureRecord<S> record = SagaExecutionSupport.onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter);
+            FailureRecord<S> record = SagaExecutionSupport.onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter, config.reorderWindow());
             if (record == null) {
                 return false;
             }
@@ -324,6 +375,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This delivery is rethrown instead. What the event holds up is decided by whatever feeds this subscription. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                             subscriptionId, sagaId, failingFor, quarantineAfter, meta.redeliveryKey(), failure);
                 }
+                recordPending(sagaId, meta, failure);
                 return false;
             }
             // A refusal that later turns into a quarantine never reaches the clearing in onCloudEvent, because the
@@ -336,6 +388,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 // fired successfully. The failing event now meets different state and may well succeed, so discard this
                 // write rather than retry one whose premise has gone. Only a first failure loses its budget that way.
                 // A later one keeps the record the winning write left in place, since only the failing input clears it.
+                // The pending version has no such premise, it is true whatever the instance looks like now.
+                recordPending(sagaId, meta, failure);
                 return false;
             }
             if (!record.quarantined()) {
@@ -353,6 +407,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // check no longer reaches here, because a check that cannot answer is a refused quarantine with a warning
             // rather than a silent one.
             rethrowIfNotTheInstances(storeFailure);
+            // Only an attributable failure with a redelivery key gets here, and the version could not be listed as pending
+            // either, which is what a replay long after depends on.
+            log.error("Saga '{}' instance '{}' failed on the event '{}' and could not list it as pending, because the state store failed. "
+                            + "If the source skips the event and the instance moves {} versions of its type past it, a replay of it is skipped as behind the reorder window.",
+                    subscriptionId, sagaId, meta.redeliveryKey(), config.reorderWindow(), storeFailure);
             if (storeFailure != failure) {
                 // Java refuses to suppress an exception under itself, and a store that rethrows the very object that
                 // reached us here would otherwise replace the real failure with IllegalArgumentException.
@@ -466,8 +525,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     if (requireTimerName != null && !hasDueTimer(current, requireTimerName, now)) {
                         return null; // stale/superseded/rescheduled timer, or the instance completed: nothing to fire.
                     }
-                    Outcome<S, C> outcome = SagaExecutionSupport.process(saga, sagaId, current, input, meta, now);
+                    Outcome<S, C> outcome = SagaExecutionSupport.process(saga, sagaId, current, input, meta, now, config.reorderWindow());
                     if (!outcome.processed()) {
+                        warnIfBehindTheReorderWindow(sagaId, current, meta);
                         return null;
                     }
                     // Dispatch before saving so a command is never lost. A lost compare-and-set retries this whole body,
@@ -500,14 +560,33 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (withoutState == null) {
                 return false;
             }
-            return withoutState.isCompleted() || withoutState.isQuarantined()
-                   || SagaExecutionSupport.isRedelivery(withoutState, meta);
+            if (withoutState.isCompleted() || withoutState.isQuarantined()) {
+                return true;
+            }
+            if (!SagaExecutionSupport.isRedelivery(withoutState, meta, config.reorderWindow())) {
+                return false;
+            }
+            warnIfBehindTheReorderWindow(sagaId, withoutState, meta);
+            return true;
         } catch (Throwable secondFailure) {
             rethrowIfNotTheInstances(secondFailure);
             if (secondFailure != loadFailure) {
                 loadFailure.addSuppressed(secondFailure);
             }
             return false;
+        }
+    }
+
+    // A skipped stream event further behind than the reorder window cannot be told from a redelivery, and a late arrival
+    // is the case where skipping it loses the event, so it is said once per stream rather than skipped silently.
+    private void warnIfBehindTheReorderWindow(String sagaId, @Nullable SagaEnvelope<S> current, EventMeta meta) {
+        if (current == null || current.isCompleted() || current.isQuarantined()
+            || SagaExecutionSupport.classify(current, meta, config.reorderWindow()) != SagaExecutionSupport.Delivery.BEHIND_WINDOW) {
+            return;
+        }
+        if (behindWindowWarned.add(List.of(sagaId, meta.streamId()))) {
+            log.warn("Saga '{}' skipped version {} of stream '{}', event type '{}', because it is further behind than the instance remembers, which is the reorder window of {} or a smaller window it used earlier. It is either a redelivery or an event that arrived later than that, and the saga cannot tell which. Raise reorderWindow on the SagaRunnerConfig if the feed reorders further than that. A raised window does not bring back versions the instance has already forgotten. This is logged once per stream.",
+                    sagaId, meta.streamVersion(), meta.streamId(), meta.eventType(), config.reorderWindow());
         }
     }
 
@@ -601,7 +680,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         Long streamVersion = readStreamKey(cloudEvent, extensions, OccurrentCloudEventExtension.STREAM_VERSION, OccurrentExtensionGetter::getStreamVersion, unreadableStreamKey);
         // Use the framework's own position accessor, which accepts a Number or String, rather than narrowing to Long.
         Long position = readPosition(cloudEvent, extensions);
-        return new ExtractedMeta(new EventMeta(streamId, streamVersion, position), unreadableStreamKey.isEmpty() ? null : unreadableStreamKey.getFirst());
+        return new ExtractedMeta(new EventMeta(streamId, streamVersion, position, cloudEvent.getType()), unreadableStreamKey.isEmpty() ? null : unreadableStreamKey.getFirst());
     }
 
     // RuntimeException rather than Throwable on purpose. An unreadable extension is a fact about the event rather than
