@@ -6,6 +6,9 @@ Date: 2026-07-07
 
 Accepted
 
+Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md), which reverses the decision to keep `DcbConsistencyToken.value()` a `long`. The token
+holds the criteria it was read with, and `value()` is removed.
+
 ## Context
 
 DCB is unreleased. Before the DCB API surface locks, PRs #293 and #294 swept the decider, DSL, and dcb-api packages for

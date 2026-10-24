@@ -820,17 +820,18 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     // Runs after the (dcbTags, position) index exists, since the lookup is hinted on it. A failed check only logs.
+    // The indexes are listed only when a stream event exists, so a collection without one needs no listIndexes privilege.
     private static Mono<Void> warnOnPositionedStreamEventsWithoutDcbTagsIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         return mongoTemplate.getCollection(eventStoreCollectionName)
-                .flatMap(collection -> Flux.from(collection.listIndexes()).collectList()
-                        .flatMap(indexes -> Mono.justOrEmpty(DcbTagsIndexCheck.warningFor(eventStoreCollectionName, indexes)))
-                        .filterWhen(warning -> Mono.from(collection.find(DcbTagsIndexCheck.positionedStreamEvent())
+                .flatMap(collection -> Mono.from(collection.find(DcbTagsIndexCheck.positionedStreamEvent())
                                 .hint(DcbTagsIndexCheck.hint())
                                 .min(DcbTagsIndexCheck.min())
                                 .max(DcbTagsIndexCheck.max())
                                 .limit(1)
                                 .projection(Projections.include(ID))
-                                .first()).hasElement()))
+                                .first())
+                        .flatMap(positionedStreamEvent -> Flux.from(collection.listIndexes()).collectList())
+                        .flatMap(indexes -> Mono.justOrEmpty(DcbTagsIndexCheck.warningFor(eventStoreCollectionName, indexes))))
                 .doOnNext(LOGGER::warn)
                 .then()
                 .onErrorResume(RuntimeException.class, e -> {

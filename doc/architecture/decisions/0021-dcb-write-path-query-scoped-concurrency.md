@@ -6,6 +6,11 @@ Date: 2026-06-22
 
 Accepted
 
+Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md). For a criteria item with at least one tag, the query reads and increments only its `tag:`
+markers and no longer its `type:` markers, so an append that only shares a type with criteria that have tags no longer
+makes the check refuse a later append on them. What an append increments for its own events is unchanged, so two
+appends of one type that run at the same time still write the same `type:` marker.
+
 ## Context
 
 `SpringMongoEventStore.appendDcb` appends DCB events under an optional `DcbAppendCondition`, which is the DCB optimistic-concurrency check: fail the append if any event matching the condition's `DcbQuery` exists after the position the command read. The current implementation has three concurrency problems.
