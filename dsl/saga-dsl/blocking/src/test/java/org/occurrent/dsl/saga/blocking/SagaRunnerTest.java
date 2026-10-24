@@ -289,10 +289,13 @@ class SagaRunnerTest {
 
         // Drives the compare-and-set retry with a scripted store: find() is always empty, so every attempt starts the
         // OrderPlaced instance fresh and produces an envelope to save, and compareAndSave decides whether that attempt wins.
+        // A failed apply also lists its stream version as pending, through compareAndSaveWithoutState. That write is counted
+        // apart, in pendingSaveAttempts, and scripted by the same arguments, so a store that loses or throws loses or throws on both.
         private final class ScriptedCasStore implements SagaStateStore<OrderState> {
-            private final IntPredicate savedOnAttempt; // 1-based attempt number, did that save win?
-            private final RuntimeException failWith;    // when set, compareAndSave throws instead of returning
+            private final IntPredicate savedOnAttempt; // 1-based attempt number, did that save win? Counted separately for each kind of save.
+            private final RuntimeException failWith;    // when set, a save throws instead of returning
             int saveAttempts = 0;
+            int pendingSaveAttempts = 0;
 
             ScriptedCasStore(IntPredicate savedOnAttempt, RuntimeException failWith) {
                 this.savedOnAttempt = savedOnAttempt;
@@ -311,6 +314,15 @@ class SagaRunnerTest {
                     throw failWith;
                 }
                 return savedOnAttempt.test(saveAttempts);
+            }
+
+            @Override
+            public boolean compareAndSaveWithoutState(@NonNull String sagaId, @NonNull SagaEnvelope<OrderState> envelope, long expectedVersion) {
+                pendingSaveAttempts++;
+                if (failWith != null) {
+                    throw failWith;
+                }
+                return savedOnAttempt.test(pendingSaveAttempts);
             }
 
             @Override
@@ -359,6 +371,8 @@ class SagaRunnerTest {
                     .isInstanceOf(SagaConcurrencyException.class)
                     .hasMessageContaining("after 3 attempts");
             assertThat(store.saveAttempts).isEqualTo(3);
+            // The pending record is retried on a lost compare-and-set too, and given up after the same number of attempts.
+            assertThat(store.pendingSaveAttempts).isEqualTo(3);
         }
 
         @Test
@@ -369,6 +383,8 @@ class SagaRunnerTest {
             assertThatThrownBy(() -> execution(store, 5).onCloudEvent(orderPlaced("order-cas-3")))
                     .isSameAs(storeDown);
             assertThat(store.saveAttempts).isEqualTo(1);
+            // The pending record is tried once and its failure is not what propagates, the apply failure above is.
+            assertThat(store.pendingSaveAttempts).isEqualTo(1);
         }
 
         @Test
@@ -663,8 +679,8 @@ class SagaRunnerTest {
         void a_dispatcher_that_fails_once_still_gets_the_command_delivered_exactly_once_after_redelivery() {
             // InMemorySubscription retries a failed delivery of the SAME cloud event through its RetryStrategy
             // (see InMemorySubscription.run -> executeWithRetry), which is exactly the at-least-once redelivery this
-            // proves: the failed attempt dispatches nothing and saves nothing, so the eventual, successful redelivery
-            // is the only one that records the command and saves the instance.
+            // proves: the failed attempt dispatches nothing and only lists its stream version as pending, so the
+            // eventual, successful redelivery is the only one that records the command and completes the instance.
             String orderId = "order-7";
             SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
             CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
@@ -685,10 +701,10 @@ class SagaRunnerTest {
             assertAll(
                     () -> assertThat(shipAttempts.get()).isGreaterThanOrEqualTo(2),
                     () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
-                    // Still two saves. InMemorySubscriptionModel cannot be resumed at a chosen position, so this runner
-                    // has no quarantine budget and the failed attempt writes nothing at all, not even the record that
-                    // would start one.
-                    () -> assertThat(envelope.version()).isEqualTo(2),
+                    // Three saves: OrderPlaced, then the failed PaymentReserved, then its successful redelivery. With quarantine
+                    // off the failed attempt still lists its stream version as pending, which is one save, and the pending
+                    // record is no failure, so failure() below stays null.
+                    () -> assertThat(envelope.version()).isEqualTo(3),
                     () -> assertThat(envelope.failure()).isNull()
             );
         }

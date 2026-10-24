@@ -24,6 +24,11 @@ Amended on 2026-10-24 by
 its `streamid` with its `streamversion`, or by its `position`. It recognises one by the stream key alone, and an event
 with only a position is refused like any other event without a key.
 
+Amended on 2026-10-24 by
+[ADR 154](0154-a-saga-tells-a-late-stream-event-from-a-redelivery-per-event-type.md). The Context says
+`SagaExecutionSupport.isRedelivery` compares the stream key against a per-instance watermark. It compares it against a
+mark per stream and event type, and applies a version that arrives after a higher one from the same stream.
+
 ## Context
 
 A saga tells a redelivered event from a new one by its `streamid` together with its `streamversion`, or by its
