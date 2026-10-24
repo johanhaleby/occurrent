@@ -6,6 +6,8 @@
 
 #### Breaking changes
 
+* **`RepositionableSubscriptions.findIn(..)` on a blocking `DurableSubscriptionModel` finds the durable model itself, and a resume at a position through it stores the checkpoint before the subscription resumes.** In 0.33.0 and 0.34.0 the lookup found the model under the durable model, which resumed without storing anything, so a restart before the next event started from the older checkpoint. A catch-up model over a durable model now has the position stored when it resumes the durable model at one. See [the upgrade guide](doc/migration/upgrading-to-0.35.0.md#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint), [ADR 151](doc/architecture/decisions/0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md) and [#1253](https://github.com/johanhaleby/occurrent/issues/1253).
+
 ### 0.34.0 (2026-10-23)
 
 #### Highlights

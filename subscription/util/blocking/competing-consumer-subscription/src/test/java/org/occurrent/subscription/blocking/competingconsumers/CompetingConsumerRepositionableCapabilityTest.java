@@ -67,7 +67,7 @@ class CompetingConsumerRepositionableCapabilityTest {
         CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100);
         return Stream.of(
                 Named.of("a standalone stream catch-up model", new Wiring(live -> new StreamCatchupSubscriptionModel(live, unused(EventStoreQueries.class), config), true)),
-                Named.of("a durable model", new Wiring(live -> live, false)));
+                Named.of("a durable model", new Wiring(live -> live, true)));
     }
 
     static Stream<Named<Wiring>> dispatcherWirings() {
