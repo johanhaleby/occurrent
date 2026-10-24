@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.tck.latecommit.LateCommits;
 
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;

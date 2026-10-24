@@ -25,12 +25,14 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.*;
 import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
+import org.occurrent.tck.latecommit.AppendHold;
+import org.occurrent.tck.latecommit.HeldAppend;
+import org.occurrent.tck.latecommit.LateCommits;
+import org.occurrent.testsupport.mongodb.HoldingTransactionalOperator;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
-import org.springframework.transaction.reactive.TransactionCallback;
 import org.springframework.transaction.reactive.TransactionalOperator;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.temporal.ChronoUnit;
@@ -141,7 +143,9 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
             AppendHold hold = new AppendHold();
             EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                     .eventStoreCollectionName(collection)
-                    .transactionConfig(new HoldingTransactionalOperator(TransactionalOperator.create(transactionManager), hold))
+                    .transactionConfig(new HoldingTransactionalOperator(TransactionalOperator.create(transactionManager), () -> hold.engage()
+                            ? Mono.fromFuture(hold.released()).timeout(AppendHold.RELEASE_TIMEOUT)
+                            : Mono.empty()))
                     .timeRepresentation(timeRepresentation)
                     .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
                     .build();
@@ -149,38 +153,6 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
             return HeldAppend.of(hold, holding, () -> {
             });
         });
-    }
-
-    private static final class HoldingTransactionalOperator implements TransactionalOperator {
-
-        private final TransactionalOperator delegate;
-        private final AppendHold hold;
-
-        HoldingTransactionalOperator(TransactionalOperator delegate, AppendHold hold) {
-            this.delegate = delegate;
-            this.hold = hold;
-        }
-
-        private Mono<Void> holdOnce() {
-            return Mono.defer(() -> hold.engage()
-                    ? Mono.fromFuture(hold.released()).timeout(AppendHold.RELEASE_TIMEOUT)
-                    : Mono.empty());
-        }
-
-        @Override
-        public <T> Mono<T> transactional(Mono<T> mono) {
-            return holdOnce().then(delegate.transactional(mono));
-        }
-
-        @Override
-        public <T> Flux<T> transactional(Flux<T> flux) {
-            return holdOnce().thenMany(delegate.transactional(flux));
-        }
-
-        @Override
-        public <T> Flux<T> execute(TransactionCallback<T> action) {
-            return holdOnce().thenMany(delegate.execute(action));
-        }
     }
 
     @Override
