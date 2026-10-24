@@ -243,7 +243,7 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
         }
 
         @Test
-        void throws_what_the_wrapped_model_throws_after_the_checkpoint_is_stored_and_leaves_it_stored() {
+        void throws_what_the_wrapped_model_throws_after_the_checkpoint_is_stored_and_puts_back_the_checkpoint_stored_before() {
             // Given
             InMemoryCheckpointStorage storage = storageHolding(OLDER);
             RepositionableFake wrapped = new RepositionableFake();
@@ -258,7 +258,74 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(wrappedFailure),
-                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(NEWER)
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(OLDER)
+            );
+        }
+
+        @Test
+        void throws_what_the_wrapped_model_throws_and_removes_the_checkpoint_when_none_was_stored_before() {
+            // Given nothing stored for the subscription when the resume at a position runs
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            storage.delete(SUBSCRIPTION_ID);
+            IllegalStateException wrappedFailure = new IllegalStateException("the wrapped model could not reopen its feed");
+            wrapped.failResumeAtPositionWith = wrappedFailure;
+
+            // When
+            Throwable thrown = catchThrowable(() -> repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isSameAs(wrappedFailure),
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isNull()
+            );
+        }
+
+        @Test
+        void throws_what_the_wrapped_model_throws_with_the_failure_to_put_the_checkpoint_back_as_suppressed() {
+            // Given a storage that takes the new position and then fails the save that puts the old one back
+            PutBackFailingStorage storage = new PutBackFailingStorage();
+            storage.save(SUBSCRIPTION_ID, OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            IllegalStateException wrappedFailure = new IllegalStateException("the wrapped model could not reopen its feed");
+            wrapped.failResumeAtPositionWith = wrappedFailure;
+            IllegalStateException putBackFailure = new IllegalStateException("the storage lost its connection");
+            storage.failSaveNumber(2, putBackFailure);
+
+            // When
+            Throwable thrown = catchThrowable(() -> repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isSameAs(wrappedFailure),
+                    () -> assertThat(thrown.getSuppressed()).as("suppressed").containsExactly(putBackFailure)
+            );
+        }
+
+        @Test
+        void throws_what_the_wrapped_model_throws_with_the_failure_to_remove_the_checkpoint_as_suppressed() {
+            // Given nothing stored for the subscription, and a storage that fails the delete that removes the new position
+            PutBackFailingStorage storage = new PutBackFailingStorage();
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            storage.delete(SUBSCRIPTION_ID);
+            IllegalStateException wrappedFailure = new IllegalStateException("the wrapped model could not reopen its feed");
+            wrapped.failResumeAtPositionWith = wrappedFailure;
+            IllegalStateException putBackFailure = new IllegalStateException("the storage lost its connection");
+            storage.failDelete(putBackFailure);
+
+            // When
+            Throwable thrown = catchThrowable(() -> repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isSameAs(wrappedFailure),
+                    () -> assertThat(thrown.getSuppressed()).as("suppressed").containsExactly(putBackFailure)
             );
         }
     }
@@ -340,6 +407,40 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
 
     private static RepositionableSubscriptions repositionableIn(DurableSubscriptionModel model) {
         return RepositionableSubscriptions.findIn(model).orElseThrow();
+    }
+
+    /**
+     * A storage that fails the nth save counted from {@link #failSaveNumber} and every delete after {@link #failDelete}.
+     */
+    private static class PutBackFailingStorage extends InMemoryCheckpointStorage {
+        private int savesLeftBeforeFailure = Integer.MAX_VALUE;
+        @Nullable private RuntimeException saveFailure = null;
+        @Nullable private RuntimeException deleteFailure = null;
+
+        void failSaveNumber(int number, RuntimeException failure) {
+            savesLeftBeforeFailure = number - 1;
+            saveFailure = failure;
+        }
+
+        void failDelete(RuntimeException failure) {
+            deleteFailure = failure;
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            if (saveFailure != null && savesLeftBeforeFailure-- == 0) {
+                throw saveFailure;
+            }
+            return super.save(subscriptionId, checkpoint, condition);
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            if (deleteFailure != null) {
+                throw deleteFailure;
+            }
+            super.delete(subscriptionId);
+        }
     }
 
     /**

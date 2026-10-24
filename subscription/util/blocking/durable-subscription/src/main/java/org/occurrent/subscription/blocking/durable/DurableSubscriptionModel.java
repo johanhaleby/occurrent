@@ -814,8 +814,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * The checkpoint is stored with the same write condition as every other checkpoint this model writes. When the
      * checkpoint storage refuses the write with {@link CheckpointWriteConditionNotFulfilledException}, because another
      * node has written with a newer lease, the exception propagates and the subscription stays paused. When the wrapped
-     * model's resume throws after the write, the stored checkpoint stays and the exception propagates, so a later
-     * {@link #resumeSubscription(String)} or a restart starts from the position asked for here.
+     * model's resume throws after the write, the checkpoint stored before is put back, or removed when none was, and
+     * the exception propagates. A catch-up model that shares the checkpoint storage then replays from where it would
+     * have before the call. When putting it back throws too, that exception is added to the thrown one as a suppressed
+     * exception, and the position asked for here may still be the one stored.
      * <p>
      * A subscription subscribed without checkpointing (see {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}),
      * or one the wrapped model doesn't report as paused, is passed on to the wrapped model as it is and nothing is
@@ -846,9 +848,28 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             Checkpoint position = resolved instanceof StartAt.StartAtCheckpoint at ? at.checkpoint : presentPositionToResumeAt(subscriptionId);
             // Stored before the resume, since an event delivered after the resume writes a newer checkpoint that this
             // write would otherwise overwrite
+            Checkpoint previous = storage.read(subscriptionId);
             storage.save(subscriptionId, position, writeConditionFor(subscriptionId));
-            return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(position));
+            try {
+                return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(position));
+            } catch (RuntimeException | Error e) {
+                putBack(subscriptionId, previous, e);
+                throw e;
+            }
         });
+    }
+
+    // A catch-up model sharing the storage replays from what is stored, so a failed resume puts back what it found
+    private void putBack(String subscriptionId, @Nullable Checkpoint previous, Throwable resumeFailure) {
+        try {
+            if (previous == null) {
+                storage.delete(subscriptionId);
+            } else {
+                storage.save(subscriptionId, previous, writeConditionFor(subscriptionId));
+            }
+        } catch (RuntimeException | Error putBackFailure) {
+            resumeFailure.addSuppressed(putBackFailure);
+        }
     }
 
     private Checkpoint presentPositionToResumeAt(String subscriptionId) {

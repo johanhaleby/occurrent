@@ -93,12 +93,20 @@ call holds the lock `DurableSubscriptionModel` already takes per subscription id
 
 The store comes first. The subscription is paused and the id lock is held, so no event's checkpoint can be written in
 between. Resuming first would let an event's checkpoint be written and then overwritten with an older position.
+Resuming first and then storing only when the stored checkpoint is still the one read before would avoid that, but
+`CheckpointWriteCondition` has no such case. It has `any()`, `notOlderThan(..)` and `ifAbsent()`, and a fourth case
+would have to be evaluated by every `CheckpointStorage`, the four Occurrent ships and every one an application wrote.
 
 The store uses the same write condition as every other checkpoint write in the model (ADR 116, ADR 139). A refused
 write throws `CheckpointWriteConditionNotFulfilledException`, nothing is resumed and the subscription stays paused,
-because a node another node has fenced out must not move the position. When the wrapped resume throws after the store,
-the stored position stays and the exception propagates. A later plain resume, or a restart, then starts from the
-position the caller asked for. Rolling the store back would be a second write that can fail on its own.
+because a node another node has fenced out must not move the position.
+
+When the wrapped resume throws after the store, the model puts back the checkpoint stored before, under the same lock
+and with the same write condition, or deletes the new one when nothing was stored before. Then the exception
+propagates. A catch-up model that shares the checkpoint storage, as it does in the Spring Boot starter, replays from
+the stored checkpoint. Had the new position stayed, a later resume would make the catch-up model go live at it and
+skip the events written between its replay position and the new one. A failure to put the checkpoint back is added
+to the thrown exception as a suppressed exception.
 
 `capability(RepositionableSubscriptions.class)` on a `DurableSubscriptionModel` answers the model itself when the
 wrapped model can reposition and empty otherwise, as `ReactorDurableSubscriptionModel` and the catch-up models already
