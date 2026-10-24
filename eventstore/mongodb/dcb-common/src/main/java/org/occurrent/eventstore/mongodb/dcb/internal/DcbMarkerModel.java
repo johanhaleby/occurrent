@@ -22,6 +22,7 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 
 import java.util.List;
 import java.util.Set;
@@ -43,6 +44,25 @@ public final class DcbMarkerModel {
     public static final String COUNTER_POSITION = "position";
     public static final String CHECKPOINT_LAST_POSITION = "lastPosition";
     public static final String CHECKPOINT_VERSION = "version";
+    /**
+     * The marker field that counts the increments whose events carry {@link #EVENT_MARKER_VERSIONS}. Every increment a
+     * 0.35 writer makes raises it together with {@link #CHECKPOINT_VERSION}, so {@code version - s} counts the
+     * increments of writers that wrote none (ADR 148).
+     */
+    public static final String CHECKPOINT_STAMPED = "s";
+    /**
+     * The marker field holding the marker's epoch, an {@code ObjectId} set when the marker is created, or by the first
+     * 0.35 increment of a marker created before it.
+     */
+    public static final String CHECKPOINT_EPOCH = "epoch";
+    /**
+     * The event field holding one element per marker key of the event, with the marker's key, epoch and the version
+     * the event's append gave it.
+     */
+    public static final String EVENT_MARKER_VERSIONS = "mv";
+    public static final String EVENT_MARKER_VERSIONS_KEY = "k";
+    public static final String EVENT_MARKER_VERSIONS_EPOCH = "e";
+    public static final String EVENT_MARKER_VERSIONS_VERSION = "v";
 
     private static final String MARKER_ID_PREFIX = "marker:";
     private static final String POSITION_COLLECTION_SUFFIX = "_position";
@@ -63,38 +83,31 @@ public final class DcbMarkerModel {
         return MARKER_ID_PREFIX + key;
     }
 
+    /**
+     * The marker key of a marker document id, the inverse of {@link #markerId(String)}.
+     */
+    public static String markerKey(String markerId) {
+        if (!markerId.startsWith(MARKER_ID_PREFIX)) {
+            throw new IllegalArgumentException("Not a marker id: " + markerId);
+        }
+        return markerId.substring(MARKER_ID_PREFIX.length());
+    }
+
+    // Decompose into one key per attribute (a key per tag, a key per type) and NEVER combine them into a single
+    // "type:X+tag:t" key. Skew-safety (ADR 0021) depends on this: a conflicting event shares a marker via whichever
+    // single attribute made it match, and a combined key would share nothing with an event that carries only one
+    // of the attributes through a different criteria. The derivation is shared with the in-memory store.
     public static Set<String> queryMarkerKeys(DcbCriteria criteria) {
-        if (criteria instanceof DcbCriteria.MatchAll) {
-            return Set.of("all");
-        }
-        // Decompose into one key per attribute (a key per tag, a key per type) and NEVER combine them into a single
-        // "type:X+tag:t" key. Skew-safety (ADR 0021) depends on this: a conflicting event shares a marker via whichever
-        // single attribute made it match, and a combined key would share nothing with an event that carries only one
-        // of the attributes through a different criteria.
-        TreeSet<String> keys = new TreeSet<>();
-        for (DcbCriterion item : dcbQueryItems(criteria)) {
-            item.tags().forEach(tag -> keys.add("tag:" + tag.canonical()));
-            item.types().forEach(type -> keys.add("type:" + type));
-        }
-        return keys;
+        return DcbMarkerVersionsSupport.queryMarkerKeys(criteria);
     }
 
     // MatchAll has no per-item markers. A DcbCriterion is one alternative, and Items contains several.
     public static List<DcbCriterion> dcbQueryItems(DcbCriteria criteria) {
-        return switch (criteria) {
-            case DcbCriteria.MatchAll ignored -> List.of();
-            case DcbCriterion item -> List.of(item);
-            case DcbCriteria.Items items -> items.items();
-        };
+        return DcbMarkerVersionsSupport.items(criteria);
     }
 
     public static Set<String> eventMarkerKeys(List<CloudEvent> events) {
-        TreeSet<String> keys = new TreeSet<>();
-        for (CloudEvent event : events) {
-            DcbCloudEvents.getTags(event).forEach(tag -> keys.add("tag:" + tag.canonical()));
-            keys.add("type:" + event.getType());
-        }
-        return keys;
+        return DcbMarkerVersionsSupport.eventMarkerKeys(events);
     }
 
     public static Set<Tag> tagsOf(List<CloudEvent> events) {
