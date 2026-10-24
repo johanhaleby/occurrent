@@ -21,6 +21,7 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.occurrent.tck.internal.scaffolding.ExpectedGuaranteeViolation;
 import org.occurrent.tck.subscription.blocking.RestartConformance;
 import org.occurrent.tck.subscription.blocking.RestartableSubscriptionModelFixture;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -35,6 +36,9 @@ import org.testcontainers.mongodb.MongoDBContainer;
  * {@code NativeMongoSubscriptionModel} would restart.
  */
 @Testcontainers
+@ExpectedGuaranteeViolation(
+        tests = "a_subscription_started_at_a_stored_global_position_delivers_an_event_that_committed_below_it",
+        issue = "https://github.com/johanhaleby/occurrent/issues/1297")
 class CatchupSubscriptionModelRestartConformanceTest extends RestartConformance {
 
     private static final String DATABASE = "catchuprestartconformance";

@@ -18,6 +18,7 @@ package org.occurrent.tck.subscription.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.tck.latecommit.LateCommits;
 
 import java.util.List;
 
@@ -60,4 +61,41 @@ public interface RestartableSubscriptionModelFixture extends SubscriptionModelFi
      * lost rather than that nothing repeats.
      */
     boolean resumesAfterARestart();
+
+    /**
+     * How the store behind this model answers an append that commits after one with a higher position. Asked by
+     * {@link RestartConformance}, which holds one append between the moment its position is assigned and the moment it
+     * commits, lets a later append be delivered and stored as the position to restart from, and then commits the held
+     * one.
+     * <p>
+     * A store that reserves a position before its transaction commits answers with
+     * {@link LateCommits#holding(java.util.function.Supplier)}, and builds the hold from a public injection point of the
+     * store that wrote what this model reads. A store that assigns a position and commits it as one step answers
+     * {@link LateCommits#inPositionOrder()}, and the suite then runs the same steps with nothing held.
+     * <p>
+     * Required, with no usable default, because there is no answer that is right often enough to inherit. A fixture
+     * that does not override it fails {@link RestartConformance} before its first assertion.
+     */
+    default LateCommits lateCommits() {
+        throw new UnsupportedOperationException(getClass().getName() + " runs RestartConformance but does not override "
+                + "lateCommits(). Either override it, or stop extending the restart suite.");
+    }
+
+    /**
+     * Whether a subscription started at {@code StartAt.checkpoint(GlobalCheckpoint.of(p))}, a position the application
+     * stored itself, delivers what was committed after position {@code p} was reached, including an event that
+     * committed late with a position below {@code p}.
+     * <p>
+     * Answering {@code true} owes {@link RestartConformance} that late event. Answering {@code false} owes the opposite,
+     * that the model starts at the present and only what arrives afterwards is delivered, which is what a model reading
+     * a change stream does with a position it cannot open at. The test refuses instead when the model does not accept
+     * {@link StartAtVariant#CHECKPOINT} at all, see {@link #acceptedStartAtVariants()}.
+     * <p>
+     * Required, with no usable default, for the same reason as {@link #lateCommits()}. A fixture that does not override
+     * it fails {@link RestartConformance} before its first assertion.
+     */
+    default boolean honoursAGlobalPosition() {
+        throw new UnsupportedOperationException(getClass().getName() + " runs RestartConformance but does not override "
+                + "honoursAGlobalPosition(). Either override it, or stop extending the restart suite.");
+    }
 }

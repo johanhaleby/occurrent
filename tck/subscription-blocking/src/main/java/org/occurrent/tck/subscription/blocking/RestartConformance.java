@@ -18,18 +18,34 @@ package org.occurrent.tck.subscription.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.ConformanceEvents;
+import org.occurrent.tck.latecommit.HeldAppend;
+import org.occurrent.tck.latecommit.LateAppend;
+import org.occurrent.tck.latecommit.LateCommitGuarantee;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
 
 /**
@@ -48,6 +64,12 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  * {@link RestartableSubscriptionModelFixture#resumesAfterARestart()}, because two models with identical durable state
  * underneath them genuinely differ. A change-stream model reads from wherever the server is now, and the same model
  * wrapped in one that keeps a checkpoint reads from where the checkpoint says. Both branches are asserted.
+ * <p>
+ * A model that resumes also owes the events a store commits out of position order. A store that reserves an event's
+ * position before the transaction that writes it commits can let an event with a lower position become visible after
+ * one with a higher position, and a subscription that stored the higher one as where it got to must still be delivered
+ * the lower one when it restarts. {@link RestartableSubscriptionModelFixture#lateCommits()} is how the suite makes a
+ * store do that, and a store that cannot declares so.
  * <p>
  * <strong>Delivery here is at-least-once, not exactly-once.</strong> A model resuming from the last position it stored
  * rather than from just after it hands that event over a second time, and nothing in Occurrent promises otherwise, so
@@ -72,6 +94,18 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
      */
     @Override
     protected abstract RestartableSubscriptionModelFixture createFixture();
+
+    private static final String HELD_STREAM = "stream:held";
+
+    /**
+     * Touched in setup, so a fixture that never answered fails before the first assertion rather than halfway through
+     * a test.
+     */
+    @Override
+    protected void checkFixtureCanAnswerThisSuite(SubscriptionModelFixture fixture) {
+        ((RestartableSubscriptionModelFixture) fixture).lateCommits();
+        ((RestartableSubscriptionModelFixture) fixture).honoursAGlobalPosition();
+    }
 
     private RestartableSubscriptionModelFixture restartable() {
         // Safe by the covariant return above: a subclass cannot widen it back.
@@ -147,5 +181,146 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
                 .as("state left behind by the previous model must not stop a fresh subscription from delivering, which "
                         + "is what a checkpoint left in a state nothing can start from would do")
                 .contains(afterTheRestart.getId());
+    }
+
+    @Test
+    void a_restart_delivers_an_event_that_committed_after_a_later_one_was_delivered() {
+        restartAfterALateCommit(restartable().resumesAfterARestart(), "resumes", (restarted, id, storedPosition, recorded) -> restarted.subscribe(id, recorded));
+    }
+
+    @Test
+    void a_subscription_started_at_a_stored_global_position_delivers_an_event_that_committed_below_it() {
+        if (!fixture().acceptedStartAtVariants().contains(StartAtVariant.CHECKPOINT)) {
+            assertThatThrownBy(() -> subscriptionModel()
+                    .subscribe(subscriptionId(), null, StartAt.checkpoint(GlobalCheckpoint.of(1)), new RecordedEvents()))
+                    .as("this model declares it does not accept %s, so a position the application stored itself is "
+                            + "refused rather than quietly ignored", StartAtVariant.CHECKPOINT)
+                    .isInstanceOf(UnsupportedStartAtException.class);
+            return;
+        }
+        restartAfterALateCommit(restartable().honoursAGlobalPosition(), "honours a global position",
+                (restarted, id, storedPosition, recorded) -> restarted.subscribe(subscriptionId(), null, StartAt.checkpoint(storedPosition.get()), recorded));
+    }
+
+    /**
+     * Starts how the rebuilt subscription is made. {@code storedPosition} is the position an application would have
+     * stored after the later event was delivered, which is only asked for by a start that applies one.
+     */
+    private interface Resume {
+        Subscription start(SubscriptionModel restarted, String id, Supplier<Checkpoint> storedPosition, RecordedEvents recorded);
+    }
+
+    private void restartAfterALateCommit(boolean owesTheLateEvent, String declaration, Resume resume) {
+        String id = subscriptionId();
+        RecordedEvents beforeTheRestart = new RecordedEvents();
+        List<CloudEvent> deliveredBefore = new ArrayList<>();
+        assertThat(subscriptionModel().subscribe(id, beforeTheRestart).waitUntilStarted(deliveryTimeout()))
+                .as("the subscription must be listening before the append is held, or the later event would not be "
+                        + "delivered to it")
+                .isTrue();
+        CloudEvent inFlight = ConformanceEvents.event("in-flight", "NameDefined");
+        CloudEvent overtaking = ConformanceEvents.event("overtaking", "NameWasChanged");
+        CloudEvent marker = ConformanceEvents.event("marker", "MarkerEvent");
+        AtomicReference<HeldAppend> hold = new AtomicReference<>();
+
+        try (LateAppend<Void> late = LateAppend.<Void>start(restartable().lateCommits(),
+                held -> {
+                    hold.set(held);
+                    return () -> {
+                        held.eventStore().write(HELD_STREAM, List.of(inFlight));
+                        return null;
+                    };
+                },
+                () -> {
+                    publish(inFlight);
+                    return null;
+                },
+                held -> held == null ? arrived(beforeTheRestart, deliveredBefore, inFlight) : isStored(held, inFlight))) {
+            publish(overtaking);
+            assertThat(arrived(beforeTheRestart, deliveredBefore, overtaking))
+                    .as("the model has to deliver the later event before a restart says anything about the position it "
+                            + "stored")
+                    .isTrue();
+
+            SubscriptionModel restarted = restartable().restart();
+            deliveredBefore.addAll(beforeTheRestart.soFar());
+            late.release();
+            if (!late.commitsInPositionOrder()) {
+                late.requireWindowEntered(positionStoredBy(hold.get(), inFlight), positionDelivered(deliveredBefore, overtaking));
+            }
+
+            RecordedEvents afterTheRestart = new RecordedEvents();
+            // A store that commits in position order has no positions to hand back from a delivered event, so the
+            // fixture's own starting point stands in for the one an application would have stored.
+            Supplier<Checkpoint> storedPosition = () -> late.commitsInPositionOrder()
+                    ? fixture().aCheckpointToStartFrom()
+                    : GlobalCheckpoint.of(positionDelivered(deliveredBefore, overtaking));
+            assertThat(resume.start(restarted, id, storedPosition, afterTheRestart).waitUntilStarted(deliveryTimeout()))
+                    .as("the rebuilt subscription must report started, or whichever branch runs below reports a missing "
+                            + "event as a position problem when it was really a subscription that never started")
+                    .isTrue();
+            publish(marker);
+
+            if (owesTheLateEvent) {
+                boolean deliveredAlready = idsOf(deliveredBefore).contains(inFlight.getId());
+                List<CloudEvent> received = afterTheRestart.awaitUntil(events -> idsOf(events).contains(marker.getId())
+                        && (deliveredAlready || idsOf(events).contains(inFlight.getId())), deliveryTimeout());
+                assertThat(idsOf(received))
+                        .as("the marker proves the rebuilt subscription is delivering, so an event missing below is a "
+                                + "position that skipped it rather than a subscription that never listened")
+                        .contains(marker.getId());
+                Set<String> delivered = new LinkedHashSet<>(idsOf(deliveredBefore));
+                delivered.addAll(idsOf(received));
+                LateCommitGuarantee.require(delivered.contains(inFlight.getId()),
+                        "the event that committed after the one the subscription stored is delivered before the restart "
+                                + "or by the rebuilt subscription, since this model declares it " + declaration,
+                        () -> "the subscription was delivered " + idsOf(deliveredBefore) + " before the restart and "
+                                + idsOf(received) + " after it");
+            } else {
+                List<CloudEvent> received = afterTheRestart.awaitUntil(
+                        events -> idsOf(events).contains(marker.getId()), deliveryTimeout());
+                assertThat(idsOf(received))
+                        .as("this model declares it starts at the present, so only the marker arrives, and an event "
+                                + "that committed before the rebuilt subscription started is gone")
+                        .containsExactly(marker.getId());
+            }
+        }
+    }
+
+    private boolean arrived(RecordedEvents recorded, List<CloudEvent> sink, CloudEvent event) {
+        if (!idsOf(sink).contains(event.getId())) {
+            sink.addAll(recorded.awaitUntil(events -> idsOf(events).contains(event.getId()), deliveryTimeout()));
+        }
+        return idsOf(sink).contains(event.getId());
+    }
+
+    private static boolean isStored(HeldAppend held, CloudEvent event) {
+        return idsOf(held.eventStore().read(HELD_STREAM).events()).contains(event.getId());
+    }
+
+    private static long positionStoredBy(@Nullable HeldAppend held, CloudEvent event) {
+        if (held == null) {
+            throw new IllegalStateException("The store declared it holds an append, but no append was held");
+        }
+        try (var events = held.eventStore().read(HELD_STREAM).events()) {
+            return events.filter(candidate -> candidate.getId().equals(event.getId()))
+                    .mapToLong(OccurrentCloudEventExtension::getPosition)
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException("Event " + event.getId() + " was not found in " + HELD_STREAM
+                            + " once the held append had committed"));
+        }
+    }
+
+    private static long positionDelivered(List<CloudEvent> delivered, CloudEvent event) {
+        long position = delivered.stream()
+                .filter(candidate -> candidate.getId().equals(event.getId()))
+                .mapToLong(OccurrentCloudEventExtension::getPosition)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("Event " + event.getId() + " was not delivered"));
+        if (position <= 0) {
+            throw new IllegalStateException("The delivered event " + event.getId() + " carries no position, so the suite "
+                    + "cannot check that the held append reserved its position before it");
+        }
+        return position;
     }
 }
