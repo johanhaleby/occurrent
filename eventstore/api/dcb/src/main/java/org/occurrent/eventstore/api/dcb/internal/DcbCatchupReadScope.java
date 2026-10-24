@@ -26,7 +26,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Internal, not part of the public API. The reads of one DCB catch-up replay attempt are the live start, the head and
- * every replay read. A store that reports a live start makes these reads see everything that committed up to it. Close
+ * every replay read. A store that reports a live start makes these reads see everything that committed before it. Close
  * the scope when the attempt ends.
  */
 @NullMarked

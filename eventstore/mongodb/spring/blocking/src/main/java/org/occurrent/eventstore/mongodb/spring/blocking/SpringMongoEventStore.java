@@ -614,7 +614,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 // Never the session of a transaction the caller has open, since that transaction may abort
                 this.template.setSessionSynchronization(NEVER);
                 if (notBefore != null) {
-                    OperationTimeLiveStart.tryParse(notBefore).ifPresent(session::advanceOperationTime);
+                    // Advances to just before the live start and not to it, since the cluster time may not have reached it yet
+                    // and the replay only needs what committed before it
+                    OperationTimeLiveStart.tryParse(notBefore).map(OperationTimeLiveStart::oneIncrementBefore).ifPresent(session::advanceOperationTime);
                 }
                 readCounter();
                 BsonTimestamp t0 = session.getOperationTime();
