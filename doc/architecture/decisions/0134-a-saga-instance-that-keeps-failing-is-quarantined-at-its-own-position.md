@@ -30,6 +30,11 @@ The three questions this decision could not settle on its own were ruled at that
 narrowing rather than a closure, and [#918](https://github.com/johanhaleby/occurrent/issues/918) is its recorded
 path.
 
+Amended on 2026-10-24 by
+[ADR 150](0150-a-global-position-is-not-a-saga-redelivery-key.md). The Decision below defines the redelivery key as the
+stream id with its version, or the global position. It is the stream id with its version alone, and a stored failure
+record whose input is `position:N` counts as no failure record.
+
 ## Context
 
 `SagaExecution.onCloudEvent` runs the saga and catches nothing. `SagaExecutionSupport.process` calls

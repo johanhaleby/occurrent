@@ -19,6 +19,11 @@ against that record.
 > a listener that does not acknowledge, and 0.34.0's parking source makes the other side a supported configuration.
 > The saga declines to acknowledge a refused event, and nothing here decides what happens to it next.
 
+Amended on 2026-10-24 by
+[ADR 150](0150-a-global-position-is-not-a-saga-redelivery-key.md). The Context says a saga recognises a redelivery by
+its `streamid` with its `streamversion`, or by its `position`. It recognises one by the stream key alone, and an event
+with only a position is refused like any other event without a key.
+
 ## Context
 
 A saga tells a redelivered event from a new one by its `streamid` together with its `streamversion`, or by its
