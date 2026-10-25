@@ -16,25 +16,42 @@
 
 package org.occurrent.subscription.blocking.competingconsumers;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.SubscriptionRefusedException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * Covers issue #737, finding 1: a delegate that refuses {@code pauseSubscription} (for example a catch-up
@@ -48,10 +65,25 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
 
     private static final String SUBSCRIBER_ID = "subscriber";
+    private static final String SUBSCRIPTION_ID = "subscriptionId";
 
     private final DelegateThatRefusesPause delegate = new DelegateThatRefusesPause();
     private final RecordingCompetingConsumerStrategy strategy = new RecordingCompetingConsumerStrategy();
     private final CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+    private final ListAppender<ILoggingEvent> logEvents = new ListAppender<>();
+    private final Logger modelLogger = (Logger) LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class);
+
+    @BeforeEach
+    void capture_what_the_model_logs() {
+        logEvents.start();
+        modelLogger.addAppender(logEvents);
+    }
+
+    @AfterEach
+    void stop_capturing_what_the_model_logs() {
+        modelLogger.detachAppender(logEvents);
+        logEvents.stop();
+    }
 
     @Test
     void a_delegate_refusal_still_releases_the_lease_and_reports_the_consumer_paused() {
@@ -73,11 +105,109 @@ class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
                 .contains("unregister:" + subscriptionId + ":" + SUBSCRIBER_ID);
     }
 
+    // The wrapped model refusing the pause means it no longer runs the subscription, so there is nothing left to
+    // pause there. Returning normally and giving up the lease is correct, since keeping it would leave this node
+    // holding a lease that no subscription on it serves and no other node could take over.
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("refusals")
+    @DisplayName("a user pause refused by the wrapped model returns normally, pauses the consumer and unregisters it")
+    void a_user_pause_refused_by_the_wrapped_model_returns_normally_pauses_the_consumer_and_unregisters_it(SubscriptionRefusedException refusal) {
+        // Given
+        subscribeAndRefusePause(refusal);
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).isNull(),
+                () -> assertThat(model.isPaused(SUBSCRIPTION_ID)).isTrue(),
+                () -> assertThat(strategy.calls).contains("unregister:" + SUBSCRIPTION_ID + ":" + SUBSCRIBER_ID)
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("refusals")
+    @DisplayName("a user pause refused by the wrapped model logs one warning naming the subscription, the subscriber and the refusal")
+    void a_user_pause_refused_by_the_wrapped_model_logs_one_warning_naming_the_subscription_the_subscriber_and_the_refusal(SubscriptionRefusedException refusal) {
+        // Given
+        subscribeAndRefusePause(refusal);
+
+        // When
+        model.pauseSubscription(SUBSCRIPTION_ID);
+
+        // Then
+        assertThat(warnings()).singleElement().satisfies(warning -> assertAll(
+                () -> assertThat(warning.getFormattedMessage()).contains(SUBSCRIPTION_ID, SUBSCRIBER_ID, "pausedByUser=true"),
+                () -> assertThat(warning.getThrowableProxy().getClassName()).isEqualTo(refusal.getClass().getName()),
+                () -> assertThat(warning.getThrowableProxy().getMessage()).isEqualTo(refusal.getMessage())
+        ));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("refusals")
+    @DisplayName("a pause after a lost lease refused by the wrapped model pauses the consumer and releases the lease")
+    void a_pause_after_a_lost_lease_refused_by_the_wrapped_model_pauses_the_consumer_and_releases_the_lease(SubscriptionRefusedException refusal) {
+        // Given
+        subscribeAndRefusePause(refusal);
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.onConsumeProhibited(SUBSCRIPTION_ID, SUBSCRIBER_ID));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).isNull(),
+                () -> assertThat(model.isPaused(SUBSCRIPTION_ID)).isTrue(),
+                () -> assertThat(strategy.calls).contains("release:" + SUBSCRIPTION_ID + ":" + SUBSCRIBER_ID),
+                () -> assertThat(strategy.calls).doesNotContain("unregister:" + SUBSCRIPTION_ID + ":" + SUBSCRIBER_ID)
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("refusals")
+    @DisplayName("a pause after a lost lease refused by the wrapped model logs one warning naming the subscription, the subscriber and the refusal")
+    void a_pause_after_a_lost_lease_refused_by_the_wrapped_model_logs_one_warning_naming_the_subscription_the_subscriber_and_the_refusal(SubscriptionRefusedException refusal) {
+        // Given
+        subscribeAndRefusePause(refusal);
+
+        // When
+        model.onConsumeProhibited(SUBSCRIPTION_ID, SUBSCRIBER_ID);
+
+        // Then
+        assertThat(warnings()).singleElement().satisfies(warning -> assertAll(
+                () -> assertThat(warning.getFormattedMessage()).contains(SUBSCRIPTION_ID, SUBSCRIBER_ID, "pausedByUser=false"),
+                () -> assertThat(warning.getThrowableProxy().getClassName()).isEqualTo(refusal.getClass().getName()),
+                () -> assertThat(warning.getThrowableProxy().getMessage()).isEqualTo(refusal.getMessage())
+        ));
+    }
+
+    private static Stream<SubscriptionRefusedException> refusals() {
+        return Stream.of(
+                new UnknownSubscriptionException(SUBSCRIPTION_ID),
+                new SubscriptionNotRunningException(SUBSCRIPTION_ID)
+        );
+    }
+
+    private void subscribeAndRefusePause(SubscriptionRefusedException refusal) {
+        model.subscribe(SUBSCRIBER_ID, SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), event -> {
+        });
+        delegate.refusePauseOf(SUBSCRIPTION_ID, refusal);
+    }
+
+    private List<ILoggingEvent> warnings() {
+        return logEvents.list.stream().filter(event -> event.getLevel() == Level.WARN).toList();
+    }
+
     private static final class DelegateThatRefusesPause implements SubscriptionModel {
-        private final List<String> refusedIds = new ArrayList<>();
+        private final Map<String, SubscriptionRefusedException> refusals = new HashMap<>();
 
         void refusePauseOf(String subscriptionId) {
-            refusedIds.add(subscriptionId);
+            refusePauseOf(subscriptionId, new UnknownSubscriptionException(subscriptionId));
+        }
+
+        void refusePauseOf(String subscriptionId, SubscriptionRefusedException refusal) {
+            refusals.put(subscriptionId, refusal);
         }
 
         @Override
@@ -119,8 +249,9 @@ class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
 
         @Override
         public void pauseSubscription(String subscriptionId) {
-            if (refusedIds.contains(subscriptionId)) {
-                throw new UnknownSubscriptionException(subscriptionId);
+            SubscriptionRefusedException refusal = refusals.get(subscriptionId);
+            if (refusal != null) {
+                throw refusal;
             }
         }
     }
