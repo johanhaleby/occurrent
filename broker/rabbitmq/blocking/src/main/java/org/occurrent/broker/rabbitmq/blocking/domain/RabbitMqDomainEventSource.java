@@ -591,6 +591,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
      * own javadoc already expects once this source's channel eventually closes.
      */
     private void stopPermanently() {
+        Throwable primary = null;
         consumeLock.lock();
         try {
             // Set under the same lock reconcileConsumption() now reads it under, so the two can never interleave:
@@ -618,21 +619,30 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
             } catch (RuntimeException ignored) {
                 // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
             }
+        } catch (Throwable e) {
+            primary = e;
+            throw e;
         } finally {
-            // A finally, so an Error out of the cancel or a release still closes the channel and stops the poll and the
-            // worker. The close is what requeues a held delivery, the release only makes that happen sooner. The Error
-            // still propagates once the teardown is done, unless the teardown throws something of its own, which then
-            // replaces it.
-            try {
-                consumeChannel.close();
-            } catch (IOException | TimeoutException | RuntimeException ignored) {
-                // Best effort, mirroring close()'s own channel teardown: the channel is going away either way.
-                // RuntimeException also catches ShutdownSignalException, which extends it.
-            } finally {
-                consumeLock.unlock();
-                scheduler.shutdown();
-                worker.stopAcceptingWork();
-            }
+            // Runs for an Error out of the cancel or a release too, since the channel close is what requeues a held
+            // delivery and the poll and the worker still need stopping. A step that fails is added to that Error as
+            // suppressed instead of replacing it.
+            new RabbitMqTeardown(primary)
+                    .run(this::closeChannelIgnoringFailure)
+                    .run(consumeLock::unlock)
+                    .run(scheduler::shutdown)
+                    .run(worker::stopAcceptingWork)
+                    .finish();
+        }
+    }
+
+    // Best effort, mirroring close()'s own channel teardown. The channel is going away either way, and an
+    // already-failed or already-closed channel has nothing further this source can do about it. RuntimeException
+    // also catches ShutdownSignalException, which extends it.
+    private void closeChannelIgnoringFailure() {
+        try {
+            consumeChannel.close();
+        } catch (IOException | TimeoutException | RuntimeException ignored) {
+            // See above.
         }
     }
 
@@ -665,6 +675,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
      */
     @Override
     public void close() {
+        Throwable primary = null;
         try {
             long deadline = System.nanoTime() + RabbitMqTeardown.timeoutNanos(closeTimeout);
             bringCloseDeadlineForwardTo(deadline);
@@ -716,16 +727,24 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
                     consumeLock.unlock();
                 }
             }
+        } catch (Throwable e) {
+            primary = e;
+            throw e;
         } finally {
-            // A finally like stopPermanently()'s, so an exception from anything above, the deadline arithmetic included,
-            // still reaches the channel close, and the parking sink's close after it under PARK.
-            try {
-                consumeChannel.close();
-            } catch (IOException | ShutdownSignalException | TimeoutException ignored) {
-                // Best effort, mirroring RabbitMqCloudEventSink#close's own channel teardown.
-            } finally {
-                failureAction.close();
-            }
+            // Like stopPermanently()'s, so an exception from anything above still reaches the channel close, and the
+            // parking sink's close after it under PARK. A step that fails is added to that exception as suppressed.
+            new RabbitMqTeardown(primary)
+                    .run(this::closeChannelIgnoringIoFailure)
+                    .run(failureAction::close)
+                    .finish();
+        }
+    }
+
+    private void closeChannelIgnoringIoFailure() {
+        try {
+            consumeChannel.close();
+        } catch (IOException | ShutdownSignalException | TimeoutException ignored) {
+            // Best effort, mirroring RabbitMqCloudEventSink#close's own channel teardown.
         }
     }
 
@@ -953,16 +972,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
                 source.start(this, destinations);
                 return source;
             } catch (RuntimeException e) {
-                closeQuietly(channel);
-                if (failureAction != null) {
-                    failureAction.close();
-                }
-                if (source != null) {
-                    // start() can fail after the source, and its scheduler, already exist. The scheduler has no
-                    // thread yet here, since scheduleWithFixedDelay(...) is the last thing start() does, but this
-                    // stays defensive against that ordering changing later.
-                    source.scheduler.shutdownNow();
-                }
+                unwind(e, channel, failureAction, source);
                 throw e;
             }
         }
@@ -988,6 +998,20 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
                         .orElseThrow(() -> new RabbitMqSourceException("No RabbitMQ channel number was available to create the source's channel on"));
             } catch (IOException e) {
                 throw new RabbitMqSourceException("Failed to create the source's RabbitMQ channel", e);
+            }
+        }
+
+        // A step that fails is added to the failure build() is already throwing as suppressed instead of replacing it.
+        // The scheduler has no thread yet when start() fails, since scheduleWithFixedDelay(...) is the last thing it
+        // does, but shutting it down stays defensive against that ordering changing.
+        private void unwind(RuntimeException failure, Channel channel, @Nullable RabbitMqDeliveryFailureAction failureAction,
+                            @Nullable RabbitMqDomainEventSource<E> source) {
+            RabbitMqTeardown teardown = new RabbitMqTeardown(failure).run(() -> closeQuietly(channel));
+            if (failureAction != null) {
+                teardown.run(failureAction::close);
+            }
+            if (source != null) {
+                teardown.run(source.scheduler::shutdownNow);
             }
         }
 

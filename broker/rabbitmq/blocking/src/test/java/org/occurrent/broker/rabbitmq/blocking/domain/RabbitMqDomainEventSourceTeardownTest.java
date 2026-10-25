@@ -33,11 +33,16 @@ import org.mockito.InOrder;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryFailureAction;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryWorker;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqSourceException;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.RoutingOutcome;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
@@ -45,6 +50,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -56,10 +62,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
@@ -288,6 +296,141 @@ class RabbitMqDomainEventSourceTeardownTest {
         assertThat(thrown).isInstanceOf(StackOverflowError.class);
     }
 
+    /**
+     * The release is what fails first, then the channel close fails with something that is not a
+     * {@link com.rabbitmq.client.ShutdownSignalException}, which close() does not swallow.
+     */
+    @ParameterizedTest
+    @EnumSource(value = RoutingOutcome.class, names = {"DEFERRED", "NOT_DELIVERABLE"})
+    void an_exception_closing_the_channel_does_not_replace_the_failure_already_leaving_close(RoutingOutcome held) throws Exception {
+        Channel channel = mock(Channel.class);
+        StackOverflowError primary = new StackOverflowError("release");
+        IllegalStateException closeFailure = new IllegalStateException("close");
+        doThrow(primary).when(channel).basicNack(anyLong(), anyBoolean(), anyBoolean());
+        doThrow(closeFailure).when(channel).close();
+        RabbitMqDeliveryFailureAction failureAction = spy(redeliveringAction(channel));
+        RabbitMqDomainEventSource<Object> source = sourceOver(channel, failureAction);
+        source.route(held, HELD_DELIVERY_TAG, new BasicProperties(), new byte[0]);
+
+        Throwable thrown = catchThrowable(source::close);
+
+        assertThat(thrown).isSameAs(primary);
+        assertThat(thrown.getSuppressed()).containsExactly(closeFailure);
+        verify(channel).close();
+        verify(failureAction).close();
+    }
+
+    @Test
+    void with_no_failure_already_leaving_close_the_channel_close_failure_leaves_it_with_the_failure_action_failure_suppressed() throws Exception {
+        Channel channel = mock(Channel.class);
+        IllegalStateException channelFailure = new IllegalStateException("channel");
+        IllegalArgumentException actionFailure = new IllegalArgumentException("action");
+        doThrow(channelFailure).when(channel).close();
+        RabbitMqDeliveryFailureAction failureAction = mock(RabbitMqDeliveryFailureAction.class);
+        doThrow(actionFailure).when(failureAction).close();
+        RabbitMqDomainEventSource<Object> source = sourceOver(channel, failureAction);
+
+        Throwable thrown = catchThrowable(source::close);
+
+        assertThat(thrown).isSameAs(channelFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(actionFailure);
+        verify(channel).close();
+        verify(failureAction).close();
+    }
+
+    @Test
+    void the_channel_close_throwing_the_very_failure_already_leaving_close_does_not_suppress_it_on_itself() throws Exception {
+        Channel channel = mock(Channel.class);
+        StackOverflowError primary = new StackOverflowError("shared");
+        doThrow(primary).when(channel).basicNack(anyLong(), anyBoolean(), anyBoolean());
+        doThrow(primary).when(channel).close();
+        RabbitMqDeliveryFailureAction failureAction = spy(redeliveringAction(channel));
+        RabbitMqDomainEventSource<Object> source = sourceOver(channel, failureAction);
+        source.route(RoutingOutcome.DEFERRED, HELD_DELIVERY_TAG, new BasicProperties(), new byte[0]);
+
+        Throwable thrown = catchThrowable(source::close);
+
+        assertThat(thrown).isSameAs(primary);
+        assertThat(thrown.getSuppressed()).isEmpty();
+        verify(failureAction).close();
+    }
+
+    /**
+     * The channel close failing with an {@code Error} of its own is what used to replace the one from the release.
+     * Everything the stop does after the close still has to happen, and the lock has to be free for the next thread,
+     * which a following {@code close()} on another thread shows by releasing the delivery the failed release put back.
+     */
+    @ParameterizedTest
+    @EnumSource(value = RoutingOutcome.class, names = {"DEFERRED", "NOT_DELIVERABLE"})
+    void an_error_closing_the_channel_on_a_permanent_stop_does_not_replace_the_error_from_the_release_and_the_stop_completes(RoutingOutcome held) throws Exception {
+        Channel channel = mock(Channel.class);
+        StackOverflowError primary = new StackOverflowError("release");
+        LinkageError closeFailure = new LinkageError("close");
+        doThrow(primary).doNothing().when(channel).basicNack(anyLong(), anyBoolean(), anyBoolean());
+        doThrow(closeFailure).doNothing().when(channel).close();
+        RabbitMqDomainEventSource<Object> source = sourceOver(channel, DeliveryFailurePolicy.REDELIVER);
+        source.route(held, HELD_DELIVERY_TAG, new BasicProperties(), new byte[0]);
+
+        Throwable thrown = catchThrowable(() -> source.route(RoutingOutcome.REFUSED, HELD_DELIVERY_TAG + 1, new BasicProperties(), new byte[0]));
+
+        assertThat(thrown).isSameAs(primary);
+        assertThat(thrown.getSuppressed()).containsExactly(closeFailure);
+        assertThat(schedulerOf(source).isShutdown()).as("the poll is stopped").isTrue();
+        assertThat(workerAcceptsWork(source)).as("the worker accepts work").isFalse();
+        Throwable closeOnAnotherThread = CompletableFuture.supplyAsync(() -> catchThrowable(source::close)).get(5, TimeUnit.SECONDS);
+        assertThat(closeOnAnotherThread).isNull();
+        verify(channel, times(2)).basicNack(eq(HELD_DELIVERY_TAG), anyBoolean(), anyBoolean());
+    }
+
+    /**
+     * Fails on its first attempt, so the exception that leaves build() is the one start() threw rather than one of the
+     * two that the teardown after it throws. PARK, so that the failure action has a parking channel to close.
+     */
+    @Test
+    void a_failed_build_throws_its_own_failure_with_the_teardown_failures_suppressed_on_it() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        Channel parkingChannel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel), Optional.of(parkingChannel));
+        IOException qosFailure = new IOException("qos");
+        IllegalStateException channelCloseFailure = new IllegalStateException("channel close");
+        IllegalArgumentException parkingCloseFailure = new IllegalArgumentException("parking close");
+        doThrow(qosFailure).when(channel).basicQos(1);
+        doThrow(channelCloseFailure).when(channel).close();
+        doThrow(parkingCloseFailure).when(parkingChannel).close();
+        RabbitMqDomainEventSource.Builder<Object> builder = RabbitMqDomainEventSource.builder(connection, feed(), "queue")
+                .declareTopology(false)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(RabbitMqDestination.of("parking-exchange", "parked"))
+                .retryStrategy(RetryStrategy.none());
+
+        Throwable thrown = catchThrowable(builder::build);
+
+        assertThat(thrown).isInstanceOf(RabbitMqSourceException.class).hasCause(qosFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(channelCloseFailure, parkingCloseFailure);
+        verify(channel).close();
+        verify(parkingChannel).close();
+    }
+
+    @Test
+    void a_failed_build_whose_channel_close_throws_the_very_failure_build_is_throwing_does_not_suppress_it_on_itself() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        IllegalStateException shared = new IllegalStateException("shared");
+        doThrow(shared).when(channel).basicQos(1);
+        doThrow(shared).when(channel).close();
+        RabbitMqDomainEventSource.Builder<Object> builder = RabbitMqDomainEventSource.builder(connection, feed(), "queue")
+                .declareTopology(false)
+                .retryStrategy(RetryStrategy.none());
+
+        Throwable thrown = catchThrowable(builder::build);
+
+        assertThat(thrown).isSameAs(shared);
+        assertThat(thrown.getSuppressed()).isEmpty();
+        verify(channel).close();
+    }
+
     private static Stream<Duration> hugeCloseTimeouts() {
         return Stream.of(
                 Duration.ofSeconds(Long.MAX_VALUE, 999_999_999),
@@ -304,6 +447,45 @@ class RabbitMqDomainEventSourceTeardownTest {
     // lock at that moment makes close() skip the consumer cancel and leave it to the channel close.
     private static Stream<Duration> closeTimeouts() {
         return Stream.concat(waitingCloseTimeouts(), Stream.of(Duration.ZERO));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static DomainEventFeed<Object> feed() {
+        return mock(DomainEventFeed.class);
+    }
+
+    private static ScheduledExecutorService schedulerOf(RabbitMqDomainEventSource<Object> source) throws ReflectiveOperationException {
+        Field field = RabbitMqDomainEventSource.class.getDeclaredField("scheduler");
+        field.setAccessible(true);
+        return (ScheduledExecutorService) field.get(source);
+    }
+
+    /**
+     * Hands the worker a task that cannot finish until released. A worker that accepted it is not idle until then, and
+     * one that has stopped dropped it, which leaves it idle at once.
+     */
+    private static boolean workerAcceptsWork(RabbitMqDomainEventSource<Object> source) throws ReflectiveOperationException {
+        Field field = RabbitMqDomainEventSource.class.getDeclaredField("worker");
+        field.setAccessible(true);
+        RabbitMqDeliveryWorker worker = (RabbitMqDeliveryWorker) field.get(source);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            worker.submit(HANDLED_DELIVERY_TAG, () -> {
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            return !worker.isIdle();
+        } finally {
+            release.countDown();
+        }
+    }
+
+    private static RabbitMqDeliveryFailureAction redeliveringAction(Channel channel) {
+        return new RabbitMqDeliveryFailureAction(channel, DeliveryFailurePolicy.REDELIVER, null, null,
+                LoggerFactory.getLogger(RabbitMqDomainEventSourceTeardownTest.class));
     }
 
     private static Delivery delivery(long deliveryTag) {
