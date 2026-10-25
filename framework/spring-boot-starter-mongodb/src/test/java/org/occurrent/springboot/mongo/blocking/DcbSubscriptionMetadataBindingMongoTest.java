@@ -138,6 +138,27 @@ class DcbSubscriptionMetadataBindingMongoTest {
         assertThat(DcbEventMetadata.from(m).dcbTags()).contains(Tag.parse(TAG));
     }
 
+    @Test
+    void dcb_metadata_exposes_the_checkpoint_the_replayed_event_was_delivered_with() {
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(eventFirstDcbMetadataReceiver.receivedMetadata()).hasSize(1));
+
+        DcbEventMetadata m = eventFirstDcbMetadataReceiver.receivedMetadata().get(0);
+
+        assertThat(m.checkpoint()).hasValueSatisfying(checkpoint -> assertThat(checkpoint).isNotBlank());
+    }
+
+    @Test
+    void generic_event_metadata_exposes_the_same_checkpoint_as_dcb_event_metadata() {
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(eventFirstGenericMetadataReceiver.receivedMetadata()).hasSize(1));
+
+        EventMetadata m = eventFirstGenericMetadataReceiver.receivedMetadata().get(0);
+
+        assertThat(m.getCheckpoint()).hasValueSatisfying(checkpoint -> assertThat(checkpoint).isNotBlank());
+        assertThat(DcbEventMetadata.from(m).checkpoint()).isEqualTo(m.getCheckpoint());
+    }
+
     // --- helpers ---
 
     private void append(String tag, MyEvent... events) {

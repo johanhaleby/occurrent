@@ -18,13 +18,18 @@ package org.occurrent.dsl.dcb.blocking;
 
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.StringBasedCheckpoint;
 
+import java.net.URI;
 import java.util.Map;
 import java.util.Set;
 
@@ -68,5 +73,45 @@ class DcbEventMetadataTest {
         EventMetadata metadata = new EventMetadata(Map.of());
 
         assertThat(DcbEventMetadata.from(metadata).dcbTags()).isEmpty();
+    }
+
+    @Test
+    void checkpoint_is_the_one_the_event_was_delivered_with() {
+        // Given
+        CloudEvent event = new CheckpointAwareCloudEvent(plainEvent(), new StringBasedCheckpoint("position:1;origin:0;liveFrom:token"));
+
+        // When
+        DcbEventMetadata metadata = DcbEventMetadata.from(EventMetadata.from(event));
+
+        // Then
+        assertThat(metadata.checkpoint()).hasValue("position:1;origin:0;liveFrom:token");
+    }
+
+    @Test
+    void checkpoint_is_empty_when_the_event_was_delivered_without_one() {
+        // Given
+        DcbEventMetadata metadata = DcbEventMetadata.from(EventMetadata.from(plainEvent()));
+
+        // When
+        var checkpoint = metadata.checkpoint();
+
+        // Then
+        assertThat(checkpoint).isEmpty();
+    }
+
+    @Test
+    void checkpoint_is_empty_when_the_metadata_was_built_from_a_map() {
+        // Given
+        DcbEventMetadata metadata = DcbEventMetadata.from(new EventMetadata(Map.of(OccurrentCloudEventExtension.POSITION, 7L)));
+
+        // When
+        var checkpoint = metadata.checkpoint();
+
+        // Then
+        assertThat(checkpoint).isEmpty();
+    }
+
+    private static CloudEvent plainEvent() {
+        return CloudEventBuilder.v1().withId("e1").withSource(URI.create("urn:test")).withType("type").build();
     }
 }

@@ -38,6 +38,11 @@ import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
+import org.occurrent.subscription.CheckpointAwareCloudEvent
+import org.occurrent.subscription.StartAt
+import org.occurrent.subscription.StringBasedCheckpoint
+import org.occurrent.subscription.SubscriptionFilter
+import org.occurrent.subscription.api.reactor.FluxSubscriptionModel
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel
 import org.occurrent.testing.mongodb.OccurrentMongoFlush
 import org.occurrent.testsupport.mongodb.MongoTestDatabase
@@ -48,6 +53,7 @@ import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import reactor.core.Disposable
+import reactor.core.publisher.Flux
 import java.net.URI
 import java.time.LocalDateTime
 import java.util.*
@@ -121,6 +127,38 @@ class DcbReactorSubscriptionsTest {
             assertThat(delivered.metadata.position().isPresent).isTrue()
             assertThat(delivered.metadata.position().asLong).isGreaterThan(0)
             assertThat(delivered.metadata.dcbTags()).containsExactly(Tag.of("entity", "carol"))
+        }
+    }
+
+    @Test
+    fun exposes_the_checkpoint_the_subscription_model_delivered_the_event_with() {
+        val delivering = object : FluxSubscriptionModel {
+            override fun subscribe(filter: SubscriptionFilter?, startAt: StartAt): Flux<CloudEvent> =
+                subscriptionModel.subscribe(filter, startAt).map { CheckpointAwareCloudEvent(it, StringBasedCheckpoint("position:7;origin:0;liveFrom:token")) }
+        }
+        val received = CopyOnWriteArrayList<DcbEvent<DomainEvent>>()
+        disposables.add(DcbSubscriptions(delivering, converter).subscribeWithMetadata(DcbCriteria.tags(Tag.of("entity", "dave"))).doOnNext(received::add).subscribe())
+        Thread.sleep(500)
+
+        appendTagged(NameDefined(UUID.randomUUID().toString(), time, "dave", "Dave"), "entity:dave")
+
+        await().atMost(FIVE_SECONDS).untilAsserted {
+            assertThat(received).hasSize(1)
+            assertThat(received[0].metadata.checkpoint()).contains("position:7;origin:0;liveFrom:token")
+        }
+    }
+
+    @Test
+    fun exposes_the_checkpoint_the_mongodb_subscription_model_delivers_a_live_event_with() {
+        val received = CopyOnWriteArrayList<DcbEvent<DomainEvent>>()
+        disposables.add(dcbSubscriptions.subscribeWithMetadata(DcbCriteria.tags(Tag.of("entity", "erin"))).doOnNext(received::add).subscribe())
+        Thread.sleep(500)
+
+        appendTagged(NameDefined(UUID.randomUUID().toString(), time, "erin", "Erin"), "entity:erin")
+
+        await().atMost(FIVE_SECONDS).untilAsserted {
+            assertThat(received).hasSize(1)
+            assertThat(received[0].metadata.checkpoint()).isPresent.get().asString().contains("resumeToken")
         }
     }
 

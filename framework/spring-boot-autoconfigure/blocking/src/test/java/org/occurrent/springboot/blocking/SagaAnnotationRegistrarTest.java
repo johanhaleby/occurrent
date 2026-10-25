@@ -29,6 +29,7 @@ import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
+import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -104,6 +105,10 @@ class SagaAnnotationRegistrarTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<CompetingConsumerStrategy> strategyProvider = mock(ObjectProvider.class);
         when(applicationContext.getBeanProvider(CompetingConsumerStrategy.class)).thenReturn(strategyProvider);
+        // Empty, since no application hands back a resume point here.
+        @SuppressWarnings("unchecked")
+        ObjectProvider<SubscriptionResumePoints> resumePointsProvider = mock(ObjectProvider.class);
+        when(applicationContext.getBeanProvider(SubscriptionResumePoints.class)).thenReturn(resumePointsProvider);
 
         StartPositionSupport startPositionSupport = new StartPositionSupport(applicationContext);
         SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport);
