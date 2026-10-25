@@ -21,6 +21,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import org.awaitility.core.ConditionTimeoutException;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.junit.jupiter.api.*;
@@ -229,6 +230,44 @@ class StreamTimeCatchupLateCommitMongoTest {
     }
 
     @Test
+    void a_catch_up_whose_start_resolves_to_nothing_for_the_live_model_delivers_an_event_whose_earlier_time_commits_during_the_replay() throws Exception {
+        // Given
+        Thread writerA = new Thread(() -> appendToStream("stream-a", named("A")), HELD_WRITER);
+        writerA.start();
+        assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
+        appendToStream("stream-b", named("B"));
+        appendToStream("stream-c", named("C"));
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        SpringMongoSubscriptionModel live = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        StreamCatchupSubscriptionModel model = new StreamCatchupSubscriptionModel(live, eventStore, config);
+        StartAt resolvesToNothingForTheLiveModel = StartAt.dynamic(context ->
+                context.hasSubscriptionModelType(SpringMongoSubscriptionModel.class) ? null : StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime()));
+        try {
+            // When
+            model.subscribe("sub", resolvesToNothingForTheLiveModel, cloudEvent -> {
+                String name = nameOf(cloudEvent);
+                received.add(name);
+                if (name.equals("C")) {
+                    // A commits after the replay read past its time and before the handover
+                    releaseA.countDown();
+                    join(writerA);
+                }
+            }).waitUntilStarted();
+            appendToStream("stream-d", named("D"));
+            boolean deliveredAfterTheHandover = arrives(received, "D");
+
+            // Then
+            assertThat(writerA.isAlive()).as("writer A still committing").isFalse();
+            assertThat(deliveredAfterTheHandover).as("an event written after the handover is delivered live").isTrue();
+            assertThat(received).as("the event whose earlier time committed during the replay").contains("A");
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    @Test
     void an_event_whose_earlier_time_committed_after_the_live_start_is_delivered_when_the_live_start_leaves_the_change_stream_history_during_the_resumed_replay() throws Exception {
         LocalDateTime base = LocalDateTime.now();
         // Writer A takes the earliest time and holds its transaction open
@@ -302,6 +341,23 @@ class StreamTimeCatchupLateCommitMongoTest {
     private void dropChangeStreamHistoryUpToNow() {
         BsonTimestamp now = requireNonNull(mongoClient.getDatabase(DATABASE).runCommand(new Document("hostInfo", 1)).get("operationTime", BsonTimestamp.class));
         ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, DATABASE, now);
+    }
+
+    private static boolean arrives(List<String> received, String name) {
+        try {
+            await().atMost(AT_MOST).until(() -> received.contains(name));
+            return true;
+        } catch (ConditionTimeoutException e) {
+            return false;
+        }
+    }
+
+    private static void join(Thread thread) {
+        try {
+            thread.join(20_000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static void block(CountDownLatch latch) {
