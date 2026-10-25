@@ -738,13 +738,13 @@ class CompetingConsumerSubscriptionModelTest {
         String subscriberId2 = "SubscriberId2";
         String subscriptionId1 = "SubscriptionId1";
         String subscriptionId2 = "SubscriptionId2";
+        // Node 2 joins last, so a slow setup cannot hand it a lease that node 1 never gets back
         competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription1::add).waitUntilStarted();
-        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription1::add).waitUntilStarted();
-
         competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId2, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription2::add).waitUntilStarted();
-        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId2, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription2::add).waitUntilStarted();
-
         await("node 1 to hold both leases").until(() -> strategy1.hasLock(subscriptionId1, subscriberId1) && strategy1.hasLock(subscriptionId2, subscriberId1));
+
+        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription1::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId2, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription2::add).waitUntilStarted();
         if (stallTheNodeThatHeldTheLeases) {
             strategy1.stall();
         }
