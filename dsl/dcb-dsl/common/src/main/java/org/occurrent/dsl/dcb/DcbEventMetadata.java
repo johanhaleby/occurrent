@@ -18,11 +18,13 @@ package org.occurrent.dsl.dcb;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.cloudevents.CheckpointCarrier;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
 
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 
@@ -66,6 +68,16 @@ public final class DcbEventMetadata {
      */
     public Set<Tag> dcbTags() {
         return decodeTags(metadata.getData().get(DcbCloudEvents.TAGS));
+    }
+
+    /**
+     * The checkpoint the subscription delivered the event with, or empty when the event has none, as
+     * {@link EventMetadata#getCheckpoint()} reads it. Store it with the application's state, in the same transaction,
+     * and restart with {@code DcbStartAt.checkpoint(stored)}. {@link CheckpointCarrier#checkpoint()} says which
+     * subscription models understand it, and what a restart from it does once the oplog no longer reaches back to it.
+     */
+    public Optional<String> checkpoint() {
+        return metadata.getCheckpoint();
     }
 
     /**
