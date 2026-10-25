@@ -16,6 +16,9 @@
 
 package org.occurrent.broker.rabbitmq.blocking;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.AlreadyClosedException;
@@ -33,6 +36,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -111,12 +115,62 @@ class RabbitMqDeliveryFailureActionTest {
     }
 
     /**
-     * A {@code basicNack} failure on {@link RabbitMqDeliveryFailureAction#redeliverFailure(long)} propagates rather
-     * than being swallowed, and the "Redelivered" log line never runs, since {@code redeliver(...)} throws before
-     * reaching it.
+     * A confirmed park says what was done. A copy went to the parking destination and the acknowledgement for the
+     * original was sent. It does not claim anything about what the broker did with that acknowledgement.
      */
     @Test
-    void redeliverFailure_never_logs_the_redelivered_line_when_basicNack_itself_fails() throws Exception {
+    void apply_logs_that_a_copy_was_parked_and_the_acknowledgement_sent_without_claiming_nothing_consumed_it() {
+        // Given
+        Channel consumeChannel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey");
+        Logger log = LoggerFactory.getLogger("RabbitMqDeliveryFailureActionTest.park");
+        ListAppender<ILoggingEvent> logged = captureLogOf(log);
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, parkingDestination, log);
+
+        // When
+        action.apply(42L, new BasicProperties(), new byte[0]);
+
+        // Then
+        assertThat(logged.list).singleElement().satisfies(event -> assertAll(
+                () -> assertThat(event.getLevel()).isEqualTo(Level.WARN),
+                () -> assertThat(event.getFormattedMessage())
+                        .contains("42", "\"exchange\"", "\"routingKey\"", "sent the acknowledgement for the original")
+                        .doesNotContain("nothing consumed")));
+    }
+
+    /**
+     * A failed delivery that is put back says that a negative acknowledgement with requeue was sent for it. It does
+     * not claim the delivery was redelivered or that nothing consumed it, since the broker decides that.
+     */
+    @Test
+    void redeliverFailure_logs_that_a_negative_acknowledgement_with_requeue_was_sent_without_claiming_a_redelivery() {
+        // Given
+        Channel consumeChannel = mock(Channel.class);
+        Logger log = LoggerFactory.getLogger("RabbitMqDeliveryFailureActionTest.redeliver");
+        ListAppender<ILoggingEvent> logged = captureLogOf(log);
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.REDELIVER,
+                null, null, log);
+
+        // When
+        action.redeliverFailure(42L);
+
+        // Then
+        assertThat(logged.list).singleElement().satisfies(event -> assertAll(
+                () -> assertThat(event.getLevel()).isEqualTo(Level.WARN),
+                () -> assertThat(event.getFormattedMessage())
+                        .contains("42", "negative acknowledgement with requeue")
+                        .doesNotContain("Redelivered", "nothing consumed")));
+    }
+
+    /**
+     * A {@code basicNack} failure on {@link RabbitMqDeliveryFailureAction#redeliverFailure(long)} propagates rather
+     * than being swallowed, and the failure warning never runs, since {@code redeliver(...)} throws before reaching
+     * it.
+     */
+    @Test
+    void redeliverFailure_never_logs_the_failure_warning_when_basicNack_itself_fails() throws Exception {
         Channel consumeChannel = mock(Channel.class);
         doThrow(new IOException("nack failed")).when(consumeChannel).basicNack(42L, false, true);
         Logger log = mock(Logger.class);
@@ -226,5 +280,12 @@ class RabbitMqDeliveryFailureActionTest {
         assertThat(recovering.isLostToConnectionRecovery(new IllegalStateException("unrelated"))).isFalse();
         assertThat(recovering.isLostToConnectionRecovery(new OutOfMemoryError())).isFalse();
         assertThat(notRecovering.isLostToConnectionRecovery(new AlreadyClosedException(connectionDropped))).as("connection without automatic recovery").isFalse();
+    }
+
+    private static ListAppender<ILoggingEvent> captureLogOf(Logger log) {
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        ((ch.qos.logback.classic.Logger) log).addAppender(logged);
+        return logged;
     }
 }

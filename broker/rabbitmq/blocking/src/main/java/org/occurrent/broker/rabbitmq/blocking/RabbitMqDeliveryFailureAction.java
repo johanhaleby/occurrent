@@ -146,8 +146,8 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
             return;
         }
         ack(deliveryTag);
-        log.warn("Parked delivery tag {} to exchange \"{}\" routing key \"{}\" and acknowledged the original; " +
-                "nothing consumed it.", deliveryTag, destination.exchange(), destination.routingKey());
+        log.warn("Parked a copy of delivery tag {} to exchange \"{}\" routing key \"{}\" and sent the acknowledgement " +
+                "for the original.", deliveryTag, destination.exchange(), destination.routingKey());
     }
 
     /**
@@ -177,6 +177,10 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
     /**
      * Acknowledges {@code deliveryTag} on the delivery's own channel. Used for a delivery that succeeded, and
      * internally once a park publish has been confirmed.
+     * <p>
+     * After a connection recovery the client ignores an acknowledgement for a tag issued before it, without
+     * throwing, and the broker delivers that message again. Returning normally therefore means the acknowledgement
+     * was handed to the client, not that the broker received it.
      */
     public void ack(long deliveryTag) {
         try {
@@ -193,7 +197,8 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * since RabbitMQ puts it back on the queue when the connection drops and delivers it again on the recovered
      * channel, and closing the channel to put it back would take that channel out of recovery for good. The message
      * only arrives again if topology recovery registers the consumer on the recovered channel, which this does not
-     * check, since the client does not expose whether a connection has it turned on.
+     * check, since a {@code Connection} does not expose whether it has topology recovery turned on. Only the
+     * {@code ConnectionFactory} it was created from does.
      * <p>
      * True only for a channel from a connection with automatic recovery enabled, and then for two failures. One is a
      * {@link ShutdownSignalException}, {@code AlreadyClosedException} included, for the whole connection rather than
@@ -226,6 +231,9 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * this source is configured with, since nothing here is broken or wrong, only not ready yet, and pacing a
      * source's own consumer this way happens far too often, by design, for a log line per occurrence to be useful.
      * See {@link #redeliverFailure(long)} for the equivalent used on an actual failure, which does log.
+     * <p>
+     * Like {@link #ack(long)}, a call for a tag issued before a connection recovery returns normally and sends
+     * nothing, and the broker delivers that message again.
      */
     public void redeliver(long deliveryTag) {
         try {
@@ -244,7 +252,7 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      */
     public void redeliverFailure(long deliveryTag) {
         redeliver(deliveryTag);
-        log.warn("Redelivered delivery tag {} with requeue; nothing consumed it.", deliveryTag);
+        log.warn("Sent a negative acknowledgement with requeue for delivery tag {} after it failed.", deliveryTag);
     }
 
     /**
