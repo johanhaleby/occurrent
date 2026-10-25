@@ -21,6 +21,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoCredential;
 import com.mongodb.MongoException;
+import com.mongodb.MongoInterruptedException;
 import com.mongodb.MongoNodeIsRecoveringException;
 import com.mongodb.MongoNotPrimaryException;
 import com.mongodb.MongoSecurityException;
@@ -86,6 +87,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -1204,10 +1206,17 @@ class UpdateEventRepairTest {
                 () -> assertThat(runner.isAlive())
                         .as("the interrupted run must have stopped before the resumed run starts, otherwise the two can race over the same checkpoint")
                         .isFalse(),
+                // The interrupt arrives in the throttle sleep or in a driver call, which one depends on where the runner is
+                // once the checkpoint is visible, and both fail the run with the interruption in the cause chain
                 () -> assertThat(runnerFailure.get())
-                        .as("interrupting the run must fail it with the documented exception rather than let it continue or die some other way")
+                        .as("interrupting the run must fail it rather than let it continue or die some other way")
                         .isInstanceOf(RuntimeException.class)
-                        .hasMessageContaining("interrupted while throttling")
+                        .satisfies(failure -> assertThat(causeChainOf(failure))
+                                .as("the failure must say the run was interrupted")
+                                .anyMatch(cause -> cause instanceof InterruptedException || cause instanceof MongoInterruptedException)),
+                () -> assertThat(database.getCollection(EVENT_COLLECTION + "_update_event_repair_checkpoint").countDocuments())
+                        .as("an interrupted run must keep the checkpoint it wrote, wherever the interrupt caught it")
+                        .isPositive()
         );
 
         UpdateEventRepairResult resumed = newRepair().run();
@@ -1328,6 +1337,10 @@ class UpdateEventRepairTest {
                         .as("the killed run's checkpoint already counted a's position above the counter before the tag fix took it out of the filter's reach, and a kill before the post-batch write left that count there")
                         .isEqualTo(1)
         );
+    }
+
+    private static List<Throwable> causeChainOf(Throwable failure) {
+        return Stream.iterate(failure, Objects::nonNull, Throwable::getCause).toList();
     }
 
     private void waitUntilCheckpointExists() {
