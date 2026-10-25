@@ -641,6 +641,9 @@ class KafkaCloudEventSourceTest extends KafkaTestSupport {
         String topicB = prefix + "TypeB";
         createNamedTopic(topicA, 1);
         createNamedTopic(topicB, 1);
+        // The consumer resolves the pattern from metadata it fetches once and refreshes only after
+        // metadata.max.age.ms, so both topics must be listed by the broker before the source is built
+        awaitTopicsListed(topicA, topicB);
         // catchAllDestination() never consults the type mapper, so any valid one works here. qualified() needs no
         // reference class the way simple(...) would.
         KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(prefix, ReflectionCloudEventTypeMapper.qualified());
