@@ -3371,7 +3371,7 @@ class StreamCatchupResumeReplayMongoTest {
      * A wrapper of the model it is made over, whose first cancel runs a step and then throws without reaching that model,
      * so the model still holds the subscription. Every later cancel goes through.
      */
-    private static final class CancelFailingModel extends DelegatingModel implements SubscriptionModelWrapper {
+    private static final class CancelFailingModel extends DelegatingModel implements SubscriptionModelWrapper, RepositionableSubscriptions {
         static final String UNAVAILABLE = "The live delegate cannot cancel";
         private final AtomicBoolean failed = new AtomicBoolean();
         private final Runnable beforeItFails;
@@ -3408,6 +3408,18 @@ class StreamCatchupResumeReplayMongoTest {
         public SubscriptionModel getWrappedSubscriptionModel() {
             return delegate;
         }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return RepositionableSubscriptions.findIn(delegate).map(model -> model.restartsAt(checkpoint)).orElse(true);
+        }
     }
 
     /**
@@ -3415,7 +3427,7 @@ class StreamCatchupResumeReplayMongoTest {
      * ended, and then throws without reaching that model, so the model still holds the subscription paused. Every later
      * cancel goes through.
      */
-    private static final class UnpausingCancelFailingModel extends DelegatingModel implements SubscriptionModelWrapper {
+    private static final class UnpausingCancelFailingModel extends DelegatingModel implements SubscriptionModelWrapper, RepositionableSubscriptions {
         static final String UNAVAILABLE = "The live delegate cannot cancel";
         final CountDownLatch inCancel = new CountDownLatch(1);
         private final CountDownLatch endCancel = new CountDownLatch(1);
@@ -3476,12 +3488,24 @@ class StreamCatchupResumeReplayMongoTest {
         public SubscriptionModel getWrappedSubscriptionModel() {
             return delegate;
         }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return RepositionableSubscriptions.findIn(delegate).map(model -> model.restartsAt(checkpoint)).orElse(true);
+        }
     }
 
     /**
      * A wrapper of the model it is made over, whose first cancel runs a step once that model has cancelled.
      */
-    private static final class CancelFollowedByModel extends DelegatingModel implements SubscriptionModelWrapper {
+    private static final class CancelFollowedByModel extends DelegatingModel implements SubscriptionModelWrapper, RepositionableSubscriptions {
         private final AtomicBoolean followed = new AtomicBoolean();
         private final Runnable afterTheCancel;
 
@@ -3502,12 +3526,24 @@ class StreamCatchupResumeReplayMongoTest {
         public SubscriptionModel getWrappedSubscriptionModel() {
             return delegate;
         }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return RepositionableSubscriptions.findIn(delegate).map(model -> model.restartsAt(checkpoint)).orElse(true);
+        }
     }
 
     /**
      * A wrapper of the model it is made over, which waits before it holds the first subscription paused.
      */
-    private static final class HoldingModel extends DelegatingModel implements SubscriptionModelWrapper {
+    private static final class HoldingModel extends DelegatingModel implements SubscriptionModelWrapper, RepositionableSubscriptions {
         final CountDownLatch enteredSubscribePaused = new CountDownLatch(1);
         final CountDownLatch releaseSubscribePaused = new CountDownLatch(1);
 
@@ -3528,13 +3564,25 @@ class StreamCatchupResumeReplayMongoTest {
         public SubscriptionModel getWrappedSubscriptionModel() {
             return delegate;
         }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return RepositionableSubscriptions.findIn(delegate).map(model -> model.restartsAt(checkpoint)).orElse(true);
+        }
     }
 
     /**
      * A wrapper of the model it is made over, whose first subscribe throws without reaching that model. Every later
      * subscribe goes through.
      */
-    private static final class SubscribeFailingModel extends DelegatingModel implements SubscriptionModelWrapper {
+    private static final class SubscribeFailingModel extends DelegatingModel implements SubscriptionModelWrapper, RepositionableSubscriptions {
         static final String UNAVAILABLE = "The live delegate cannot subscribe";
         private final AtomicBoolean failed = new AtomicBoolean();
 
@@ -3553,6 +3601,18 @@ class StreamCatchupResumeReplayMongoTest {
         @Override
         public SubscriptionModel getWrappedSubscriptionModel() {
             return delegate;
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return RepositionableSubscriptions.findIn(delegate).map(model -> model.restartsAt(checkpoint)).orElse(true);
         }
     }
 }

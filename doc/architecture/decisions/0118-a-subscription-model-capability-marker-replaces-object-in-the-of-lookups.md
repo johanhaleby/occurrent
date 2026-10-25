@@ -6,6 +6,8 @@ Date: 2026-08-10
 
 Accepted
 
+Amended by [ADR 151](0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md): from 0.35.0 the blocking lookups unwrap a `SubscriptionModelWrapper` only for a capability that observes, and a capability that acts on a subscription is answered only by a model that implements it.
+
 ## Context
 
 `RepositionableSubscriptions`, `ReplayAwareSubscriptions` and `IntrospectableSubscriptions` (blocking) each expose a

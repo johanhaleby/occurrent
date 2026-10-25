@@ -53,6 +53,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
@@ -251,7 +252,7 @@ class CatchupLostLiveStartMongoTest {
         }
     }
 
-    private static final class ArmsTheFailpointAfterTheFinalCheck implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
+    private static final class ArmsTheFailpointAfterTheFinalCheck implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions {
         private final CheckpointAwareSubscriptionModel delegate;
         private final Runnable afterTheFirstFinalCheck;
         private final AtomicBoolean armed = new AtomicBoolean();
@@ -332,6 +333,18 @@ class CatchupLostLiveStartMongoTest {
         @Override
         public void cancelSubscription(String subscriptionId) {
             delegate.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return RepositionableSubscriptions.findIn(delegate).map(model -> model.restartsAt(checkpoint)).orElse(true);
         }
     }
 

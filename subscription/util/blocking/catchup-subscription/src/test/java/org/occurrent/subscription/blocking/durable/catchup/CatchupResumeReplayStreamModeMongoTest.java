@@ -59,6 +59,7 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
@@ -2451,7 +2452,7 @@ class CatchupResumeReplayStreamModeMongoTest {
      * A wrapper of the model it is made over, whose first cancel runs a step and then throws without reaching that model,
      * so the model still holds the subscription. Every other call, and every later cancel, goes through.
      */
-    private static final class CancelFailingModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
+    private static final class CancelFailingModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions {
         static final String UNAVAILABLE = "The live delegate cannot cancel";
         private final CheckpointAwareSubscriptionModel delegate;
         private final AtomicBoolean failed = new AtomicBoolean();
@@ -2549,13 +2550,25 @@ class CatchupResumeReplayStreamModeMongoTest {
         public SubscriptionModel getWrappedSubscriptionModel() {
             return delegate;
         }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return RepositionableSubscriptions.findIn(delegate).map(model -> model.restartsAt(checkpoint)).orElse(true);
+        }
     }
 
     /**
      * A wrapper of the model it is made over, whose first subscribe throws without reaching that model. Every other call,
      * and every later subscribe, goes through.
      */
-    private static final class SubscribeFailingModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
+    private static final class SubscribeFailingModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions {
         static final String UNAVAILABLE = "The live delegate cannot subscribe";
         private final CheckpointAwareSubscriptionModel delegate;
         private final AtomicBoolean failed = new AtomicBoolean();
@@ -2636,12 +2649,24 @@ class CatchupResumeReplayStreamModeMongoTest {
         public SubscriptionModel getWrappedSubscriptionModel() {
             return delegate;
         }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return RepositionableSubscriptions.findIn(delegate).map(model -> model.restartsAt(checkpoint)).orElse(true);
+        }
     }
 
     /**
      * Passes everything on to the model it is made over, and says nothing about being a wrapper of it.
      */
-    private static class DelegatingModel implements CheckpointAwareSubscriptionModel {
+    private static class DelegatingModel implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
         final CheckpointAwareSubscriptionModel delegate;
 
         DelegatingModel(CheckpointAwareSubscriptionModel delegate) {
@@ -2711,6 +2736,18 @@ class CatchupResumeReplayStreamModeMongoTest {
         @Override
         public boolean canResumeFrom(Checkpoint checkpoint) {
             return delegate.canResumeFrom(checkpoint);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return RepositionableSubscriptions.findIn(delegate).map(model -> model.restartsAt(checkpoint)).orElse(true);
         }
     }
 
