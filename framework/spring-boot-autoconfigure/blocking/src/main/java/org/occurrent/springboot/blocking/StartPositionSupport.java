@@ -135,6 +135,7 @@ class StartPositionSupport {
         return withResumePoint(subscriptionId, dcbStartAt(subscriptionId, startPosition, startAtDcbPosition, resumeBehavior));
     }
 
+    @SuppressWarnings("removal")
     private DcbStartAt dcbStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtDcbPosition, ResumeBehavior resumeBehavior) {
         if (startAtDcbPosition >= 0) {
             // Start after a specific position, applying the same replay-then-resume logic BEGINNING uses.
