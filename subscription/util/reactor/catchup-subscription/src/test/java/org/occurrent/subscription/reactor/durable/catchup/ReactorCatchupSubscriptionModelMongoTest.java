@@ -26,6 +26,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.EventStoreCapability;
@@ -50,6 +51,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.time.Duration;
@@ -57,10 +59,13 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -186,6 +191,59 @@ class ReactorCatchupSubscriptionModelMongoTest {
         });
     }
 
+    @Test
+    void a_subscribe_without_a_filter_from_a_position_checkpoint_is_refused_named_and_unnamed_before_anything_is_delivered_and_leaves_the_id_free() {
+        appendToStream("stream-1", name("stream1"));
+        appendTagged(name("dcb1"), "name:1");
+        ReactorCatchupSubscriptionModel catchup = dualMode();
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        try {
+            Throwable named = catchThrowable(() -> catchup.subscribe("subscription", null, StartAt.checkpoint(GlobalCheckpoint.of(0)), collectNames(received)));
+            Throwable unnamed = catchThrowable(() -> catchup.subscribe(null, StartAt.checkpoint(GlobalCheckpoint.of(0))));
+
+            assertThat(named).as("the named subscribe").isExactlyInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContainingAll("Subscription 'subscription'", "StreamSubscriptionFilter", "DcbSubscriptionFilter", "AgnosticSubscriptionFilter");
+            assertThat(unnamed).as("the unnamed subscribe").isExactlyInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContainingAll("A subscription has no subscription filter", "StreamSubscriptionFilter", "DcbSubscriptionFilter", "AgnosticSubscriptionFilter");
+            assertThat(catchup.isRunning("subscription")).as("the refused id runs").isFalse();
+            assertThat(received).as("what the refused subscribe delivered").isEmpty();
+
+            catchup.subscribe("subscription", StreamSubscriptionFilter.filter(Filter.streamId("stream-1")), StartAt.checkpoint(GlobalCheckpoint.of(0)), collectNames(received))
+                    .waitUntilStarted().block(Duration.ofSeconds(40));
+            await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).as("what a subscribe with a filter for the same id receives").containsExactly("stream1"));
+        } finally {
+            catchup.cancelSubscription("subscription").block(Duration.ofSeconds(10));
+        }
+    }
+
+    @Test
+    void a_restore_from_a_delivered_position_checkpoint_delivers_the_stream_events_after_it_with_a_stream_filter_and_is_refused_without_one() {
+        appendToStream("stream-1", name("stream1"));
+        appendTagged(name("dcb1"), "name:1");
+        appendToStream("stream-1", name("stream2"));
+        appendTagged(name("dcb2"), "name:1");
+        appendToStream("stream-1", name("stream3"));
+        StreamSubscriptionFilter streamEvents = StreamSubscriptionFilter.filter(Filter.streamId("stream-1"));
+        ReactorCatchupSubscriptionModel firstProcess = dualMode();
+        ConcurrentHashMap<String, String> checkpointDeliveredWith = new ConcurrentHashMap<>();
+        firstProcess.subscribe("projection", streamEvents, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() ->
+                checkpointDeliveredWith.put(nameOf(cloudEvent), EventMetadata.from(cloudEvent).getCheckpoint().orElseThrow())));
+        await().atMost(Duration.ofSeconds(40)).until(() -> checkpointDeliveredWith.size() == 3);
+        firstProcess.cancelSubscription("projection").block(Duration.ofSeconds(10));
+        StartAt restore = StartAt.checkpoint(new StringBasedCheckpoint(checkpointDeliveredWith.get("stream1")));
+        ReactorCatchupSubscriptionModel secondProcess = dualMode();
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        try {
+            Throwable withoutFilter = catchThrowable(() -> secondProcess.subscribe("projection", null, restore, collectNames(received)));
+            secondProcess.subscribe("projection", streamEvents, restore, collectNames(received)).waitUntilStarted().block(Duration.ofSeconds(40));
+
+            await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).as("the stream events after the checkpoint").containsExactly("stream2", "stream3"));
+            assertThat(withoutFilter).as("the restore without a filter").isExactlyInstanceOf(IllegalArgumentException.class).hasMessageContaining("Subscription 'projection'");
+        } finally {
+            secondProcess.cancelSubscription("projection").block(Duration.ofSeconds(10));
+        }
+    }
+
     private ReactorCatchupSubscriptionModel dualMode() {
         return new ReactorCatchupSubscriptionModel(subscriptionModel, eventStore, eventStore, null, null);
     }
@@ -194,6 +252,14 @@ class ReactorCatchupSubscriptionModelMongoTest {
         disposables.add(flux.map(ce -> ((NameDefined) converter.toDomainEvent(ce)).name()).doOnNext(received::add).subscribe());
         // Give the change-stream subscription a moment to start before the test writes more events.
         sleep(700);
+    }
+
+    private Function<CloudEvent, Mono<Void>> collectNames(List<String> received) {
+        return cloudEvent -> Mono.fromRunnable(() -> received.add(nameOf(cloudEvent)));
+    }
+
+    private String nameOf(CloudEvent cloudEvent) {
+        return ((NameDefined) converter.toDomainEvent(cloudEvent)).name();
     }
 
     private NameDefined name(String name) {
