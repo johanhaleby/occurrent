@@ -60,7 +60,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * A scheduled executor stops running a task once one execution throws, and nothing reads what the execution threw.
- * Throwing an {@link Error} on from a refresh round would reach nobody. It would only leave the node unable to refresh a
+ * Rethrowing an {@link Error} from a refresh round would reach nobody. It would only leave the node unable to refresh a
  * lease it holds, or to take one that has become free, for as long as it runs, so the round is logged and the next one
  * runs. The same goes for the consumers within one round. An {@link Error} from one consumer's refresh must not leave
  * the consumers after it unrefreshed, which would let their leases expire.
@@ -203,7 +203,7 @@ class MongoLeaseRefreshErrorTest {
     }
 
     /**
-     * Rounds run by a real schedule, the first one right away, so register before scheduling the refresh.
+     * Rounds run at a fixed rate, the first one right away, so register before scheduling the refresh.
      */
     private static ScheduledRefresh everyRound() {
         return new ScheduledRefresh((lease, scheduler) -> scheduler.fixedRate(Duration.ZERO, ROUND_EVERY));
