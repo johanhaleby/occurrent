@@ -25,9 +25,12 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -185,21 +188,48 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
 
     @Test
     void a_restart_delivers_an_event_that_committed_after_a_later_one_was_delivered() {
-        restartAfterALateCommit(restartable().resumesAfterARestart(), "resumes", (restarted, id, storedPosition, recorded) -> restarted.subscribe(id, recorded));
+        restartAfterALateCommit(restartable().resumesAfterARestart(), "resumes", false, (restarted, id, storedPosition, recorded) -> restarted.subscribe(id, recorded));
     }
 
     @Test
-    void a_subscription_started_at_a_stored_global_position_delivers_an_event_that_committed_below_it() {
-        if (!fixture().acceptedStartAtVariants().contains(StartAtVariant.CHECKPOINT)) {
-            assertThatThrownBy(() -> subscriptionModel()
-                    .subscribe(subscriptionId(), null, StartAt.checkpoint(GlobalCheckpoint.of(1)), new RecordedEvents()))
-                    .as("this model declares it does not accept %s, so a position the application stored itself is "
-                            + "refused rather than quietly ignored", StartAtVariant.CHECKPOINT)
-                    .isInstanceOf(UnsupportedStartAtException.class);
+    void a_subscription_started_at_a_bare_global_position_is_refused() {
+        if (restartable().honoursAGlobalPosition()) {
+            restartAfterALateCommit(true, "honours a global position", false,
+                    (restarted, id, storedPosition, recorded) -> restarted.subscribe(id, null, StartAt.checkpoint(storedPosition.get()), recorded));
             return;
         }
-        restartAfterALateCommit(restartable().honoursAGlobalPosition(), "honours a global position",
-                (restarted, id, storedPosition, recorded) -> restarted.subscribe(subscriptionId(), null, StartAt.checkpoint(storedPosition.get()), recorded));
+        String id = subscriptionId();
+        RecordedEvents recorded = new RecordedEvents();
+        StartAt bare = StartAt.checkpoint(GlobalCheckpoint.of(1));
+
+        if (restartable().refusesABareGlobalPosition() && fixture().acceptedStartAtVariants().contains(StartAtVariant.CHECKPOINT)) {
+            assertThatThrownBy(() -> subscriptionModel().subscribe(id, null, bare, recorded).waitUntilStarted(deliveryTimeout()))
+                    .as("this model accepts a checkpoint but cannot prove that nothing committed below a bare position, "
+                            + "so it refuses the start and names the subscription instead of resuming from a position "
+                            + "that may skip an event")
+                    .isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining(id);
+        } else {
+            assertThatThrownBy(() -> subscriptionModel().subscribe(id, null, bare, recorded))
+                    .as("this model does not start from a position the application stored itself, so it refuses it "
+                            + "rather than quietly ignoring it")
+                    .isInstanceOf(UnsupportedStartAtException.class);
+        }
+        assertThat(recorded.soFar())
+                .as("a refused subscription never listened, so nothing reaches its handler")
+                .isEmpty();
+    }
+
+    @Test
+    void a_subscription_started_at_the_checkpoint_delivered_with_an_event_delivers_an_event_that_committed_below_it() {
+        if (restartable().honoursAGlobalPosition() || !restartable().refusesABareGlobalPosition()) {
+            // Only a model that refuses a bare position owes the checkpoint that replaces it. One that honours a bare
+            // position is covered by the test above, and one that does not accept a position has no checkpoint to
+            // start from.
+            return;
+        }
+        restartAfterALateCommit(true, "hands out a checkpoint with every event it delivers", true,
+                (restarted, id, storedPosition, recorded) -> restarted.subscribe(id, null, StartAt.checkpoint(storedPosition.get()), recorded));
     }
 
     /**
@@ -210,7 +240,7 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
         Subscription start(SubscriptionModel restarted, String id, Supplier<Checkpoint> storedPosition, RecordedEvents recorded);
     }
 
-    private void restartAfterALateCommit(boolean owesTheLateEvent, String declaration, Resume resume) {
+    private void restartAfterALateCommit(boolean owesTheLateEvent, String declaration, boolean storesTheDeliveredCheckpoint, Resume resume) {
         String id = subscriptionId();
         RecordedEvents beforeTheRestart = new RecordedEvents();
         List<CloudEvent> deliveredBefore = new ArrayList<>();
@@ -254,6 +284,8 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
             // fixture's own starting point stands in for the one an application would have stored.
             Supplier<Checkpoint> storedPosition = () -> late.commitsInPositionOrder()
                     ? fixture().aCheckpointToStartFrom()
+                    : storesTheDeliveredCheckpoint
+                    ? checkpointDeliveredWith(deliveredBefore, overtaking)
                     : GlobalCheckpoint.of(positionDelivered(deliveredBefore, overtaking));
             assertThat(resume.start(restarted, id, storedPosition, afterTheRestart).waitUntilStarted(deliveryTimeout()))
                     .as("the rebuilt subscription must report started, or whichever branch runs below reports a missing "
@@ -309,6 +341,15 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
                     .orElseThrow(() -> new IllegalStateException("Event " + event.getId() + " was not found in " + HELD_STREAM
                             + " once the held append had committed"));
         }
+    }
+
+    private static Checkpoint checkpointDeliveredWith(List<CloudEvent> delivered, CloudEvent event) {
+        return delivered.stream()
+                .filter(candidate -> candidate.getId().equals(event.getId()))
+                .findFirst()
+                .map(CheckpointAwareCloudEvent::getCheckpointOrThrowIAE)
+                .map(checkpoint -> (Checkpoint) new StringBasedCheckpoint(checkpoint.asString()))
+                .orElseThrow(() -> new IllegalStateException("Event " + event.getId() + " was not delivered"));
     }
 
     private static long positionDelivered(List<CloudEvent> delivered, CloudEvent event) {

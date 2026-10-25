@@ -140,6 +140,12 @@ class SuiteNeverSkipsTest {
     }
 
     @Test
+    void the_restart_suite_passes_every_test_against_a_model_that_refuses_a_bare_position_and_hands_out_checkpoints() {
+        // The catch-up flavour of the same declaration, run here for the same reason as the branch above.
+        assertEveryTestPasses(RefusingABarePositionRestartConformance.class, "subscription model");
+    }
+
+    @Test
     void the_restart_suite_fails_before_its_first_assertion_against_a_fixture_that_has_no_lateCommits() {
         Events tests = EngineTestKit.engine("junit-jupiter")
                 .selectors(selectClass(DeclinesLateCommitsRestartConformance.class))
@@ -443,6 +449,14 @@ class SuiteNeverSkipsTest {
         }
     }
 
+    static class RefusingABarePositionRestartConformance extends RestartConformance {
+
+        @Override
+        protected RestartableSubscriptionModelFixture createFixture() {
+            return new WorkingRestartableSubscriptionModelFixture(true, true);
+        }
+    }
+
     static class DeclinesLateCommitsRestartConformance extends RestartConformance {
 
         @Override
@@ -504,6 +518,13 @@ class SuiteNeverSkipsTest {
         @Override
         public boolean honoursAGlobalPosition() {
             return false;
+        }
+
+        @Override
+        public boolean refusesABareGlobalPosition() {
+            // Declared so the test that only a model handing out checkpoints owes runs, and fails, rather than
+            // returning early, which would make "honours nothing" pass one test.
+            return true;
         }
     }
 
@@ -573,12 +594,18 @@ class SuiteNeverSkipsTest {
 
         private final WorkingRestartableSubscriptionModel.Storage storage = new WorkingRestartableSubscriptionModel.Storage();
         private final boolean resumesAfterARestart;
+        private final boolean refusesABareGlobalPosition;
 
         private WorkingRestartableSubscriptionModel model;
 
         WorkingRestartableSubscriptionModelFixture(boolean resumesAfterARestart) {
+            this(resumesAfterARestart, false);
+        }
+
+        WorkingRestartableSubscriptionModelFixture(boolean resumesAfterARestart, boolean refusesABareGlobalPosition) {
             this.resumesAfterARestart = resumesAfterARestart;
-            this.model = new WorkingRestartableSubscriptionModel(storage, resumesAfterARestart);
+            this.refusesABareGlobalPosition = refusesABareGlobalPosition;
+            this.model = new WorkingRestartableSubscriptionModel(storage, resumesAfterARestart, refusesABareGlobalPosition);
         }
 
         @Override
@@ -589,7 +616,7 @@ class SuiteNeverSkipsTest {
         @Override
         public SubscriptionModel restart() {
             model.shutdown();
-            model = new WorkingRestartableSubscriptionModel(storage, resumesAfterARestart);
+            model = new WorkingRestartableSubscriptionModel(storage, resumesAfterARestart, refusesABareGlobalPosition);
             return model;
         }
 
@@ -607,9 +634,14 @@ class SuiteNeverSkipsTest {
 
         @Override
         public boolean honoursAGlobalPosition() {
-            // Nothing is held, so the later event was delivered to the first subscription and the position changes
-            // nothing, whichever answer is declared. Follows the model's own start so both branches get a green run.
-            return resumesAfterARestart;
+            // A model that resumes honours a bare position, and one that does not refuses it, one way or the other
+            // depending on whether it hands out checkpoints. All three branches get a green run.
+            return resumesAfterARestart && !refusesABareGlobalPosition;
+        }
+
+        @Override
+        public boolean refusesABareGlobalPosition() {
+            return refusesABareGlobalPosition;
         }
 
         @Override

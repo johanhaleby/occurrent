@@ -86,9 +86,10 @@ public interface RestartableSubscriptionModelFixture extends SubscriptionModelFi
      * stored itself, delivers what was committed after position {@code p} was reached, including an event that
      * committed late with a position below {@code p}.
      * <p>
-     * Answering {@code true} owes {@link RestartConformance} that late event. Answering {@code false} owes the opposite,
-     * that the model starts at the present and only what arrives afterwards is delivered, which is what a model reading
-     * a change stream does with a position it cannot open at. The test refuses instead when the model does not accept
+     * Answering {@code true} owes {@link RestartConformance} that late event. Answering {@code false} owes a refusal,
+     * since a bare position carries nothing that proves no event committed below it, and a model that cannot prove
+     * that must not start. The refusal is an {@code UnsupportedStartAtException} unless the model declares
+     * {@link #refusesABareGlobalPosition()}. The test refuses instead when the model does not accept
      * {@link StartAtVariant#CHECKPOINT} at all, see {@link #acceptedStartAtVariants()}.
      * <p>
      * Required, with no usable default, for the same reason as {@link #lateCommits()}. A fixture that does not override
@@ -97,5 +98,22 @@ public interface RestartableSubscriptionModelFixture extends SubscriptionModelFi
     default boolean honoursAGlobalPosition() {
         throw new UnsupportedOperationException(getClass().getName() + " runs RestartConformance but does not override "
                 + "honoursAGlobalPosition(). Either override it, or stop extending the restart suite.");
+    }
+
+    /**
+     * Whether the refusal {@link #honoursAGlobalPosition()} owes when it answers {@code false} is a
+     * {@code CatchupCannotResumeException} rather than an {@code UnsupportedStartAtException}. A catch-up model answers
+     * {@code true}: it accepts a checkpoint, and refuses a bare position because it has no live start to hand over
+     * from, with the message naming the subscription and the way out.
+     * <p>
+     * Such a model also hands out, with every event it delivers, a checkpoint that does carry the proof, so
+     * {@link RestartConformance} also asserts that a subscription started at the checkpoint delivered with an event
+     * delivers an event that committed below it. Ignored when {@link #honoursAGlobalPosition()} answers {@code true}.
+     * <p>
+     * Answers {@code false} unless overridden, which keeps a model that refuses a position by not accepting it, the
+     * common case, from having to say so.
+     */
+    default boolean refusesABareGlobalPosition() {
+        return false;
     }
 }

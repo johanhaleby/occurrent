@@ -122,10 +122,20 @@ class ReactorDurableSubscriptionModelFixture implements RestartableSubscriptionM
     }
 
     /**
-     * True. The reactive catch-up model inside replays from a {@code GlobalCheckpoint}, then hands over to the live model.
+     * False. A bare {@code GlobalCheckpoint} carries no live start, so the reactive catch-up model inside cannot tell
+     * that nothing committed below it and refuses the start, see {@link #refusesABareGlobalPosition()}.
      */
     @Override
     public boolean honoursAGlobalPosition() {
+        return false;
+    }
+
+    /**
+     * True. The refusal is a {@code CatchupCannotResumeException}, and the checkpoint delivered with an event is what to
+     * start from instead.
+     */
+    @Override
+    public boolean refusesABareGlobalPosition() {
         return true;
     }
 

@@ -18,7 +18,12 @@ package org.occurrent.tck.subscription.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupCannotResumeException;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -59,18 +64,40 @@ final class WorkingRestartableSubscriptionModel implements SubscriptionModel {
 
     private final Storage storage;
     private final boolean resumesAfterARestart;
+    private final boolean refusesABareGlobalPosition;
     private final Map<String, Registration> registrations = new ConcurrentHashMap<>();
     private final Set<String> paused = ConcurrentHashMap.newKeySet();
 
     private volatile boolean running = true;
 
     WorkingRestartableSubscriptionModel(Storage storage, boolean resumesAfterARestart) {
+        this(storage, resumesAfterARestart, false);
+    }
+
+    /**
+     * @param refusesABareGlobalPosition Whether a bare {@link GlobalCheckpoint} is refused with a
+     *                                   {@link CatchupCannotResumeException} and every delivered event carries the
+     *                                   checkpoint to start from after it, the way a catch-up model behaves. A model
+     *                                   that does neither refuses a bare position with an
+     *                                   {@link UnsupportedStartAtException} unless it resumes.
+     */
+    WorkingRestartableSubscriptionModel(Storage storage, boolean resumesAfterARestart, boolean refusesABareGlobalPosition) {
         this.storage = storage;
         this.resumesAfterARestart = resumesAfterARestart;
+        this.refusesABareGlobalPosition = refusesABareGlobalPosition;
     }
 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        if (startAt instanceof StartAt.StartAtCheckpoint startAtCheckpoint && startAtCheckpoint.checkpoint instanceof GlobalCheckpoint) {
+            if (refusesABareGlobalPosition) {
+                throw new CatchupCannotResumeException("Subscription " + subscriptionId + " cannot start at a bare position. "
+                        + "Start it at a checkpoint delivered with an event instead.");
+            }
+            if (!resumesAfterARestart) {
+                throw new UnsupportedStartAtException(startAt);
+            }
+        }
         Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
         // Registering and recording where this subscription starts happen under one lock. Split apart, an append
         // landing between them would see the id registered with no starting position recorded yet, default it to the
@@ -81,7 +108,9 @@ final class WorkingRestartableSubscriptionModel implements SubscriptionModel {
             }
             // A model that does not resume starts at the end of the log every time, and one that does starts at the end
             // only the first time it sees an id, which is what makes the first subscription in a test start live on both.
-            if (!resumesAfterARestart || !storage.howFarEachSubscriptionGot.containsKey(subscriptionId)) {
+            if (refusesABareGlobalPosition && startAt instanceof StartAt.StartAtCheckpoint startAtCheckpoint) {
+                storage.howFarEachSubscriptionGot.put(subscriptionId, Integer.parseInt(startAtCheckpoint.checkpoint.asString()));
+            } else if (!resumesAfterARestart || !storage.howFarEachSubscriptionGot.containsKey(subscriptionId)) {
                 storage.howFarEachSubscriptionGot.put(subscriptionId, storage.log.size());
             }
         }
@@ -121,7 +150,9 @@ final class WorkingRestartableSubscriptionModel implements SubscriptionModel {
                 next = storage.log.get(position);
             }
             if (registration.matcher.test(next)) {
-                registration.action.accept(next);
+                registration.action.accept(refusesABareGlobalPosition
+                        ? new CheckpointAwareCloudEvent(next, new StringBasedCheckpoint(String.valueOf(position + 1)))
+                        : next);
             }
             synchronized (storage) {
                 storage.howFarEachSubscriptionGot.put(subscriptionId, position + 1);
