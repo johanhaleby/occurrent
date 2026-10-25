@@ -1008,7 +1008,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * The position the live delegate goes live from once a replay whose live start is the one in {@code handoverStart}
      * hands over, resolved each time the live delegate asks, so a retry picks up the latest checkpoint. With checkpoint
      * storage it stores the live start when nothing is stored, or when a catch-up of either kind stored a position or a
-     * time, since the live delegate may not support either, and returns what is stored otherwise. Without checkpoint
+     * time, since the live delegate may not support either. It also stores it over a later stored position when it is the
+     * live start kept in the checkpoint {@code startAt} resolves to, since the caller kept that checkpoint with state that
+     * holds no event after it. It returns what is stored otherwise. Without checkpoint
      * storage it returns the live start. When the live delegate must not run, it stores nothing, and returns what
      * {@code startAt} resolves to for each model that wraps another and the live start for the innermost one, so a
      * wrapper told to store nothing stores nothing and the innermost model goes live from where the replay read.
@@ -1036,12 +1038,22 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         return StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
                         cfg -> () -> {
                             Checkpoint position = cfg.storage().read(subscriptionId);
-                            if (position == null || isCatchupCheckpoint(position)) {
+                            if (position == null || isCatchupCheckpoint(position) || keptInTheStart(startAt, liveStart)) {
                                 position = cfg.storage().save(subscriptionId, liveStart, writeConditionFor(cfg, subscriptionId));
                             }
                             return goLiveFrom.apply(position);
                         })
                 .orElse(() -> goLiveFrom.apply(liveStart)));
+    }
+
+    // Whether liveStart is the live start kept in the checkpoint startAt resolves to for this model, as in a checkpoint the
+    // application stored with its state and started the subscription from again
+    private boolean keptInTheStart(StartAt startAt, Checkpoint liveStart) {
+        StartAt resolved = startAt.get(generateSubscriptionModelContext());
+        if (!(resolved instanceof StartAtCheckpoint at) || !isCatchupCheckpoint(at.checkpoint)) {
+            return false;
+        }
+        return samePosition(liveStart, CatchupCheckpoints.parse(at.checkpoint).liveFrom());
     }
 
     // Whether the live delegate tells this model about lost history, and can resume a subscription at a live start a
