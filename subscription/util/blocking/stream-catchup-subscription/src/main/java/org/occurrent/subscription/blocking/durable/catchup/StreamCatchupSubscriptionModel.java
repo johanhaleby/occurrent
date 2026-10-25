@@ -196,7 +196,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         if (requestedStartAt.isDefault()) {
             // Resume from a stored position if there is one, otherwise delegate to the parent subscription model.
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
-            warnIfStoredWithoutLiveStart(subscriptionId, checkpoint);
+            refuseIfStoredWithoutLiveStart(subscriptionId, checkpoint);
             if (checkpoint == null) {
                 // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
                 // the handover would, keeping DCB events out.

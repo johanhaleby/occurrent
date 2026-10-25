@@ -116,7 +116,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         if (requestedStartAt.isDefault()) {
             // Resume from the stored position if there is one, otherwise subscribe live (with the DCB query post-filter).
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
-            warnIfStoredWithoutLiveStart(subscriptionId, checkpoint);
+            refuseIfStoredWithoutLiveStart(subscriptionId, checkpoint);
             if (checkpoint == null) {
                 return subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, requestedStartAt), action, holdPaused);
             }
