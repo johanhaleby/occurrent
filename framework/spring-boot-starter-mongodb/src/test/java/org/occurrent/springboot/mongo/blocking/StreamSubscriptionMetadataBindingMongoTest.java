@@ -87,6 +87,9 @@ class StreamSubscriptionMetadataBindingMongoTest {
     @Autowired
     private MetadataFirstEventSecondReceiver metadataFirstEventSecondReceiver;
 
+    @Autowired
+    private CheckpointReceiver checkpointReceiver;
+
     @Test
     void event_only_binds_the_event() {
         append(new MyEvent("meta-event-1"));
@@ -112,6 +115,15 @@ class StreamSubscriptionMetadataBindingMongoTest {
                 assertThat(metadataFirstEventSecondReceiver.receivedEvents()).extracting(MyEvent::name).containsExactly("meta-event-3"));
         EventMetadata m = metadataFirstEventSecondReceiver.receivedMetadata().get(0);
         assertThat(m.getStreamId()).isNotBlank();
+    }
+
+    @Test
+    void a_subscription_handler_with_event_metadata_exposes_the_checkpoint_the_event_was_delivered_with() {
+        append(new MyEvent("meta-event-4"));
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(checkpointReceiver.receivedEvents()).extracting(MyEvent::name).containsExactly("meta-event-4"));
+        EventMetadata m = checkpointReceiver.receivedMetadata().get(0);
+        assertThat(m.getCheckpoint()).hasValueSatisfying(checkpoint -> assertThat(checkpoint).isNotBlank());
     }
 
     private void append(MyEvent event) {
@@ -163,6 +175,11 @@ class StreamSubscriptionMetadataBindingMongoTest {
         MetadataFirstEventSecondReceiver metadataFirstEventSecondReceiver() {
             return new MetadataFirstEventSecondReceiver();
         }
+
+        @Bean
+        CheckpointReceiver checkpointReceiver() {
+            return new CheckpointReceiver();
+        }
     }
 
     // --- receivers (one per subscription so ids are unique) ---
@@ -187,6 +204,22 @@ class StreamSubscriptionMetadataBindingMongoTest {
         @StreamSubscription(id = "stream-meta-binding-event-first")
         void on(MyEvent event, EventMetadata meta) {
             if ("meta-event-2".equals(event.name())) {
+                events.add(event);
+                metadata.add(meta);
+            }
+        }
+
+        List<MyEvent> receivedEvents() { return events; }
+        List<EventMetadata> receivedMetadata() { return metadata; }
+    }
+
+    static class CheckpointReceiver {
+        private final CopyOnWriteArrayList<MyEvent> events = new CopyOnWriteArrayList<>();
+        private final CopyOnWriteArrayList<EventMetadata> metadata = new CopyOnWriteArrayList<>();
+
+        @org.occurrent.annotation.Subscription(id = "stream-meta-binding-checkpoint")
+        void on(MyEvent event, EventMetadata meta) {
+            if ("meta-event-4".equals(event.name())) {
                 events.add(event);
                 metadata.add(meta);
             }

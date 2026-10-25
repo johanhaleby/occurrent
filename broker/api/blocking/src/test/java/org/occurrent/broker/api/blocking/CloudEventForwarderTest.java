@@ -52,6 +52,18 @@ class CloudEventForwarderTest {
     }
 
     @Test
+    void forwards_an_event_that_carries_no_extension_the_original_event_does_not_have() {
+        CloudEvent original = plainEvent(1);
+        forwarder.forward("subscription1");
+
+        wrappedModel.publish(new CheckpointAwareCloudEvent(original, GlobalCheckpoint.of(1)));
+
+        CloudEvent forwarded = sink.published().get(0);
+        assertThat(forwarded.getExtensionNames()).isEqualTo(original.getExtensionNames());
+        assertThat(forwarded.getExtension("checkpoint")).isNull();
+    }
+
+    @Test
     void leaves_the_checkpoint_unmoved_and_propagates_the_failure_when_the_sink_throws() {
         forwarder.forward("subscription1");
         sink.failOnNextPublish();
@@ -78,12 +90,15 @@ class CloudEventForwarderTest {
     }
 
     private static CloudEvent checkpointAwareEvent(long position) {
-        CloudEvent cloudEvent = CloudEventBuilder.v1()
+        return new CheckpointAwareCloudEvent(plainEvent(position), GlobalCheckpoint.of(position));
+    }
+
+    private static CloudEvent plainEvent(long position) {
+        return CloudEventBuilder.v1()
                 .withId("event-" + position)
                 .withSource(URI.create("urn:occurrent:test"))
                 .withType("SomethingHappened")
                 .withExtension(OccurrentCloudEventExtension.occurrent("stream1", position))
                 .build();
-        return new CheckpointAwareCloudEvent(cloudEvent, GlobalCheckpoint.of(position));
     }
 }

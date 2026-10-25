@@ -60,6 +60,32 @@ class DcbStartAtTest {
     }
 
     @Test
+    void checkpoint_maps_to_a_string_based_checkpoint_of_the_given_string() {
+        // Given
+        String delivered = "position:5;origin:0;liveFrom:token";
+
+        // When
+        StartAt startAt = DcbStartAt.checkpoint(delivered).toStartAt();
+
+        // Then
+        assertThat(startAt).isInstanceOf(StartAt.StartAtCheckpoint.class);
+        assertThat(((StartAt.StartAtCheckpoint) startAt).checkpoint).isEqualTo(new StringBasedCheckpoint(delivered));
+    }
+
+    @Test
+    void checkpoint_rejects_null_eagerly() {
+        assertThatThrownBy(() -> DcbStartAt.checkpoint(null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void checkpoint_rejects_a_blank_string_eagerly() {
+        assertThatThrownBy(() -> DcbStartAt.checkpoint(" "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("blank");
+    }
+
+    @Test
     void dynamic_returning_null_propagates_null_to_the_caller() {
         // A read-model delegate that always returns null signals "no opinion" to the subscription model.
         StartAt.SubscriptionModelContext ctx = new StartAt.SubscriptionModelContext(Object.class);
