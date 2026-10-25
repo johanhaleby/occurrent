@@ -713,12 +713,26 @@ class CompetingConsumerSubscriptionModelTest {
 
     @Test
     void consumption_is_resumed_after_prohibited_when_lease_time_is_low() {
+        consumptionIsResumedAfterProhibited(false);
+    }
+
+    @Test
+    void consumption_is_resumed_after_prohibited_while_the_node_that_held_the_leases_is_stalled() {
+        consumptionIsResumedAfterProhibited(true);
+    }
+
+    // A stall on a loaded runner can't make a 2 second lease answer false or pass to the other node, and the event is
+    // written only once one node holds each lease and runs it, so neither a stall nor the handover can hold it back
+    private void consumptionIsResumedAfterProhibited(boolean stallTheNodeThatHeldTheLeases) {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription1 = new CopyOnWriteArrayList<>();
         CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription2 = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate, Duration.ofMillis(500)));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate, Duration.ofMillis(500)));
+        Duration leaseTime = Duration.ofSeconds(2);
+        StallableCompetingConsumerStrategy strategy1 = new StallableCompetingConsumerStrategy(loggingStrategy("1", mongoTemplate, leaseTime));
+        StallableCompetingConsumerStrategy strategy2 = new StallableCompetingConsumerStrategy(loggingStrategy("2", mongoTemplate, leaseTime));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, strategy1);
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, strategy2);
 
         String subscriberId1 = "SubscriberId1";
         String subscriberId2 = "SubscriberId2";
@@ -730,21 +744,27 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId2, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription2::add).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId2, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription2::add).waitUntilStarted();
 
-        // We prohibit all
-        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId1, subscriberId1);
-        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId1, subscriberId2);
-        competingConsumerSubscriptionModel2.onConsumeProhibited(subscriptionId2, subscriberId1);
-        competingConsumerSubscriptionModel2.onConsumeProhibited(subscriptionId2, subscriberId2);
-
-        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        await("node 1 to hold both leases").until(() -> strategy1.hasLock(subscriptionId1, subscriberId1) && strategy1.hasLock(subscriptionId2, subscriberId1));
+        if (stallTheNodeThatHeldTheLeases) {
+            strategy1.stall();
+        }
 
         // When
+        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId1, subscriberId1);
+        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId2, subscriberId1);
+        for (String subscriptionId : List.of(subscriptionId1, subscriptionId2)) {
+            await("one node to hold the lease for " + subscriptionId + " and run it").until(() ->
+                    (strategy1.hasLock(subscriptionId, subscriberId1) && competingConsumerSubscriptionModel1.isRunning(subscriptionId)) !=
+                    (strategy2.hasLock(subscriptionId, subscriberId2) && competingConsumerSubscriptionModel2.isRunning(subscriptionId)));
+        }
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
         eventStore.write("streamId", serialize(nameDefined));
 
         // Then
-        await().failFast("cloudEventsSubscription1 should never have more than 1 event", () -> cloudEventsSubscription1.size() > 1)
+        await("the event for " + subscriptionId1).failFast("the event for " + subscriptionId1 + " was delivered more than once", () -> cloudEventsSubscription1.size() > 1)
                .untilAsserted(() -> assertThat(cloudEventsSubscription1).hasSize(1));
-        await().failFast("cloudEventsSubscription2 should never have more than 1 event", () -> cloudEventsSubscription2.size() > 1)
+        await("the event for " + subscriptionId2).failFast("the event for " + subscriptionId2 + " was delivered more than once", () -> cloudEventsSubscription2.size() > 1)
                .untilAsserted(() -> assertThat(cloudEventsSubscription2).hasSize(1));
     }
 
