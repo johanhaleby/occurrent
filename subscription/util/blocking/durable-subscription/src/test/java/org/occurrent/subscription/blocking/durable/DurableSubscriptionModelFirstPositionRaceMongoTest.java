@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.durable;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -48,6 +49,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 import static org.occurrent.tck.ConformanceEvents.event;
@@ -76,8 +78,9 @@ class DurableSubscriptionModelFirstPositionRaceMongoTest {
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
-        database = mongoClient.getDatabase(DATABASE);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
     }
 
     @AfterAll

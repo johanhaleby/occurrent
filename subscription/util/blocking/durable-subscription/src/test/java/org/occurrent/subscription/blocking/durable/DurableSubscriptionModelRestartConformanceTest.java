@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.durable;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -27,6 +28,8 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * The first proof in this repository that {@link DurableSubscriptionModel} actually keeps its central promise: a
@@ -47,8 +50,9 @@ class DurableSubscriptionModelRestartConformanceTest extends RestartConformance 
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
-        database = mongoClient.getDatabase(DATABASE);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
     }
 
     @AfterAll

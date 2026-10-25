@@ -20,6 +20,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoSocketReadException;
 import com.mongodb.ServerAddress;
@@ -77,16 +78,19 @@ class SpringMongoSubscriptionModelCanResumeFromTest {
     private static final ReplicaSetReadyMongoDBContainer mongoDBContainer = ChangeStreamHistory.container();
 
     private MongoClient mongoClient;
+    private String databaseName;
     private MongoDatabase database;
     private MongoCollection<Document> events;
     private SpringMongoSubscriptionModel subscriptionModel;
 
     @BeforeEach
     void create_instances() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
-        database = mongoClient.getDatabase(DATABASE);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
+        database = mongoClient.getDatabase(databaseName);
         events = database.getCollection("events");
-        subscriptionModel = new SpringMongoSubscriptionModel(new MongoTemplate(mongoClient, DATABASE), "events", TimeRepresentation.RFC_3339_STRING);
+        subscriptionModel = new SpringMongoSubscriptionModel(new MongoTemplate(mongoClient, databaseName), "events", TimeRepresentation.RFC_3339_STRING);
     }
 
     @AfterEach
@@ -307,7 +311,7 @@ class SpringMongoSubscriptionModelCanResumeFromTest {
     }
 
     private MongoTemplate observed(AtomicInteger probes, IntConsumer beforeProbe) {
-        MongoTemplate observed = spy(new MongoTemplate(mongoClient, DATABASE));
+        MongoTemplate observed = spy(new MongoTemplate(mongoClient, databaseName));
         doAnswer(invocation -> {
             Document command = invocation.getArgument(0, Document.class);
             if (command.containsKey("aggregate")) {

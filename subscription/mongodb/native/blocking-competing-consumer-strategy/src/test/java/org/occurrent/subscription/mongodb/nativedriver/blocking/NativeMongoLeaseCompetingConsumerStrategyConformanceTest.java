@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -31,6 +32,8 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.time.Duration;
 import java.util.UUID;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * The same contract as the Spring strategy answers, asserted separately rather than assumed. The two share
@@ -60,8 +63,9 @@ class NativeMongoLeaseCompetingConsumerStrategyConformanceTest extends Competing
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
-        database = mongoClient.getDatabase(DATABASE);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
     }
 
     @AfterAll
