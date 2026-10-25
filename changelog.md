@@ -5,6 +5,7 @@
 #### Changes
 
 * **The startup warning for a MongoDB event store with `DCB` and without `STREAM` now fixes a collection that has several unusable indexes on `dcbTags`.** It names every one of them, and the commands it prints drop each unusable index and then create the sparse one, so the result is a single usable index. An index that is only hidden is unhidden instead of rebuilt. The check also accepts a partial index whose filter is an `$and` of `{ dcbTags: { $exists: true } }`, which MongoDB uses like the plain filter. The warning now says which reads the index helps (`count`, `exists`, the `wholeStoreLock()` append check and match-all reads) and doesn't promise a query plan for any of them. The check lists indexes only after it finds a stream event, so a collection without one no longer needs the `listIndexes` privilege. See [#1236](https://github.com/johanhaleby/occurrent/issues/1236).
+* **A competing consumer logs a pause that the wrapped subscription model refused at WARN instead of DEBUG.** The line names the subscription, the subscriber and the exception. The lease is still released as before. The DEBUG line was added in 0.34.0.
 
 #### Breaking changes
 
