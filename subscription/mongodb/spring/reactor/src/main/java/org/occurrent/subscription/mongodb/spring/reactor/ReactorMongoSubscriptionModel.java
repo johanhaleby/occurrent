@@ -258,6 +258,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         // the Flux directly. The named-subscription paths below advance only on action completion.
         // Flux.defer gives each subscriber its own tracked position.
         return Flux.defer(() -> {
+            // Thrown in here, so the subscriber gets it as the Flux's error
+            MongoCommons.refuseCatchupPosition(startAt);
             AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
             AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
             // Only while the Flux hasn't moved off startAt, so a loss after it has read on is handled as subscribe handles it
@@ -296,6 +298,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             // answers and isRunning(id) keeps saying yes. A dynamic position is a no-op in there, for a reason
             // checkStartPosition documents.
             MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(ReactorMongoSubscriptionModel.class));
+            MongoCommons.refuseCatchupPosition(startAt);
             InternalSubscription internalSubscription = new InternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), new AtomicReference<>(presentNow()), action);
             if (!running) {
                 // Model stopped: don't start it, so waitUntilStarted() doesn't complete for a subscription that won't
