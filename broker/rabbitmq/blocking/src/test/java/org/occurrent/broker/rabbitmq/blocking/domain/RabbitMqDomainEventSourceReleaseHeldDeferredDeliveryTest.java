@@ -16,6 +16,7 @@
 
 package org.occurrent.broker.rabbitmq.blocking.domain;
 
+import com.rabbitmq.client.ShutdownSignalException;
 import org.junit.jupiter.api.Test;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqSourceException;
 
@@ -31,9 +32,10 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * {@link RabbitMqDomainEventSource#releaseHeldDeferredDelivery(Deque, java.util.function.LongConsumer)} in
- * isolation, with no real {@code Channel} or broker behind it. A failed release (a nack that throws, an
- * {@code IOException} surfacing as {@link RabbitMqSourceException}) must never drop the tag it was for, and must
- * not let a later tag in the same pass jump ahead of the one that just failed.
+ * isolation, with no real {@code Channel} or broker behind it. A release whose nack was not sent (an
+ * {@code IOException} surfacing as {@link RabbitMqSourceException}, or a {@code ShutdownSignalException}) must never
+ * drop the tag it was for, and must not let a later tag in the same pass jump ahead of the one that just failed.
+ * A failure thrown after the nack was sent must not put the tag back, since a second nack closes the channel.
  */
 class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
 
@@ -59,27 +61,64 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
     }
 
     /**
-     * A Copilot review finding on the change that made the lifecycle poll catch {@code Throwable}. The poll now logs
-     * an {@code Error} from a release and comes back on the next tick, so a tag this method took out of the deque and
-     * did not put back has nothing left to nack it. At the default {@code prefetchCount} of one the broker then sends
-     * that consumer nothing further, on a source that is still consuming. Against a restore that names
-     * {@code RuntimeException} alone the tag is gone and only tag 2 is left.
+     * A nack that was never sent leaves the broker waiting on the tag, and at the default {@code prefetchCount} of
+     * one it sends the consumer nothing further until the tag is answered. {@code ShutdownSignalException} is what
+     * the channel throws when it is already closing, before anything went out.
      */
     @Test
-    void a_release_that_fails_with_an_error_puts_the_tag_back_too() {
+    void a_release_that_fails_with_a_shutdown_signal_puts_the_tag_back_at_the_front() {
         Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
         List<Long> released = new CopyOnWriteArrayList<>();
+        ShutdownSignalException shutdown = new ShutdownSignalException(true, false, null, null);
 
         Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
             if (tag == 1L) {
-                throw new StackOverflowError("a nack that recursed");
+                throw shutdown;
             }
             released.add(tag);
         }));
 
-        assertThat(thrown).isInstanceOf(StackOverflowError.class);
+        assertThat(thrown).isSameAs(shutdown);
         assertThat(released).isEmpty();
         assertThat(held).containsExactly(1L, 2L);
+    }
+
+    /**
+     * Anything else leaves the release after the nack went out, from a {@code MetricsCollector} the application
+     * registered. Nacking the same tag a second time makes the broker close the channel, so the failure is rethrown
+     * and the tag is not put back, which leaves only the tag this pass never got to.
+     */
+    @Test
+    void a_release_that_fails_with_an_error_after_the_nack_was_sent_does_not_put_the_tag_back() {
+        Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
+        List<Long> released = new CopyOnWriteArrayList<>();
+        StackOverflowError error = new StackOverflowError("a metrics collector that recursed");
+
+        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
+            if (tag == 1L) {
+                throw error;
+            }
+            released.add(tag);
+        }));
+
+        assertThat(thrown).isSameAs(error);
+        assertThat(released).isEmpty();
+        assertThat(held).containsExactly(2L);
+    }
+
+    @Test
+    void a_release_that_fails_with_a_runtime_exception_after_the_nack_was_sent_does_not_put_the_tag_back() {
+        Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
+        IllegalStateException failure = new IllegalStateException("a metrics collector that threw");
+
+        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
+            if (tag == 1L) {
+                throw failure;
+            }
+        }));
+
+        assertThat(thrown).isSameAs(failure);
+        assertThat(held).containsExactly(2L);
     }
 
     @Test

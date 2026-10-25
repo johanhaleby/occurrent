@@ -18,6 +18,7 @@ package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.ChannelContinuationTimeoutException;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Delivery;
 import com.rabbitmq.client.ShutdownSignalException;
@@ -304,8 +305,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
                 if (shouldConsume && consumerTag == null && worker.isIdle()) {
                     consumerTag = consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel);
                 } else if (!shouldConsume && consumerTag != null) {
-                    consumeChannel.basicCancel(consumerTag);
-                    consumerTag = null;
+                    cancelConsumer(consumerTag);
                 }
                 releaseHeldDeferredDelivery();
                 releaseHeldFailedDelivery();
@@ -323,6 +323,24 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             // with it.
             log.warn("Failed to reconcile consumption for queue \"{}\" against the subscription model's running state. " +
                     "Retrying on the next poll.", queue, e);
+        }
+    }
+
+    // Under consumeLock. A cancel that throws has still dropped the consumer on the client, or the client has no such
+    // consumer, so keeping the tag would make this source believe it is consuming and never start another. Only a
+    // cancel whose reply timed out may have left the consumer registered, so that one keeps the tag and the next poll
+    // cancels again.
+    private void cancelConsumer(String tag) throws IOException {
+        boolean consumerMayStillExist = false;
+        try {
+            consumeChannel.basicCancel(tag);
+        } catch (ChannelContinuationTimeoutException e) {
+            consumerMayStillExist = true;
+            throw e;
+        } finally {
+            if (!consumerMayStillExist) {
+                consumerTag = null;
+            }
         }
     }
 
@@ -344,6 +362,8 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     // rather than trying the next slot, since a channel failing to nack once is not going to succeed on a
     // different tag straight after. The next poll retries it. A channel that has actually died requeues
     // everything still unacked on it by itself regardless, so this is only for one that survives the failure.
+    // A failure thrown after the nack was sent, which only an application's MetricsCollector can cause, does not
+    // put the tag back.
     private void releaseHeldDeferredDelivery() {
         releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver);
     }
@@ -370,14 +390,14 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             }
             try {
                 redeliver.accept(heldDeliveryTag);
-            } catch (Throwable e) {
-                // Throwable, so the tag goes back for anything at all that escapes the release. The poll this runs
-                // under catches an Error and comes back on the next tick, and a tag taken out of the deque by a
-                // release that failed has nothing left to nack it. At the default prefetchCount of one the broker
-                // then sends that consumer nothing further, on a source that is still consuming.
+            } catch (RabbitMqSourceException | ShutdownSignalException e) {
+                // The nack was not sent, so the tag goes back for the next poll. Without it nothing would nack the
+                // tag, and at the default prefetchCount of one the broker sends the consumer nothing further.
                 heldDeferredDeliveryTags.offerFirst(heldDeliveryTag);
                 throw e;
             }
+            // Anything else is thrown after the nack was sent, by a MetricsCollector the application registered. A
+            // second nack for the same tag makes the broker close the channel, so the tag is not put back.
         }
     }
 
@@ -406,12 +426,22 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     // stop this source, since RabbitMQ puts the delivery back on the queue when the connection drops, and closing this
     // channel would take it out of the connection's recovery so the source never consumed again. Anything else stops
     // this source and closes the channel, which is what puts the delivery back on the queue. Without that the delivery
-    // would sit unacknowledged on a consumer the broker sends nothing further to. Not rethrown, since the cause is
-    // logged here, and rethrowing would only end the worker thread.
+    // would sit unacknowledged on a consumer the broker sends nothing further to.
+    // A failure after this source has already stopped, which an interrupt from close() causes, is only logged and
+    // the interrupt is passed on to the thread. Not rethrown, since the cause is logged here, and rethrowing would
+    // only end the worker thread.
     private void handleDeliveryOrStop(Delivery delivery, long deliveryTag) {
         try {
             handleDelivery(delivery);
         } catch (Throwable e) {
+            if (permanentlyStopped) {
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                log.debug("Handling delivery tag {} on queue \"{}\" failed outside this source's delivery failure policy "
+                        + "after this source had already stopped.", deliveryTag, queue, e);
+                return;
+            }
             if (failureAction.isLostToConnectionRecovery(e)) {
                 log.warn("The connection under queue \"{}\" dropped before delivery tag {} could be acknowledged or "
                         + "rejected. RabbitMQ puts it back on the queue, and this source receives it again once the "

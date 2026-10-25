@@ -358,7 +358,8 @@ class RabbitMqDomainEventSourceTeardownTest {
     /**
      * The channel close failing with an {@code Error} of its own is what used to replace the one from the release.
      * Everything the stop does after the close still has to happen, and the lock has to be free for the next thread,
-     * which a following {@code close()} on another thread shows by releasing the delivery the failed release put back.
+     * which a following {@code close()} on another thread shows by completing. The nack was sent before the release
+     * failed, so that close does not nack the tag a second time.
      */
     @ParameterizedTest
     @EnumSource(value = RoutingOutcome.class, names = {"DEFERRED", "NOT_DELIVERABLE"})
@@ -379,7 +380,7 @@ class RabbitMqDomainEventSourceTeardownTest {
         assertThat(workerAcceptsWork(source)).as("the worker accepts work").isFalse();
         Throwable closeOnAnotherThread = CompletableFuture.supplyAsync(() -> catchThrowable(source::close)).get(5, TimeUnit.SECONDS);
         assertThat(closeOnAnotherThread).isNull();
-        verify(channel, times(2)).basicNack(eq(HELD_DELIVERY_TAG), anyBoolean(), anyBoolean());
+        verify(channel, times(1)).basicNack(eq(HELD_DELIVERY_TAG), anyBoolean(), anyBoolean());
     }
 
     /**
