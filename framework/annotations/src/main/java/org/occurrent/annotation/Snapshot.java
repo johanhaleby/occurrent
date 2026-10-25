@@ -94,7 +94,16 @@ public @interface Snapshot {
     /**
      * Start after a specific global position instead of a predefined {@link #startAt()}. The default of -1 means unset.
      * Mutually exclusive with a non-{@link StartPosition#BEGINNING} {@link #startAt()} and with {@link Mode#SYNCHRONOUS}.
+     * <p>
+     * {@code 0} replays from the beginning. A position above {@code 0} is refused at start, since an event that
+     * committed below it after you read it would never be delivered. To resume after an event, keep the checkpoint
+     * the subscription delivers with it ({@code EventMetadata.getCheckpoint()}) and return it from a
+     * {@code SubscriptionResumePoints} bean.
+     *
+     * @deprecated A position above {@code 0} is refused. Start from {@link StartPosition#BEGINNING} instead, and
+     * resume after an event from a {@code SubscriptionResumePoints} bean.
      */
+    @Deprecated(forRemoval = true)
     long startAtGlobalPosition() default -1;
 
     /**

@@ -31,7 +31,7 @@ import java.util.function.Function;
  * It is the DCB counterpart to the reactive {@link FluxSubscriptionModel}, accepting a {@link DcbCriteria} and a
  * {@link DcbStartAt} rather than a stream filter and a generic start position. The {@link DcbStartAt} is passed through
  * to the underlying {@link FluxSubscriptionModel}, so whether a replay-oriented start such as {@link DcbStartAt#beginning()}
- * or {@link DcbStartAt#afterPosition(long)} replays history depends on that model. A plain model such as
+ * or {@link DcbStartAt#checkpoint(String)} replays history depends on that model. A plain model such as
  * {@code ReactorMongoSubscriptionModel} has no DCB catch-up and treats such a start as live, whereas a model composed
  * with {@code ReactorDcbCatchupSubscriptionModel} replays history from that position before going live.
  * <p>

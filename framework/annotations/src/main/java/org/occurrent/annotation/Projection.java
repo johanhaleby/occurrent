@@ -95,11 +95,19 @@ public @interface Projection {
     StartPosition startAt() default StartPosition.DEFAULT;
 
     /**
-     * Start after a specific global or DCB position, useful to rewind a durable read model to a
-     * known-good position. The default of -1 means unset, in which case {@link #startAt()} is used.
-     * Mutually exclusive with a non-{@link StartPosition#DEFAULT} {@link #startAt()} and with
+     * Start after a specific global or DCB position. The default of -1 means unset, in which case {@link #startAt()} is
+     * used. Mutually exclusive with a non-{@link StartPosition#DEFAULT} {@link #startAt()} and with
      * {@link Mode#SYNCHRONOUS}.
+     * <p>
+     * {@code 0} replays from the beginning. A position above {@code 0} is refused at start, since an event that
+     * committed below it after you read it would never be delivered. To resume after an event, keep the checkpoint
+     * the subscription delivers with it ({@code EventMetadata.getCheckpoint()}) and return it from a
+     * {@code SubscriptionResumePoints} bean.
+     *
+     * @deprecated A position above {@code 0} is refused. Start from {@link StartPosition#BEGINNING} instead, and
+     * resume after an event from a {@code SubscriptionResumePoints} bean.
      */
+    @Deprecated(forRemoval = true)
     long startAtGlobalPosition() default -1;
 
     /**

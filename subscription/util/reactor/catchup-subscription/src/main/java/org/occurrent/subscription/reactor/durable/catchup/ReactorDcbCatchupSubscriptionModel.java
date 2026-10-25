@@ -298,8 +298,8 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
 
     /**
      * Subscribe to DCB events matching {@code criteria}. A {@link DcbStartAt} that carries a {@code position} (for
-     * example {@link DcbStartAt#beginning()} or {@link DcbStartAt#afterPosition(long)}) replays history from that
-     * position and then goes live. Any other start (now or the subscription model default) goes straight to live.
+     * example {@link DcbStartAt#beginning()}, or a {@link DcbStartAt#checkpoint(String)} the subscription delivered with
+     * a replayed event) replays history from that position and then goes live. Any other start (now or the subscription model default) goes straight to live.
      */
     public Flux<CloudEvent> subscribe(DcbCriteria criteria, DcbStartAt startAt) {
         requireNonNull(criteria, "Criteria cannot be null");
