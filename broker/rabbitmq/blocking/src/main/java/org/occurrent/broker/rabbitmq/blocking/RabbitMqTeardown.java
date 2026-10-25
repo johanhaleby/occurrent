@@ -32,6 +32,7 @@ public final class RabbitMqTeardown {
     // Half of the longest span nanoTime differences can express, so adding it to System.nanoTime() never wraps past
     // the point where a deadline comparison by subtraction stops working.
     private static final long LONGEST_TIMEOUT_NANOS = Long.MAX_VALUE / 2;
+    private static final Duration LONGEST_TIMEOUT = Duration.ofNanos(LONGEST_TIMEOUT_NANOS);
 
     private final @Nullable Throwable primary;
     private @Nullable Throwable firstFailure;
@@ -102,6 +103,6 @@ public final class RabbitMqTeardown {
      * {@code timeout} is longer than that. {@link Duration#toNanos()} throws instead.
      */
     public static long timeoutNanos(Duration timeout) {
-        return timeout.compareTo(Duration.ofNanos(LONGEST_TIMEOUT_NANOS)) > 0 ? LONGEST_TIMEOUT_NANOS : timeout.toNanos();
+        return timeout.compareTo(LONGEST_TIMEOUT) > 0 ? LONGEST_TIMEOUT_NANOS : timeout.toNanos();
     }
 }

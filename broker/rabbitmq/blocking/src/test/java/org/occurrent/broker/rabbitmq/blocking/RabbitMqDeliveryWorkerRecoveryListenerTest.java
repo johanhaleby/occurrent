@@ -33,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -149,6 +150,42 @@ class RabbitMqDeliveryWorkerRecoveryListenerTest {
             // Then
             then(recoverable(first)).should(times(1)).removeRecoveryListener(addedToFirst);
             then(recoverable(second)).should(times(1)).removeRecoveryListener(addedToSecond);
+        }
+
+        @Test
+        void stopAcceptingWork_still_removes_the_second_listener_when_removing_the_first_throws() {
+            // Given
+            RabbitMqDeliveryWorker worker = worker();
+            Channel first = recoverableChannel();
+            Channel second = recoverableChannel();
+            worker.discardOnRecovery(first);
+            worker.discardOnRecovery(second);
+            RecoveryListener addedToSecond = addedListener(second);
+            doThrow(new IllegalStateException("channel closed")).when(recoverable(first)).removeRecoveryListener(any());
+
+            // When
+            catchThrowable(worker::stopAcceptingWork);
+
+            // Then
+            then(recoverable(second)).should(times(1)).removeRecoveryListener(addedToSecond);
+        }
+
+        @Test
+        void stopAcceptingWork_throws_the_failure_of_the_removal_that_failed() {
+            // Given
+            RabbitMqDeliveryWorker worker = worker();
+            Channel first = recoverableChannel();
+            Channel second = recoverableChannel();
+            worker.discardOnRecovery(first);
+            worker.discardOnRecovery(second);
+            IllegalStateException failure = new IllegalStateException("channel closed");
+            doThrow(failure).when(recoverable(first)).removeRecoveryListener(any());
+
+            // When
+            Throwable thrown = catchThrowable(worker::stopAcceptingWork);
+
+            // Then
+            assertThat(thrown).isSameAs(failure);
         }
     }
 

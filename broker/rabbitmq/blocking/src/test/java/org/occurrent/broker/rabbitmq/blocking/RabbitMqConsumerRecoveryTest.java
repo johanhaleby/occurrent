@@ -34,8 +34,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -276,6 +278,40 @@ class RabbitMqConsumerRecoveryTest {
 
         recovery.detach();
         recovery.detach();
+
+        verify(connection, times(1)).removeRecoveryListener(any());
+        verify(connection, times(1)).removeConsumerRecoveryListener(any());
+    }
+
+    @Test
+    void detach_still_removes_the_consumer_recovery_listener_when_removing_the_recovery_listener_throws() {
+        recovery.attachTo(connection);
+        ConsumerRecoveryListener registeredConsumerListener = capturedConsumerRecoveryListener();
+        doThrow(new IllegalStateException("connection closed")).when(connection).removeRecoveryListener(any());
+
+        catchThrowable(recovery::detach);
+
+        verify(connection, times(1)).removeConsumerRecoveryListener(registeredConsumerListener);
+    }
+
+    @Test
+    void detach_throws_the_failure_of_the_removal_that_failed() {
+        recovery.attachTo(connection);
+        IllegalStateException failure = new IllegalStateException("connection closed");
+        doThrow(failure).when(connection).removeRecoveryListener(any());
+
+        Throwable thrown = catchThrowable(recovery::detach);
+
+        assertThat(thrown).isSameAs(failure);
+    }
+
+    @Test
+    void a_second_detach_after_a_failed_one_does_nothing() {
+        recovery.attachTo(connection);
+        doThrow(new IllegalStateException("connection closed")).when(connection).removeRecoveryListener(any());
+        catchThrowable(recovery::detach);
+
+        assertThatCode(recovery::detach).doesNotThrowAnyException();
 
         verify(connection, times(1)).removeRecoveryListener(any());
         verify(connection, times(1)).removeConsumerRecoveryListener(any());

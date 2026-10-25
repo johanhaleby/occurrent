@@ -177,9 +177,12 @@ public final class RabbitMqDeliveryWorker {
             removals = new ArrayList<>(recoveryListenerRemovals);
             recoveryListenerRemovals.clear();
         }
+        // Every removal runs, since the list is already cleared and a later call would not find the ones left over.
+        RabbitMqTeardown teardown = new RabbitMqTeardown(null);
         for (Runnable removal : removals) {
-            removal.run();
+            teardown.run(removal);
         }
+        teardown.finish();
     }
 
     private void discardUpTo(long deliveryTag) {

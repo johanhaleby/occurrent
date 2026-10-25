@@ -85,10 +85,11 @@ public final class RabbitMqConsumerRecovery {
             Registration created = new Registration();
             recovering.addRecoveryListener(created);
             recovering.addConsumerRecoveryListener(created);
-            removal = () -> {
-                recovering.removeRecoveryListener(created);
-                recovering.removeConsumerRecoveryListener(created);
-            };
+            // Both removals run, also when the first throws.
+            removal = () -> new RabbitMqTeardown(null)
+                    .run(() -> recovering.removeRecoveryListener(created))
+                    .run(() -> recovering.removeConsumerRecoveryListener(created))
+                    .finish();
         }
     }
 
