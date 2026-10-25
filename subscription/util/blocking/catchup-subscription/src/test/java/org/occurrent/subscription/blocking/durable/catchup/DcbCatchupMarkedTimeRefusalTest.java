@@ -100,7 +100,7 @@ class DcbCatchupMarkedTimeRefusalTest {
         assertThatThrownBy(() -> catchup.subscribe("sub", StartAt.checkpoint(MARKED_TIME), delivered::add))
                 .as("what subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
-                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position");
+                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position", "StreamCatchupSubscriptionModel", "delete the checkpoint");
         assertNothingWrittenSubscribedOrDelivered(null);
     }
 
@@ -115,7 +115,7 @@ class DcbCatchupMarkedTimeRefusalTest {
         assertThatThrownBy(() -> catchup.subscribe("sub", StartAt.subscriptionModelDefault(), delivered::add))
                 .as("what subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
-                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position");
+                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position", "StreamCatchupSubscriptionModel", "delete the checkpoint");
         assertNothingWrittenSubscribedOrDelivered(MARKED_TIME);
     }
 
