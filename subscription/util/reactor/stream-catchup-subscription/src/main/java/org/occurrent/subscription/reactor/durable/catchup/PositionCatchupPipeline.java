@@ -149,7 +149,8 @@ final class PositionCatchupPipeline {
      */
     static CatchupCannotResumeException startsAtTime(@Nullable String subscriptionId, Checkpoint start) {
         return new CatchupCannotResumeException("Cannot run catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId) + " from checkpoint \"" + start.asString()
-                + "\", because a catch-up that replays by time stored it, and this catch-up replays only by position.");
+                + "\", because a catch-up that replays by time stored it, and this catch-up replays only by position."
+                + " Run the subscription with the StreamCatchupSubscriptionModel that stored the checkpoint, or delete the checkpoint so that the subscription starts from its StartAt again.");
     }
 
     // Replays from the start firstStart resolves and goes live from its token, or replays again first when the token left

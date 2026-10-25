@@ -303,7 +303,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // Before the position test, since the marked form of a time replay starts with the position prefix
         if (CatchupCheckpoints.isMarkedTime(position.checkpoint)) {
             throw new CatchupCannotResumeException("Cannot run DCB catch-up subscription " + subscriptionId + " from checkpoint \"" + position.checkpoint.asString()
-                    + "\", because a catch-up that replays by time stored it, and a DCB catch-up replays only by position.");
+                    + "\", because a catch-up that replays by time stored it, and a DCB catch-up replays only by position."
+                    + " Run the subscription with the StreamCatchupSubscriptionModel that stored the checkpoint, or delete the checkpoint so that the subscription starts from its StartAt again.");
         }
         return GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
     }
