@@ -92,6 +92,8 @@
         <integration-tests.mongo.version>8.0</integration-tests.mongo.version>
         <integration-tests.rabbitmq.version>4.1</integration-tests.rabbitmq.version>
         <integration-tests.kafka.version>4.1.0</integration-tests.kafka.version>
+        <!-- The release whose jars a test that opts in to copy-previous-release runs against what this one stores -->
+        <occurrent.previous-release.version>0.34.0</occurrent.previous-release.version>
     </properties>
 
 
@@ -323,6 +325,69 @@
                 <plugin>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>3.2.2</version>
+                </plugin>
+                <!-- A module that declares this plugin gets the previous release's Occurrent jars in
+                     target/occurrent-<version>, for PreviousRelease in test-support. Copied, not depended on, since this
+                     build's artifacts have the same names. The list is the Occurrent closure of the catch-up, durable,
+                     Mongo and Redis modules a test there drives. -->
+                <plugin>
+                    <artifactId>maven-dependency-plugin</artifactId>
+                    <version>3.8.1</version>
+                    <executions>
+                        <execution>
+                            <id>copy-previous-release</id>
+                            <phase>generate-test-resources</phase>
+                            <goals>
+                                <goal>copy</goal>
+                            </goals>
+                            <configuration>
+                                <outputDirectory>${project.build.directory}/occurrent-${occurrent.previous-release.version}</outputDirectory>
+                                <artifactItems>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-cloudevents-extension</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-common-inmemory-filter-matching</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-common-mongodb-native-filter-bsonfilter-conversion</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-common-mongodb-specialfilterhandling</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-common-mongodb-spring-filter-query-conversion</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-common-mongodb-spring-sort-conversion</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-common-mongodb-timerepresentation</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-api-blocking</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-api-common</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-api-dcb</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-api-dcb-reactor</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-api-reactor</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-capability</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-mongodb-common</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-mongodb-dcb-common</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-mongodb-native</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-eventstore-mongodb-spring-reactor</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-filter</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-functional-support</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-retry</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-api-blocking</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-api-reactor</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-catchup-reactor</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-core</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-durable-blocking</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-durable-reactor</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-mongodb-common-base</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-mongodb-common-blocking-change-stream</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-mongodb-native-blocking</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-mongodb-native-blocking-checkpoint-storage</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-mongodb-spring-blocking</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-mongodb-spring-blocking-checkpoint-storage</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-mongodb-spring-common</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-mongodb-spring-reactor</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-mongodb-spring-reactor-checkpoint-storage</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-redis-spring-blocking-checkpoint-storage</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-stream-catchup-blocking</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-stream-catchup-reactor</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-subscription-util-predicates</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                    <artifactItem><groupId>org.occurrent</groupId><artifactId>occurrent-time</artifactId><version>${occurrent.previous-release.version}</version></artifactItem>
+                                </artifactItems>
+                            </configuration>
+                        </execution>
+                    </executions>
                 </plugin>
                 <plugin>
                     <artifactId>maven-jar-plugin</artifactId>
