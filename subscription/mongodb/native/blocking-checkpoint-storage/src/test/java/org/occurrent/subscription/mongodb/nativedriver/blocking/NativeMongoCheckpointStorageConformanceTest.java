@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -43,6 +44,8 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.util.List;
 import java.util.UUID;
 
+import static java.util.Objects.requireNonNull;
+
 @Testcontainers
 class NativeMongoCheckpointStorageConformanceTest extends CheckpointStorageConformance {
 
@@ -53,10 +56,13 @@ class NativeMongoCheckpointStorageConformanceTest extends CheckpointStorageConfo
     // One client for the class, since a client is a reusable handle and standing one up means server discovery.
     // What has to be fresh per test is the collection, which the fixture takes care of.
     private static MongoClient mongoClient;
+    private static String databaseName;
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl("nativecheckpointconformance"));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("nativecheckpointconformance"));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
     }
 
     @AfterAll
@@ -66,7 +72,7 @@ class NativeMongoCheckpointStorageConformanceTest extends CheckpointStorageConfo
 
     @Override
     protected CheckpointStorageFixture createFixture() {
-        return new NativeMongoCheckpointStorageFixture(mongoClient.getDatabase("nativecheckpointconformance"));
+        return new NativeMongoCheckpointStorageFixture(mongoClient.getDatabase(databaseName));
     }
 
     private static class NativeMongoCheckpointStorageFixture implements CheckpointStorageFixture {
