@@ -21,18 +21,34 @@ import com.rabbitmq.client.CancelCallback;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.DeliverCallback;
+import com.rabbitmq.client.Delivery;
+import com.rabbitmq.client.Envelope;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.InOrder;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryFailureAction;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.subscription.RoutingOutcome;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.URI;
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -41,7 +57,10 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -57,6 +76,7 @@ import static org.mockito.Mockito.when;
 class RabbitMqDomainEventSourceTeardownTest {
 
     private static final long HELD_DELIVERY_TAG = 42L;
+    private static final long HANDLED_DELIVERY_TAG = 7L;
 
     /**
      * {@code DEFERRED} holds the tag in the deque a pacing release drains, {@code NOT_DELIVERABLE} under
@@ -124,8 +144,8 @@ class RabbitMqDomainEventSourceTeardownTest {
     }
 
     /**
-     * A close timeout of 300 years passes the builder's check but overflows a {@code long} of nanoseconds, so
-     * computing the close deadline throws before anything else in {@code close()} has run.
+     * A close timeout of 300 years passes the builder's check but overflows a {@code long} of nanoseconds, which used
+     * to make {@code close()} throw before anything else in it had run.
      */
     @Test
     void a_close_timeout_too_large_for_nanoseconds_still_closes_the_channel() throws Exception {
@@ -136,8 +156,109 @@ class RabbitMqDomainEventSourceTeardownTest {
 
         Throwable thrown = catchThrowable(source::close);
 
-        verify(channel).close();
-        assertThat(thrown).isInstanceOf(ArithmeticException.class);
+        assertThat(thrown).isNull();
+        verify(channel, times(1)).close();
+    }
+
+    @ParameterizedTest
+    @MethodSource("closeTimeouts")
+    void close_with_any_close_timeout_closes_the_channel_and_the_failure_action_once_and_throws_nothing(Duration closeTimeout) throws Exception {
+        Channel channel = mock(Channel.class);
+        RabbitMqDeliveryFailureAction failureAction = mock(RabbitMqDeliveryFailureAction.class);
+        RabbitMqDomainEventSource<Object> source = new RabbitMqDomainEventSource<>(null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, closeTimeout);
+
+        Throwable thrown = catchThrowable(source::close);
+
+        assertThat(thrown).isNull();
+        verify(channel, times(1)).close();
+        verify(failureAction, times(1)).close();
+    }
+
+    @SuppressWarnings("unchecked")
+    @ParameterizedTest
+    @MethodSource("waitingCloseTimeouts")
+    void close_with_any_close_timeout_that_waits_cancels_the_consumer_before_closing_the_channel(Duration closeTimeout) throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        when(channel.basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class))).thenReturn("consumer-tag-1");
+        DomainEventFeed<Object> feed = mock(DomainEventFeed.class);
+        when(feed.hasProjection()).thenReturn(true);
+        when(feed.isReadyForLiveDelivery()).thenReturn(true);
+        RabbitMqDomainEventSource<Object> source = RabbitMqDomainEventSource.builder(connection, feed, "queue")
+                .declareTopology(false)
+                .pollInterval(Duration.ofMillis(20))
+                .closeTimeout(closeTimeout)
+                .build();
+        verify(channel, timeout(2000)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+
+        Throwable thrown = catchThrowable(source::close);
+
+        assertThat(thrown).isNull();
+        InOrder inOrder = inOrder(channel);
+        inOrder.verify(channel).basicCancel("consumer-tag-1");
+        inOrder.verify(channel).close();
+    }
+
+    /**
+     * The projection is still running when {@code close()} starts. A deadline that had wrapped into the past would
+     * interrupt it at once and fence the acknowledgement it makes afterwards. A timeout this long has to read as a
+     * wait with no practical end instead, so the projection is left alone and its delivery is acknowledged.
+     */
+    @SuppressWarnings("unchecked")
+    @ParameterizedTest
+    @MethodSource("hugeCloseTimeouts")
+    void close_with_a_huge_close_timeout_waits_for_a_running_projection_without_interrupting_it_and_lets_it_acknowledge(Duration closeTimeout) throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        AtomicReference<DeliverCallback> deliverCallback = new AtomicReference<>();
+        when(channel.basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class))).thenAnswer(invocation -> {
+            deliverCallback.set(invocation.getArgument(2));
+            return "consumer-tag-1";
+        });
+        CountDownLatch projectionEntered = new CountDownLatch(1);
+        CountDownLatch releaseProjection = new CountDownLatch(1);
+        AtomicBoolean projectionInterrupted = new AtomicBoolean();
+        DomainEventFeed<Object> feed = mock(DomainEventFeed.class);
+        when(feed.hasProjection()).thenReturn(true);
+        when(feed.isReadyForLiveDelivery()).thenReturn(true);
+        when(feed.acceptOrDeferCloudEvent(any())).thenAnswer(invocation -> {
+            projectionEntered.countDown();
+            try {
+                releaseProjection.await();
+            } catch (InterruptedException e) {
+                projectionInterrupted.set(true);
+                Thread.currentThread().interrupt();
+            }
+            return RoutingOutcome.DELIVERED;
+        });
+        RabbitMqDomainEventSource<Object> source = RabbitMqDomainEventSource.builder(connection, feed, "queue")
+                .declareTopology(false)
+                .pollInterval(Duration.ofMillis(20))
+                .closeTimeout(closeTimeout)
+                .build();
+        AtomicReference<Throwable> closeFailure = new AtomicReference<>();
+        try {
+            verify(channel, timeout(2000)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+            deliverCallback.get().handle("consumer-tag-1", delivery(HANDLED_DELIVERY_TAG));
+            assertThat(projectionEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            CompletableFuture<Void> closing = CompletableFuture.runAsync(() -> closeFailure.set(catchThrowable(source::close)));
+            Thread.sleep(300);
+            assertThat(closing).as("close() waits while the projection is still running").isNotDone();
+            assertThat(projectionInterrupted).as("close() leaves the running projection alone").isFalse();
+            verify(channel, never()).close();
+            releaseProjection.countDown();
+
+            closing.get(5, TimeUnit.SECONDS);
+            assertThat(closeFailure.get()).isNull();
+            assertThat(projectionInterrupted).isFalse();
+            verify(channel).basicAck(HANDLED_DELIVERY_TAG, false);
+            verify(channel).close();
+        } finally {
+            releaseProjection.countDown();
+        }
     }
 
     /**
@@ -165,6 +286,34 @@ class RabbitMqDomainEventSourceTeardownTest {
 
         verify(channel).close();
         assertThat(thrown).isInstanceOf(StackOverflowError.class);
+    }
+
+    private static Stream<Duration> hugeCloseTimeouts() {
+        return Stream.of(
+                Duration.ofSeconds(Long.MAX_VALUE, 999_999_999),
+                ChronoUnit.FOREVER.getDuration(),
+                Duration.ofNanos(Long.MAX_VALUE),
+                Duration.ofNanos(Long.MAX_VALUE).plusNanos(1));
+    }
+
+    private static Stream<Duration> waitingCloseTimeouts() {
+        return Stream.concat(hugeCloseTimeouts(), Stream.of(Duration.ofNanos(Long.MAX_VALUE / 2 - 1)));
+    }
+
+    // Zero is left out of waitingCloseTimeouts() because it does not wait for the consume lock. A poll holding the
+    // lock at that moment makes close() skip the consumer cancel and leave it to the channel close.
+    private static Stream<Duration> closeTimeouts() {
+        return Stream.concat(waitingCloseTimeouts(), Stream.of(Duration.ZERO));
+    }
+
+    private static Delivery delivery(long deliveryTag) {
+        CloudEvent cloudEvent = CloudEventBuilder.v1()
+                .withId("id-1")
+                .withSource(URI.create("urn:test"))
+                .withType("t")
+                .build();
+        return new Delivery(new Envelope(deliveryTag, false, "exchange", "routingKey"),
+                RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, Map.of()), RabbitMqCloudEventMapper.toBody(cloudEvent));
     }
 
     private static RabbitMqDomainEventSource<Object> sourceOver(Channel channel, DeliveryFailurePolicy policy) {

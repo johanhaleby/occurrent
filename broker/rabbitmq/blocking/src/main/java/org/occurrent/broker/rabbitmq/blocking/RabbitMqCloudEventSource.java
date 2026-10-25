@@ -614,7 +614,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     @Override
     public void close() {
         try {
-            long deadline = System.nanoTime() + closeTimeout.toNanos();
+            long deadline = System.nanoTime() + RabbitMqTeardown.timeoutNanos(closeTimeout);
             bringCloseDeadlineForwardTo(deadline);
             scheduler.shutdownNow();
             // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
@@ -856,7 +856,8 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         /**
          * How long {@link RabbitMqCloudEventSource#close()} waits for a delivery already being handled to finish.
          * Thirty seconds by default, the same as the Kafka sources. A handler still running after that is
-         * interrupted, and its delivery goes back on the queue when the channel closes, so it is handled again.
+         * interrupted, and its delivery goes back on the queue when the channel closes, so it is handled again. A
+         * timeout longer than about 146 years counts as that long.
          */
         public Builder closeTimeout(Duration closeTimeout) {
             requireNonNull(closeTimeout, "closeTimeout cannot be null");

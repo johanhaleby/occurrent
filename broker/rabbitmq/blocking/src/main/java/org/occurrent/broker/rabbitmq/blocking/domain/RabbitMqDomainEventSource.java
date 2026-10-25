@@ -32,6 +32,7 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryFailureAction;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryWorker;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqTeardown;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopology;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.filter.Filter;
@@ -665,7 +666,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     @Override
     public void close() {
         try {
-            long deadline = System.nanoTime() + closeTimeout.toNanos();
+            long deadline = System.nanoTime() + RabbitMqTeardown.timeoutNanos(closeTimeout);
             bringCloseDeadlineForwardTo(deadline);
             scheduler.shutdownNow();
             // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
@@ -881,7 +882,8 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         /**
          * How long {@link RabbitMqDomainEventSource#close()} waits for a delivery already being handled to finish.
          * Thirty seconds by default, the same as the Kafka sources. A projection still running after that is
-         * interrupted, and its delivery goes back on the queue when the channel closes, so it is handled again.
+         * interrupted, and its delivery goes back on the queue when the channel closes, so it is handled again. A
+         * timeout longer than about 146 years counts as that long.
          */
         public Builder<E> closeTimeout(Duration closeTimeout) {
             requireNonNull(closeTimeout, "closeTimeout cannot be null");
