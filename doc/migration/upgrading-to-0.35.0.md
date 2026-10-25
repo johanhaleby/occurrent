@@ -45,6 +45,10 @@ The compiler finds those for you. The other sections compile fine and behave dif
 
 #### RabbitMQ
 
+- [A RabbitMQ source consumes again after a recovery without topology recovery](#a-rabbitmq-source-consumes-again-after-a-recovery-without-topology-recovery).
+  A source on a connection with topology recovery turned off registers a new consumer after a recovery. Two log lines
+  change their text. Compiles unchanged.
+
 #### Kafka
 
 ### Snapshots
@@ -339,3 +343,25 @@ feeds. Once the type has no `accept(..)`, the call resolves to nothing and the r
 `ProjectionFeedAcceptRenameTest` tests this against a feed that declares only `acceptAndWait(..)` and
 `acceptOrDefer(..)`. A recipe that runs after the upgrade has no type to match on, so `UpgradeToOccurrent_0_35` has
 nothing to add, and the four entries stay in `UpgradeToOccurrent_0_34`.
+
+## A RabbitMQ source consumes again after a recovery without topology recovery
+
+A `RabbitMqCloudEventSource` or `RabbitMqDomainEventSource` on a connection with automatic recovery and topology
+recovery turned off stopped consuming after a recovery in 0.34.0. From 0.35.0 it registers a new consumer
+once the recovery has finished and consumes again. The reason is in
+[ADR 153](../architecture/decisions/0153-a-rabbitmq-source-registers-a-new-consumer-when-a-recovery-leaves-it-without-one.md),
+and the report is [#1066](https://github.com/johanhaleby/occurrent/issues/1066).
+
+Nothing in your code changes. If you restart the source after a recovery, or turned topology recovery on only to keep
+the source consuming, you can stop doing that. With topology recovery on, the source keeps the consumer the client
+registered and starts no second one.
+
+Two log lines of the delivery failure policy have new text, and a search or an alert on the old one stops matching.
+
+| Before | From 0.35.0 |
+|---|---|
+| `Parked delivery tag {} to exchange "{}" routing key "{}" and acknowledged the original; nothing consumed it.` | `Parked a copy of delivery tag {} to exchange "{}" routing key "{}" and sent the acknowledgement for the original.` |
+| `Redelivered delivery tag {} with requeue; nothing consumed it.` | `Sent a negative acknowledgement with requeue for delivery tag {} after it failed.` |
+
+Both are still logged at `warn`. After a recovery the client ignores an acknowledgement for a tag from before it, so the
+old text said more than the source knew.
