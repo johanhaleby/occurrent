@@ -26,16 +26,20 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -264,6 +268,33 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
 
         // No durable checkpoint is stored in this mode, confirming no watermark-derived cursor is persisted.
         assertThat(storage.exists("subscription")).isFalse();
+    }
+
+    @Test
+    void a_replayed_event_carries_the_checkpoint_stored_after_it_and_a_live_event_carries_its_change_stream_resume_token() {
+        write(nameDefined("historic1"));
+        write(nameDefined("historic2"));
+        write(nameDefined("historic3"));
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> storedWhenDelivered = new CopyOnWriteArrayList<>();
+        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+
+        subscription.subscribe("subscription", StreamSubscriptionFilter.filter(type(EVENT_TYPE)), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            Checkpoint stored = storage.read("subscription");
+            storedWhenDelivered.add(stored == null ? "nothing" : stored.asString());
+            received.add(cloudEvent);
+        }).waitUntilStarted();
+        await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).hasSize(3));
+        write(nameDefined("live"));
+        await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).hasSize(4));
+
+        List<String> deliveredWith = received.stream().map(cloudEvent -> EventMetadata.from(cloudEvent).getCheckpoint().orElse("none")).toList();
+        assertThat(storedWhenDelivered.subList(1, 3)).as("what storage holds after each of the first two replayed events").containsExactlyElementsOf(deliveredWith.subList(0, 2));
+        assertThat(deliveredWith.subList(0, 3).stream().map(StringBasedCheckpoint::new).map(GlobalCheckpoint::positionOf))
+                .as("the position each replayed event's checkpoint holds").containsExactly(1L, 2L, 3L);
+        assertThat(received.get(3)).as("the live event").isInstanceOfSatisfying(CheckpointAwareCloudEvent.class, live ->
+                assertThat(live.getCheckpoint()).as("the checkpoint of the live event").isInstanceOf(MongoResumeTokenCheckpoint.class).extracting(Checkpoint::asString).isEqualTo(deliveredWith.get(3)));
     }
 
     private NameDefined nameDefined(String name) {
