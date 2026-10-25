@@ -24,9 +24,11 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.subscription.api.blocking.CancellableSubscriptions;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.DcbSubscriptionModel;
@@ -108,16 +110,16 @@ class WrapperCapabilityLookupTest {
                         ManualStartSubscriptionModel::stoppedByDefault,
                         with(A_SUBSCRIPTION_MODEL, IntrospectableSubscriptions.class))),
                 Named.of("CatchupSubscriptionModel over a stream", new Wrapper(
-                        beneath -> new CatchupSubscriptionModel(beneath, unused(EventStoreQueries.class), CATCHUP_CONFIG),
+                        beneath -> new CatchupSubscriptionModel(beneath, unused(EventStoreQueries.class, CatchupReads.class), CATCHUP_CONFIG),
                         with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class))),
                 Named.of("CatchupSubscriptionModel over a DCB event store", new Wrapper(
-                        beneath -> new CatchupSubscriptionModel(beneath, unused(DcbEventStore.class), QUERY, CATCHUP_CONFIG),
+                        beneath -> new CatchupSubscriptionModel(beneath, unused(DcbEventStore.class, DcbCatchupReads.class), QUERY, CATCHUP_CONFIG),
                         with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class))),
                 Named.of("StreamCatchupSubscriptionModel", new Wrapper(
-                        beneath -> new StreamCatchupSubscriptionModel(beneath, unused(EventStoreQueries.class), CATCHUP_CONFIG),
+                        beneath -> new StreamCatchupSubscriptionModel(beneath, unused(EventStoreQueries.class, CatchupReads.class), CATCHUP_CONFIG),
                         with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class))),
                 Named.of("DcbCatchupSubscriptionModel", new Wrapper(
-                        beneath -> DcbCatchupModelFactory.dcbCatchupSubscriptionModel(beneath, unused(DcbEventStore.class), QUERY, CATCHUP_CONFIG),
+                        beneath -> DcbCatchupModelFactory.dcbCatchupSubscriptionModel(beneath, unused(DcbEventStore.class, DcbCatchupReads.class), QUERY, CATCHUP_CONFIG),
                         with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class))));
     }
 
