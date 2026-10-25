@@ -499,6 +499,15 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     /**
+     * {@code false} for a checkpoint the change stream can't open at, such as a catch-up's position
+     * ({@code GlobalCheckpoint}) or a time, since a subscription subscribed at one starts at the present.
+     */
+    @Override
+    public boolean restartsAt(Checkpoint checkpoint) {
+        return !MongoCommons.opensAtThePresent(StartAt.checkpoint(checkpoint));
+    }
+
+    /**
      * Pause an individual subscription. The change stream behind it is closed, but the position it has read to is
      * kept, so {@link #resumeSubscription(String)} continues from there and events written while it was paused are
      * delivered rather than skipped.
