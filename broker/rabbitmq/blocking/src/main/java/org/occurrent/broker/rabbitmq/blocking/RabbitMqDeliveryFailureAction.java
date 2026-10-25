@@ -196,9 +196,8 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * RabbitMQ client is going to recover it. A source does not stop for such a failure and does not acknowledge the delivery either,
      * since RabbitMQ puts it back on the queue when the connection drops and delivers it again on the recovered
      * channel, and closing the channel to put it back would take that channel out of recovery for good. The message
-     * only arrives again if topology recovery registers the consumer on the recovered channel, which this does not
-     * check, since a {@code Connection} does not expose whether it has topology recovery turned on. Only the
-     * {@code ConnectionFactory} it was created from does.
+     * only arrives again once a consumer is registered on the recovered channel. The client does that with topology
+     * recovery turned on, and the source does it on its next poll otherwise, so this needs no check of which applies.
      * <p>
      * True only for a channel from a connection with automatic recovery enabled, and then for two failures. One is a
      * {@link ShutdownSignalException}, {@code AlreadyClosedException} included, for the whole connection rather than

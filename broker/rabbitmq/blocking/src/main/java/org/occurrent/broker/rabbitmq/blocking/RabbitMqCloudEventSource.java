@@ -46,6 +46,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongConsumer;
@@ -174,8 +175,9 @@ import static java.util.Objects.requireNonNull;
  * acknowledgement cannot be sent, since the channel it would go on is closed, and RabbitMQ has put the delivery back on
  * the queue for the dropped connection. On a connection with automatic recovery this source logs that at {@code warn}
  * and keeps its channel, and the recovered channel delivers the message again once the recovery has registered the
- * consumer on it. That takes topology recovery, which a {@code ConnectionFactory} has on by default. With it turned off
- * nothing registers the consumer again, after this or any other recovery. Stopping instead would mean closing the
+ * consumer on it. With topology recovery turned on, which a {@code ConnectionFactory} has by default, the client
+ * registers the consumer. With it turned off this source registers a new consumer on its first poll after the
+ * recovery has finished, once the worker has no delivery left from the old one. Stopping instead would mean closing the
  * channel, which takes it out of the connection's recovery, so this source would never consume again while every other
  * source on the connection did. A connection without automatic recovery never comes back, so on one of those this
  * source stops for good, as it does for an {@link Error} a handler throws, an {@link AssertionError} aside, which goes
@@ -204,7 +206,8 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     private final Duration closeTimeout;
 
     private final Lock consumeLock = new ReentrantLock();
-    private @Nullable String consumerTag;
+    private final AtomicReference<@Nullable String> consumerTag = new AtomicReference<>();
+    private final RabbitMqConsumerRecovery consumerRecovery;
 
     // Appended to (never under consumeLock) by handleDelivery the instant a delivery reports DEFERRED or a
     // UNAVAILABLE, in place of nacking it there and then. With prefetchCount == 1 (the default) the
@@ -251,6 +254,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             return thread;
         });
         this.worker = new RabbitMqDeliveryWorker("rabbitmq-cloudevent-source-worker-" + queue, queue, log);
+        this.consumerRecovery = new RabbitMqConsumerRecovery(consumerTag, queue, log);
         this.closeTimeout = closeTimeout;
     }
 
@@ -279,6 +283,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             throw new RabbitMqSourceException("Failed to declare topology for queue \"" + queue + "\"", e);
         }
         worker.discardOnRecovery(consumeChannel);
+        consumerRecovery.attachTo(builder.connection);
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
@@ -302,10 +307,11 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
                     return;
                 }
                 // Waits for the worker to finish what an earlier consumer sent it, see RabbitMqDeliveryWorker#isIdle.
-                if (shouldConsume && consumerTag == null && worker.isIdle()) {
-                    consumerTag = consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel);
-                } else if (!shouldConsume && consumerTag != null) {
-                    cancelConsumer(consumerTag);
+                String tag = consumerTag.get();
+                if (shouldConsume && tag == null && worker.isIdle()) {
+                    consumerTag.set(consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel));
+                } else if (!shouldConsume && tag != null) {
+                    cancelConsumer(tag);
                 }
                 releaseHeldDeferredDelivery();
                 releaseHeldFailedDelivery();
@@ -339,7 +345,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             throw e;
         } finally {
             if (!consumerMayStillExist) {
-                consumerTag = null;
+                consumerTag.compareAndSet(tag, null);
             }
         }
     }
@@ -404,9 +410,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     private void handleCancel(String cancelledConsumerTag) {
         consumeLock.lock();
         try {
-            if (cancelledConsumerTag.equals(consumerTag)) {
-                consumerTag = null;
-            }
+            consumerTag.compareAndSet(cancelledConsumerTag, null);
         } finally {
             consumeLock.unlock();
         }
@@ -444,8 +448,8 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             }
             if (failureAction.isLostToConnectionRecovery(e)) {
                 log.warn("The connection under queue \"{}\" dropped before delivery tag {} could be acknowledged or "
-                        + "rejected. RabbitMQ puts it back on the queue, and this source receives it again once the "
-                        + "connection's recovery has registered its consumer again, which needs topology recovery turned on.",
+                        + "rejected. RabbitMQ puts it back on the queue, and this source receives it again once a "
+                        + "consumer is registered on the recovered channel.",
                         queue, deliveryTag, e);
                 return;
             }
@@ -580,13 +584,14 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             // whichever of this method and a concurrent poll acquires the lock first fully decides the consumer's
             // fate before the other even reads the flag.
             permanentlyStopped = true;
-            if (consumerTag != null) {
+            consumerRecovery.detach();
+            String tag = consumerTag.getAndSet(null);
+            if (tag != null) {
                 try {
-                    consumeChannel.basicCancel(consumerTag);
+                    consumeChannel.basicCancel(tag);
                 } catch (IOException | RuntimeException e) {
                     log.warn("Failed to cancel the consumer on queue \"{}\" while stopping permanently.", queue, e);
                 }
-                consumerTag = null;
             }
             try {
                 releaseHeldDeferredDelivery();
@@ -662,17 +667,18 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle worker
             // and start a handler while this is closing.
             worker.stopAcceptingWork();
+            consumerRecovery.detach();
             // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
             // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
             if (lockBefore(deadline)) {
                 try {
-                    if (consumerTag != null) {
+                    String tag = consumerTag.getAndSet(null);
+                    if (tag != null) {
                         try {
-                            consumeChannel.basicCancel(consumerTag);
+                            consumeChannel.basicCancel(tag);
                         } catch (IOException ignored) {
                             // Best effort: the channel is about to be closed either way.
                         }
-                        consumerTag = null;
                     }
                 } finally {
                     consumeLock.unlock();
@@ -1014,6 +1020,8 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             }
             if (source != null) {
                 teardown.run(source.scheduler::shutdownNow);
+                teardown.run(source.worker::stopAcceptingWork);
+                teardown.run(source.consumerRecovery::detach);
             }
         }
 
