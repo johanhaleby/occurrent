@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -27,6 +28,8 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+
+import static java.util.Objects.requireNonNull;
 
 @Testcontainers
 class NativeMongoSubscriptionModelConformanceTest extends SubscriptionModelConformance {
@@ -42,8 +45,9 @@ class NativeMongoSubscriptionModelConformanceTest extends SubscriptionModelConfo
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl("nativesubscriptionconformance"));
-        database = mongoClient.getDatabase("nativesubscriptionconformance");
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("nativesubscriptionconformance"));
+        mongoClient = MongoClients.create(connectionString);
+        database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
     }
 
     @AfterAll

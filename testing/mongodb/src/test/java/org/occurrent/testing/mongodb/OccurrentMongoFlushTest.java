@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.StreamSupport;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -69,8 +70,9 @@ class OccurrentMongoFlushTest {
 
     @BeforeEach
     void connectAndStartFromAnEmptyDatabase() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
-        database = mongoClient.getDatabase(DATABASE);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
         database.drop();
     }
 

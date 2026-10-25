@@ -231,8 +231,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             try {
                 retryStrategyToUse.execute(() -> fn.apply(collection -> refreshOrAcquireLease(collection, failedInThisRound)).run(), whileRunning);
             } catch (Exception e) {
-                // scheduleAtFixedRate cancels every later execution once one throws, so a round that exhausted
-                // cappedRetryStrategy is caught here instead of taking the whole schedule down with it.
+                // A round that exhausted cappedRetryStrategy. Anything else it throws, an Error for instance, is logged
+                // by ScheduledRefresh, which also keeps the later rounds running.
                 log.warn("Refresh round gave up due to {} - {}. The next scheduled round will try again.",
                         e.getClass().getName(), e.getMessage(), e);
             }
@@ -431,8 +431,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * One attempt at a refresh round. The first attempt refreshes every consumer, and a retry of the round refreshes
      * only the consumers in {@code failedInThisRound}. A consumer whose refresh fails does not stop the others from
      * being refreshed, since one lease MongoDB refuses to write must not let every other lease on this instance
-     * expire. Once every consumer has had its turn, the first failure is thrown with the others attached as
-     * suppressed, so the round's retry strategy gives a failing consumer the same attempts it gave the whole round
+     * expire. That holds for an {@link Error} too. Once every consumer has had its turn, the first Error, or the first
+     * failure when none was one, is thrown with the others attached as suppressed, so the round's retry strategy gives a failing consumer the same attempts it gave the whole round
      * before. What a round changed reaches the listeners through {@link ScheduledRefresh#notifyInBackground}, so a
      * listener that blocks, which pausing or resuming a subscription while the database does not answer does, holds up
      * the later notifications for that subscription, but never those for another one or the next refresh round.
@@ -441,7 +441,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         logDebug("In refreshOrAcquireLease with {} competing consumers", competingConsumers.size());
         Set<CompetingConsumer> toRefresh = failedInThisRound.get();
         Set<CompetingConsumer> failed = new HashSet<>();
-        @Nullable RuntimeException firstFailure = null;
+        List<Throwable> failures = new ArrayList<>();
         for (CompetingConsumer cc : competingConsumers.keySet()) {
             if (toRefresh != null && !toRefresh.contains(cc)) {
                 continue;
@@ -449,15 +449,11 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             final Outcome outcome;
             try {
                 outcome = inConsumerLock(cc, () -> refreshOne(collection, cc));
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
                 logDebug("Failed to refresh the lease due to {} - {}, refreshing the other consumers before this one is tried again (subscriberId={}, subscriptionId={})",
                         e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId);
                 failed.add(cc);
-                if (firstFailure == null) {
-                    firstFailure = e;
-                } else {
-                    firstFailure.addSuppressed(e);
-                }
+                failures.add(e);
                 continue;
             }
             if (outcome.notification() != Notification.NONE) {
@@ -465,9 +461,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             }
         }
         failedInThisRound.set(failed);
-        if (firstFailure != null) {
-            throw firstFailure;
-        }
+        throwTheFirstErrorOrFailure(failures);
     }
 
     /**

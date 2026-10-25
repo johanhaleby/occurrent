@@ -21,6 +21,8 @@ package org.occurrent.subscription.mongodb.blocking.ccs.internal;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.internal.ExecutorShutdown;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -47,11 +49,16 @@ import static java.util.concurrent.TimeUnit.SECONDS;
  * notification that blocks holds up later ones for its own subscription id only. Each id whose notification blocks
  * takes a thread of the notifier's, a virtual one from Java 24 and a platform one before that, since a virtual thread
  * blocked inside {@code synchronized} keeps the platform thread it runs on before Java 24.
+ * <p>
+ * A refresh that throws is logged at ERROR and the next one runs as scheduled. That includes an {@link Error}, a
+ * {@link VirtualMachineError} too, since the executor would otherwise cancel every later refresh.
  *
  * @see #auto()
  */
 @NullMarked
 class ScheduledRefresh {
+    private static final Logger log = LoggerFactory.getLogger(ScheduledRefresh.class);
+
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
     private final BiConsumer<Duration, Scheduler> scheduleIt;
     // Its threads are daemon threads, since close() does not wait for them, and a listener that ignores the interrupt
@@ -194,17 +201,30 @@ class ScheduledRefresh {
     record Scheduler(ScheduledExecutorService executor, Runnable refresh) {
 
         void fixedRate(Duration initialDelay, Duration period) {
-            executor.scheduleAtFixedRate(refresh,
+            executor.scheduleAtFixedRate(logEveryThrowable(refresh),
                     initialDelay.toMillis(),
                     period.toMillis(),
                     TimeUnit.MILLISECONDS);
         }
 
         void fixedDelay(Duration initialDelay, Duration delay) {
-            executor.scheduleWithFixedDelay(refresh,
+            executor.scheduleWithFixedDelay(logEveryThrowable(refresh),
                     initialDelay.toMillis(),
                     delay.toMillis(),
                     TimeUnit.MILLISECONDS);
+        }
+
+        // An execution that throws cancels every later one, and nothing reads the ScheduledFuture that holds what it
+        // threw. So nothing is rethrown here, not even a VirtualMachineError, and the next refresh still runs.
+        private static Runnable logEveryThrowable(Runnable refresh) {
+            return () -> {
+                try {
+                    refresh.run();
+                } catch (Throwable t) {
+                    log.error("Lease refresh failed due to {} - {}. The next scheduled refresh will run as usual.",
+                            t.getClass().getName(), t.getMessage(), t);
+                }
+            };
         }
     }
 }
