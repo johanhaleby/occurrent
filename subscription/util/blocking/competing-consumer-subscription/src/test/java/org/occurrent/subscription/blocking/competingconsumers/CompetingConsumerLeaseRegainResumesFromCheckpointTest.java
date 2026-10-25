@@ -47,6 +47,7 @@ import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionMo
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
 import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
 import org.occurrent.subscription.blocking.durable.catchup.StreamCatchupSubscriptionModel;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -409,7 +410,7 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
             nodeA.subscribe("A", subscriptionId, null, startOfA, stallingA);
             assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches its second event").isTrue();
             assertThat(checkpointStorage.exists(subscriptionId)).as("A's replay has stored the position after its first event").isTrue();
-            assertThat(GlobalCheckpoint.isGlobalCheckpoint(checkpointStorage.read(subscriptionId))).as("what A's replay stored is a global checkpoint rather than a time").isEqualTo(storesAGlobalCheckpoint);
+            assertThat(CatchupCheckpoints.parse(requireNonNull(checkpointStorage.read(subscriptionId))) instanceof CatchupCheckpoints.Position).as("what A's replay stored is a global checkpoint rather than a time").isEqualTo(storesAGlobalCheckpoint);
 
             positionedEventStore.write(streamId, serialize(new NameWasChanged("afterBRegistered", LocalDateTime.of(2026, 1, 1, 0, 0, 3), "name", "afterBRegistered")));
             positionedEventStore.write(streamId, serialize(new NameWasChanged("beforeHandover", LocalDateTime.of(2026, 1, 1, 0, 0, 4), "name", "beforeHandover")));

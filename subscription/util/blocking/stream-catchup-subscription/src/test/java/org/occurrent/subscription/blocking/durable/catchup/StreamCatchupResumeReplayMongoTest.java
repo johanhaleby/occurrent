@@ -49,7 +49,6 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
@@ -66,6 +65,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -1292,7 +1292,7 @@ class StreamCatchupResumeReplayMongoTest {
             }
         });
         assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches its second event").isTrue();
-        assertThat(CatchupTimeCheckpoint.isCatchupTimeCheckpoint(requireNonNull(storage.read(subscriptionId)))).as("what A's replay stored is a catch-up time checkpoint").isTrue();
+        assertThat(CatchupCheckpoints.isMarkedTime(requireNonNull(storage.read(subscriptionId)))).as("what A's replay stored is the marked time form, since it replays from a time past the beginning of time").isTrue();
         // And an event is written that has a time earlier than the one stored, after the live start A read
         appendAt("late", OffsetDateTime.parse("2025-12-31T12:00:00Z"));
 
