@@ -3594,7 +3594,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     // already failed before this call. That leaves nothing to pause downstream, but the lease still
                     // needs releasing below, otherwise this node reports itself Running while holding a lease no
                     // delegate is actually serving.
-                    logDebug("Delegate refused to pause subscription, continuing to release the lease (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId(), e);
+                    log.warn("The wrapped subscription model refused to pause subscription {} due to {} - {}, so it no longer runs it here. Releasing the lease anyway (subscriberId={}, pausedByUser={})",
+                            subscriptionId, e.getClass().getName(), e.getMessage(), competingConsumer.getSubscriberId(), pausedByUser, e);
                 } catch (Throwable e) {
                     // The pause can take effect before it throws, and the consumer is then paused here too
                     recordAsPausedUnlessItRuns(competingConsumer.subscriptionIdAndSubscriberId, pausedByUser, e);
