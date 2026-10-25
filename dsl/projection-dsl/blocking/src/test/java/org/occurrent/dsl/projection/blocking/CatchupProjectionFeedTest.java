@@ -170,70 +170,14 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_forwards_to_accept_and_wait_and_folds_the_event_live() {
+    void accept_and_wait_waits_for_the_catch_up_and_folds_the_event_instead_of_deferring_it() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
-        feed.catchUp();
-
-        feed.accept(new Counted("2"));
-
-        assertThat(repo.get("counter")).isEqualTo(2);
-    }
-
-    @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_with_metadata_forwards_the_metadata_to_the_fold() {
-        InMemoryEventStore store = new InMemoryEventStore();
-        CloudEventConverter<Counted> converter = countedConverter();
-        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
-        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
-        ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
-        Projection<Long, Counted, String> projection = Projection.<Long, Counted, String>builder(0L)
-                .id((metadata, event) -> metadata.getStreamId())
-                .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
-                .build();
-        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
-                "positions", projection, repository, store, converter, Counted::eventId, null);
-        feed.catchUp();
-
-        feed.accept(metadata("live-stream", 99L), new Counted("2"));
-
-        assertThat(repo.get("live-stream")).isEqualTo(99L);
-    }
-
-    @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_throws_like_accept_and_wait_when_the_feed_is_stopped_before_the_event_is_folded() {
-        InMemoryEventStore store = new InMemoryEventStore();
-        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
-        CatchupProjectionFeed<Counted> feed = feed("counter", store, countedConverter(), repo, null);
-        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("live")));
-
-        feed.stopCatchUp();
-
-        Throwable thrown = catchThrowable(() -> fed.get(5, TimeUnit.SECONDS));
-        assertThat(thrown).as("what the deprecated accept(..) threw once the feed stopped")
-                .isInstanceOf(ExecutionException.class)
-                .cause()
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
-        assertThat(repo).isEmpty();
-    }
-
-    @Test
-    @SuppressWarnings("removal")
-    void the_deprecated_accept_waits_for_the_catch_up_and_folds_the_event_instead_of_deferring_it() {
-        InMemoryEventStore store = new InMemoryEventStore();
-        CloudEventConverter<Counted> converter = countedConverter();
-        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
-        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
-        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
-        FutureTask<Void> plain = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("early")));
-        FutureTask<Void> withMetadata = feedWaitingForTheCatchUp(() -> feed.accept(metadata("early-stream", 7L), new Counted("early-with-metadata")));
+        FutureTask<Void> plain = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(new Counted("early")));
+        FutureTask<Void> withMetadata = feedWaitingForTheCatchUp(() -> feed.acceptAndWait(metadata("early-stream", 7L), new Counted("early-with-metadata")));
 
         feed.catchUp();
 

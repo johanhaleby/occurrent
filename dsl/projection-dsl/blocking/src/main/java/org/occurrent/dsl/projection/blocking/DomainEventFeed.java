@@ -402,29 +402,6 @@ public final class DomainEventFeed<E> {
         return registered.catchupFeed().acceptOrDefer(EventMetadata.from(cloudEvent), event);
     }
 
-    /**
-     * Forwards to {@link #acceptAndWait(Object)}.
-     *
-     * @deprecated Use {@link #acceptAndWait(Object)}, which waits until the event is folded, or
-     *             {@link #acceptOrDefer(Object)}, which returns {@link RoutingOutcome#DEFERRED} instead of waiting.
-     */
-    @Deprecated(since = "0.34.0", forRemoval = true)
-    public void accept(E event) {
-        acceptAndWait(event);
-    }
-
-    /**
-     * Forwards to {@link #acceptAndWait(EventMetadata, Object)}.
-     *
-     * @deprecated Use {@link #acceptAndWait(EventMetadata, Object)}, which waits until the event is folded, or
-     *             {@link #acceptOrDefer(EventMetadata, Object)}, which returns {@link RoutingOutcome#DEFERRED}
-     *             instead of waiting.
-     */
-    @Deprecated(since = "0.34.0", forRemoval = true)
-    public void accept(EventMetadata metadata, E event) {
-        acceptAndWait(metadata, event);
-    }
-
     // Throws the registration's cached refusal rather than answering, since that refusal is permanent.
     private boolean matchesLive(Registered<E> registered, CloudEvent cloudEvent) {
         LiveMatcher liveMatcher = liveMatcherFor(registered);

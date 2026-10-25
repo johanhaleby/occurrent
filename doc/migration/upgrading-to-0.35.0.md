@@ -11,6 +11,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   `SagaEnvelope` gains a 14th record component and `SagaRunnerConfig` a 6th. **Breaks the build** if you use a record
   pattern over either.
+- [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). `DomainEventFeed` and
+  `CatchupProjectionFeed` lose both `accept(..)` overloads, on the blocking and the reactor stack. **Breaks the build**
+  if you still call one of them.
 
 ### Sagas
 
@@ -32,6 +35,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [A capability that acts on a subscription is not found past a wrapper](#a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper).
   `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. Compiles unchanged.
+- [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). Call `acceptAndWait(..)` instead, which
+  `accept(..)` already forwarded to. `UpgradeToOccurrent_0_34` renames the calls, but only while the project still
+  depends on 0.33.0 or 0.34.0. Breaks the build.
 
 ### Spring Boot starter
 
@@ -299,3 +305,37 @@ Constructor calls are not affected. The 13-argument `SagaEnvelope` constructor a
 `UpgradeToOccurrent_0_35` does not rewrite these patterns. A record pattern's arity is a compiler-enforced fact, so
 the way `UpgradeToOccurrent_0_34` appends `var appendId` to a `WriteResult` pattern could be extended to these two
 records, but the 0.34.0 change to the same two records got a guide entry and no recipe, and this follows that.
+
+## The deprecated `accept(..)` on the projection feeds is removed
+
+`accept(E)` and `accept(EventMetadata, E)` are gone from the blocking and the reactor `DomainEventFeed` and
+`CatchupProjectionFeed`. 0.34.0 deprecated them for removal and made each forward to `acceptAndWait(..)`, as
+[section 12 of the 0.34.0 guide](upgrading-to-0.34.0.md#12-a-projection-feeds-accept-waits-until-the-event-is-applied-and-fails-when-it-is-not)
+describes. The removal is [#1276](https://github.com/johanhaleby/occurrent/issues/1276).
+
+### Who is affected
+
+Code that calls `accept(..)` on one of those four types. `accept(..)` on a `PushSubscriptionModel` or a
+`CatchupThenPushSubscriptionModel` is a different method and stays.
+
+### What to do
+
+Run `UpgradeToOccurrent_0_34` while the project still depends on 0.33.0 or 0.34.0, and then move the dependency to
+0.35.0. The 0.34.0 guide shows how to run the recipe. It renames both `accept(..)` overloads on the four types to
+`acceptAndWait(..)`, and does not touch an `accept(..)` on any other type. The renamed call does what the deprecated one
+did in 0.34.0. Section 12 of the 0.34.0 guide covers how that differs from 0.33.0.
+
+`acceptAndWait(..)` first appears in 0.34.0. A project on 0.33.0 stops compiling after the rename until the dependency
+moves up, so change the dependency right after the recipe has run.
+
+If the dependency is already 0.35.0, the build fails on each `accept(..)` call and the recipe no longer finds it, so
+rename each call to `acceptAndWait(..)` by hand. A broker listener that can have a message delivered again can call
+`acceptOrDefer(..)` instead, which the same section covers.
+
+### Why there is no recipe in `UpgradeToOccurrent_0_35`
+
+`UpgradeToOccurrent_0_34` renames a call only when the compiler has resolved it to `accept(..)` on one of the four
+feeds. Once the type has no `accept(..)`, the call resolves to nothing and the recipe does not change it.
+`ProjectionFeedAcceptRenameTest` tests this against a feed that declares only `acceptAndWait(..)` and
+`acceptOrDefer(..)`. A recipe that runs after the upgrade has no type to match on, so `UpgradeToOccurrent_0_35` has
+nothing to add, and the four entries stay in `UpgradeToOccurrent_0_34`.
