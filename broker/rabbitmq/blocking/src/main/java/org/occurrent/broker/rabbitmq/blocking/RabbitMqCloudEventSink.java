@@ -52,16 +52,16 @@ import static java.util.Objects.requireNonNull;
  * a fresh one underneath it, and a later publish is never kept waiting on an abandoned one, blamed for its eventual
  * nack, or stuck permanently on a channel the broker already closed. That recovery reaches a channel-level
  * shutdown. After a connection-level one there is no connection to reopen a channel on until the caller's own
- * {@link Connection} reconnects, which RabbitMQ's client offers as automatic connection recovery. If a publish
- * failed during that outage, the first publish after the reconnect can fail too, and it reopens the channel for the
- * publishes after it.
+ * {@link Connection} reconnects, which RabbitMQ's client offers as automatic connection recovery. A publish made
+ * during that outage fails. Every publish checks that its channel is open before using it and opens a new one when it
+ * is not, so the first publish after the reconnect works without another failed publish to repair the channel first.
  * <p>
- * Each publish carries its own random {@code correlationId}, so a {@code basic.return} is matched to the publish it
- * belongs to and never to a different one, including a retry of the same event after an earlier attempt's
- * acknowledgement timed out. Publishes on one sink are still serialized on its channel, the simplest way to avoid
- * depending on exactly how this client version handles concurrent publishing on one {@link Channel}. An application
- * that needs more publish throughput than one serialized channel gives builds more than one sink, each with its own
- * {@link Channel}.
+ * Each publish carries its own random token in an internal header, so a {@code basic.return} is matched to the
+ * publish it belongs to and never to a different one, including a retry of the same event after an earlier attempt's
+ * acknowledgement timed out. A {@code correlationId} the caller sets passes through unchanged. Publishes on one sink
+ * are still serialized on its channel, the simplest way to avoid depending on exactly how this client version
+ * handles concurrent publishing on one {@link Channel}. An application that needs more publish throughput than one
+ * serialized channel gives builds more than one sink, each with its own {@link Channel}.
  * <p>
  * A transient failure is retried under {@link Builder#retryStrategy(RetryStrategy)} before a caller sees it,
  * exponential backoff from 100 ms up to 2 seconds by default and no cap on the number of attempts. The retry is not

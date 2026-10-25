@@ -77,6 +77,7 @@ class RabbitMqConfirmPublisherTest {
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(channel));
+        when(channel.isOpen()).thenReturn(true);
         when(channel.waitForConfirms(anyLong())).thenReturn(true);
         RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
         byte[] body = "raw body".getBytes(StandardCharsets.UTF_8);
@@ -100,6 +101,7 @@ class RabbitMqConfirmPublisherTest {
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(channel));
+        when(channel.isOpen()).thenReturn(true);
         when(channel.waitForConfirms(anyLong())).thenReturn(true);
         RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
         byte[] body = "raw body".getBytes(StandardCharsets.UTF_8);
@@ -137,6 +139,7 @@ class RabbitMqConfirmPublisherTest {
             }
             return Optional.of(retiringChannel);
         });
+        when(retiringChannel.isOpen()).thenReturn(true);
         when(retiringChannel.waitForConfirms(anyLong())).thenThrow(new TimeoutException("confirm timed out"));
         RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofMillis(50));
         BasicProperties properties = new BasicProperties.Builder().contentType("text/plain").build();

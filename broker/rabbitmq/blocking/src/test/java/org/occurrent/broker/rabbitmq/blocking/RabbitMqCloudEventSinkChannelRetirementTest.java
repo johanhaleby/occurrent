@@ -63,6 +63,7 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
         Channel timedOutChannel = mock(Channel.class);
         Channel replacementChannel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(timedOutChannel), Optional.of(replacementChannel));
+        when(timedOutChannel.isOpen()).thenReturn(true);
         when(timedOutChannel.waitForConfirms(anyLong())).thenThrow(new TimeoutException("no confirm in time"));
 
         RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
@@ -90,6 +91,7 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
         Channel shutdownChannel = mock(Channel.class);
         Channel replacementChannel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(shutdownChannel), Optional.of(replacementChannel));
+        when(shutdownChannel.isOpen()).thenReturn(true);
         when(shutdownChannel.waitForConfirms(anyLong())).thenThrow(new ShutdownSignalException(false, false, null, null));
 
         RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
@@ -106,6 +108,7 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
 
         // With connection auto-recovery off, this is the only way the sink ever recovers from a shut-down channel:
         // a later publish must land on the replacement rather than failing forever against the retired one.
+        when(replacementChannel.isOpen()).thenReturn(true);
         when(replacementChannel.waitForConfirms(anyLong())).thenReturn(true);
         sink.publish(orderPlaced());
         verify(replacementChannel).basicPublish(any(), any(), eq(true), any(), any());
@@ -124,6 +127,7 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
         when(connection.openChannel())
                 .thenReturn(Optional.of(shutdownChannel))
                 .thenThrow(new ShutdownSignalException(true, false, null, null));
+        when(shutdownChannel.isOpen()).thenReturn(true);
         when(shutdownChannel.waitForConfirms(anyLong())).thenThrow(new ShutdownSignalException(true, false, null, null));
 
         RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
@@ -143,6 +147,7 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
         Channel interruptedChannel = mock(Channel.class);
         Channel replacementChannel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(interruptedChannel), Optional.of(replacementChannel));
+        when(interruptedChannel.isOpen()).thenReturn(true);
         when(interruptedChannel.waitForConfirms(anyLong())).thenThrow(new InterruptedException("interrupted"));
 
         RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
@@ -167,6 +172,7 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
         when(connection.openChannel())
                 .thenReturn(Optional.of(timedOutChannel))
                 .thenThrow(new ShutdownSignalException(true, true, null, null));
+        when(timedOutChannel.isOpen()).thenReturn(true);
         when(timedOutChannel.waitForConfirms(anyLong())).thenThrow(new TimeoutException("no confirm in time"));
 
         RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
@@ -186,6 +192,7 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
         when(connection.openChannel()).thenReturn(Optional.of(channel));
         // A nack on every attempt, with no cause the default retry predicate excludes, is retried forever by
         // design once the attempt cap is gone, so only close() can end it.
+        when(channel.isOpen()).thenReturn(true);
         when(channel.waitForConfirms(anyLong())).thenReturn(false);
 
         RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
