@@ -45,11 +45,19 @@ The compiler finds those for you. The other sections compile fine and behave dif
   throws `IllegalArgumentException` when you construct it over a decorator, a test double or your own implementation of
   the event store interfaces. Compiles unchanged.
 
+- [A catch-up keeps its live start in the checkpoints it stores](#a-catch-up-keeps-its-live-start-in-the-checkpoints-it-stores).
+  0.34 refuses the new checkpoints, so a rolling upgrade or a rollback needs care. A catch-up that loses its live
+  start on every replay now throws `CatchupCannotResumeException`. Compiles unchanged.
+
 ### Spring Boot starter
 
 - [A catch-up needs the event store itself](#a-catch-up-needs-the-event-store-itself). A context whose
   `EventStoreQueries`, event store or `DcbEventStore` bean is a decorator, a mock or your own implementation fails at
   startup when a catch-up runs over it. Compiles unchanged.
+
+- [A catch-up keeps its live start in the checkpoints it stores](#a-catch-up-keeps-its-live-start-in-the-checkpoints-it-stores).
+  A subscription with `resumeBehavior = SAME_AS_START_AT` goes live from the live start its catch-up read. Compiles
+  unchanged.
 
 ### Brokers
 
@@ -439,3 +447,53 @@ subscription calls, and no longer around the event store the catch-up reads. In 
 
 `CatchupReads` and `DcbCatchupReads` are in packages named `internal`. They are public only because the stores and the
 catch-ups live in different modules, and they can change in any release, so implementing them yourself is not supported.
+
+## A catch-up keeps its live start in the checkpoints it stores
+
+A catch-up subscription reads its live start, the point where its live subscription takes over, before it replays,
+and goes live from it once the replay is done. An event that commits while the replay runs, below what the replay
+already read, is then delivered live. A catch-up that runs without the live delegate now does that too, and when it
+restarts in the middle of its replay, it goes live from the live start its earlier run stored.
+
+### What changes
+
+The checkpoint a replay stores holds the live start in a new form when the catch-up runs without the live delegate, or
+when the replay started after position 0 or after the beginning of time:
+
+| Replay | Stored as |
+| --- | --- |
+| By position | `position:<position>;v:2;origin:<position>;replayTo:<position>;liveFrom:<live start>` |
+| By time | `position:time;v:2;at:<time>;origin:<time>;liveFrom:<live start>` |
+
+The other checkpoints a catch-up stores keep the form they had in 0.34.
+
+A catch-up runs without the live delegate when the model it wraps answers `null` to its start. Under the Spring Boot
+starter that is the case for `resumeBehavior = SAME_AS_START_AT`, where `DurableSubscriptionModel` and
+`CompetingConsumerSubscriptionModel` answer `null`. Such a catch-up now hands the innermost subscription model, the
+MongoDB one, the live start, and stores nothing when it goes live. It fails with an `IllegalStateException` when neither
+the event store nor the subscription model reports a live start.
+
+### Rolling upgrades and rolling back
+
+0.34 refuses a checkpoint in the new form. It throws when it reads one and writes nothing, so nothing is lost, but the
+subscription doesn't start on that node. During a rolling upgrade, a 0.34 node that resumes a subscription a 0.35 node
+stored in the new form fails to start it until it runs 0.35 too.
+
+To roll back to 0.34, first delete the stored checkpoint of every subscription whose checkpoint starts with
+`position:` and has `;v:2;` after its first value. Each of those subscriptions then starts from the start it is
+configured with.
+
+### When a catch-up loses its live start on every replay
+
+After its replay, a catch-up checks that its live start is still in the change stream history. When it isn't, the
+catch-up replays again with a new live start, up to three times. When it loses the live start after each of those
+replays too, it fails with `CatchupCannotResumeException`, an `IllegalStateException`, and the message names the longest
+replay, from reading its live start to checking it. Size the change stream history to reach back at least that far. On
+MongoDB that is the oplog, which you can keep for a minimum time with the `oplogMinRetentionHours` setting.
+
+A blocking catch-up whose replay a resume or a takeover started then holds the replay and logs the failure once, and
+runs it again when the subscription is resumed or `start(true)` is called. A replay that `subscribe(..)` started ends
+with the exception, which `waitUntilStarted()` throws.
+
+A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
+a time replay's checkpoint in the new form.
