@@ -44,8 +44,14 @@
 
 
         <!-- Test. This module shipped with dependencies for tests nobody wrote, including an event store and a
-             subscription model that a lease has no use for. What is here now is what the lease timing test needs, and
-             no Awaitility: nothing in it waits, since it moves the clock and runs the refresh itself. -->
+             subscription model that a lease has no use for. What is here now is what the lease tests need. Awaitility
+             is for the tests that let a real schedule run, since the rest move the clock and run the refresh
+             themselves. -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
@@ -55,6 +61,11 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

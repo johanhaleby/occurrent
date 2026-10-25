@@ -1,0 +1,193 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription.mongodb.blocking.ccs.internal;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.DisplayNameGenerator;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.slf4j.LoggerFactory;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
+
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertAll;
+
+/**
+ * A scheduled executor cancels every later execution of a task once one execution throws, and nothing reads the
+ * {@code ScheduledFuture} that would hold what it threw. A rethrow from {@link ScheduledRefresh.Scheduler} would
+ * therefore reach nobody and only stop every later refresh, so the node would never refresh or acquire a lease again.
+ * That is why every throwable is logged and the next refresh runs, a {@link VirtualMachineError} included.
+ */
+@DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
+@DisplayName("ScheduledRefreshThrowable")
+class ScheduledRefreshThrowableTest {
+
+    private static final Duration PERIOD = Duration.ofMillis(20);
+
+    private final Logged logged = new Logged();
+    private final Logger scheduledRefreshLogger = (Logger) LoggerFactory.getLogger(ScheduledRefresh.class);
+    private ScheduledRefresh scheduledRefresh;
+
+    @BeforeEach
+    void captureTheLogOfScheduledRefresh() {
+        logged.start();
+        scheduledRefreshLogger.addAppender(logged);
+    }
+
+    @AfterEach
+    void stopCapturingAndTheRefresh() {
+        scheduledRefreshLogger.detachAppender(logged);
+        logged.stop();
+        if (scheduledRefresh != null) {
+            scheduledRefresh.close();
+        }
+    }
+
+    @Nested
+    @DisplayName("when a refresh throws on its first run")
+    class When_a_refresh_throws_on_its_first_run {
+
+        @ParameterizedTest
+        @MethodSource("org.occurrent.subscription.mongodb.blocking.ccs.internal.ScheduledRefreshThrowableTest#schedulesAndThrowables")
+        @DisplayName("the next scheduled refresh still runs, since a rethrow would only cancel every later refresh")
+        void the_next_scheduled_refresh_still_runs(Schedule schedule, Throwable thrown) {
+            // Given
+            AtomicInteger runs = new AtomicInteger();
+
+            // When
+            scheduleThatThrowsOnTheFirstRun(schedule, runs, thrown);
+
+            // Then
+            await().atMost(3, SECONDS).until(runs::get, count -> count >= 3);
+        }
+
+        @ParameterizedTest
+        @MethodSource("org.occurrent.subscription.mongodb.blocking.ccs.internal.ScheduledRefreshThrowableTest#schedulesAndThrowables")
+        @DisplayName("it is logged at ERROR with the class name of what was thrown")
+        void it_is_logged_at_error_level_with_the_class_name_of_what_was_thrown(Schedule schedule, Throwable thrown) {
+            // Given
+            AtomicInteger runs = new AtomicInteger();
+
+            // When
+            scheduleThatThrowsOnTheFirstRun(schedule, runs, thrown);
+
+            // Then
+            await().atMost(3, SECONDS).untilAsserted(() -> {
+                List<ILoggingEvent> errors = logged.events();
+                assertThat(errors).as("the throwable is logged once").hasSize(1);
+                assertAll(
+                        () -> assertThat(errors.getFirst().getLevel()).isEqualTo(Level.ERROR),
+                        () -> assertThat(errors.getFirst().getFormattedMessage()).contains(thrown.getClass().getName()),
+                        () -> assertThat(errors.getFirst().getThrowableProxy().getClassName()).isEqualTo(thrown.getClass().getName())
+                );
+            });
+        }
+    }
+
+    @Nested
+    @DisplayName("when a refresh does not throw")
+    class When_a_refresh_does_not_throw {
+
+        @ParameterizedTest
+        @MethodSource("org.occurrent.subscription.mongodb.blocking.ccs.internal.ScheduledRefreshThrowableTest#schedules")
+        @DisplayName("nothing is logged at ERROR")
+        void nothing_is_logged_at_error_level(Schedule schedule) {
+            // Given
+            AtomicInteger runs = new AtomicInteger();
+            scheduledRefresh = new ScheduledRefresh((lease, scheduler) -> schedule.schedule(scheduler));
+
+            // When
+            scheduledRefresh.scheduleInBackground(runs::incrementAndGet, Duration.ofSeconds(1));
+            await().atMost(3, SECONDS).until(runs::get, count -> count >= 3);
+
+            // Then
+            assertThat(logged.events()).noneMatch(event -> event.getLevel().isGreaterOrEqual(Level.ERROR));
+        }
+    }
+
+    private void scheduleThatThrowsOnTheFirstRun(Schedule schedule, AtomicInteger runs, Throwable thrown) {
+        scheduledRefresh = new ScheduledRefresh((lease, scheduler) -> schedule.schedule(scheduler));
+        scheduledRefresh.scheduleInBackground(() -> {
+            if (runs.incrementAndGet() == 1) {
+                sneakyThrow(thrown);
+            }
+        }, Duration.ofSeconds(1));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable thrown) throws T {
+        throw (T) thrown;
+    }
+
+    private static class Logged extends AppenderBase<ILoggingEvent> {
+        private final List<ILoggingEvent> events = new CopyOnWriteArrayList<>();
+
+        @Override
+        protected void append(ILoggingEvent event) {
+            events.add(event);
+        }
+
+        List<ILoggingEvent> events() {
+            return List.copyOf(events);
+        }
+    }
+
+    enum Schedule {
+        FIXED_RATE(scheduler -> scheduler.fixedRate(Duration.ZERO, PERIOD)),
+        FIXED_DELAY(scheduler -> scheduler.fixedDelay(Duration.ZERO, PERIOD));
+
+        private final Consumer<ScheduledRefresh.Scheduler> schedule;
+
+        Schedule(Consumer<ScheduledRefresh.Scheduler> schedule) {
+            this.schedule = schedule;
+        }
+
+        void schedule(ScheduledRefresh.Scheduler scheduler) {
+            schedule.accept(scheduler);
+        }
+    }
+
+    static Stream<Schedule> schedules() {
+        return Stream.of(Schedule.values());
+    }
+
+    // Instances are thrown deliberately. Nothing here runs out of memory or overflows a stack.
+    static Stream<Arguments> schedulesAndThrowables() {
+        return schedules().flatMap(schedule -> Stream.of(
+                Arguments.of(schedule, new IllegalStateException("a refresh that threw")),
+                Arguments.of(schedule, new AssertionError("an Error that is not a VirtualMachineError")),
+                Arguments.of(schedule, new StackOverflowError("a VirtualMachineError")),
+                Arguments.of(schedule, new OutOfMemoryError("another VirtualMachineError"))));
+    }
+}
