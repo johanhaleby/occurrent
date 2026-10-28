@@ -23,6 +23,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -37,6 +38,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.occurrent.subscription.mongodb.blocking.ccs.internal.FailureLogging.logIgnoringWhatLoggingThrows;
 
 /**
  * Schedules a periodic refresh, and tells the listeners what a refresh changed on a thread of its own.
@@ -125,21 +127,7 @@ class ScheduledRefresh {
 
     void scheduleInBackground(Runnable refresh, Duration leaseTime) {
         scheduleIt.accept(leaseTime, new Scheduler(executor, () -> {
-            try {
-                handOverWhatTheNotifierDidNotTake();
-            } catch (Throwable handingOver) {
-                try {
-                    refresh.run();
-                } catch (Throwable refreshing) {
-                    // The JVM can throw the same preallocated OutOfMemoryError from both calls, and a throwable can't
-                    // suppress itself
-                    if (refreshing != handingOver) {
-                        refreshing.addSuppressed(handingOver);
-                    }
-                    throw refreshing;
-                }
-                throw handingOver;
-            }
+            handOverWhatTheNotifierDidNotTake();
             refresh.run();
         }));
     }
@@ -178,27 +166,32 @@ class ScheduledRefresh {
     }
 
     // One subscription id at a time, so the ids already waiting add one ERROR line per refresh, not one each. A
-    // notification a refresh decides is handed over on its own and logs its own line when the notifier throws.
+    // notification a refresh decides is handed over on its own and logs its own line when the notifier throws. Throws
+    // nothing, so the refresh after it always runs.
     private void handOverWhatTheNotifierDidNotTake() {
         if (notifier == null) {
             return;
         }
-        while (true) {
-            String subscriptionId = null;
-            Undelivered queued = null;
-            synchronized (undelivered) {
-                for (Map.Entry<String, Undelivered> entry : undelivered.entrySet()) {
-                    if (entry.getValue().waitingForARefresh) {
-                        subscriptionId = entry.getKey();
-                        queued = entry.getValue();
-                        queued.waitingForARefresh = false;
-                        break;
+        try {
+            while (true) {
+                String subscriptionId = null;
+                Undelivered queued = null;
+                synchronized (undelivered) {
+                    for (Map.Entry<String, Undelivered> entry : undelivered.entrySet()) {
+                        if (entry.getValue().waitingForARefresh) {
+                            subscriptionId = entry.getKey();
+                            queued = entry.getValue();
+                            queued.waitingForARefresh = false;
+                            break;
+                        }
                     }
                 }
+                if (queued == null || !handOver(notifier, subscriptionId, queued)) {
+                    return;
+                }
             }
-            if (queued == null || !handOver(notifier, subscriptionId, queued)) {
-                return;
-            }
+        } catch (Throwable t) {
+            logIgnoringWhatLoggingThrows(log, Level.ERROR, "Handing the waiting notifications over to the notifier failed due to {} - {}. The refresh runs as usual.", t);
         }
     }
 
@@ -220,13 +213,8 @@ class ScheduledRefresh {
             synchronized (undelivered) {
                 queued.waitingForARefresh = true;
             }
-            try {
-                log.error("The notifier did not take the notifications for subscription {} due to {} - {}. A later scheduled refresh hands them over again.",
-                        subscriptionId, t.getClass().getName(), t.getMessage(), t);
-            } catch (Throwable whileLogging) {
-                // Logging can throw too, such as a second OutOfMemoryError, and the refresh round that handed the
-                // notification over would then skip every consumer it has not refreshed yet
-            }
+            logIgnoringWhatLoggingThrows(log, Level.ERROR, "The notifier did not take the notifications for subscription {} due to {} - {}. A later scheduled refresh hands them over again.",
+                    subscriptionId, t);
             return false;
         }
     }
@@ -252,13 +240,8 @@ class ScheduledRefresh {
                 next.run();
             } catch (Throwable t) {
                 // Not rethrown, since that would leave the notifications after it to nobody
-                try {
-                    log.error("A notification for subscription {} failed due to {} - {}. The notifications after it are delivered as usual.",
-                            subscriptionId, t.getClass().getName(), t.getMessage(), t);
-                } catch (Throwable whileLogging) {
-                    // Logging can throw too, such as a second OutOfMemoryError, and the notifications after the one
-                    // that threw would then reach nobody
-                }
+                logIgnoringWhatLoggingThrows(log, Level.ERROR, "A notification for subscription {} failed due to {} - {}. The notifications after it are delivered as usual.",
+                        subscriptionId, t);
             }
         }
     }
@@ -304,13 +287,7 @@ class ScheduledRefresh {
                 try {
                     refresh.run();
                 } catch (Throwable t) {
-                    try {
-                        log.error("Lease refresh failed due to {} - {}. The next scheduled refresh will run as usual.",
-                                t.getClass().getName(), t.getMessage(), t);
-                    } catch (Throwable whileLogging) {
-                        // Logging can throw too, such as a second OutOfMemoryError, and that would cancel every later
-                        // refresh just the same
-                    }
+                    logIgnoringWhatLoggingThrows(log, Level.ERROR, "Lease refresh failed due to {} - {}. The next scheduled refresh will run as usual.", t);
                 }
             };
         }

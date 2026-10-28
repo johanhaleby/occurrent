@@ -28,6 +28,7 @@ import org.occurrent.retry.internal.RetryImpl;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -48,6 +49,8 @@ import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+
+import static org.occurrent.subscription.mongodb.blocking.ccs.internal.FailureLogging.logIgnoringWhatLoggingThrows;
 
 /**
  * Common operations for MongoDB lease-based competing consumer strategies
@@ -473,8 +476,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * and a later round grants it again.
      * Dropping it could leave this instance refreshing a lease for a subscription that has stopped delivering, which
      * no grant would restart, since the listener finds the consumer running already, and which no other instance
-     * could take over. A listener that throws is logged once, an {@link Error} at ERROR and anything else at WARN, and
-     * the other listeners are told anyway. Nothing is thrown, since the notifier would only log it a second time.
+     * could take over. What a listener throws is logged at most once, an {@link Error} at ERROR and anything else at
+     * WARN, and the other listeners are told anyway, also when logging it throws. It isn't rethrown, since the notifier
+     * would only log it a second time.
      */
     private void notifyListenersIfStillTrue(Outcome outcome, CompetingConsumer cc) {
         if (!running) {
@@ -498,12 +502,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                     listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId);
                 }
             } catch (Throwable e) {
-                String line = "Listener {} failed on {} due to {} - {} (subscriberId={}, subscriptionId={})";
-                if (e instanceof Error) {
-                    log.error(line, listener, outcome.notification(), e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
-                } else {
-                    log.warn(line, listener, outcome.notification(), e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
-                }
+                logIgnoringWhatLoggingThrows(log, e instanceof Error ? Level.ERROR : Level.WARN, "Listener {} failed on {} (subscriberId={}, subscriptionId={}) due to {} - {}",
+                        listener, outcome.notification(), cc.subscriberId, cc.subscriptionId, e);
             }
         }
     }

@@ -414,15 +414,6 @@ class ScheduledRefreshThrowableTest {
         throw (T) thrown;
     }
 
-    // Reading its message throws, as logging it could when memory runs out. Neither is an OutOfMemoryError, since JUnit
-    // rethrows one from a failing assertion and that ends the whole run instead of failing the test.
-    private static class ErrorThatThrowsWhenLogged extends Error {
-        @Override
-        public String getMessage() {
-            throw new Error("thrown while logging");
-        }
-    }
-
     // An Error from reading its message, as a second OutOfMemoryError while logging the first one would be
     private static class ThrowingWhenLogged extends RuntimeException {
         @Override
