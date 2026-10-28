@@ -1046,6 +1046,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 .orElse(() -> goLiveFrom.apply(liveStart)));
     }
 
+    // The start the live delegate gets when the start resolved to firstStartAt and no replay runs. A wrapper startAt
+    // answers null for, such as a durable model told to store nothing, still gets null, as at a handover
+    static StartAt goingLiveFrom(StartAt startAt, StartAt firstStartAt) {
+        if (!startAt.isDynamic()) {
+            return firstStartAt;
+        }
+        return StartAt.dynamic(context -> SubscriptionModelWrapper.class.isAssignableFrom(context.subscriptionModelType()) && startAt.get(context) == null ? null : firstStartAt);
+    }
+
     // Whether liveStart is the live start kept in the checkpoint startAt resolves to for this model, as in a checkpoint the
     // application stored with its state and started the subscription from again
     private boolean keptInTheStart(StartAt startAt, Checkpoint liveStart) {

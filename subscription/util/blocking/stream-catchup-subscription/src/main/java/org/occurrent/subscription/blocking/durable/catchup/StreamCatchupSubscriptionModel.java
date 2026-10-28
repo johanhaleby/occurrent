@@ -200,7 +200,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             if (checkpoint == null) {
                 // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
                 // the handover would, keeping DCB events out.
-                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), requestedStartAt, action, holdPaused);
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, requestedStartAt), action, holdPaused);
             }
             // A time position stored by a replay that did not finish resumes that replay, also on a store that
             // writes position, where it runs through the time-ordered catch-up
@@ -211,7 +211,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
 
         CatchupReplay replay = replayFrom(subscriptionId, filter, startAt, action, firstStartAt);
         if (replay == null) {
-            return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), firstStartAt, action, holdPaused);
+            return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, firstStartAt), action, holdPaused);
         }
         return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, replay, holdPaused));
     }
