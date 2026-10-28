@@ -50,7 +50,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
   start on every replay now throws `CatchupCannotResumeException`. Compiles unchanged.
 - [A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from).
   A blocking catch-up delivers each replayed event as a `CheckpointAwareCloudEvent`, which equals only another one
-  with the same checkpoint. Store the checkpoint with your state to resume from it. Compiles unchanged.
+  with the same checkpoint. Store the checkpoint with your state to resume from it. An exhaustive `switch` over
+  `DcbStartAt` needs a case for the new `DcbStartAt.AtCheckpoint`.
 - [A catch-up over both a stream and a DCB model refuses a position start without a filter](#a-catch-up-over-both-a-stream-and-a-dcb-model-refuses-a-position-start-without-a-filter).
   A subscription with no filter that starts at a position checkpoint throws `IllegalArgumentException`. Compiles
   unchanged.
@@ -540,6 +541,14 @@ same transaction, and start the subscription from it again with
 `StartAt.checkpoint(new StringBasedCheckpoint(checkpoint))`, or `DcbStartAt.checkpoint(checkpoint)` for a DCB
 subscription.
 
+From the checkpoint of a live event, or of an event that a catch-up replays by position, the subscription resumes
+after that event. A catch-up that replays by time resumes at the event's time instead, so it delivers the events with
+that time again, that event included. When its `catchupPhaseSortBy` doesn't start with the time ascending, an event from
+its first read resumes the whole replay from where it started.
+
+`DcbStartAt.checkpoint(..)` returns the new `DcbStartAt.AtCheckpoint`. `DcbStartAt` is sealed, so a `switch` over it
+that lists every case and has no `default` no longer compiles. Add a case for `DcbStartAt.AtCheckpoint`.
+
 To rewind a read model to a point you know is good, keep the checkpoint of the event at that point, and start the
 subscription from it.
 
@@ -559,12 +568,18 @@ when you subscribe. A `StartAt.checkpoint(..)` you build when you subscribe is a
 that takes over an hour later delivers that hour's events again. Read the checkpoint when the node takes over instead:
 
 ```java
-competingConsumerSubscriptionModel.subscribe("my-read-model", filter,
-        StartAt.dynamic(context -> StartAt.checkpoint(new StringBasedCheckpoint(myStore.checkpoint()))), action);
+competingConsumerSubscriptionModel.subscribe("my-read-model", filter, StartAt.dynamic(context -> {
+    String checkpoint = myStore.checkpoint();
+    return checkpoint == null ? StartAt.subscriptionModelDefault() : StartAt.checkpoint(new StringBasedCheckpoint(checkpoint));
+}), action);
 ```
 
+Return a start of your own, such as `StartAt.subscriptionModelDefault()`, while your store holds no checkpoint yet,
+since `StringBasedCheckpoint` refuses `null`.
+
 When a node gets the lease back after losing it, the model it wraps resumes from where that node last ran. Events can
-be delivered again, and none are skipped.
+be delivered again. None are skipped, unless the change stream history no longer reaches back to that position and the
+model is set to restart after lost history, which restarts the subscription from the present.
 
 ### Spring Boot
 
@@ -579,15 +594,21 @@ SubscriptionResumePoints subscriptionResumePoints(MyReadModelRepository reposito
 }
 ```
 
-A non-null answer is the checkpoint the subscription resumes after, ahead of the one Spring Boot's `CheckpointStorage`
+A non-null answer is the checkpoint the subscription resumes from, ahead of the one Spring Boot's `CheckpointStorage`
 holds. When that stored checkpoint is newer than the answer, the events between the two are delivered again. `null`
 starts the subscription from the annotation's start, as it starts without the bean. Spring Boot reads the bean each time
 a subscription model reads the start, also when a node of a competing consumer takes over, and can ask more than once
 for one start, so return the same answer each time.
 
 With `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING` or an explicit position, the answer only
-moves where the replay starts. The subscription still stores no checkpoint in `CheckpointStorage`, and the competing
-consumer model does not compete for it.
+moves where the replay starts. The subscription keeps no checkpoint in `CheckpointStorage` once it is live, and the
+competing consumer model does not compete for it. A catch-up that stores checkpoints during its replay still does, and
+deletes the last one when the replay goes live.
+
+Spring Boot decides from the annotation, not from the answer, whether application startup waits for the subscription.
+Under the default `startupMode`, a subscription whose annotation starts at `NOW` or `DEFAULT` waits, also when the
+answer makes it replay. One whose annotation replays, from the beginning, a position or a time, starts in the
+background, also when the answer makes it go live. Set `startupMode` on the annotation to choose.
 
 ## A catch-up over both a stream and a DCB model refuses a position start without a filter
 

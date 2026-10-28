@@ -72,8 +72,10 @@ import static java.util.Objects.requireNonNull;
  * this node first gets the lease, and starts from what the function returns at that moment. So a start that reads a
  * checkpoint the application stores with its own state starts from the latest one the application holds when this node
  * takes over. When this node gets the lease back after losing it, the wrapped model resumes from its own position, not
- * from the start. That can deliver events again but skips none. Under a catch-up subscription model the function is read
- * once more then, only to decide whether the catch-up replays.
+ * from the start. That can deliver events again. It skips none, unless the change stream history, such as the MongoDB
+ * oplog, no longer reaches back to that position and the wrapped model is set to restart after lost history, which
+ * restarts the subscription from the present. Under a catch-up subscription model the function is read once more then,
+ * only to decide whether the catch-up replays.
  * <br>
  * <br>
  * A wrapped model can refuse a subscription when it starts it, as a catch-up model holding both a stream and a DCB
