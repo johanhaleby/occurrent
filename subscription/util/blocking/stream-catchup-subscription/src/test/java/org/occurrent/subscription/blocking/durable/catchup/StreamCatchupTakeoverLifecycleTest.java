@@ -200,7 +200,7 @@ class StreamCatchupTakeoverLifecycleTest {
         create(true);
 
         // When
-        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(1)), action());
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(1, new StringBasedCheckpoint("live start the replay read"), 1, 3)), action());
         boolean storedTheOrigin = waitUpTo(Duration.ofSeconds(10), () -> !liveModel.lostLiveStarts.isEmpty()
                 && saved.stream().anyMatch(checkpoint -> checkpoint.startsWith("position:1;") && checkpoint.endsWith(liveModel.lostLiveStarts.getFirst().asString())));
 
