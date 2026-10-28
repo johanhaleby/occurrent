@@ -31,8 +31,9 @@ import org.occurrent.dsl.dcb.DcbEventMetadata;
  * <p>
  * Return the checkpoint stored with the state. From the checkpoint of a live event, or of an event that a catch-up
  * replays by position, the subscription resumes after the last event that state includes. A catch-up that replays by
- * time resumes at that event's time instead, so it delivers the events with that time again, that event included. When
- * its {@code catchupPhaseSortBy} doesn't start with the time ascending, an event from its first read resumes the whole
+ * time resumes at that event's time instead, so it delivers the events with that time again, that event included. An
+ * event without a time holds the checkpoint of the event before it, and resumes where that one does. When its
+ * {@code catchupPhaseSortBy} doesn't start with the time ascending, an event from its first read resumes the whole
  * replay from where it started.
  * <p>
  * The checkpoint is the string the subscription delivered with that event, {@link EventMetadata#getCheckpoint()} or
@@ -48,7 +49,8 @@ import org.occurrent.dsl.dcb.DcbEventMetadata;
  * replay still does, and deletes the last one when the replay goes live.
  * <p>
  * Spring Boot decides from the annotation, not from the answer, whether application startup waits for the subscription.
- * Under the default {@code startupMode}, a subscription whose annotation starts at {@code NOW} or {@code DEFAULT} waits,
+ * When {@code occurrent.subscription.mode} is {@code manual}, nothing waits. Otherwise, under the default
+ * {@code startupMode}, a subscription whose annotation starts at {@code NOW} or {@code DEFAULT} waits,
  * also when the answer makes it replay. One whose annotation replays, from the beginning, a position or a time, starts in
  * the background, also when the answer makes it go live. Set {@code startupMode} on the annotation to choose.
  * <p>
