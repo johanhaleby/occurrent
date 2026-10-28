@@ -229,7 +229,8 @@ public final class RabbitMqDeliveryWorker {
 
     /**
      * Lets a delivery already running finish, starts no queued one, and returns without waiting. Safe to call from
-     * the worker thread itself, which is where a source that stops for good calls it from.
+     * the worker thread itself, which is where a source that stops for good calls it from. A failure removing the
+     * recovery listener is thrown only after the worker has stopped accepting work.
      */
     public void stopAcceptingWork() {
         synchronized (recoveryListenerRemovals) {
@@ -250,12 +251,18 @@ public final class RabbitMqDeliveryWorker {
      * @return {@code false} when a delivery was still running after {@code timeout}, {@code true} otherwise. Always
      * {@code true} when called from the worker thread, which returns at once since waiting there would wait for the
      * caller itself.
+     * @throws RuntimeException A failure removing the recovery listener, thrown only after the wait.
      */
     public boolean stop(Duration timeout) {
-        stopAcceptingWork();
-        if (isWorkerThread()) {
-            return true;
-        }
+        boolean[] finished = {true};
+        new RabbitMqTeardown(null)
+                .run(this::stopAcceptingWork)
+                .run(() -> finished[0] = isWorkerThread() || awaitTermination(timeout))
+                .finish();
+        return finished[0];
+    }
+
+    private boolean awaitTermination(Duration timeout) {
         try {
             return executor.awaitTermination(timeout.toNanos(), TimeUnit.NANOSECONDS);
         } catch (InterruptedException e) {

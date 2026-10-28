@@ -28,6 +28,9 @@ import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -185,6 +188,35 @@ class RabbitMqDeliveryWorkerRecoveryListenerTest {
             Throwable thrown = catchThrowable(worker::stopAcceptingWork);
 
             // Then
+            assertThat(thrown).isSameAs(failure);
+        }
+
+        @Test
+        void stop_still_waits_for_a_running_delivery_when_removing_a_listener_throws_and_then_throws_that_failure() throws Exception {
+            // Given
+            RabbitMqDeliveryWorker worker = worker();
+            Channel channel = recoverableChannel();
+            worker.discardOnRecovery(channel);
+            IllegalStateException failure = new IllegalStateException("channel closed");
+            doThrow(failure).when(recoverable(channel)).removeRecoveryListener(any());
+            CountDownLatch started = new CountDownLatch(1);
+            AtomicBoolean finished = new AtomicBoolean();
+            worker.submit(1L, () -> {
+                started.countDown();
+                try {
+                    Thread.sleep(300);
+                    finished.set(true);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // When
+            Throwable thrown = catchThrowable(() -> worker.stop(Duration.ofSeconds(5)));
+
+            // Then
+            assertThat(finished).as("the delivery had finished when stop threw").isTrue();
             assertThat(thrown).isSameAs(failure);
         }
     }

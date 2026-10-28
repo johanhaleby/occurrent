@@ -49,7 +49,9 @@ import static org.mockito.Mockito.verify;
  * A failure that reaches the worker after this source has already stopped is not a second reason to stop it.
  * {@code close()} interrupts a handler that is still running, and a handler that surfaces that interrupt as an
  * {@code InterruptedException} would otherwise be logged at error as this source failing, and stop a source that is
- * already stopped. The failure is routed through the worker's own entry point against a mocked {@link Channel}.
+ * already stopped. It is logged at debug when the handler was interrupted or {@code close()} has stopped waiting for
+ * it, and at warn otherwise, since nothing else reports it then. The failure is routed through the worker's own entry
+ * point against a mocked {@link Channel}.
  */
 class RabbitMqCloudEventSourceStoppedSourceDeliveryFailureTest {
 
@@ -63,18 +65,25 @@ class RabbitMqCloudEventSourceStoppedSourceDeliveryFailureTest {
 
     @BeforeEach
     void buildSource() {
+        source = sourceClosingWithin(Duration.ofSeconds(1));
+        logged.start();
+        sourceLog.addAppender(logged);
+        // A stopped source logs some failures at debug, which the root level of info would drop
+        sourceLog.setLevel(Level.DEBUG);
+    }
+
+    private RabbitMqCloudEventSource sourceClosingWithin(Duration closeTimeout) {
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("sub", cloudEvent -> sneakyThrow(handlerFailure.get()));
         RabbitMqDeliveryFailureAction failureAction = new RabbitMqDeliveryFailureAction(channel, DeliveryFailurePolicy.REDELIVER, null, null,
                 LoggerFactory.getLogger(RabbitMqCloudEventSourceStoppedSourceDeliveryFailureTest.class));
-        source = new RabbitMqCloudEventSource(model, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, Duration.ofSeconds(1));
-        logged.start();
-        sourceLog.addAppender(logged);
+        return new RabbitMqCloudEventSource(model, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, closeTimeout);
     }
 
     @AfterEach
     void detachLogAppender() {
         sourceLog.detachAppender(logged);
+        sourceLog.setLevel(null);
         Thread.interrupted();
     }
 
@@ -120,6 +129,28 @@ class RabbitMqCloudEventSourceStoppedSourceDeliveryFailureTest {
         handleDeliveryOrStop();
 
         assertThat(Thread.currentThread().isInterrupted()).isFalse();
+    }
+
+    @Test
+    void a_handler_error_after_the_source_stopped_by_itself_logs_a_warning() throws Exception {
+        handlerFailure.set(new StackOverflowError("a handler that recursed"));
+        stopPermanently();
+
+        handleDeliveryOrStop();
+
+        assertThat(logged.list).extracting(ILoggingEvent::getLevel).containsExactly(Level.WARN);
+    }
+
+    @Test
+    void a_handler_error_after_close_stopped_waiting_for_it_logs_at_debug() throws Exception {
+        handlerFailure.set(new StackOverflowError("a handler that recursed"));
+        source = sourceClosingWithin(Duration.ZERO);
+        source.close();
+        logged.list.clear();
+
+        handleDeliveryOrStop();
+
+        assertThat(logged.list).extracting(ILoggingEvent::getLevel).containsExactly(Level.DEBUG);
     }
 
     private void stopPermanently() {

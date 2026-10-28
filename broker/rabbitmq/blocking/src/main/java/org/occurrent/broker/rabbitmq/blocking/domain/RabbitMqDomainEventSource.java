@@ -18,7 +18,6 @@ package org.occurrent.broker.rabbitmq.blocking.domain;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
-import com.rabbitmq.client.ChannelContinuationTimeoutException;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Delivery;
 import com.rabbitmq.client.ShutdownSignalException;
@@ -333,15 +332,15 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
                             "stopped consuming for good.", queue);
                 }
                 boolean shouldConsume = feed.hasProjection() && readyForLiveDelivery;
-                // Waits for the worker to finish what an earlier consumer sent it, see RabbitMqDeliveryWorker#isIdle.
                 String tag = consumerTag.get();
-                if (shouldConsume && tag == null && worker.isIdle()) {
-                    consumerTag.set(consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel));
-                } else if (!shouldConsume && tag != null) {
-                    cancelConsumer(tag);
+                if (!shouldConsume && tag != null) {
+                    consumerRecovery.retire(tag);
                 }
-                releaseHeldDeferredDelivery();
-                releaseHeldFailedDelivery();
+                // Waits for the worker to finish what an earlier consumer sent it, see RabbitMqDeliveryWorker#isIdle.
+                if (consumerRecovery.cancelRetired(consumeChannel) && shouldConsume && consumerTag.get() == null && worker.isIdle()) {
+                    consumerRecovery.consume(() -> consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel));
+                }
+                releaseHeldDeliveriesOrStop();
             } finally {
                 consumeLock.unlock();
             }
@@ -358,21 +357,21 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         }
     }
 
-    // Under consumeLock. A cancel that throws has still dropped the consumer on the client, or the client has no such
-    // consumer, so keeping the tag would make this source believe it is consuming and never start another. Only a
-    // cancel whose reply timed out may have left the consumer registered, so that one keeps the tag and the next poll
-    // cancels again.
-    private void cancelConsumer(String tag) throws IOException {
-        boolean consumerMayStillExist = false;
+    // Under consumeLock. A release that failed in a way that may or may not have sent its nack can't be retried, since a
+    // second nack for a tag makes the broker close the channel, and can't be left either, since at the default
+    // prefetchCount of one the broker sends nothing further. Closing the channel requeues it.
+    private void releaseHeldDeliveriesOrStop() {
         try {
-            consumeChannel.basicCancel(tag);
-        } catch (ChannelContinuationTimeoutException e) {
-            consumerMayStillExist = true;
-            throw e;
-        } finally {
-            if (!consumerMayStillExist) {
-                consumerTag.compareAndSet(tag, null);
+            releaseHeldDeferredDelivery();
+            releaseHeldFailedDelivery();
+        } catch (Throwable e) {
+            if (nackNotSent(e)) {
+                throw e;
             }
+            log.error("Releasing a held delivery on queue \"{}\" failed, and the negative acknowledgement may or may not "
+                    + "have been sent. Stopping this source and closing its channel, which puts that delivery back on "
+                    + "the queue.", queue, e);
+            stopPermanently();
         }
     }
 
@@ -393,8 +392,8 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // rather than trying the next slot, since a channel failing to nack once is not going to succeed on a
     // different tag straight after. The next poll retries it. A channel that has actually died requeues
     // everything still unacked on it by itself regardless, so this is only for one that survives the failure.
-    // A failure thrown after the nack was sent, which only an application's MetricsCollector can cause, does not
-    // put the tag back.
+    // Any other failure may come before the frame is written, from an application's TrafficListener, or after it,
+    // from its MetricsCollector. The tag is not put back, and the poll stops this source instead.
     private void releaseHeldDeferredDelivery() {
         releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver);
     }
@@ -420,15 +419,24 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
             }
             try {
                 redeliver.accept(heldDeliveryTag);
-            } catch (RabbitMqSourceException | ShutdownSignalException e) {
-                // The nack was not sent, so the tag goes back for the next poll. Without it nothing would nack the
-                // tag, and at the default prefetchCount of one the broker sends the consumer nothing further.
-                heldDeferredDeliveryTags.offerFirst(heldDeliveryTag);
+            } catch (RuntimeException e) {
+                if (nackNotSent(e)) {
+                    // Without it nothing would nack the tag, and at the default prefetchCount of one the broker sends
+                    // the consumer nothing further.
+                    heldDeferredDeliveryTags.offerFirst(heldDeliveryTag);
+                }
+                // Anything else may have been thrown after the nack was sent, and a second nack for the same tag
+                // makes the broker close the channel, so that tag is not put back.
                 throw e;
             }
-            // Anything else is thrown after the nack was sent, by a MetricsCollector the application registered. A
-            // second nack for the same tag makes the broker close the channel, so the tag is not put back.
         }
+    }
+
+    // How a nack that was not sent fails. AMQChannel.quiescingTransmit calls an application's TrafficListener before
+    // it writes the frame and ChannelN.basicNack calls its MetricsCollector after, so a failure from either of those
+    // can't tell whether the nack went out.
+    static boolean nackNotSent(Throwable failure) {
+        return failure instanceof RabbitMqSourceException || failure instanceof ShutdownSignalException;
     }
 
     private void handleCancel(String cancelledConsumerTag) {
@@ -455,19 +463,27 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // this channel would take it out of the connection's recovery so the source never consumed again. Anything else
     // stops this source and closes the channel, which is what puts the delivery back on the queue. Without that the
     // delivery would sit unacknowledged on a consumer the broker sends nothing further to.
-    // A failure after this source has already stopped, which an interrupt from close() causes, is only logged and
-    // the interrupt is passed on to the thread. Not rethrown, since the cause is logged here, and rethrowing would
-    // only end the worker thread.
+    // A failure after this source has already stopped does not stop it again. It is logged at debug when the
+    // projection was interrupted or close() has stopped waiting for it, and at warn otherwise, since nothing else
+    // reports it then. An interrupt is passed on to the thread. Not rethrown, since rethrowing would only end the
+    // worker thread.
     private void handleDeliveryOrStop(Delivery delivery, long deliveryTag) {
         try {
             handleDelivery(delivery);
         } catch (Throwable e) {
             if (permanentlyStopped) {
+                boolean interrupted = e instanceof InterruptedException || Thread.currentThread().isInterrupted();
                 if (e instanceof InterruptedException) {
                     Thread.currentThread().interrupt();
                 }
-                log.debug("Handling delivery tag {} on queue \"{}\" failed outside this source's delivery failure policy "
-                        + "after this source had already stopped.", deliveryTag, queue, e);
+                if (interrupted || closeDeadlinePassed()) {
+                    log.debug("Handling delivery tag {} on queue \"{}\" failed outside this source's delivery failure "
+                            + "policy after close() stopped waiting for it.", deliveryTag, queue, e);
+                } else {
+                    log.warn("Handling delivery tag {} on queue \"{}\" failed outside this source's delivery failure "
+                            + "policy after this source had stopped. Closing its channel puts that delivery back on the "
+                            + "queue.", deliveryTag, queue, e);
+                }
                 return;
             }
             if (failureAction.isLostToConnectionRecovery(e)) {
@@ -626,48 +642,46 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
      * own javadoc already expects once this source's channel eventually closes.
      */
     private void stopPermanently() {
-        Throwable primary = null;
         consumeLock.lock();
+        // Every step runs, also after one throws, since the channel close is what requeues a held delivery and the
+        // poll and the worker still need stopping. The first failure is thrown with the later ones suppressed on it.
+        new RabbitMqTeardown(null)
+                // Set under the same lock reconcileConsumption() reads it under, so whichever of the two takes the
+                // lock first decides the consumer's fate before the other reads the flag.
+                .run(() -> permanentlyStopped = true)
+                .run(consumerRecovery::detach)
+                .run(this::cancelConsumerWhileStopping)
+                .run(this::releaseHeldIgnoringFailure)
+                .run(this::closeChannelIgnoringFailure)
+                .run(consumeLock::unlock)
+                .run(scheduler::shutdown)
+                .run(worker::stopAcceptingWork)
+                .finish();
+    }
+
+    private void cancelConsumerWhileStopping() {
+        String tag = consumerTag.getAndSet(null);
+        if (tag != null) {
+            try {
+                consumeChannel.basicCancel(tag);
+            } catch (IOException | RuntimeException e) {
+                // RuntimeException too, since an already closed channel throws AlreadyClosedException
+                log.warn("Failed to cancel the consumer on queue \"{}\" while stopping permanently.", queue, e);
+            }
+        }
+    }
+
+    // Best effort, the channel close that follows requeues whatever this could not release.
+    private void releaseHeldIgnoringFailure() {
         try {
-            // Set under the same lock reconcileConsumption() now reads it under, so the two can never interleave:
-            // whichever of this method and a concurrent poll acquires the lock first fully decides the consumer's
-            // fate before the other even reads the flag.
-            permanentlyStopped = true;
-            consumerRecovery.detach();
-            String tag = consumerTag.getAndSet(null);
-            if (tag != null) {
-                try {
-                    consumeChannel.basicCancel(tag);
-                } catch (IOException | RuntimeException e) {
-                    // RuntimeException too, not only IOException: an already-closed channel throws
-                    // com.rabbitmq.client.AlreadyClosedException, unchecked, and a cancel that failed is no reason to
-                    // skip the releases below.
-                    log.warn("Failed to cancel the consumer on queue \"{}\" while stopping permanently.", queue, e);
-                }
-            }
-            try {
-                releaseHeldDeferredDelivery();
-            } catch (RuntimeException ignored) {
-                // Best effort, the channel close in the finally below requeues whatever this could not.
-            }
-            try {
-                releaseHeldFailedDelivery();
-            } catch (RuntimeException ignored) {
-                // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
-            }
-        } catch (Throwable e) {
-            primary = e;
-            throw e;
-        } finally {
-            // Runs for an Error out of the cancel or a release too, since the channel close is what requeues a held
-            // delivery and the poll and the worker still need stopping. A step that fails is added to that Error as
-            // suppressed instead of replacing it.
-            new RabbitMqTeardown(primary)
-                    .run(this::closeChannelIgnoringFailure)
-                    .run(consumeLock::unlock)
-                    .run(scheduler::shutdown)
-                    .run(worker::stopAcceptingWork)
-                    .finish();
+            releaseHeldDeferredDelivery();
+        } catch (RuntimeException ignored) {
+            // See above
+        }
+        try {
+            releaseHeldFailedDelivery();
+        } catch (RuntimeException ignored) {
+            // See above
         }
     }
 
@@ -711,69 +725,61 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
      */
     @Override
     public void close() {
-        Throwable primary = null;
-        try {
-            long deadline = System.nanoTime() + RabbitMqTeardown.timeoutNanos(closeTimeout);
-            bringCloseDeadlineForwardTo(deadline);
-            scheduler.shutdownNow();
-            // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
-            permanentlyStopped = true;
-            // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle worker
-            // and start a projection while this is closing.
-            worker.stopAcceptingWork();
-            consumerRecovery.detach();
-            // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
-            // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
-            if (lockBefore(deadline)) {
-                try {
-                    String tag = consumerTag.getAndSet(null);
-                    if (tag != null) {
-                        try {
-                            consumeChannel.basicCancel(tag);
-                        } catch (IOException ignored) {
-                            // Best effort: the channel is about to be closed either way.
-                        }
+        long deadline = System.nanoTime() + RabbitMqTeardown.timeoutNanos(closeTimeout);
+        // Stays false when the wait throws, so a projection that may still be running is fenced and interrupted
+        boolean[] workerFinished = {false};
+        // Every step runs, also after one throws, like stopPermanently()'s. The first failure is thrown with the later
+        // ones suppressed on it.
+        new RabbitMqTeardown(null)
+                .run(() -> bringCloseDeadlineForwardTo(deadline))
+                .run(scheduler::shutdownNow)
+                // Stops a poll that is already running from starting a new consumer while this waits for the worker.
+                .run(() -> permanentlyStopped = true)
+                // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle
+                // worker and start a projection while this is closing.
+                .run(worker::stopAcceptingWork)
+                .run(consumerRecovery::detach)
+                // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that
+                // lock while a park waits for its confirm. Closing the channel cancels the consumer and requeues the rest.
+                .run(() -> underLockBefore(deadline, this::cancelConsumerOnClose))
+                .run(() -> workerFinished[0] = worker.stop(remainingUntil(deadline)))
+                .run(() -> {
+                    if (!workerFinished[0] || worker.isWorkerThread()) {
+                        // The teardown goes ahead with a delivery still running, either because the wait ended early
+                        // or because a projection is closing its own source, so fence the acknowledgement from here
+                        // rather than at a deadline that may still be in the future.
+                        bringCloseDeadlineForwardTo(System.nanoTime());
                     }
-                } finally {
-                    consumeLock.unlock();
-                }
-            }
-            boolean workerFinished = worker.stop(remainingUntil(deadline));
-            if (!workerFinished || worker.isWorkerThread()) {
-                // The teardown below goes ahead with a delivery still running, either because this thread was interrupted
-                // while waiting or because a projection is closing its own source, so fence the acknowledgement from here
-                // rather than at a deadline that may still be in the future.
-                bringCloseDeadlineForwardTo(System.nanoTime());
-            }
-            if (!workerFinished) {
-                worker.interruptRunningWork(closeTimeout);
-            }
-            if (lockBefore(deadline)) {
-                try {
-                    try {
-                        releaseHeldDeferredDelivery();
-                    } catch (RuntimeException ignored) {
-                        // Best effort, the channel close in the finally below requeues whatever is left held.
+                })
+                .run(() -> {
+                    if (!workerFinished[0] && !worker.isWorkerThread()) {
+                        worker.interruptRunningWork(closeTimeout);
                     }
-                    try {
-                        releaseHeldFailedDelivery();
-                    } catch (RuntimeException ignored) {
-                        // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
-                    }
-                } finally {
-                    consumeLock.unlock();
-                }
+                })
+                .run(() -> underLockBefore(deadline, this::releaseHeldIgnoringFailure))
+                .run(this::closeChannelIgnoringIoFailure)
+                .run(failureAction::close)
+                .finish();
+    }
+
+    private void cancelConsumerOnClose() {
+        String tag = consumerTag.getAndSet(null);
+        if (tag != null) {
+            try {
+                consumeChannel.basicCancel(tag);
+            } catch (IOException ignored) {
+                // Best effort, the channel is about to be closed either way
             }
-        } catch (Throwable e) {
-            primary = e;
-            throw e;
-        } finally {
-            // Like stopPermanently()'s, so an exception from anything above still reaches the channel close, and the
-            // parking sink's close after it under PARK. A step that fails is added to that exception as suppressed.
-            new RabbitMqTeardown(primary)
-                    .run(this::closeChannelIgnoringIoFailure)
-                    .run(failureAction::close)
-                    .finish();
+        }
+    }
+
+    private void underLockBefore(long deadlineNanos, Runnable step) {
+        if (lockBefore(deadlineNanos)) {
+            try {
+                step.run();
+            } finally {
+                consumeLock.unlock();
+            }
         }
     }
 

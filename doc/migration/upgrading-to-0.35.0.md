@@ -46,8 +46,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 #### RabbitMQ
 
 - [A RabbitMQ source consumes again after a recovery without topology recovery](#a-rabbitmq-source-consumes-again-after-a-recovery-without-topology-recovery).
-  A source on a connection with topology recovery turned off registers a new consumer after a recovery. Two log lines
-  change their text. Compiles unchanged.
+  A source on a connection with topology recovery turned off registers a new consumer after a recovery. A
+  `TrafficListener` or `MetricsCollector` that throws while the source sends a negative acknowledgement stops the
+  source. Two log lines change their text. Compiles unchanged.
 
 #### Kafka
 
@@ -355,6 +356,11 @@ and the report is [#1066](https://github.com/johanhaleby/occurrent/issues/1066).
 Nothing in your code changes. If you restart the source after a recovery, or turned topology recovery on only to keep
 the source consuming, you can stop doing that. With topology recovery on, the source keeps the consumer the client
 registered and starts no second one.
+
+A `TrafficListener` or `MetricsCollector` on the connection that throws while the source sends a negative
+acknowledgement for a held delivery now stops the source, with a line at `error`. The source can't tell whether the
+acknowledgement went out, and sending it twice makes the broker close the channel. Closing the channel puts the
+delivery back on the queue. In 0.34.0 the next poll sent it again.
 
 Two log lines of the delivery failure policy have new text, and a search or an alert on the old one stops matching.
 

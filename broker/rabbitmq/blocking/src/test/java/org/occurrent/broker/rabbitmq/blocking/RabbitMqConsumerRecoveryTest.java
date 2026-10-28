@@ -19,6 +19,8 @@ package org.occurrent.broker.rabbitmq.blocking;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.ChannelContinuationTimeoutException;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.RecoveryListener;
 import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
@@ -29,6 +31,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -55,6 +60,7 @@ class RabbitMqConsumerRecoveryTest {
 
     private final AtomicReference<String> consumerTag = new AtomicReference<>();
     private final AutorecoveringConnection connection = mock(AutorecoveringConnection.class);
+    private final Channel channel = mock(Channel.class);
     private final ch.qos.logback.classic.Logger log = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("consumer-recovery-test");
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
     private final RabbitMqConsumerRecovery recovery = new RabbitMqConsumerRecovery(consumerTag, QUEUE, log);
@@ -222,6 +228,152 @@ class RabbitMqConsumerRecoveryTest {
         assertAll(
                 () -> assertThat(consumerTag.get()).isEqualTo("tag-registered-by-the-poll"),
                 () -> assertThat(logged.list).hasSize(1));
+    }
+
+    @Test
+    void a_consumer_whose_registration_a_recovery_started_during_is_not_held_and_the_next_cancel_removes_it() throws Exception {
+        recovery.attachTo(connection);
+        RecoveryListener recoveryListener = capturedRecoveryListener();
+
+        recovery.consume(() -> {
+            recoveryListener.handleRecoveryStarted(connection);
+            return "tag-registered-as-the-recovery-started";
+        });
+        recoveryListener.handleRecovery(connection);
+        boolean noneLeft = recovery.cancelRetired(channel);
+
+        assertAll(
+                () -> assertThat(consumerTag.get()).isNull(),
+                () -> assertThat(noneLeft).isTrue(),
+                () -> verify(channel).basicCancel("tag-registered-as-the-recovery-started"));
+    }
+
+    @Test
+    void consume_holds_the_tag_when_no_recovery_overlapped_it() throws Exception {
+        recovery.attachTo(connection);
+
+        recovery.consume(() -> "tag-1");
+
+        assertThat(consumerTag.get()).isEqualTo("tag-1");
+    }
+
+    @Test
+    void consume_registers_nothing_while_a_recovery_runs() throws Exception {
+        recovery.attachTo(connection);
+        capturedRecoveryListener().handleRecoveryStarted(connection);
+
+        recovery.consume(() -> {
+            throw new AssertionError("registered a consumer while a recovery ran");
+        });
+
+        assertThat(consumerTag.get()).isNull();
+    }
+
+    @Test
+    void a_tag_cleared_by_a_recovery_with_topology_recovery_off_is_cancelled_by_the_next_cancel() throws Exception {
+        consumerTag.set("tag-1");
+        recovery.attachTo(connection);
+        RecoveryListener recoveryListener = capturedRecoveryListener();
+        recoveryListener.handleRecoveryStarted(connection);
+        recoveryListener.handleRecovery(connection);
+
+        recovery.cancelRetired(channel);
+
+        verify(channel).basicCancel("tag-1");
+    }
+
+    @Test
+    void a_consumer_retired_while_a_recovery_runs_is_cancelled_under_the_tag_the_recovery_registered_it_with() throws Exception {
+        consumerTag.set("tag-1");
+        recovery.attachTo(connection);
+        RecoveryListener recoveryListener = capturedRecoveryListener();
+        ConsumerRecoveryListener consumerListener = capturedConsumerRecoveryListener();
+        recoveryListener.handleRecoveryStarted(connection);
+
+        recovery.retire("tag-1");
+        boolean noneLeftDuringRecovery = recovery.cancelRetired(channel);
+        consumerListener.consumerRecovered("tag-1", "tag-2");
+        recoveryListener.handleRecovery(connection);
+        boolean noneLeftAfterRecovery = recovery.cancelRetired(channel);
+
+        assertAll(
+                () -> assertThat(noneLeftDuringRecovery).isFalse(),
+                () -> assertThat(noneLeftAfterRecovery).isTrue(),
+                () -> assertThat(consumerTag.get()).isNull(),
+                () -> verify(channel).basicCancel("tag-2"),
+                () -> verify(channel, never()).basicCancel("tag-1"));
+    }
+
+    @Test
+    void a_cancel_that_a_recovery_overlapped_is_made_again_after_the_recovery() throws Exception {
+        recovery.attachTo(connection);
+        RecoveryListener recoveryListener = capturedRecoveryListener();
+        recovery.retire("tag-1");
+        doAnswer(invocation -> {
+            recoveryListener.handleRecoveryStarted(connection);
+            return null;
+        }).doNothing().when(channel).basicCancel("tag-1");
+
+        boolean noneLeftAfterOverlap = recovery.cancelRetired(channel);
+        recoveryListener.handleRecovery(connection);
+        boolean noneLeftAfterRecovery = recovery.cancelRetired(channel);
+
+        assertAll(
+                () -> assertThat(noneLeftAfterOverlap).isFalse(),
+                () -> assertThat(noneLeftAfterRecovery).isTrue(),
+                () -> verify(channel, times(2)).basicCancel("tag-1"));
+    }
+
+    @Test
+    void a_cancel_for_a_consumer_the_channel_no_longer_has_forgets_it() throws Exception {
+        recovery.retire("tag-1");
+        doThrow(new IOException("Unknown consumerTag")).when(channel).basicCancel("tag-1");
+
+        boolean noneLeft = recovery.cancelRetired(channel);
+        recovery.cancelRetired(channel);
+
+        assertAll(
+                () -> assertThat(noneLeft).isTrue(),
+                () -> verify(channel).basicCancel("tag-1"));
+    }
+
+    @Test
+    void a_cancel_whose_reply_timed_out_keeps_the_consumer_and_throws() throws Exception {
+        recovery.retire("tag-1");
+        ChannelContinuationTimeoutException timeout = new ChannelContinuationTimeoutException(new TimeoutException("no reply"), channel, 1, null);
+        doThrow(timeout).doNothing().when(channel).basicCancel("tag-1");
+
+        Throwable thrown = catchThrowable(() -> recovery.cancelRetired(channel));
+        boolean noneLeft = recovery.cancelRetired(channel);
+
+        assertAll(
+                () -> assertThat(thrown).isSameAs(timeout),
+                () -> assertThat(noneLeft).isTrue(),
+                () -> verify(channel, times(2)).basicCancel("tag-1"));
+    }
+
+    @Test
+    void a_cancel_that_fails_in_a_way_that_says_nothing_about_the_consumer_keeps_it_and_throws() throws Exception {
+        recovery.retire("tag-1");
+        IllegalStateException failure = new IllegalStateException("thrown by a TrafficListener");
+        doThrow(failure).doNothing().when(channel).basicCancel("tag-1");
+
+        Throwable thrown = catchThrowable(() -> recovery.cancelRetired(channel));
+        boolean noneLeft = recovery.cancelRetired(channel);
+
+        assertAll(
+                () -> assertThat(thrown).isSameAs(failure),
+                () -> assertThat(noneLeft).isTrue(),
+                () -> verify(channel, times(2)).basicCancel("tag-1"));
+    }
+
+    @Test
+    void retire_clears_the_tag_only_when_the_source_holds_that_one() {
+        consumerTag.set("tag-2");
+
+        recovery.retire("tag-1");
+
+        assertThat(consumerTag.get()).isEqualTo("tag-2");
     }
 
     @Test

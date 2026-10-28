@@ -20,24 +20,33 @@ import com.rabbitmq.client.CancelCallback;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.ChannelContinuationTimeoutException;
 import com.rabbitmq.client.DeliverCallback;
+import com.rabbitmq.client.RecoveryListener;
+import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
+import com.rabbitmq.client.impl.recovery.ConsumerRecoveryListener;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqConsumerRecovery;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryFailureAction;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -46,13 +55,16 @@ import static org.mockito.Mockito.when;
 /**
  * What the lifecycle poll believes about its consumer after a cancel that threw. A cancel that fails with the
  * connection recovered underneath it throws for a consumer the client no longer has, and a source that kept the tag
- * would think it was still consuming and never register another. Only a cancel whose reply timed out may have left
- * the consumer registered, so that one keeps the tag and the next poll cancels again. The poll is driven directly
+ * would think it was still consuming and never register another. A cancel whose reply timed out, or that failed in a
+ * way that says nothing about the consumer, may have left it registered, so the next poll cancels again. A cancel
+ * made while a recovery runs could miss the consumer the recovery registers again, so it waits for the recovery to
+ * finish and cancels that consumer under its new tag. The poll is driven directly
  * against a mocked {@link Channel}, since nothing schedules it on a source built this way.
  */
 class RabbitMqDomainEventSourceCancelConsumerTest {
 
     private static final String CONSUMER_TAG = "consumer-tag-1";
+    private static final String RECOVERED_CONSUMER_TAG = "consumer-tag-2";
 
     private final Channel channel = mock(Channel.class);
     private final AtomicBoolean ready = new AtomicBoolean(true);
@@ -103,16 +115,40 @@ class RabbitMqDomainEventSourceCancelConsumerTest {
     }
 
     @Test
-    void a_cancel_that_fails_with_a_runtime_exception_clears_the_consumer_so_the_next_poll_that_should_consume_registers_another() throws Exception {
-        doThrow(new IllegalStateException("the channel is closing")).doNothing().when(channel).basicCancel(CONSUMER_TAG);
+    void a_cancel_that_fails_with_a_runtime_exception_is_made_again_before_the_next_poll_that_should_consume_registers_another() throws Exception {
+        doThrow(new IllegalStateException("thrown by a TrafficListener")).doNothing().when(channel).basicCancel(CONSUMER_TAG);
         ready.set(false);
         poll();
 
         ready.set(true);
         poll();
 
-        verify(channel).basicCancel(CONSUMER_TAG);
-        verify(channel, times(2)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+        InOrder inOrder = inOrder(channel);
+        inOrder.verify(channel, times(2)).basicCancel(CONSUMER_TAG);
+        inOrder.verify(channel).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+    }
+
+    @Test
+    void a_consumer_paused_while_a_recovery_runs_is_cancelled_under_the_tag_the_recovery_registered_it_with_before_another_is_registered() throws Exception {
+        AutorecoveringConnection connection = mock(AutorecoveringConnection.class);
+        consumerRecovery().attachTo(connection);
+        RecoveryListener recoveryListener = captured(RecoveryListener.class, captor -> verify(connection).addRecoveryListener(captor.capture()));
+        ConsumerRecoveryListener consumerListener = captured(ConsumerRecoveryListener.class, captor -> verify(connection).addConsumerRecoveryListener(captor.capture()));
+        // The recovered channel has no consumer under the old tag until topology recovery registers it again
+        doThrow(new IOException("Unknown consumerTag")).when(channel).basicCancel(CONSUMER_TAG);
+
+        recoveryListener.handleRecoveryStarted(connection);
+        ready.set(false);
+        poll();
+        consumerListener.consumerRecovered(CONSUMER_TAG, RECOVERED_CONSUMER_TAG);
+        recoveryListener.handleRecovery(connection);
+        poll();
+        ready.set(true);
+        poll();
+
+        InOrder inOrder = inOrder(channel);
+        inOrder.verify(channel).basicCancel(RECOVERED_CONSUMER_TAG);
+        inOrder.verify(channel).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
     }
 
     @Test
@@ -132,5 +168,17 @@ class RabbitMqDomainEventSourceCancelConsumerTest {
         Method reconcileConsumption = RabbitMqDomainEventSource.class.getDeclaredMethod("reconcileConsumption");
         reconcileConsumption.setAccessible(true);
         reconcileConsumption.invoke(source);
+    }
+
+    private RabbitMqConsumerRecovery consumerRecovery() throws ReflectiveOperationException {
+        Field consumerRecovery = RabbitMqDomainEventSource.class.getDeclaredField("consumerRecovery");
+        consumerRecovery.setAccessible(true);
+        return (RabbitMqConsumerRecovery) consumerRecovery.get(source);
+    }
+
+    private static <T> T captured(Class<T> type, Consumer<ArgumentCaptor<T>> verification) {
+        ArgumentCaptor<T> captor = ArgumentCaptor.forClass(type);
+        verification.accept(captor);
+        return captor.getValue();
     }
 }

@@ -22,6 +22,9 @@ import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.RecoveryListener;
+import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
+import com.rabbitmq.client.impl.recovery.RecordedConsumer;
+import com.rabbitmq.client.impl.recovery.TopologyRecoveryFilter;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +44,8 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -125,6 +130,97 @@ class RabbitMqCloudEventSourceConsumerRecoveryTest {
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).contains("after"));
             await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5))
                     .untilAsserted(() -> assertThat(consumerCount()).isOne());
+            // A record left behind would hold this source's callbacks and be registered again by a later recovery
+            assertThat(((AutorecoveringConnection) sourceConnection).getRecordedConsumers()).hasSize(1);
+        }
+    }
+
+    /**
+     * Topology recovery registers every consumer it found recorded when it started, so a consumer this source cancels
+     * after that point comes back. A filter that holds the recovery right after it has read the records is what lets
+     * a poll that pauses the source run in exactly that window, every time.
+     */
+    @Test
+    void a_source_paused_while_topology_recovery_registers_its_consumer_again_cancels_that_consumer_and_registers_one_when_it_resumes() throws Exception {
+        AtomicBoolean holdConsumerRecovery = new AtomicBoolean();
+        CountDownLatch consumerRecoveryHeld = new CountDownLatch(1);
+        CountDownLatch releaseConsumerRecovery = new CountDownLatch(1);
+        ConnectionFactory sourceConnectionFactory = plainConnectionFactory();
+        sourceConnectionFactory.setAutomaticRecoveryEnabled(true);
+        sourceConnectionFactory.setTopologyRecoveryEnabled(true);
+        sourceConnectionFactory.setNetworkRecoveryInterval(500);
+        sourceConnectionFactory.setTopologyRecoveryFilter(new TopologyRecoveryFilter() {
+            @Override
+            public boolean filterConsumer(RecordedConsumer recordedConsumer) {
+                if (holdConsumerRecovery.get()) {
+                    consumerRecoveryHeld.countDown();
+                    awaitUninterruptibly(releaseConsumerRecovery);
+                }
+                return true;
+            }
+        });
+
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        List<String> received = new CopyOnWriteArrayList<>();
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> received.add(ce.getId()));
+        AtomicBoolean ready = new AtomicBoolean(true);
+        AtomicInteger readinessChecks = new AtomicInteger();
+
+        try (Connection sourceConnection = sourceConnectionFactory.newConnection();
+             RabbitMqCloudEventSource ignored = RabbitMqCloudEventSource.builder(sourceConnection, model, queue)
+                     .declareTopology(false)
+                     .pollInterval(Duration.ofMillis(100))
+                     .readinessSource(subscriptionId -> {
+                         readinessChecks.incrementAndGet();
+                         return ready.get();
+                     })
+                     .build()) {
+            CountDownLatch recovered = new CountDownLatch(1);
+            ((Recoverable) sourceConnection).addRecoveryListener(new RecoveryListener() {
+                @Override
+                public void handleRecovery(Recoverable recoverable) {
+                    recovered.countDown();
+                }
+
+                @Override
+                public void handleRecoveryStarted(Recoverable recoverable) {
+                }
+            });
+            publish("before");
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).contains("before"));
+
+            holdConsumerRecovery.set(true);
+            forceCloseAllConnectionsOrFail();
+            assertThat(consumerRecoveryHeld.await(30, TimeUnit.SECONDS)).as("topology recovery reached the consumer").isTrue();
+            ready.set(false);
+            int checksBeforePause = readinessChecks.get();
+            // The polls run one after the other, so the second one to start after the pause means the first has finished
+            await().atMost(Duration.ofSeconds(10)).until(() -> readinessChecks.get() >= checksBeforePause + 2);
+            releaseConsumerRecovery.countDown();
+            assertThat(recovered.await(30, TimeUnit.SECONDS)).as("connection recovered").isTrue();
+
+            await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10))
+                    .untilAsserted(() -> assertThat(consumerCount()).as("consumers while paused").isZero());
+            ready.set(true);
+            await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10))
+                    .untilAsserted(() -> assertThat(consumerCount()).as("consumers after resuming").isOne());
+        } finally {
+            releaseConsumerRecovery.countDown();
+        }
+    }
+
+    private static void awaitUninterruptibly(CountDownLatch latch) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                latch.await();
+                break;
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 

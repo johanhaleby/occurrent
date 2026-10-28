@@ -9,7 +9,7 @@ Accepted. Resolves [#1066](https://github.com/johanhaleby/occurrent/issues/1066)
 [#1112](https://github.com/johanhaleby/occurrent/issues/1112),
 [#1094](https://github.com/johanhaleby/occurrent/issues/1094) and
 [#1287](https://github.com/johanhaleby/occurrent/issues/1287), and takes the two RabbitMQ points of
-[#1107](https://github.com/johanhaleby/occurrent/issues/1107) that are about a nack and a stopped source. Applies to
+[#1107](https://github.com/johanhaleby/occurrent/issues/1107) that are about a negative acknowledgement and a stopped source. Applies to
 `RabbitMqCloudEventSource`, `RabbitMqDomainEventSource` and `RabbitMqCloudEventSink`. Amends
 [ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md) on one point, the limit
 it records for a connection with topology recovery turned off.
@@ -37,7 +37,11 @@ So a channel's recovery listener runs before the consumer is registered again an
 connection's `handleRecovery` runs after, and it is the first place where a consumer that is still missing is
 missing for good.
 
-Reviewing the failure paths of the same classes for 0.35.0 turned up four more defects of the same kind, where the
+Step 3 copies the client's records of the connection's consumers before it registers any of them again. A consumer
+the source cancels after that copy is registered again under a new tag. A consumer the source registers after step 1
+has a tag the source didn't hold when the recovery started, so step 4 can't tell whether that consumer survived.
+
+Reviewing the failure paths of the same classes for 0.35.0 turned up five more defects of the same kind, where the
 source believes something that stopped being true.
 
 - **A failed cancel leaves the tag.** `basicCancel` throws `IOException` with "Unknown consumerTag" for a tag the
@@ -68,23 +72,39 @@ source believes something that stopped being true.
    returns the plain connection underneath it, which never calls a recovery listener. The listeners go on the
    `AutorecoveringConnection` the source was built with, and a connection that isn't one gets none, since it never
    recovers by itself.
-3. **The tag is written by compare-and-set.** The poll writes it from its own thread while a recovery runs, and
-   the lock the poll holds around a blocking `basicConsume` would make the recovery wait for it. The source keeps the
-   tag in an `AtomicReference`. A consumer the poll registered after the recovery started has another tag than the one
-   taken at the start and is never cleared. A report about another source's consumer on the same connection doesn't
-   match the tag either.
-4. **A cancel that fails clears the tag, except one that timed out.** A `ChannelContinuationTimeoutException` means
-   the reply didn't come, so the consumer may still exist, and the next poll cancels again. Any other failure means the
-   channel has no such consumer or no longer works, and keeping the tag only blocks the next registration.
-5. **A held delivery is nacked once.** The release puts a tag back only for a `RabbitMqSourceException` or a
-   `ShutdownSignalException`, which are how a nack that wasn't sent fails. Anything else comes from the
-   `MetricsCollector` after the frame was sent, and the tag is not put back. An `Error` thrown before the frame was
-   sent loses the tag. The channel close of a stop requeues it.
-6. **A failure after a permanent stop is logged at `debug`.** The source doesn't stop again and doesn't log at
-   `error`, and it passes an interrupt on to the thread, since the interrupt comes from `close()`.
-7. **A cleanup step never replaces the failure that is leaving.** `RabbitMqTeardown` runs every step and adds a failure
-   from a later step to the one already leaving as suppressed, or throws the first failed step when nothing was
-   leaving. A failure that is the leaving one, or one of its causes, isn't added, since `addSuppressed` refuses it.
+3. **The poll registers and cancels a consumer only between recoveries.** `RabbitMqConsumerRecovery` counts each
+   recovery that starts and each that ends. A consumer the source no longer wants is retired, which means the source
+   stops holding its tag and keeps it for the next cancel. When the client reports a retired consumer registered
+   again, the new tag replaces the old one, and the next poll cancels it. A consumer the poll registered while a
+   recovery started is retired the same way instead of held. When a recovery ends without the client having
+   registered the consumer again, the source retires its tag, and the cancel removes the client's record of that
+   consumer before the poll registers a new one. The recovery callbacks take only a short lock of their own and never
+   wait for the poll's blocking calls. The source keeps its tag in an `AtomicReference` and the callbacks write it by
+   compare-and-set, so a report about another source's consumer on the same connection doesn't match it.
+4. **A cancel forgets a consumer only when the client no longer has it.** A cancel that returns, or fails with a
+   `ShutdownSignalException` or with an `IOException` such as "Unknown consumerTag", means the channel has no such
+   consumer or no longer works. A `ChannelContinuationTimeoutException` means the reply didn't come, and any other
+   failure, such as one from an application's `TrafficListener` before the frame was written, says nothing about the
+   consumer. In those cases the consumer may still exist, so the next poll cancels it again and registers no new one
+   until a cancel shows the consumer is gone. A cancel that a recovery overlapped is made again after the recovery.
+5. **A release that may have sent its nack stops the source.** The release puts a tag back only for a
+   `RabbitMqSourceException` or a `ShutdownSignalException`, which are how a nack that wasn't sent fails, and the next
+   poll releases it again. Any other failure, an `Error` included, can come from the application's `TrafficListener`,
+   which `AMQChannel.quiescingTransmit` calls before it writes the frame, or from its `MetricsCollector`, which
+   `ChannelN.basicNack` calls after. A second nack makes the broker close the channel, and no nack leaves the delivery
+   unanswered, so at the default `prefetchCount` of one the broker sends nothing further. The poll logs the failure at
+   `error` and stops the source, and the channel close requeues the delivery without a second nack.
+6. **A failure after a permanent stop doesn't stop the source again.** It is logged at `debug` when the handler was
+   interrupted or `close()` has stopped waiting for it, and at `warn` otherwise, since nothing else reports an
+   `Error`, a checked exception thrown from Kotlin or a failed acknowledgement then. An interrupt is passed on to the
+   thread.
+7. **A cleanup step never replaces the failure that is leaving, and a failed step skips none of the others.**
+   `close()`, `stopPermanently()` and a failed `build()` run each step through `RabbitMqTeardown`, so a recovery
+   listener whose removal throws no longer skips the consumer cancel, the wait for a running handler, the fence on
+   acknowledgements or the interrupt before the channel closes. `RabbitMqDeliveryWorker.stop` waits for a running
+   handler even when that removal throws, and throws once the wait is over. `RabbitMqTeardown` adds a failure from a
+   later step to the one already leaving as suppressed, or throws the first failed step when nothing was leaving. A
+   failure that is the leaving one, or one of its causes, isn't added, since `addSuppressed` refuses it.
 8. **A close timeout longer than about 146 years counts as that long.** The deadline is `System.nanoTime()` plus the
    timeout, and half the longest span a nano time difference can express is the longest timeout that can't make the
    comparison wrong. The builder keeps accepting what it accepted, since refusing a value that worked until `close()`
@@ -111,9 +131,15 @@ source can't tell the cases apart and would have to ask the broker with a passiv
 count. A client upgrade that changes the order above breaks the source in the same way, which is why the real-broker
 tests run both settings of topology recovery.
 
-The compare-and-set rules out a lock the recovery would wait on. They don't rule out a recovery that starts while the
-poll is registering a consumer. That consumer is recorded by the client and recovered under topology recovery like any
-other, and the poll's tag stays right because nothing clears a tag it didn't hold when the recovery started.
+The poll waits out a recovery before it registers or cancels a consumer. A source paused while a recovery runs keeps
+the consumer the recovery registers again until its first poll after the recovery, and a source that should resume
+during one starts consuming on that poll. A consumer the poll registered as a recovery started is cancelled by the
+next poll, which then registers a new one if the source should still consume, since the source can't tell whether
+the recovery kept the first one.
+
+A cancel that keeps failing in a way that says nothing about the consumer, such as a `TrafficListener` that throws on
+every frame, keeps the source from registering a new consumer for as long as it fails. Registering one anyway could
+leave two consumers on the queue.
 
 Nothing persisted changes. No event, checkpoint, header or message body is written differently.
 

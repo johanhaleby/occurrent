@@ -22,6 +22,7 @@ import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.RecoveryListener;
+import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.BeforeEach;
@@ -128,6 +129,8 @@ class RabbitMqDomainEventSourceConsumerRecoveryTest {
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(handled).contains(new TestOrderPlaced("order-2")));
             await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5))
                     .untilAsserted(() -> assertThat(consumerCount()).isOne());
+            // A record left behind would hold this source's callbacks and be registered again by a later recovery
+            assertThat(((AutorecoveringConnection) sourceConnection).getRecordedConsumers()).hasSize(1);
         }
     }
 

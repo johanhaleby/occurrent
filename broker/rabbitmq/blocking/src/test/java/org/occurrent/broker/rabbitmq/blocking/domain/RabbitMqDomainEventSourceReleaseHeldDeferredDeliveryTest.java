@@ -16,11 +16,20 @@
 
 package org.occurrent.broker.rabbitmq.blocking.domain;
 
+import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.ShutdownSignalException;
 import org.junit.jupiter.api.Test;
+import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryFailureAction;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqSourceException;
+import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.subscription.RoutingOutcome;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
@@ -29,13 +38,21 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * {@link RabbitMqDomainEventSource#releaseHeldDeferredDelivery(Deque, java.util.function.LongConsumer)} in
  * isolation, with no real {@code Channel} or broker behind it. A release whose nack was not sent (an
  * {@code IOException} surfacing as {@link RabbitMqSourceException}, or a {@code ShutdownSignalException}) must never
  * drop the tag it was for, and must not let a later tag in the same pass jump ahead of the one that just failed.
- * A failure thrown after the nack was sent must not put the tag back, since a second nack closes the channel.
+ * Any other failure may have come after the nack was sent and must not put the tag back, since a second nack closes
+ * the channel. The poll stops the source for it instead, and closing the channel puts the delivery back on the queue.
  */
 class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
 
@@ -84,12 +101,12 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
     }
 
     /**
-     * Anything else leaves the release after the nack went out, from a {@code MetricsCollector} the application
-     * registered. Nacking the same tag a second time makes the broker close the channel, so the failure is rethrown
-     * and the tag is not put back, which leaves only the tag this pass never got to.
+     * Anything else may come from an application's {@code TrafficListener} before the nack is written or from its
+     * {@code MetricsCollector} after. Nacking the same tag a second time makes the broker close the channel, so the
+     * failure is rethrown and the tag is not put back, which leaves only the tag this pass never got to.
      */
     @Test
-    void a_release_that_fails_with_an_error_after_the_nack_was_sent_does_not_put_the_tag_back() {
+    void a_release_that_fails_with_an_error_that_may_have_followed_the_nack_does_not_put_the_tag_back() {
         Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
         List<Long> released = new CopyOnWriteArrayList<>();
         StackOverflowError error = new StackOverflowError("a metrics collector that recursed");
@@ -107,9 +124,9 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
     }
 
     @Test
-    void a_release_that_fails_with_a_runtime_exception_after_the_nack_was_sent_does_not_put_the_tag_back() {
+    void a_release_that_fails_with_a_runtime_exception_that_may_have_followed_the_nack_does_not_put_the_tag_back() {
         Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
-        IllegalStateException failure = new IllegalStateException("a metrics collector that threw");
+        IllegalStateException failure = new IllegalStateException("a traffic listener or a metrics collector that threw");
 
         Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
             if (tag == 1L) {
@@ -119,6 +136,32 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
 
         assertThat(thrown).isSameAs(failure);
         assertThat(held).containsExactly(2L);
+    }
+
+    /**
+     * At the default {@code prefetchCount} of one the broker sends nothing further until the tag is answered, so a
+     * poll that dropped it and carried on would leave the source stuck until its channel closed.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_poll_whose_release_may_have_sent_the_nack_stops_the_source_and_closes_its_channel_with_no_second_nack() throws Exception {
+        Channel channel = mock(Channel.class);
+        doThrow(new IllegalStateException("thrown by a TrafficListener")).when(channel).basicNack(anyLong(), anyBoolean(), anyBoolean());
+        DomainEventFeed<Object> feed = mock(DomainEventFeed.class);
+        when(feed.hasProjection()).thenReturn(true);
+        when(feed.isReadyForLiveDelivery()).thenReturn(true);
+        RabbitMqDeliveryFailureAction failureAction = new RabbitMqDeliveryFailureAction(channel, DeliveryFailurePolicy.REDELIVER, null, null,
+                LoggerFactory.getLogger(RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest.class));
+        RabbitMqDomainEventSource<Object> source = new RabbitMqDomainEventSource<>(feed, channel, "queue", 1, Duration.ofSeconds(1), failureAction,
+                Duration.ofSeconds(1));
+        source.route(RoutingOutcome.DEFERRED, 1L, new BasicProperties(), new byte[0]);
+
+        Method reconcileConsumption = RabbitMqDomainEventSource.class.getDeclaredMethod("reconcileConsumption");
+        reconcileConsumption.setAccessible(true);
+        reconcileConsumption.invoke(source);
+
+        verify(channel).close();
+        verify(channel, times(1)).basicNack(1L, false, true);
     }
 
     @Test
