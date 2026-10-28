@@ -61,31 +61,36 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@link RabbitMqCloudEventSource#releaseHeldDeferredDelivery(Deque, java.util.function.LongConsumer)} in
- * isolation, with no real {@code Channel} or broker behind it. A release whose nack was not sent (an
- * {@code IOException} surfacing as {@link RabbitMqSourceException}, or a {@code ShutdownSignalException}) must never
- * drop the tag it was for, and must not let a later tag in the same pass jump ahead of the one that just failed.
+ * isolation, with no real {@code Channel} or broker behind it. A release whose nack was not sent, which a
+ * {@code ShutdownSignalException} from a closed channel shows, must never drop the tag it was for, and must not let a
+ * later tag in the same pass jump ahead of the one that just failed.
  * Any other failure may have come after the nack was sent and must not put the tag back, since a second nack closes
  * the channel. The poll stops the source for it instead, and closing the channel puts the delivery back on the queue.
  */
 class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
 
+    /**
+     * A nack that was never sent leaves the broker waiting on the tag, and at the default {@code prefetchCount} of
+     * one it sends the consumer nothing further until the tag is answered. {@code ShutdownSignalException} is what
+     * the channel throws when it is already closing, before anything went out.
+     */
     @Test
-    void a_failed_release_puts_the_tag_back_at_the_front_and_stops_the_rest_of_the_pass() {
+    void a_release_on_a_closed_channel_puts_the_tag_back_at_the_front_and_stops_the_rest_of_the_pass() {
         Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
         AtomicInteger attempts = new AtomicInteger();
         List<Long> released = new CopyOnWriteArrayList<>();
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, false, null, null);
 
         Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
             attempts.incrementAndGet();
             if (tag == 1L) {
-                throw new RabbitMqSourceException("Failed to negatively acknowledge delivery tag " + tag,
-                        new IOException("channel hiccup"));
+                throw shutdown;
             }
             released.add(tag);
         }));
 
-        assertThat(thrown).isInstanceOf(RabbitMqSourceException.class).hasMessageContaining("delivery tag 1");
-        // Only the one attempt that failed: the pass stops there rather than moving on to tag 2, which would
+        assertThat(thrown).isSameAs(shutdown);
+        // The pass stops at the attempt that failed rather than moving on to tag 2, which would
         // reorder a later tag ahead of one still waiting to be retried.
         assertThat(attempts.get()).isEqualTo(1);
         assertThat(released).isEmpty();
@@ -94,26 +99,23 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
     }
 
     /**
-     * A nack that was never sent leaves the broker waiting on the tag, and at the default {@code prefetchCount} of
-     * one it sends the consumer nothing further until the tag is answered. {@code ShutdownSignalException} is what
-     * the channel throws when it is already closing, before anything went out.
+     * {@code basicNack} declares {@code IOException}, and a {@code MetricsCollector} written in Kotlin can throw one
+     * after the frame was written, which the release wraps in {@link RabbitMqSourceException} like any other.
      */
     @Test
-    void a_release_that_fails_with_a_shutdown_signal_puts_the_tag_back_at_the_front() {
+    void a_release_that_fails_with_an_io_exception_that_may_have_followed_the_nack_does_not_put_the_tag_back() {
         Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
-        List<Long> released = new CopyOnWriteArrayList<>();
-        ShutdownSignalException shutdown = new ShutdownSignalException(true, false, null, null);
+        RabbitMqSourceException failure = new RabbitMqSourceException("Failed to negatively acknowledge delivery tag 1",
+                new IOException("thrown by a metrics collector after the nack was written"));
 
         Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
             if (tag == 1L) {
-                throw shutdown;
+                throw failure;
             }
-            released.add(tag);
         }));
 
-        assertThat(thrown).isSameAs(shutdown);
-        assertThat(released).isEmpty();
-        assertThat(held).containsExactly(1L, 2L);
+        assertThat(thrown).isSameAs(failure);
+        assertThat(held).containsExactly(2L);
     }
 
     /**
@@ -241,15 +243,14 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
 
         Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
             if (attempts.getAndIncrement() == 0) {
-                throw new RabbitMqSourceException("Failed to negatively acknowledge delivery tag " + tag,
-                        new IOException("channel hiccup"));
+                throw new ShutdownSignalException(false, false, null, null);
             }
             released.add(tag);
         }));
-        assertThat(thrown).isInstanceOf(RabbitMqSourceException.class);
+        assertThat(thrown).isInstanceOf(ShutdownSignalException.class);
         assertThat(held).containsExactly(1L, 2L);
 
-        // The next poll's own call to this same method, against the channel that survived the earlier failure.
+        // The next poll's own call to this same method, once a recovery has opened the channel again.
         RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
             attempts.incrementAndGet();
             released.add(tag);

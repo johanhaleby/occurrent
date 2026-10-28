@@ -93,14 +93,22 @@ source believes something that stopped being true.
    consumer. In those cases the consumer may still exist, so the next poll cancels it again and registers no new one
    until a cancel shows the consumer is gone. A cancel that a recovery overlapped is made again after the recovery.
 5. **A release that may have sent its nack stops the source.** The release puts a tag back only for a
-   `RabbitMqSourceException` or a `ShutdownSignalException`, which are how a nack that wasn't sent fails, and the next
-   poll releases it again. Any other failure, an `Error` included, can come from the application's `TrafficListener`,
-   which `AMQChannel.quiescingTransmit` calls before it writes the frame, or from its `MetricsCollector`, which
-   `ChannelN.basicNack` calls after. A second nack makes the broker close the channel, and no nack leaves the delivery
-   unanswered, so at the default `prefetchCount` of one the broker sends nothing further. The poll logs the failure at
-   `error` and stops the source, and the channel close requeues the delivery without a second nack. The stop takes no
-   new work into the worker from the start, as `close()` does, so a delivery the client dispatches after the channel
-   close starts no handler.
+   `ShutdownSignalException`, which `AMQChannel.transmit` throws when the channel is closed, before it writes
+   anything, and the next poll releases it again. Any other failure can come from the application's
+   `TrafficListener`, which `AMQChannel.quiescingTransmit` calls before it writes the frame, or from its
+   `MetricsCollector`, which `ChannelN.basicNack` calls after. A collector written in Kotlin can throw a checked
+   `IOException` there, and `RabbitMqDeliveryFailureAction` wraps it in a `RabbitMqSourceException` like any other
+   `IOException`, so neither that nor an `Error` shows that the nack wasn't sent. A second nack makes the broker close
+   the channel, and no nack leaves the delivery unanswered, so at the default `prefetchCount` of one the broker sends
+   nothing further. The poll logs the failure at `error` and stops the source, and the channel close requeues the
+   delivery without a second nack. The stop takes no new work into the worker from the start, as `close()` does, so a
+   delivery the client dispatches after the channel close starts no handler.
+
+   A socket write that fails during a release also throws an `IOException`, so it stops the source too. In 0.34.0 the
+   release put its tag back after any failure and the next poll tried again. When the write failed because the
+   connection was gone, that retry did no harm, since a closed channel refuses it and a recovered one ignores a tag
+   from before the recovery. The source can't tell a failed write from a collector that threw, so it stops in both
+   cases.
 6. **A failure after a permanent stop doesn't stop the source again.** It is logged at `debug` when the handler was
    interrupted or `close()` has stopped waiting for it, and at `warn` otherwise, since nothing else reports an
    `Error`, a checked exception thrown from Kotlin or a failed acknowledgement then. An interrupt is passed on to the
@@ -111,7 +119,10 @@ source believes something that stopped being true.
    acknowledgements or the interrupt before the channel closes. `RabbitMqDeliveryWorker.stop` waits for a running
    handler even when that removal throws, and throws once the wait is over. `RabbitMqTeardown` adds a failure from a
    later step to the one already leaving as suppressed, or throws the first failed step when nothing was leaving. A
-   failure that is the leaving one, or one of its causes, isn't added, since `addSuppressed` refuses it.
+   failure that is the leaving one, or one of its causes, isn't added, since `addSuppressed` refuses it. A checked
+   exception that a step written in Kotlin throws counts as a failed step too. After a step throws an
+   `InterruptedException`, `RabbitMqTeardown` sets the interrupt status of the thread again before the next step
+   runs.
 8. **A close timeout longer than about 146 years counts as that long.** The deadline is `System.nanoTime()` plus the
    timeout, and half the longest span a nano time difference can express is the longest timeout that can't make the
    comparison wrong. The builder keeps accepting what it accepted, since refusing a value that worked until `close()`

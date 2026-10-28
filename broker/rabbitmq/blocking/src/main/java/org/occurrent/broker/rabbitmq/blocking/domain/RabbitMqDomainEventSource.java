@@ -393,13 +393,11 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // pass, collapsing the at-most-one-per-poll-interval bound this exists to keep. A tag appended mid-loop waits
     // for the next poll instead.
     //
-    // A failed nack (an IOException surfacing as RabbitMqSourceException from basicNack) never drops the tag it
-    // was for: it goes back to the front, ahead of whatever this pass has not gotten to yet, and this pass stops
-    // rather than trying the next slot, since a channel failing to nack once is not going to succeed on a
-    // different tag straight after. The next poll retries it. A channel that has actually died requeues
-    // everything still unacked on it by itself regardless, so this is only for one that survives the failure.
-    // Any other failure may come before the frame is written, from an application's TrafficListener, or after it,
-    // from its MetricsCollector. The tag is not put back, and the poll stops this source instead.
+    // A nack that failed on a closed channel never drops the tag it was for. It goes back to the front, ahead of
+    // whatever this pass has not gotten to yet, and this pass stops rather than trying the next slot. The next poll
+    // retries it. Any other failure may come before the frame is written, from an application's TrafficListener, or
+    // after it, from its MetricsCollector, an IOException that basicNack declares included. The tag is not put back,
+    // and the poll stops this source instead.
     private void releaseHeldDeferredDelivery() {
         releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver);
     }
@@ -438,11 +436,12 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         }
     }
 
-    // How a nack that was not sent fails. AMQChannel.quiescingTransmit calls an application's TrafficListener before
-    // it writes the frame and ChannelN.basicNack calls its MetricsCollector after, so a failure from either of those
-    // can't tell whether the nack went out.
+    // How a nack that was not sent fails. AMQChannel.transmit throws it from ensureIsOpen before it writes anything.
+    // An IOException, which failureAction wraps in RabbitMqSourceException, doesn't show that. ChannelN.basicNack
+    // calls the application's MetricsCollector after it writes the frame, and one written in Kotlin can throw a
+    // checked IOException there.
     static boolean nackNotSent(Throwable failure) {
-        return failure instanceof RabbitMqSourceException || failure instanceof ShutdownSignalException;
+        return failure instanceof ShutdownSignalException;
     }
 
     private void handleCancel(String cancelledConsumerTag) {

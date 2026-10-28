@@ -17,7 +17,11 @@
 package org.occurrent.broker.rabbitmq.blocking.domain;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.GetResponse;
+import com.rabbitmq.client.NoOpMetricsCollector;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
@@ -33,6 +37,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 
+import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -548,6 +553,42 @@ class RabbitMqDomainEventSourceTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * {@code ChannelN.basicNack} calls the connection's {@code MetricsCollector} after it writes the frame, and one
+     * written in Kotlin can throw a checked {@code IOException} there. A second nack for the same tag makes the broker
+     * close the channel, so the source stops instead of releasing the tag again, and the channel close puts the
+     * delivery back on the queue.
+     */
+    @Test
+    void a_release_whose_metrics_collector_throws_after_the_nack_stops_the_source_and_sends_no_second_nack() throws Exception {
+        String queue = declareAndBindQueue(TestOrderPlaced.class.getName());
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+            throw new IllegalStateException("fails every time");
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+        NackRecorder metricsCollector = new NackRecorder();
+        ConnectionFactory connectionFactory = new ConnectionFactory();
+        connectionFactory.setUri(amqpUrl());
+        connectionFactory.setMetricsCollector(metricsCollector);
+
+        try (Connection sourceConnection = connectionFactory.newConnection();
+             RabbitMqDomainEventSource<TestOrderPlaced> source = RabbitMqDomainEventSource.builder(sourceConnection, feed, queue)
+                     .declareTopology(false)
+                     .pollInterval(POLL_INTERVAL)
+                     .build()) {
+            publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(5)).until(() -> !metricsCollector.nackedDeliveryTags.isEmpty());
+            long firstNacked = metricsCollector.nackedDeliveryTags.get(0);
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(1));
+            // Ten poll intervals, each of which would release the tag again had the source put it back
+            Thread.sleep(POLL_INTERVAL.multipliedBy(10).toMillis());
+
+            assertThat(metricsCollector.nackedDeliveryTags).filteredOn(tag -> tag == firstNacked).hasSize(1);
+        }
+    }
+
     private String declareAndBindQueue(String routingKey) throws Exception {
         // Not auto-delete: a source that cancels its own consumer (going idle between the coarse-poll tests, or
         // stopping for good on UnreadableLiveFilterException) must not take the queue, and whatever is still on it,
@@ -612,6 +653,28 @@ class RabbitMqDomainEventSourceTest extends RabbitMqTestSupport {
         @Override
         public String getCloudEventType(Class<? extends TestOrderPlaced> type) {
             return TestOrderPlaced.class.getName();
+        }
+    }
+
+    /**
+     * Throws a checked {@code IOException} after the first nack, the way a {@code MetricsCollector} written in Kotlin
+     * can.
+     */
+    private static final class NackRecorder extends NoOpMetricsCollector {
+
+        private final List<Long> nackedDeliveryTags = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void basicNack(Channel channel, long deliveryTag, boolean requeue) {
+            nackedDeliveryTags.add(deliveryTag);
+            if (nackedDeliveryTags.size() == 1) {
+                NackRecorder.<RuntimeException>sneakyThrow(new IOException("thrown by a metrics collector after the nack was written"));
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+            throw (T) failure;
         }
     }
 }

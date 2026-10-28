@@ -406,6 +406,47 @@ class RabbitMqTeardownTest {
     }
 
     /**
+     * Kotlin doesn't check exceptions, so a step written in it can throw an {@code InterruptedException} that
+     * {@code Runnable.run} doesn't declare.
+     */
+    @Test
+    void a_step_that_throws_an_undeclared_interrupted_exception_lets_the_later_steps_run_and_is_what_leaves() {
+        InterruptedException interrupted = new InterruptedException("thrown undeclared");
+        List<String> ran = new ArrayList<>();
+
+        Throwable thrown = catchThrowable(() -> new RabbitMqTeardown(null)
+                .run(() -> {
+                    ran.add("first");
+                    throwUndeclared(interrupted);
+                })
+                .run(() -> ran.add("second"))
+                .finish());
+        boolean interruptStatusSet = Thread.interrupted();
+
+        assertThat(ran).containsExactly("first", "second");
+        assertThat(thrown).isSameAs(interrupted);
+        assertThat(interruptStatusSet).isTrue();
+    }
+
+    @Test
+    void with_a_primary_failure_an_undeclared_interrupted_exception_is_suppressed_and_the_interrupt_status_set_again() {
+        IllegalStateException primary = new IllegalStateException("primary");
+        InterruptedException interrupted = new InterruptedException("thrown undeclared");
+        List<String> ran = new ArrayList<>();
+
+        Throwable thrown = catchThrowable(() -> new RabbitMqTeardown(primary)
+                .run(() -> throwUndeclared(interrupted))
+                .run(() -> ran.add("second"))
+                .finish());
+        boolean interruptStatusSet = Thread.interrupted();
+
+        assertThat(ran).containsExactly("second");
+        assertThat(thrown).isNull();
+        assertThat(primary.getSuppressed()).containsExactly(interrupted);
+        assertThat(interruptStatusSet).isTrue();
+    }
+
+    /**
      * Every combination of a primary failure present or not, which of four teardown steps fail, and whether a failing
      * step throws the primary itself or something else.
      */
@@ -490,6 +531,11 @@ class RabbitMqTeardownTest {
         if (failure instanceof Error error) {
             throw error;
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void throwUndeclared(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     private static RuntimeException withoutSuppression(String message) {

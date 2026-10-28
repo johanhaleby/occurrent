@@ -46,13 +46,18 @@ public final class RabbitMqTeardown {
     }
 
     /**
-     * Runs {@code step}, and every step after it, whatever happens. A {@link RuntimeException} or {@link Error} out
-     * of it is added as suppressed to the primary failure, or to the first failed step when there is no primary one.
+     * Runs {@code step}, and every step after it, whatever happens. Whatever it throws, a checked exception thrown
+     * from Kotlin included, is added as suppressed to the primary failure, or to the first failed step when there is
+     * no primary one. After an {@link InterruptedException} the interrupt status of the thread is set again, so the
+     * steps after it, and the caller, see that the thread was asked to stop.
      */
     public RabbitMqTeardown run(Runnable step) {
         try {
             step.run();
-        } catch (RuntimeException | Error failure) {
+        } catch (Throwable failure) {
+            if (failure instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             if (primary != null) {
                 attachSuppressed(primary, failure);
             } else if (firstFailure == null) {
@@ -65,15 +70,18 @@ public final class RabbitMqTeardown {
     }
 
     /**
-     * Throws the first failed step when there was no primary failure, otherwise nothing.
+     * Throws the first failed step when there was no primary failure, otherwise nothing. A checked exception is
+     * thrown as it is, undeclared, the way the step threw it.
      */
     public void finish() {
-        if (firstFailure instanceof RuntimeException runtimeException) {
-            throw runtimeException;
+        if (firstFailure != null) {
+            throw RabbitMqTeardown.<RuntimeException>sneakyThrow(firstFailure);
         }
-        if (firstFailure instanceof Error error) {
-            throw error;
-        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     /**
