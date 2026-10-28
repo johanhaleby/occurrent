@@ -769,7 +769,7 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
-    void an_event_written_while_the_node_that_held_the_lease_hands_it_over_is_delivered_once() {
+    void an_event_written_as_soon_as_a_prohibited_node_gives_up_its_lease_is_delivered_once() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
