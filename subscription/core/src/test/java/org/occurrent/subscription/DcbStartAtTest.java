@@ -46,6 +46,16 @@ class DcbStartAtTest {
     }
 
     @Test
+    void beginning_is_a_start_at_position_zero() {
+        assertThat(DcbStartAt.beginning()).isEqualTo(new DcbStartAt.AtPosition(0));
+    }
+
+    @Test
+    void after_position_zero_is_the_beginning() {
+        assertThat(DcbStartAt.afterPosition(0)).isEqualTo(DcbStartAt.beginning());
+    }
+
+    @Test
     void after_position_maps_to_the_given_dcb_position() {
         StartAt startAt = DcbStartAt.afterPosition(5).toStartAt();
         assertThat(startAt).isInstanceOf(StartAt.StartAtCheckpoint.class);
