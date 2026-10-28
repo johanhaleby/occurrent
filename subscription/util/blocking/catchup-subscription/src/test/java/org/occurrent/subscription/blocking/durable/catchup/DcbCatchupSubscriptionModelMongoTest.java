@@ -37,6 +37,8 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CatchupCannotResumeException;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -66,6 +68,7 @@ import java.util.function.Consumer;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -232,8 +235,10 @@ class DcbCatchupSubscriptionModelMongoTest {
         subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")),
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
-        // Resuming after position 1 (as if event1 was already processed elsewhere) replays only event2 and event3.
-        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(1)), toDomainEvents(received)).waitUntilStarted();
+        // Resuming after position 1 (as if event1 was already processed elsewhere) replays only event2 and event3,
+        // from the live start read after all three were written.
+        Checkpoint liveStart = requireNonNull(subscriptionModel.globalCheckpoint());
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(1, liveStart, 0, 3)), toDomainEvents(received)).waitUntilStarted();
 
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(received).containsExactly(event2, event3));
@@ -244,6 +249,27 @@ class DcbCatchupSubscriptionModelMongoTest {
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(received).containsExactly(event2, event3, live1));
         assertThat(received).doesNotContain(event1);
+    }
+
+    @Test
+    void a_start_after_an_explicit_dcb_position_without_a_live_start_is_refused_and_nothing_is_delivered_or_stored() {
+        appendTagged("name:1", nameDefined("event1"));
+        appendTagged("name:1", nameDefined("event2"));
+        appendTagged("name:1", nameDefined("event3"));
+
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")),
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+
+        Throwable failure = catchThrowable(() -> subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(1)), toDomainEvents(received))
+                .waitUntilStarted(Duration.ofSeconds(20)));
+
+        assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                .hasMessageContaining("subscription")
+                .hasMessageContaining("after position 1")
+                .hasMessageContaining("EventMetadata.getCheckpoint()");
+        assertThat(storage.read("subscription")).as("stored").isNull();
+        assertThat(received).as("delivered").isEmpty();
     }
 
     private static void awaitLatch(CountDownLatch latch) {

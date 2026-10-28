@@ -33,6 +33,7 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpoint;
@@ -64,6 +65,7 @@ import java.util.function.Consumer;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.filter.Filter.type;
@@ -186,9 +188,11 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
         subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore,
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
-        // Resuming after position 1 (as if event1 was already processed elsewhere) replays only event2 and event3.
+        // Resuming after position 1 (as if event1 was already processed elsewhere) replays only event2 and event3,
+        // from the live start read after all three were written.
+        Checkpoint liveStart = requireNonNull(subscriptionModel.globalCheckpoint());
         subscription.subscribe("subscription", StreamSubscriptionFilter.filter(type(EVENT_TYPE)),
-                StartAt.checkpoint(GlobalCheckpoint.of(1)), toDomainEvents(received)).waitUntilStarted();
+                StartAt.checkpoint(GlobalCheckpoint.of(1, liveStart, 0, 3)), toDomainEvents(received)).waitUntilStarted();
 
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(received).containsExactly(event2, event3));
@@ -196,10 +200,31 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
     }
 
     @Test
-    void a_legacy_time_based_resume_token_in_position_mode_resumes_the_replay_from_that_time_instead_of_being_read_as_a_position() {
+    void a_start_after_an_explicit_global_position_without_a_live_start_is_refused_and_nothing_is_delivered_or_stored() {
+        write(nameDefined("event1"));
+        write(nameDefined("event2"));
+        write(nameDefined("event3"));
+
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+
+        Throwable failure = catchThrowable(() -> subscription.subscribe("subscription", StreamSubscriptionFilter.filter(type(EVENT_TYPE)),
+                StartAt.checkpoint(GlobalCheckpoint.of(1)), toDomainEvents(received)).waitUntilStarted(Duration.ofSeconds(20)));
+
+        assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                .hasMessageContaining("subscription")
+                .hasMessageContaining("after position 1")
+                .hasMessageContaining("EventMetadata.getCheckpoint()");
+        assertThat(storage.read("subscription")).as("stored").isNull();
+        assertThat(received).as("delivered").isEmpty();
+    }
+
+    @Test
+    void a_legacy_time_based_resume_token_in_position_mode_is_refused_and_left_as_it_was_since_it_holds_no_live_start() {
         // A store that turned stream position on after running the legacy time-based catch-up, whose checkpoint
-        // storage still holds the time token that replay stored. It says the replay handled everything before that
-        // time, so an event before it is not replayed, and one at or after it, written before the flip, is.
+        // storage still holds the bare time token that replay stored. It holds no live start, so an event written
+        // after that replay read past the time could be missed, and the start is refused.
         NameDefined beforeTheToken = new NameDefined(UUID.randomUUID().toString(), time.minusMinutes(2), "name", "beforeTheToken");
         NameDefined preFlip = nameDefined("preFlip");
         write(beforeTheToken);
@@ -214,14 +239,15 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
 
         // StartAt.subscriptionModelDefault() resumes from storage, where the model has to recognise the token as a
         // time rather than read it as, or fail to parse it as, a position
-        subscription.subscribe("subscription", StreamSubscriptionFilter.filter(type(EVENT_TYPE)),
-                StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted();
+        Throwable failure = catchThrowable(() -> subscription.subscribe("subscription", StreamSubscriptionFilter.filter(type(EVENT_TYPE)),
+                StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted(Duration.ofSeconds(20)));
 
-        NameDefined afterResolve = nameDefined("afterResolve");
-        write(afterResolve);
-        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
-                assertThat(received).containsExactly(preFlip, afterResolve));
-        assertThat(received).doesNotContain(beforeTheToken);
+        assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                .hasMessageContaining("subscription")
+                .hasMessageContaining(legacyTimeToken)
+                .hasMessageContaining("holds no live start");
+        assertThat(storage.read("subscription").asString()).as("stored").isEqualTo(legacyTimeToken);
+        assertThat(received).as("delivered").isEmpty();
     }
 
     @Test
