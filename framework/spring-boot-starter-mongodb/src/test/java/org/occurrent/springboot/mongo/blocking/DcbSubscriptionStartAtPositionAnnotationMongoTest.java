@@ -23,6 +23,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
@@ -36,6 +37,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
@@ -58,9 +61,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Verifies that startAtDcbPosition delivers events strictly after the specified DCB sequence position.
- * Three events are appended before the subscription starts (positions 1, 2, 3). A subscription with
- * startAtDcbPosition = 1 must receive only positions 2 and 3, never position 1.
+ * Verifies startAtDcbPosition. Three events are appended before the subscriptions start (positions 1, 2, 3). A
+ * subscription with startAtDcbPosition = 0 replays all of them. One with startAtDcbPosition = 1 is a bare position
+ * above 0, which holds no live start, so its catch-up is refused and nothing is delivered.
  */
 @DisplayName("DcbSubscription startAtDcbPosition (DCB-only mode)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -74,6 +77,7 @@ import static org.awaitility.Awaitility.await;
 @Import(DcbSubscriptionStartAtPositionAnnotationMongoTest.MongoDbContainerConfiguration.class)
 @Testcontainers
 @Timeout(60)
+@ExtendWith(OutputCaptureExtension.class)
 class DcbSubscriptionStartAtPositionAnnotationMongoTest {
 
     static final String TAG = "test:start-at-position";
@@ -82,17 +86,25 @@ class DcbSubscriptionStartAtPositionAnnotationMongoTest {
     @Autowired
     private RecordingSubscriber recordingSubscriber;
 
+    @Autowired
+    private RefusedPositionSubscriber refusedPositionSubscriber;
+
     @Test
-    void subscription_with_startAtDcbPosition_1_skips_the_first_event_and_delivers_positions_2_and_3() {
+    void subscription_with_startAtDcbPosition_0_delivers_positions_1_2_and_3() {
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(recordingSubscriber.received())
                         .extracting(TestEvent::name)
-                        .containsExactlyInAnyOrder("event-2", "event-3"));
+                        .containsExactly("event-1", "event-2", "event-3"));
+    }
 
-        // The first event must never appear, even after the subscription has settled.
-        assertThat(recordingSubscriber.received())
-                .extracting(TestEvent::name)
-                .doesNotContain("event-1");
+    @Test
+    void subscription_with_startAtDcbPosition_1_is_refused_and_delivers_nothing(CapturedOutput output) {
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(output.getAll())
+                        .contains("CatchupCannotResumeException")
+                        .contains("Cannot start catch-up subscription dcb-start-at-refused-position-subscriber after position 1"));
+
+        assertThat(refusedPositionSubscriber.received()).isEmpty();
     }
 
     // --- inner application and configuration classes ---
@@ -138,6 +150,12 @@ class DcbSubscriptionStartAtPositionAnnotationMongoTest {
         RecordingSubscriber recordingSubscriber() {
             return new RecordingSubscriber();
         }
+
+        @Bean
+        @DependsOn("historyAppender")
+        RefusedPositionSubscriber refusedPositionSubscriber() {
+            return new RefusedPositionSubscriber();
+        }
     }
 
     static class HistoryAppender {
@@ -161,8 +179,20 @@ class DcbSubscriptionStartAtPositionAnnotationMongoTest {
     static class RecordingSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
-        // startAtDcbPosition = 1 means: deliver events from position 2 onward (exclusive resume semantics).
-        @DcbSubscription(id = "dcb-start-at-position-subscriber", startAtDcbPosition = 1)
+        @DcbSubscription(id = "dcb-start-at-position-subscriber", startAtDcbPosition = 0)
+        void onEvent(TestEvent event) {
+            received.add(event);
+        }
+
+        List<TestEvent> received() {
+            return received;
+        }
+    }
+
+    static class RefusedPositionSubscriber {
+        private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        @DcbSubscription(id = "dcb-start-at-refused-position-subscriber", startAtDcbPosition = 1)
         void onEvent(TestEvent event) {
             received.add(event);
         }
