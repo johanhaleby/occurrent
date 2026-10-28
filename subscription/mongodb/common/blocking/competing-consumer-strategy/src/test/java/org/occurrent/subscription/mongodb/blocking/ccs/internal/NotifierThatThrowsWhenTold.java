@@ -16,30 +16,49 @@
 
 package org.occurrent.subscription.mongodb.blocking.ccs.internal;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * A notifier that throws {@code thrown} from the first {@code execute}, as a cached thread pool throws an
- * {@link OutOfMemoryError} when it can't start a thread, and runs every later task on the calling thread. A test can
- * then assert on what a refresh delivered as soon as the refresh returns.
+ * A notifier that runs each task on a thread of its own, and that throws from {@code execute} for as long as it was
+ * told to, as a cached thread pool throws an {@link OutOfMemoryError} when it can't start a thread. Once
+ * {@link #awaitEveryTask()} returns, a test can assert on everything the tasks delivered.
  */
-class NotifierThatThrowsOnItsFirstTask extends AbstractExecutorService {
-    private final AtomicBoolean first = new AtomicBoolean(true);
-    private final Error thrown;
+class NotifierThatThrowsWhenTold extends AbstractExecutorService {
+    private static final Duration TASK_TIMEOUT = Duration.ofSeconds(10);
 
-    NotifierThatThrowsOnItsFirstTask(Error thrown) {
+    private final List<Thread> tasks = new CopyOnWriteArrayList<>();
+    private volatile Error thrown;
+
+    void throwOnEveryTask(Error thrown) {
         this.thrown = thrown;
+    }
+
+    void takeEveryTask() {
+        this.thrown = null;
+    }
+
+    // Also waits for a task started while it waits
+    void awaitEveryTask() throws InterruptedException {
+        for (int i = 0; i < tasks.size(); i++) {
+            if (!tasks.get(i).join(TASK_TIMEOUT)) {
+                throw new IllegalStateException("A task of the notifier still runs after " + TASK_TIMEOUT);
+            }
+        }
     }
 
     @Override
     public void execute(Runnable task) {
-        if (first.getAndSet(false)) {
-            throw thrown;
+        Error toThrow = thrown;
+        if (toThrow != null) {
+            throw toThrow;
         }
-        task.run();
+        Thread thread = Thread.ofPlatform().daemon().unstarted(task);
+        tasks.add(thread);
+        thread.start();
     }
 
     @Override

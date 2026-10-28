@@ -66,7 +66,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * lease it holds, or to take one that has become free, for as long as it runs, so the round is logged and the next one
  * runs. The same goes for the consumers within one round. An {@link Error} from one consumer's refresh must not leave
  * the consumers after it unrefreshed, which would let their leases expire. And a grant the notifier threw an
- * {@link Error} on must reach the listeners in the next round, since no later round decides it again.
+ * {@link Error} on must reach the listeners in a later round, since no other round decides it again.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -170,12 +170,11 @@ class MongoLeaseRefreshErrorTest {
     }
 
     @Test
-    void grants_a_lease_in_the_round_after_the_notifier_threw_an_Error_on_taking_its_grant() {
+    void grants_a_lease_in_the_round_after_the_notifier_threw_an_Error_on_taking_its_grant() throws InterruptedException {
         // Given
         AtomicReference<Runnable> round = new AtomicReference<>();
-        // Thrown deliberately. Nothing here runs out of memory.
-        ScheduledRefresh held = new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()),
-                new NotifierThatThrowsOnItsFirstTask(new OutOfMemoryError("unable to create native thread")));
+        NotifierThatThrowsWhenTold notifier = new NotifierThatThrowsWhenTold();
+        ScheduledRefresh held = new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()), notifier);
         otherNode = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), new ScheduledRefresh((lease, scheduler) -> {
         }));
         support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), held)
@@ -196,14 +195,21 @@ class MongoLeaseRefreshErrorTest {
         otherNode.unregisterCompetingConsumer(locks, "a-subscription", "the-other-node");
 
         // When
+        // Thrown deliberately. Nothing here runs out of memory.
+        notifier.throwOnEveryTask(new OutOfMemoryError("unable to create native thread"));
         // The round that takes the lease, whose grant the notifier throws on, and the round after it
-        catchThrowable(round.get()::run);
+        Throwable thrown = catchThrowable(round.get()::run);
+        notifier.takeEveryTask();
         round.get().run();
+        notifier.awaitEveryTask();
 
         // Then
         // A round decides a grant once, and every later round finds the lease held and decides nothing. Dropping the
         // grant would leave the subscription paused on the node that holds its lease, with no other node able to take it.
-        assertThat(granted).containsExactly("a-subscription");
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the round whose grant the notifier threw on").isNull(),
+                () -> assertThat(granted).containsExactly("a-subscription")
+        );
     }
 
     /**

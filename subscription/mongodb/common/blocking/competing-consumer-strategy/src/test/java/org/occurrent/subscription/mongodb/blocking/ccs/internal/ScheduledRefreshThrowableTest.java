@@ -35,6 +35,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -54,7 +55,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * throwable from logging it is caught as well.
  * <p>
  * A notifier that throws on taking a notification, as a cached thread pool does when it can't start a thread, gets it
- * again from the next refresh, since a refresh decides each notification only once.
+ * again from a later refresh, since a refresh decides each notification only once.
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("ScheduledRefreshThrowable")
@@ -167,17 +168,31 @@ class ScheduledRefreshThrowableTest {
     @DisplayName("when the notifier throws an Error on taking a notification")
     class When_the_notifier_throws_an_Error_on_taking_a_notification {
 
+        private final NotifierThatThrowsWhenTold notifier = new NotifierThatThrowsWhenTold();
+        private final AtomicInteger refreshes = new AtomicInteger();
+        private Runnable round;
+
+        @BeforeEach
+        void holdTheRefresh() {
+            AtomicReference<Runnable> held = new AtomicReference<>();
+            scheduledRefresh = new ScheduledRefresh((lease, scheduler) -> held.set(scheduler.refresh()), notifier);
+            scheduledRefresh.scheduleInBackground(refreshes::incrementAndGet, Duration.ofSeconds(1));
+            round = held.get();
+        }
+
         @Test
         @DisplayName("the next refresh delivers it, and then the one queued behind it")
-        void the_next_refresh_delivers_it_and_then_the_one_queued_behind_it() {
+        void the_next_refresh_delivers_it_and_then_the_one_queued_behind_it() throws InterruptedException {
             // Given
             List<String> delivered = new CopyOnWriteArrayList<>();
-            Runnable round = heldRefreshWithANotifierThatThrowsOnItsFirstTask();
+            notifier.throwOnEveryTask(new OutOfMemoryError("unable to create native thread"));
             Throwable thrown = catchThrowable(() -> scheduledRefresh.notifyInBackground("a-subscription", () -> delivered.add("first")));
             scheduledRefresh.notifyInBackground("a-subscription", () -> delivered.add("second"));
+            notifier.takeEveryTask();
 
             // When
             round.run();
+            notifier.awaitEveryTask();
 
             // Then
             assertAll(
@@ -190,7 +205,7 @@ class ScheduledRefreshThrowableTest {
         @DisplayName("it is logged at ERROR with the subscription id and the class name of what was thrown")
         void it_is_logged_at_error_level_with_the_subscription_id_and_the_class_name_of_what_was_thrown() {
             // Given
-            heldRefreshWithANotifierThatThrowsOnItsFirstTask();
+            notifier.throwOnEveryTask(new OutOfMemoryError("unable to create native thread"));
 
             // When
             catchThrowable(() -> scheduledRefresh.notifyInBackground("a-subscription", () -> {
@@ -204,14 +219,111 @@ class ScheduledRefreshThrowableTest {
             ));
         }
 
-        private Runnable heldRefreshWithANotifierThatThrowsOnItsFirstTask() {
-            AtomicReference<Runnable> round = new AtomicReference<>();
-            // Thrown deliberately. Nothing here runs out of memory.
-            scheduledRefresh = new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()),
-                    new NotifierThatThrowsOnItsFirstTask(new OutOfMemoryError("unable to create native thread")));
-            scheduledRefresh.scheduleInBackground(() -> {
-            }, Duration.ofSeconds(1));
-            return round.get();
+        // The refresh round that handed the notification over would otherwise skip the consumers after it
+        @Test
+        @DisplayName("and logging it throws too, nothing is thrown to the caller and the next refresh delivers it")
+        void and_logging_it_throws_too_nothing_is_thrown_to_the_caller_and_the_next_refresh_delivers_it() throws InterruptedException {
+            // Given
+            List<String> delivered = new CopyOnWriteArrayList<>();
+            notifier.throwOnEveryTask(new ErrorThatThrowsWhenLogged());
+
+            // When
+            Throwable thrown = catchThrowable(() -> scheduledRefresh.notifyInBackground("a-subscription", () -> delivered.add("first")));
+            notifier.takeEveryTask();
+            round.run();
+            notifier.awaitEveryTask();
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).as("thrown to the refresh round that handed the notification over").isNull(),
+                    () -> assertThat(delivered).containsExactly("first")
+            );
+        }
+
+        @Test
+        @DisplayName("a refresh hands the waiting subscriptions over one at a time and stops at the first the notifier throws on")
+        void a_refresh_hands_the_waiting_subscriptions_over_one_at_a_time_and_stops_at_the_first_the_notifier_throws_on() throws InterruptedException {
+            // Given
+            List<String> delivered = new CopyOnWriteArrayList<>();
+            notifier.throwOnEveryTask(new OutOfMemoryError("unable to create native thread"));
+            scheduledRefresh.notifyInBackground("subscription-1", () -> delivered.add("subscription-1"));
+            scheduledRefresh.notifyInBackground("subscription-2", () -> delivered.add("subscription-2"));
+            logged.clear();
+
+            // When
+            round.run();
+            List<ILoggingEvent> loggedByTheRoundTheNotifierThrewIn = logged.events();
+            notifier.takeEveryTask();
+            round.run();
+            notifier.awaitEveryTask();
+
+            // Then
+            assertAll(
+                    () -> assertThat(loggedByTheRoundTheNotifierThrewIn).as("logged by the round the notifier threw in").hasSize(1),
+                    () -> assertThat(delivered).containsExactlyInAnyOrder("subscription-1", "subscription-2")
+            );
+        }
+
+        @Test
+        @DisplayName("and logging it throws during a refresh, the refresh runs and a later one delivers every waiting subscription")
+        void and_logging_it_throws_during_a_refresh_the_refresh_runs_and_a_later_one_delivers_every_waiting_subscription() throws InterruptedException {
+            // Given
+            List<String> delivered = new CopyOnWriteArrayList<>();
+            notifier.throwOnEveryTask(new OutOfMemoryError("unable to create native thread"));
+            scheduledRefresh.notifyInBackground("subscription-1", () -> delivered.add("subscription-1"));
+            scheduledRefresh.notifyInBackground("subscription-2", () -> delivered.add("subscription-2"));
+            notifier.throwOnEveryTask(new ErrorThatThrowsWhenLogged());
+
+            // When
+            Throwable thrown = catchThrowable(round::run);
+            int refreshesInTheRoundTheNotifierThrewIn = refreshes.get();
+            notifier.takeEveryTask();
+            round.run();
+            notifier.awaitEveryTask();
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).as("thrown by the round the notifier threw in").isNull(),
+                    () -> assertThat(refreshesInTheRoundTheNotifierThrewIn).as("refreshes run by the round the notifier threw in").isEqualTo(1),
+                    () -> assertThat(delivered).containsExactlyInAnyOrder("subscription-1", "subscription-2")
+            );
+        }
+
+        // Handing it over again would wait for the next refresh, up to half a lease, and a prohibition queued behind a
+        // grant would leave this node consuming for that long
+        @Test
+        @DisplayName("a notification queued behind one being delivered is delivered by the same task")
+        void a_notification_queued_behind_one_being_delivered_is_delivered_by_the_same_task() throws InterruptedException {
+            // Given
+            List<String> delivered = new CopyOnWriteArrayList<>();
+            CountDownLatch delivering = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            scheduledRefresh.notifyInBackground("a-subscription", () -> {
+                delivering.countDown();
+                awaitUninterruptibly(release);
+                delivered.add("first");
+            });
+            assertThat(delivering.await(10, SECONDS)).as("the first notification is being delivered").isTrue();
+            scheduledRefresh.notifyInBackground("a-subscription", () -> delivered.add("second"));
+
+            // When
+            notifier.throwOnEveryTask(new OutOfMemoryError("unable to create native thread"));
+            release.countDown();
+            notifier.awaitEveryTask();
+
+            // Then
+            assertThat(delivered).containsExactly("first", "second");
+        }
+
+        private static void awaitUninterruptibly(CountDownLatch latch) {
+            while (true) {
+                try {
+                    latch.await();
+                    return;
+                } catch (InterruptedException ignored) {
+                    // Only close() interrupts, and it runs after the test
+                }
+            }
         }
     }
 
@@ -227,6 +339,15 @@ class ScheduledRefreshThrowableTest {
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> void sneakyThrow(Throwable thrown) throws T {
         throw (T) thrown;
+    }
+
+    // Reading its message throws, as logging it could when memory runs out. Neither is an OutOfMemoryError, since JUnit
+    // rethrows one from a failing assertion and that ends the whole run instead of failing the test.
+    private static class ErrorThatThrowsWhenLogged extends Error {
+        @Override
+        public String getMessage() {
+            throw new Error("thrown while logging");
+        }
     }
 
     // An Error from reading its message, as a second OutOfMemoryError while logging the first one would be
@@ -247,6 +368,10 @@ class ScheduledRefreshThrowableTest {
 
         List<ILoggingEvent> events() {
             return List.copyOf(events);
+        }
+
+        void clear() {
+            events.clear();
         }
     }
 

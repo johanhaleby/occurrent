@@ -23,7 +23,9 @@ import org.junit.jupiter.api.Test;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -33,7 +35,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * close() does not wait for the notifier, since a listener it is calling may wait for the database. A listener that
- * also ignores the interrupt close() sends goes on running after it, on a thread that must not keep the JVM alive.
+ * also ignores the interrupt close() sends goes on running after it, on a thread that must not keep the JVM alive, and
+ * a notification handed over after close() is dropped even when that thread could still run it.
  * However many subscription ids have a listener that blocks, the refresh and the notifications of every other id go
  * on, and from Java 24 the notifier takes no platform thread for each of them.
  */
@@ -63,6 +66,31 @@ class ScheduledRefreshNotifierTest {
 
             assertThat(notifier.isAlive()).as("the listener still blocks after close()").isTrue();
             assertThat(notifier.isDaemon()).as("[the notifier thread still delivering a notification after close() is a daemon thread]").isTrue();
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void a_notification_handed_over_after_close_is_dropped_also_while_one_for_the_same_id_is_being_delivered() throws InterruptedException {
+        ScheduledRefresh refresh = ScheduledRefresh.auto();
+        CountDownLatch release = new CountDownLatch(1);
+        CompletableFuture<Thread> deliveredOn = new CompletableFuture<>();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        try {
+            refresh.notifyInBackground("s1", () -> {
+                deliveredOn.complete(Thread.currentThread());
+                awaitIgnoringInterrupts(release);
+            });
+            assertThat(deliveredOn).as("the first notification is delivered").succeedsWithin(EVENTUALLY);
+            Thread notifier = deliveredOn.join();
+
+            refresh.close();
+            refresh.notifyInBackground("s1", () -> delivered.add("handed over after close()"));
+            release.countDown();
+
+            assertThat(notifier.join(EVENTUALLY)).as("the notifier thread ends once the first notification returns").isTrue();
+            assertThat(delivered).isEmpty();
         } finally {
             release.countDown();
         }

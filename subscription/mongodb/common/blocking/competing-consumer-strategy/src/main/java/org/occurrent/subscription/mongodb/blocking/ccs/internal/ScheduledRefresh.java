@@ -28,10 +28,8 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -66,14 +64,10 @@ class ScheduledRefresh {
     // Its threads are daemon threads, since close() does not wait for them, and a listener that ignores the interrupt
     // close() sends can go on running after it. close() is what ends the refresh thread.
     private final @Nullable ExecutorService notifier;
-    // The notifications not yet delivered per subscription id, the first one being delivered or about to be. An id is
-    // here only while a task on the notifier delivers its notifications, or while it waits in notTakenByTheNotifier,
-    // so a new notification for it is queued behind them and one for an id not here starts a task of its own. Read and
-    // written under its own monitor only.
-    private final Map<String, Deque<Runnable>> undelivered = new HashMap<>();
-    // The ids in undelivered whose task the notifier threw on, such as an OutOfMemoryError when it could not start a
-    // thread. The next refresh starts their task again. Read and written under the monitor of undelivered.
-    private final Set<String> notTakenByTheNotifier = new HashSet<>();
+    // The notifications not yet delivered per subscription id. An id is here while a task on the notifier delivers its
+    // notifications, or while they wait for a refresh to hand them over again, so a new notification for it is queued
+    // behind them and one for an id not here starts a task of its own. Read and written under its own monitor only.
+    private final Map<String, Undelivered> undelivered = new HashMap<>();
 
     /**
      * Runs every notification on the thread that runs the refresh, so a test that holds the refresh and runs it
@@ -132,88 +126,130 @@ class ScheduledRefresh {
 
     void scheduleInBackground(Runnable refresh, Duration leaseTime) {
         scheduleIt.accept(leaseTime, new Scheduler(executor, () -> {
-            deliverWhatTheNotifierDidNotTake();
-            refresh.run();
+            try {
+                handOverWhatTheNotifierDidNotTake();
+            } finally {
+                refresh.run();
+            }
         }));
     }
 
     /**
      * Hands {@code notification} to the notifier, or runs it right here when there is none. It runs once every
-     * notification handed over before it for the same {@code subscriptionId} has run, and never waits for one for
-     * another subscription id, as long as the notifier has a thread free, which the one {@link #auto()} and
+     * notification handed over before it for the same {@code subscriptionId} has run or thrown, and never waits for one
+     * for another subscription id, as long as the notifier has a thread free, which the one {@link #auto()} and
      * {@link #every(Duration)} make always has. A notification handed over after {@link #close()} is dropped, since
-     * nothing is left to act on it. When the notifier throws anything else, such as an {@link OutOfMemoryError} when it
-     * can't start a thread, that is logged at ERROR, and the next scheduled refresh hands the notifications for
-     * {@code subscriptionId} over again, in the same order.
+     * nothing is left to act on it.
+     * <p>
+     * When the notifier throws anything else, such as an {@link OutOfMemoryError} when it can't start a thread, this
+     * method logs it at ERROR and returns without throwing, also when logging it throws. A later scheduled refresh
+     * hands the notifications for {@code subscriptionId} over again, in the same order. Each refresh hands the waiting
+     * subscription ids over one at a time and stops at the first one the notifier throws on, so the ones after it wait
+     * for the next refresh.
      */
     void notifyInBackground(String subscriptionId, Runnable notification) {
         if (notifier == null) {
             notification.run();
             return;
         }
+        Undelivered queued;
         synchronized (undelivered) {
-            Deque<Runnable> queued = undelivered.get(subscriptionId);
+            queued = undelivered.get(subscriptionId);
             if (queued != null) {
-                queued.add(notification);
+                queued.notifications.add(notification);
                 return;
             }
-            undelivered.put(subscriptionId, new ArrayDeque<>(List.of(notification)));
+            queued = new Undelivered();
+            queued.notifications.add(notification);
+            undelivered.put(subscriptionId, queued);
         }
-        deliverNextInBackground(notifier, subscriptionId);
+        handOver(notifier, subscriptionId, queued);
     }
 
-    private void deliverNextInBackground(ExecutorService notifier, String subscriptionId) {
-        try {
-            notifier.execute(() -> deliverNext(notifier, subscriptionId));
-        } catch (RejectedExecutionException closed) {
-            // close() ran, and the listeners are shutting down with this instance
-            synchronized (undelivered) {
-                undelivered.remove(subscriptionId);
-            }
-        } catch (Throwable t) {
-            // Kept, unlike after close(), since a refresh decides each notification only once
-            synchronized (undelivered) {
-                notTakenByTheNotifier.add(subscriptionId);
-            }
-            log.error("The notifier did not take the notifications for subscription {} due to {} - {}. The next scheduled refresh hands them over again.",
-                    subscriptionId, t.getClass().getName(), t.getMessage(), t);
-        }
-    }
-
-    private void deliverWhatTheNotifierDidNotTake() {
+    // One subscription id at a time, so a notifier that can't start a thread is tried and logged once per refresh
+    private void handOverWhatTheNotifierDidNotTake() {
         if (notifier == null) {
             return;
         }
-        List<String> subscriptionIds;
-        synchronized (undelivered) {
-            subscriptionIds = List.copyOf(notTakenByTheNotifier);
-            notTakenByTheNotifier.clear();
-        }
-        subscriptionIds.forEach(subscriptionId -> deliverNextInBackground(notifier, subscriptionId));
-    }
-
-    // One notification per task, so one that throws leaves the rest to the next task instead of to nobody
-    private void deliverNext(ExecutorService notifier, String subscriptionId) {
-        Runnable next;
-        synchronized (undelivered) {
-            next = undelivered.get(subscriptionId).getFirst();
-        }
-        try {
-            next.run();
-        } finally {
-            boolean more;
+        while (true) {
+            String subscriptionId = null;
+            Undelivered queued = null;
             synchronized (undelivered) {
-                Deque<Runnable> queued = undelivered.get(subscriptionId);
-                queued.removeFirst();
-                more = !queued.isEmpty();
-                if (!more) {
-                    undelivered.remove(subscriptionId);
+                for (Map.Entry<String, Undelivered> entry : undelivered.entrySet()) {
+                    if (entry.getValue().waitingForARefresh) {
+                        subscriptionId = entry.getKey();
+                        queued = entry.getValue();
+                        queued.waitingForARefresh = false;
+                        break;
+                    }
                 }
             }
-            if (more) {
-                deliverNextInBackground(notifier, subscriptionId);
+            if (queued == null || !handOver(notifier, subscriptionId, queued)) {
+                return;
             }
         }
+    }
+
+    // False when the notifier threw, and then the notifications wait for a refresh to hand them over again
+    private boolean handOver(ExecutorService notifier, String subscriptionId, Undelivered queued) {
+        try {
+            notifier.execute(() -> deliverUntilNoneIsLeft(notifier, subscriptionId, queued));
+            return true;
+        } catch (RejectedExecutionException closed) {
+            // close() ran, and the listeners are shutting down with this instance
+            synchronized (undelivered) {
+                undelivered.remove(subscriptionId, queued);
+            }
+            return true;
+        } catch (Throwable t) {
+            // Kept, unlike after close(), since a refresh decides each notification only once. Setting a flag allocates
+            // nothing, so a second OutOfMemoryError can't throw here.
+            synchronized (undelivered) {
+                queued.waitingForARefresh = true;
+            }
+            try {
+                log.error("The notifier did not take the notifications for subscription {} due to {} - {}. A later scheduled refresh hands them over again.",
+                        subscriptionId, t.getClass().getName(), t.getMessage(), t);
+            } catch (Throwable whileLogging) {
+                // Logging can throw too, such as a second OutOfMemoryError, and the refresh round that handed the
+                // notification over would then skip every consumer it has not refreshed yet
+            }
+            return false;
+        }
+    }
+
+    // One task delivers every notification for the id, also those queued while it runs, so only handing over the
+    // first one can find the notifier unable to start a thread
+    private void deliverUntilNoneIsLeft(ExecutorService notifier, String subscriptionId, Undelivered queued) {
+        while (true) {
+            Runnable next;
+            synchronized (undelivered) {
+                // Dropped after close(), the same as a notification handed over after it
+                next = notifier.isShutdown() ? null : queued.notifications.poll();
+                if (next == null) {
+                    undelivered.remove(subscriptionId, queued);
+                    return;
+                }
+            }
+            try {
+                next.run();
+            } catch (Throwable t) {
+                // Not rethrown, since that would leave the notifications after it to nobody
+                try {
+                    log.error("A notification for subscription {} failed due to {} - {}. The notifications after it are delivered as usual.",
+                            subscriptionId, t.getClass().getName(), t.getMessage(), t);
+                } catch (Throwable whileLogging) {
+                    // Logging can throw too, such as a second OutOfMemoryError, and the notifications after the one
+                    // that threw would then reach nobody
+                }
+            }
+        }
+    }
+
+    private static final class Undelivered {
+        private final Deque<Runnable> notifications = new ArrayDeque<>();
+        // Set when the notifier threw on taking them, so no task delivers them until a refresh hands them over again
+        private boolean waitingForARefresh;
     }
 
     /**
