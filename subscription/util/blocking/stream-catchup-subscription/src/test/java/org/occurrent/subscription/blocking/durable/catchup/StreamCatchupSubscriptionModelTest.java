@@ -1087,7 +1087,7 @@ class StreamCatchupSubscriptionModelTest {
         history.forEach(e -> eventStore.write(e.eventId(), inTheSameMillisecond().toCloudEvents(List.of(e))));
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         // What a replay that stored event0's position and then stopped would have left behind
-        storage.save("subscription", TimeBasedCheckpoint.from(SAME_MILLISECOND));
+        storage.save("subscription", CatchupTimeCheckpoint.of(asTime(SAME_MILLISECOND), new StringBasedCheckpoint("stored live start"), BEGINNING_OF_TIME));
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel model = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
@@ -1107,7 +1107,7 @@ class StreamCatchupSubscriptionModelTest {
         history.forEach(e -> eventStore.write(e.eventId(), atTheirOwnTime.toCloudEvents(List.of(e))));
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         // What a replay from StartAtTime.offsetDateTime(..) that stored event0's time and then stopped would have left behind
-        storage.save("subscription", TimeBasedCheckpoint.from(history.get(0).timestamp().toInstant().atOffset(ZoneOffset.UTC)));
+        storage.save("subscription", CatchupTimeCheckpoint.of(asTime(history.get(0).timestamp().toInstant().atOffset(ZoneOffset.UTC)), new StringBasedCheckpoint("stored live start"), BEGINNING_OF_TIME));
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel model = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
@@ -1165,7 +1165,7 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     @Test
-    void a_stored_live_start_the_model_no_longer_has_replays_again_from_the_origin_and_goes_live_from_a_start_read_now() {
+    void a_stored_live_start_the_model_no_longer_has_replays_again_from_the_beginning_and_goes_live_from_a_start_read_now() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
         List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3"), nameDefined("event4"));
         history.forEach(event -> write(eventStore, event));
@@ -1173,30 +1173,145 @@ class StreamCatchupSubscriptionModelTest {
         CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, liveStartReadNow);
         StringBasedCheckpoint agedOut = new StringBasedCheckpoint("aged out live start");
         model.lost.add(agedOut);
-        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
-            @Override
-            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                saved.add(checkpoint.asString());
-                return super.save(id, checkpoint, condition);
-            }
-        };
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore,
-                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100));
 
-        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(3, agedOut, 1, 3)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(3, agedOut, 0, 3)), toDomainEvents(received)).waitUntilStarted();
 
-        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history.subList(1, 4)));
+        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history));
         assertThat(model.resumeProbes).containsExactly(agedOut, liveStartReadNow);
         assertThat(model.liveStarts).containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
-        assertThat(saved.stream().map(StringBasedCheckpoint::new).filter(CatchupCheckpoints::isMarked).map(Checkpoint::asString))
-                .as("the checkpoints the replay stores carry the new live start and the same origin, marked since the origin is past zero")
-                .containsExactly(CatchupCheckpoints.format(2, 1, 4, liveStartReadNow), CatchupCheckpoints.format(3, 1, 4, liveStartReadNow), CatchupCheckpoints.format(4, 1, 4, liveStartReadNow));
     }
 
     @Test
-    void a_start_without_a_live_start_reads_one_now_and_asks_the_model_about_it_only_after_the_replay() {
+    void a_stored_live_start_the_model_no_longer_has_is_refused_when_the_replay_began_after_the_beginning() {
+        // Given a stored position whose live start the model has lost, from a replay that began at position 1
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3"), nameDefined("event4"));
+        history.forEach(event -> write(eventStore, event));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
+        StringBasedCheckpoint agedOut = new StringBasedCheckpoint("aged out live start");
+        model.lost.add(agedOut);
+        Checkpoint stored = GlobalCheckpoint.of(3, agedOut, 1, 3);
+        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage storage = savesRecordedIn(saved);
+        storage.save("subscription", stored);
+        saved.clear();
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        try {
+            // When the subscription restarts
+            Subscription started = subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received));
+            Throwable failure = catchThrowable(() -> started.waitUntilStarted(Duration.ofSeconds(20)));
+
+            // Then the start is refused, naming the subscription and the origin
+            assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("subscription")
+                    .hasMessageContaining("again from position 1")
+                    .hasMessageContaining("Start the subscription from the beginning again");
+            // And nothing was replayed, stored or handed over
+            assertThat(received).as("delivered").isEmpty();
+            assertThat(saved).as("stored").isEmpty();
+            assertThat(storage.read("subscription")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
+            assertThat(model.resumeProbes).as("asked once, about the stored live start").containsExactly(agedOut);
+            assertThat(model.liveStarts).as("handed over").isEmpty();
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    void a_live_start_the_model_loses_during_a_replay_that_began_after_the_beginning_is_refused_instead_of_replaying_again() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3"), nameDefined("event4"));
+        history.forEach(event -> write(eventStore, event));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
+        StringBasedCheckpoint storedLiveStart = new StringBasedCheckpoint("stored live start");
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100));
+        try {
+            Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(2, storedLiveStart, 1, 4)), cloudEvent -> {
+                model.lost.add(storedLiveStart);
+                toDomainEvents(received).accept(cloudEvent);
+            });
+
+            assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(20)))
+                    .isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("subscription")
+                    .hasMessageContaining("again from position 1");
+            assertThat(received).as("the rest of the stored replay, and no replay again").containsExactly(history.get(2), history.get(3));
+            assertThat(model.resumeProbes).as("once before the replay and once after it").containsExactly(storedLiveStart, storedLiveStart);
+            assertThat(model.liveStarts).as("handed over").isEmpty();
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    void a_start_at_a_bare_position_above_0_is_refused_and_nothing_is_delivered_or_stored() {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3")).forEach(event -> write(eventStore, event));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
+        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage storage = savesRecordedIn(saved);
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        try {
+            // When
+            Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(1)), toDomainEvents(received));
+            Throwable failure = catchThrowable(() -> started.waitUntilStarted(Duration.ofSeconds(20)));
+
+            // Then the start is refused, naming the subscription, the position and the checkpoint to start from instead
+            assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("subscription")
+                    .hasMessageContaining("after position 1")
+                    .hasMessageContaining("EventMetadata.getCheckpoint()");
+            assertThat(received).as("delivered").isEmpty();
+            assertThat(saved).as("stored").isEmpty();
+            assertThat(storage.read("subscription")).as("the stored checkpoint").isNull();
+            assertThat(model.resumeProbes).as("asked about a live start").isEmpty();
+            assertThat(model.liveStarts).as("handed over").isEmpty();
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    void a_position_stored_without_a_live_start_is_refused_at_a_restart_and_the_stored_checkpoint_is_left_as_it_was() {
+        // Given a position above 0 stored by a version that kept no live start beside it
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3")).forEach(event -> write(eventStore, event));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
+        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage storage = savesRecordedIn(saved);
+        storage.save("subscription", GlobalCheckpoint.of(2));
+        saved.clear();
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        try {
+            // When the subscription restarts
+            Subscription started = subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received));
+            Throwable failure = catchThrowable(() -> started.waitUntilStarted(Duration.ofSeconds(20)));
+
+            // Then
+            assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("subscription")
+                    .hasMessageContaining("after position 2");
+            assertThat(received).as("delivered").isEmpty();
+            assertThat(saved).as("stored").isEmpty();
+            assertThat(storage.read("subscription")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(GlobalCheckpoint.of(2).asString());
+            assertThat(model.liveStarts).as("handed over").isEmpty();
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    void a_start_at_position_0_without_a_live_start_reads_one_now_and_asks_the_model_about_it_only_after_the_replay() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
         List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3"));
         history.forEach(event -> write(eventStore, event));
@@ -1205,9 +1320,9 @@ class StreamCatchupSubscriptionModelTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100));
 
-        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(1)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
 
-        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history.subList(1, 3)));
+        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history));
         assertThat(model.resumeProbes).containsExactly(liveStartReadNow);
         assertThat(model.liveStarts).containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
     }
@@ -1446,31 +1561,7 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     @Test
-    void a_stored_catch_up_time_whose_live_start_the_model_no_longer_has_replays_again_from_the_origin_and_goes_live_from_a_start_read_now() {
-        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
-        List<DomainEvent> history = List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)), writeAt(eventStore, "event4", at(4)));
-        StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("live start read now");
-        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, liveStartReadNow);
-        StringBasedCheckpoint agedOut = new StringBasedCheckpoint("aged out live start");
-        model.lost.add(agedOut);
-        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
-        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore,
-                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(savesRecordedIn(saved)).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
-
-        subscription.subscribe("subscription", StartAt.checkpoint(CatchupTimeCheckpoint.of(asTime(at(3)), agedOut, asTime(at(2)))), toDomainEvents(received)).waitUntilStarted();
-
-        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history.subList(1, 4)));
-        assertThat(model.resumeProbes).containsExactly(agedOut, liveStartReadNow);
-        assertThat(model.liveStarts).containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
-        assertThat(markedTimesIn(saved))
-                .as("the checkpoints the replay stores carry the new live start and the same origin, marked since the origin is past the beginning of time")
-                .containsExactly(CatchupCheckpoints.format(asTime(at(2)), asTime(at(2)), liveStartReadNow), CatchupCheckpoints.format(asTime(at(3)), asTime(at(2)), liveStartReadNow),
-                        CatchupCheckpoints.format(asTime(at(4)), asTime(at(2)), liveStartReadNow));
-    }
-
-    @Test
-    void a_catch_up_time_read_back_from_a_storage_that_keeps_strings_resumes_the_same_way() {
+    void a_stored_catch_up_time_whose_live_start_the_model_no_longer_has_replays_again_from_the_beginning_of_time_and_goes_live_from_a_start_read_now() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
         List<DomainEvent> history = List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)), writeAt(eventStore, "event4", at(4)));
         StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("live start read now");
@@ -1479,12 +1570,73 @@ class StreamCatchupSubscriptionModelTest {
         model.lost.add(agedOut);
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100));
-        Checkpoint readBackAsAString = new StringBasedCheckpoint(CatchupTimeCheckpoint.of(asTime(at(3)), agedOut, asTime(at(2))).asString());
 
-        subscription.subscribe("subscription", StartAt.checkpoint(readBackAsAString), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(CatchupTimeCheckpoint.of(asTime(at(3)), agedOut, BEGINNING_OF_TIME)), toDomainEvents(received)).waitUntilStarted();
 
-        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history.subList(1, 4)));
+        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history));
         assertThat(model.resumeProbes).containsExactly(agedOut, liveStartReadNow);
+        assertThat(model.liveStarts).containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
+    }
+
+    @Test
+    void a_stored_catch_up_time_whose_live_start_the_model_no_longer_has_is_refused_when_the_replay_began_after_the_beginning_of_time() {
+        // Given a stored time whose live start the model has lost, from a replay that began at the time of event2
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)), writeAt(eventStore, "event4", at(4)));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
+        StringBasedCheckpoint agedOut = new StringBasedCheckpoint("aged out live start");
+        model.lost.add(agedOut);
+        Checkpoint stored = CatchupTimeCheckpoint.of(asTime(at(3)), agedOut, asTime(at(2)));
+        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage storage = savesRecordedIn(saved);
+        storage.save("subscription", stored);
+        saved.clear();
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        try {
+            // When the subscription restarts
+            Subscription started = subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received));
+            Throwable failure = catchThrowable(() -> started.waitUntilStarted(Duration.ofSeconds(20)));
+
+            // Then the start is refused, naming the subscription and the origin
+            assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("subscription")
+                    .hasMessageContaining("again from time " + asTime(at(2)))
+                    .hasMessageContaining("Start the subscription from the beginning again");
+            // And nothing was replayed, stored or handed over
+            assertThat(received).as("delivered").isEmpty();
+            assertThat(saved).as("stored").isEmpty();
+            assertThat(storage.read("subscription")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
+            assertThat(model.resumeProbes).as("asked once, about the stored live start").containsExactly(agedOut);
+            assertThat(model.liveStarts).as("handed over").isEmpty();
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    void a_catch_up_time_read_back_from_a_storage_that_keeps_strings_is_refused_the_same_way() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)), writeAt(eventStore, "event4", at(4)));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
+        StringBasedCheckpoint agedOut = new StringBasedCheckpoint("aged out live start");
+        model.lost.add(agedOut);
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100));
+        Checkpoint readBackAsAString = new StringBasedCheckpoint(CatchupTimeCheckpoint.of(asTime(at(3)), agedOut, asTime(at(2))).asString());
+        try {
+            Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(readBackAsAString), toDomainEvents(received));
+
+            assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(20)))
+                    .isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("subscription")
+                    .hasMessageContaining("again from time " + asTime(at(2)));
+            assertThat(received).as("delivered").isEmpty();
+            assertThat(model.resumeProbes).containsExactly(agedOut);
+        } finally {
+            subscription.shutdown();
+        }
     }
 
     @Test
@@ -1507,24 +1659,57 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     @Test
-    void a_live_start_the_model_loses_during_a_time_replay_replays_again_from_the_origin_and_goes_live_from_a_start_read_now() {
+    void a_live_start_the_model_loses_during_a_time_replay_that_began_after_the_beginning_of_time_is_refused_instead_of_replaying_again() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
         List<DomainEvent> history = List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)), writeAt(eventStore, "event4", at(4)));
-        StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("live start read now");
-        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, liveStartReadNow);
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
         StringBasedCheckpoint storedLiveStart = new StringBasedCheckpoint("stored live start");
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100));
+        try {
+            Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(CatchupTimeCheckpoint.of(asTime(at(3)), storedLiveStart, asTime(at(2)))), cloudEvent -> {
+                model.lost.add(storedLiveStart);
+                toDomainEvents(received).accept(cloudEvent);
+            });
 
-        subscription.subscribe("subscription", StartAt.checkpoint(CatchupTimeCheckpoint.of(asTime(at(3)), storedLiveStart, asTime(at(2)))), cloudEvent -> {
-            model.lost.add(storedLiveStart);
-            toDomainEvents(received).accept(cloudEvent);
-        }).waitUntilStarted();
+            assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(20)))
+                    .isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("subscription")
+                    .hasMessageContaining("again from time " + asTime(at(2)));
+            assertThat(received).as("the rest of the stored replay, and no replay again").containsExactly(history.get(2), history.get(3));
+            assertThat(model.resumeProbes).as("once before the replay and once after it").containsExactly(storedLiveStart, storedLiveStart);
+            assertThat(model.liveStarts).as("handed over").isEmpty();
+        } finally {
+            subscription.shutdown();
+        }
+    }
 
-        await().untilAsserted(() -> assertThat(model.liveStarts).containsExactly(StartAt.checkpoint(liveStartReadNow).toString()));
-        assertThat(received).as("the rest of the stored replay, then all of the history from the origin again")
-                .containsExactly(history.get(2), history.get(3), history.get(1), history.get(2), history.get(3));
-        assertThat(model.resumeProbes).containsExactly(storedLiveStart, storedLiveStart, liveStartReadNow);
+    @Test
+    @Timeout(30)
+    void a_specific_time_start_whose_live_start_is_lost_before_the_handover_is_refused_at_once_instead_of_replaying_again() {
+        // Given a start at the time of event2, whose live start the model loses during the replay
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        List<DomainEvent> history = List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)), writeAt(eventStore, "event4", at(4)));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
+        model.losesEveryLiveStart = true;
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100));
+        try {
+            // When
+            Subscription started = subscription.subscribe("subscription", StartAtTime.offsetDateTime(at(2)), toDomainEvents(received));
+
+            // Then it fails at once, where it replayed again 3 times before
+            assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(20)))
+                    .isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("subscription")
+                    .hasMessageContaining("again from time " + asTime(at(2)))
+                    .hasMessageNotContaining("replays");
+            assertThat(received).as("the history from the time of event2, once").containsExactlyElementsOf(history.subList(1, 4));
+            assertThat(model.resumeProbes).as("asked once, after the only replay").hasSize(1);
+            assertThat(model.liveStarts).as("handed over").isEmpty();
+        } finally {
+            subscription.shutdown();
+        }
     }
 
     @Test
@@ -1685,35 +1870,35 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     @Test
-    void a_stored_plain_time_resumes_from_that_time_with_a_live_start_read_before_the_replay_and_logs_a_warning() {
+    void a_stored_plain_time_is_refused_at_the_default_start_and_the_stored_checkpoint_is_left_as_it_was() {
+        // Given a time stored without a live start
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
-        List<DomainEvent> history = List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)), writeAt(eventStore, "event4", at(4)));
-        StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("live start read now");
-        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, liveStartReadNow);
+        List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)), writeAt(eventStore, "event4", at(4)));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
         CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
         InMemoryCheckpointStorage storage = savesRecordedIn(saved);
         storage.save("subscription", TimeBasedCheckpoint.from(at(3)));
         saved.clear();
-        Logger catchupLog = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
-        ListAppender<ILoggingEvent> logged = new ListAppender<>();
-        logged.start();
-        catchupLog.addAppender(logged);
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore,
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
         try {
-            subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted();
+            // When the subscription starts at the model default
+            Throwable failure = catchThrowable(() -> subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)));
 
-            await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history.subList(2, 4)));
-            assertThat(model.resumeProbes).containsExactly(liveStartReadNow);
-            assertThat(model.liveStarts).containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
-            assertThat(markedTimesIn(saved)).as("the replay stores the live start it read now, and the stored time as its origin, marked since the origin is past the beginning of time")
-                    .containsExactly(CatchupCheckpoints.format(asTime(at(3)), asTime(at(3)), liveStartReadNow), CatchupCheckpoints.format(asTime(at(4)), asTime(at(3)), liveStartReadNow));
-            assertThat(logged.list).filteredOn(event -> event.getLevel() == Level.WARN)
-                    .singleElement()
-                    .satisfies(event -> assertThat(event.getFormattedMessage()).contains("subscription").contains(asTime(at(3))).contains("no live start"));
+            // Then the start is refused at once, naming the subscription and the fix
+            assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("subscription")
+                    .hasMessageContaining(asTime(at(3)))
+                    .hasMessageContaining("holds no live start")
+                    .hasMessageContaining("EventMetadata.getCheckpoint()");
+            // And nothing was delivered, stored or handed over
+            assertThat(received).as("delivered").isEmpty();
+            assertThat(saved).as("stored").isEmpty();
+            assertThat(storage.read("subscription")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(TimeBasedCheckpoint.from(at(3)).asString());
+            assertThat(model.resumeProbes).as("asked about a live start").isEmpty();
+            assertThat(model.liveStarts).as("handed over").isEmpty();
         } finally {
-            catchupLog.detachAppender(logged);
             subscription.shutdown();
         }
     }
