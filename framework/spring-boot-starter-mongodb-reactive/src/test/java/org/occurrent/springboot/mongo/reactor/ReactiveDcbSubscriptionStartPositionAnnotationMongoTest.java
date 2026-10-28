@@ -23,6 +23,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -37,6 +38,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
@@ -63,8 +66,8 @@ import static org.awaitility.Awaitility.await;
 /**
  * Fills the reactive DCB start-position gap: {@code ReactiveDcbSubscriptionAnnotationMongoTest} only exercises
  * {@code startAt = BEGINNING}. This proves {@code DEFAULT} and {@code NOW} never replay history written more than a
- * second before they subscribe, and that
- * {@code startAtDcbPosition} correctly resumes strictly after the given position, mirroring the blocking
+ * second before they subscribe, that {@code startAtDcbPosition = 0} replays the whole history, and that
+ * a {@code startAtDcbPosition} above 0 is refused, mirroring the blocking
  * {@code DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest} and
  * {@code DcbSubscriptionStartAtPositionAnnotationMongoTest}.
  */
@@ -80,6 +83,7 @@ import static org.awaitility.Awaitility.await;
 @Import(ReactiveDcbSubscriptionStartPositionAnnotationMongoTest.MongoDbContainerConfiguration.class)
 @Testcontainers
 @Timeout(60)
+@ExtendWith(OutputCaptureExtension.class)
 class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
 
     static final String TAG = "test:reactive-start-position";
@@ -100,8 +104,11 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
     @Autowired
     private ExplicitPositionSubscriber explicitPositionSubscriber;
 
+    @Autowired
+    private RefusedPositionSubscriber refusedPositionSubscriber;
+
     @Test
-    void default_and_now_never_replay_history_older_than_a_second_while_an_explicit_position_resumes_strictly_after_it() {
+    void default_and_now_never_replay_history_older_than_a_second_while_an_explicit_position_0_replays_all_of_it() {
         // Neither DEFAULT nor NOW ever sees the history, written more than a second before they subscribed.
         await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
             assertThat(defaultPositionSubscriber.invocationCount()).isZero();
@@ -112,10 +119,8 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
             assertThat(nowPositionSubscriber.received()).isEmpty();
         });
 
-        // startAtDcbPosition = 1 means: deliver from position 2 onward, i.e. skip "event-1".
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                assertThat(explicitPositionSubscriber.received()).extracting(TestEvent::name).containsExactlyInAnyOrder("event-2", "event-3"));
-        assertThat(explicitPositionSubscriber.received()).extracting(TestEvent::name).doesNotContain("event-1");
+                assertThat(explicitPositionSubscriber.received()).extracting(TestEvent::name).containsExactlyInAnyOrder("event-1", "event-2", "event-3"));
 
         append(new TestEvent("live-default"));
         append(new TestEvent("live-now"));
@@ -124,6 +129,16 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
                 assertThat(defaultPositionSubscriber.received()).extracting(TestEvent::name).containsExactly("live-default"));
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(nowPositionSubscriber.received()).extracting(TestEvent::name).containsExactly("live-now"));
+    }
+
+    @Test
+    void an_explicit_position_above_0_is_refused_and_delivers_nothing(CapturedOutput output) {
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(output.getAll())
+                        .contains("CatchupCannotResumeException")
+                        .contains("Cannot start catch-up subscription reactive-dcb-sp-refused-position after position 1"));
+
+        assertThat(refusedPositionSubscriber.received()).isEmpty();
     }
 
     private void append(TestEvent event) {
@@ -188,6 +203,12 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
         @DependsOn("historyAppender")
         ExplicitPositionSubscriber explicitPositionSubscriber() {
             return new ExplicitPositionSubscriber();
+        }
+
+        @Bean
+        @DependsOn("historyAppender")
+        RefusedPositionSubscriber refusedPositionSubscriber() {
+            return new RefusedPositionSubscriber();
         }
     }
 
@@ -263,7 +284,21 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
     static class ExplicitPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
-        @DcbSubscription(id = "reactive-dcb-sp-explicit-position", startAtDcbPosition = 1)
+        @DcbSubscription(id = "reactive-dcb-sp-explicit-position", startAtDcbPosition = 0)
+        Mono<Void> onEvent(TestEvent event) {
+            received.add(event);
+            return Mono.empty();
+        }
+
+        List<TestEvent> received() {
+            return received;
+        }
+    }
+
+    static class RefusedPositionSubscriber {
+        private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        @DcbSubscription(id = "reactive-dcb-sp-refused-position", startAtDcbPosition = 1)
         Mono<Void> onEvent(TestEvent event) {
             received.add(event);
             return Mono.empty();

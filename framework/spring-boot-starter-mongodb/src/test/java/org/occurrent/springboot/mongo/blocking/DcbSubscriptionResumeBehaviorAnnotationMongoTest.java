@@ -98,7 +98,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
             await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                     assertThat(sameAsStartAtSubscriber1.received()).extracting(TestEvent::name).containsExactly("historic-1", "historic-2"));
             await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                    assertThat(positionSubscriber1.received()).extracting(TestEvent::name).containsExactly("historic-2"));
+                    assertThat(positionSubscriber1.received()).extracting(TestEvent::name).containsExactly("historic-1", "historic-2"));
         } finally {
             ctx1.close();
         }
@@ -122,10 +122,10 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
             await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                     assertThat(sameAsStartAtSubscriber2.received()).extracting(TestEvent::name).containsExactly("historic-1", "historic-2", "while-down-1"));
 
-            // SAME_AS_START_AT (explicit startAtDcbPosition): replays again from that same position, not from
-            // stored progress, so it sees the same tail of history plus the new event.
+            // SAME_AS_START_AT (explicit startAtDcbPosition 0): replays again from that same position, not from
+            // stored progress, so it sees the same history plus the new event.
             await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                    assertThat(positionSubscriber2.received()).extracting(TestEvent::name).containsExactly("historic-2", "while-down-1"));
+                    assertThat(positionSubscriber2.received()).extracting(TestEvent::name).containsExactly("historic-1", "historic-2", "while-down-1"));
         } finally {
             ctx2.close();
         }
@@ -299,8 +299,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     static class SameAsStartAtPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
-        // startAtDcbPosition = 1 means: deliver from position 2 onward, i.e. skip "historic-1".
-        @DcbSubscription(id = "dcb-resume-same-as-start-at-position", startAtDcbPosition = 1, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        @DcbSubscription(id = "dcb-resume-same-as-start-at-position", startAtDcbPosition = 0, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
         void onEvent(TestEvent event) {
             received.add(event);
         }
