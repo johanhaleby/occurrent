@@ -27,6 +27,7 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -80,6 +81,10 @@ class ProjectionAnnotationDurableResumeMongoTest {
             // First boot: the BEGINNING projection replays the two historic events, so the Mongo-backed count reaches 2.
             await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                     assertThat(count(mongo)).isEqualTo(2));
+            // The checkpoint is written at the hand-over to live, after the handler has applied both events.
+            CheckpointStorage checkpointStorage = ctx1.getBean(CheckpointStorage.class);
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(checkpointStorage.read("order-count")).isNotNull());
         } finally {
             ctx1.close();
         }

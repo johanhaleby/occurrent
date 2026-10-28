@@ -175,6 +175,19 @@ public abstract class KafkaTestSupport {
     }
 
     /**
+     * Awaits until the broker lists every topic in {@code names} in its metadata. A consumer subscribed by pattern
+     * resolves the pattern from metadata it fetches once and refreshes only after {@code metadata.max.age.ms}, so a
+     * topic the broker has not yet listed at that first fetch is not assigned within a test's window.
+     * {@code createTopics(..).all().get()} returns once the controller has the topic, which can be earlier than the
+     * broker answering metadata requests with it.
+     */
+    protected void awaitTopicsListed(String... names) {
+        Set<String> expected = Set.of(names);
+        await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(50)).untilAsserted(() ->
+                assertThat(adminClient.listTopics().names().get(30, TimeUnit.SECONDS)).containsAll(expected));
+    }
+
+    /**
      * Deletes a topic {@link #createTopic(int)} or {@link #createNamedTopic(String, int)} created, for a test that
      * needs more than the one scratch topic {@link #topic} already is (which {@link #deleteScratchTopicAndCloseAdminClient()}
      * tears down on its own). Best effort. A failure here is swallowed rather than failing the test, since it only
