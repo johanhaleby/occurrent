@@ -14,6 +14,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). `DomainEventFeed` and
   `CatchupProjectionFeed` lose both `accept(..)` overloads, on the blocking and the reactor stack. **Breaks the build**
   if you still call one of them.
+- [A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from).
+  `DcbStartAt` gains the case `DcbStartAt.AtCheckpoint`. **Breaks the build** if you `switch` exhaustively over
+  `DcbStartAt` without a `default`.
 
 ### Sagas
 
@@ -50,8 +53,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
   start on every replay now throws `CatchupCannotResumeException`. Compiles unchanged.
 - [A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from).
   A blocking catch-up delivers each replayed event as a `CheckpointAwareCloudEvent`, which equals only another one
-  with the same checkpoint. Store the checkpoint with your state to resume from it. An exhaustive `switch` over
-  `DcbStartAt` needs a case for the new `DcbStartAt.AtCheckpoint`.
+  with the same checkpoint. Store the checkpoint with your state to resume from it. **Breaks the build** if you
+  `switch` exhaustively over `DcbStartAt` without a `default`.
 - [A catch-up over both a stream and a DCB model refuses a position start without a filter](#a-catch-up-over-both-a-stream-and-a-dcb-model-refuses-a-position-start-without-a-filter).
   A subscription with no filter that starts at a position checkpoint throws `IllegalArgumentException`. Compiles
   unchanged.
@@ -543,11 +546,9 @@ subscription.
 
 From the checkpoint of a live event, or of an event that a catch-up replays by position, the subscription resumes
 after that event. A catch-up that replays by time resumes at the event's time instead, so it delivers the events with
-that time again, that event included. When its `catchupPhaseSortBy` doesn't start with the time ascending, an event from
-its first read resumes the whole replay from where it started.
-
-`DcbStartAt.checkpoint(..)` returns the new `DcbStartAt.AtCheckpoint`. `DcbStartAt` is sealed, so a `switch` over it
-that lists every case and has no `default` no longer compiles. Add a case for `DcbStartAt.AtCheckpoint`.
+that time again, that event included. An event without a time holds the checkpoint of the event before it, and resumes
+where that one does. When its `catchupPhaseSortBy` doesn't start with the time ascending, an event from its first read
+resumes the whole replay from where it started.
 
 To rewind a read model to a point you know is good, keep the checkpoint of the event at that point, and start the
 subscription from it.
@@ -606,9 +607,19 @@ competing consumer model does not compete for it. A catch-up that stores checkpo
 deletes the last one when the replay goes live.
 
 Spring Boot decides from the annotation, not from the answer, whether application startup waits for the subscription.
-Under the default `startupMode`, a subscription whose annotation starts at `NOW` or `DEFAULT` waits, also when the
+When `occurrent.subscription.mode` is `manual`, nothing waits. Otherwise, under the default `startupMode`, a subscription whose annotation starts at `NOW` or `DEFAULT` waits, also when the
 answer makes it replay. One whose annotation replays, from the beginning, a position or a time, starts in the
 background, also when the answer makes it go live. Set `startupMode` on the annotation to choose.
+
+### An exhaustive `switch` over `DcbStartAt`
+
+`DcbStartAt.checkpoint(..)` returns the new `DcbStartAt.AtCheckpoint`. `DcbStartAt` is sealed, so a `switch` over it
+that lists every case and has no `default` no longer compiles. Add a case for `DcbStartAt.AtCheckpoint`.
+
+### Why there is no recipe
+
+What the new case should do depends on what the `switch` does with the others, so there is nothing for
+`UpgradeToOccurrent_0_35` to write into it.
 
 ## A catch-up over both a stream and a DCB model refuses a position start without a filter
 
