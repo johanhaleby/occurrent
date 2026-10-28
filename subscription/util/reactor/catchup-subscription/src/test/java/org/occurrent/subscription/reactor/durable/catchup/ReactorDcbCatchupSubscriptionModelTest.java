@@ -34,6 +34,8 @@ import reactor.test.StepVerifier;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorDcbCatchupSubscriptionModelTest {
 
@@ -45,6 +47,18 @@ class ReactorDcbCatchupSubscriptionModelTest {
         // errors instead of replaying. The event store is never read, the failure happens before the first replay read.
         StepVerifier.create(catchup.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.beginning()))
                 .expectError(IllegalStateException.class)
+                .verify();
+    }
+
+    @Test
+    void a_start_after_a_dcb_position_above_zero_is_refused_before_anything_is_read() {
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedDcbEventStore());
+
+        StepVerifier.create(catchup.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.afterPosition(2)))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(CatchupCannotResumeException.class)
+                        .hasMessageContaining("after position 2")
+                        .hasMessageContaining("EventMetadata.getCheckpoint()"))
                 .verify();
     }
 

@@ -164,7 +164,8 @@ class ReactorDurableMarkedCheckpointPreviousReleaseMongoTest {
         ReactorCheckpointStorage storage = new ReactorCheckpointStorage(reactiveMongoTemplate, checkpointCollectionName);
         CountDownLatch deliveringC = new CountDownLatch(1);
         ReactorDurableSubscriptionModel first = durable(eventStore, storage);
-        first.subscribe("sub", null, StartAt.checkpoint(GlobalCheckpoint.of(1)), event -> Mono.fromRunnable(() -> {
+        Checkpoint liveStart = requireNonNull(new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING).globalCheckpoint().block(TIMEOUT));
+        first.subscribe("sub", null, StartAt.checkpoint(GlobalCheckpoint.of(1, liveStart, 1, 4)), event -> Mono.fromRunnable(() -> {
             if (event.getId().equals("C")) {
                 deliveringC.countDown();
                 awaitOrFail(crashed);

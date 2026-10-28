@@ -38,9 +38,10 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
-import org.occurrent.tck.internal.scaffolding.ExpectedGuaranteeViolation;
 import org.occurrent.tck.latecommit.AppendHold;
 import org.occurrent.tck.latecommit.LateCommitGuarantee;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -72,14 +73,12 @@ import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
 @Timeout(120)
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
-@ExpectedGuaranteeViolation(
-        tests = "an_event_that_committed_below_a_position_the_application_stored_itself_is_delivered_by_a_catch_up_started_at_that_position",
-        issue = "https://github.com/johanhaleby/occurrent/issues/1297")
 class ReactorDcbCatchupSubscriptionModelMongoTest {
 
     @Container
@@ -213,7 +212,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     }
 
     @Test
-    void an_event_that_committed_below_a_position_the_application_stored_itself_is_delivered_by_a_catch_up_started_at_that_position() {
+    void a_position_the_application_stored_itself_is_refused() {
         // The first append reserves its position and parks before its transaction starts, without blocking a thread
         AppendHold hold = new AppendHold();
         CountDownLatch parked = new CountDownLatch(1);
@@ -243,12 +242,69 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
 
         ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore);
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(DcbCriteria.all(), DcbStartAt.afterPosition(requireNonNull(appendedC).lastSequencePosition())), received);
 
+        // When
+        Throwable failure = catchThrowable(() -> catchup.subscribe(DcbCriteria.all(), DcbStartAt.afterPosition(requireNonNull(appendedC).lastSequencePosition()))
+                .map(ce -> ((NameDefined) converter.toDomainEvent(ce)).name()).doOnNext(received::add).blockLast(Duration.ofSeconds(40)));
+
+        // Then
+        assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                .hasMessageContaining("after position " + requireNonNull(appendedC).lastSequencePosition())
+                .hasMessageContaining("EventMetadata.getCheckpoint()");
+        assertThat(received).as("delivered").isEmpty();
+    }
+
+    @Test
+    void an_event_that_committed_below_the_checkpoint_the_application_stored_from_a_delivered_event_is_delivered() {
+        // The first append reserves its position and parks before its transaction starts, without blocking a thread
+        AppendHold hold = new AppendHold();
+        CountDownLatch parked = new CountDownLatch(1);
+        EventStoreConfig holdingConfig = new EventStoreConfig.Builder()
+                .eventStoreCollectionName("events")
+                .transactionConfig(new HoldingTransactionalOperator(TransactionalOperator.create(tx), () -> {
+                    if (!hold.engage()) {
+                        return Mono.empty();
+                    }
+                    parked.countDown();
+                    return Mono.fromFuture(hold.released()).timeout(AppendHold.RELEASE_TIMEOUT);
+                }))
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                .build();
+        ReactorMongoEventStore holdingStore = new ReactorMongoEventStore(mongoTemplate, holdingConfig);
+        AtomicReference<DcbAppendResult> appendedA = new AtomicReference<>();
+        disposables.add(holdingStore.append(tagged(name("A"), "name:a")).doOnNext(appendedA::set).subscribe());
+        await().atMost(Duration.ofSeconds(20)).until(() -> parked.getCount() == 0);
+        DcbAppendResult appendedB = holdingStore.append(tagged(name("B"), "name:b")).block();
+        holdingStore.append(tagged(name("C"), "name:c")).block();
+
+        // A first subscription delivers B and C, and the application stores the checkpoint C was delivered with
+        AtomicReference<String> checkpointOfC = new AtomicReference<>();
+        ReactorDcbCatchupSubscriptionModel first = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore);
+        Disposable firstSubscription = first.subscribe(DcbCriteria.all(), DcbStartAt.beginning()).doOnNext(ce -> {
+            if (((NameDefined) converter.toDomainEvent(ce)).name().equals("C")) {
+                checkpointOfC.set(EventMetadata.from(ce).getCheckpoint().orElseThrow());
+            }
+        }).subscribe();
+        disposables.add(firstSubscription);
+        await().atMost(Duration.ofSeconds(40)).until(() -> checkpointOfC.get() != null);
+        firstSubscription.dispose();
+
+        // A commits below that checkpoint
+        hold.released().complete(null);
+        await().atMost(Duration.ofSeconds(20)).until(() -> appendedA.get() != null);
+        assertThat(appendedA.get().firstSequencePosition()).as("A reserved its position before B did").isLessThan(requireNonNull(appendedB).firstSequencePosition());
+
+        // When a second subscription starts from the stored checkpoint
+        ReactorDcbCatchupSubscriptionModel second = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(second.subscribe(DcbCriteria.all(), DcbStartAt.checkpoint(checkpointOfC.get())), received);
         appendTagged(name("D"), "name:d");
-        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).as("the catch-up is delivering").contains("D"));
+
+        // Then
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).as("the started subscription is delivering").contains("D"));
         LateCommitGuarantee.require(received.contains("A"),
-                "the event that committed below the position the application stored is delivered",
+                "the event that committed below the stored checkpoint is delivered",
                 () -> "the subscription was delivered " + received);
     }
 
