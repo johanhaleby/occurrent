@@ -105,8 +105,8 @@ class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
                 .contains("unregister:" + subscriptionId + ":" + SUBSCRIBER_ID);
     }
 
-    // The wrapped model refusing the pause means it no longer runs the subscription, so there is nothing left to
-    // pause there. Returning normally and giving up the lease is correct, since keeping it would leave this node
+    // The wrapped model refusing the pause means it doesn't know the subscription or doesn't run it, so there is
+    // nothing to pause there. Returning normally and giving up the lease is correct, since keeping it would leave this node
     // holding a lease that no subscription on it serves and no other node could take over.
 
     @ParameterizedTest(name = "{0}")
@@ -139,7 +139,9 @@ class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
 
         // Then
         assertThat(warnings()).singleElement().satisfies(warning -> assertAll(
-                () -> assertThat(warning.getFormattedMessage()).contains(SUBSCRIPTION_ID, SUBSCRIBER_ID, "pausedByUser=true"),
+                // The arguments, since the label subscriberId= and the refusal's message in the line hold both ids as text
+                () -> assertThat(warning.getArgumentArray()).contains(SUBSCRIPTION_ID, SUBSCRIBER_ID),
+                () -> assertThat(warning.getFormattedMessage()).contains("pausedByUser=true"),
                 () -> assertThat(warning.getThrowableProxy().getClassName()).isEqualTo(refusal.getClass().getName()),
                 () -> assertThat(warning.getThrowableProxy().getMessage()).isEqualTo(refusal.getMessage())
         ));
@@ -176,7 +178,9 @@ class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
 
         // Then
         assertThat(warnings()).singleElement().satisfies(warning -> assertAll(
-                () -> assertThat(warning.getFormattedMessage()).contains(SUBSCRIPTION_ID, SUBSCRIBER_ID, "pausedByUser=false"),
+                // The arguments, since the label subscriberId= and the refusal's message in the line hold both ids as text
+                () -> assertThat(warning.getArgumentArray()).contains(SUBSCRIPTION_ID, SUBSCRIBER_ID),
+                () -> assertThat(warning.getFormattedMessage()).contains("pausedByUser=false"),
                 () -> assertThat(warning.getThrowableProxy().getClassName()).isEqualTo(refusal.getClass().getName()),
                 () -> assertThat(warning.getThrowableProxy().getMessage()).isEqualTo(refusal.getMessage())
         ));
