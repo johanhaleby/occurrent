@@ -25,7 +25,8 @@ It is a limit the source can remove. The source holds the tag of its consumer, a
 while it holds none. After a recovery without topology recovery the tag names a consumer that no longer exists, so the
 poll never starts another. Nothing else was wrong with that source.
 
-I checked the order of a recovery in amqp-client 5.36.0 and against a broker. The client calls these in turn:
+I checked the order of a recovery in amqp-client 5.36.0 and in 5.37.0, the version the project builds with, and
+against a broker. The client calls these in turn:
 
 1. `handleRecoveryStarted` on the connection's recovery listeners.
 2. The recovery of each channel, which calls the channel's own `handleRecovery`.
@@ -38,8 +39,9 @@ connection's `handleRecovery` runs after, and it is the first place where a cons
 missing for good.
 
 Step 3 copies the client's records of the connection's consumers before it registers any of them again. A consumer
-the source cancels after that copy is registered again under a new tag. A consumer the source registers after step 1
-has a tag the source didn't hold when the recovery started, so step 4 can't tell whether that consumer survived.
+the source cancels after that copy is registered again, under the tag it was recorded with. A consumer the source
+registers after step 1 has a tag the source didn't hold when the recovery started, so step 4 can't tell whether that
+consumer survived.
 
 Reviewing the failure paths of the same classes for 0.35.0 turned up five more defects of the same kind, where the
 source believes something that stopped being true.
@@ -79,8 +81,11 @@ source believes something that stopped being true.
    recovery started is retired the same way instead of held. When a recovery ends without the client having
    registered the consumer again, the source retires its tag, and the cancel removes the client's record of that
    consumer before the poll registers a new one. The recovery callbacks take only a short lock of their own and never
-   wait for the poll's blocking calls. The source keeps its tag in an `AtomicReference` and the callbacks write it by
-   compare-and-set, so a report about another source's consumer on the same connection doesn't match it.
+   wait for the poll's blocking calls. The source keeps its tag in an `AtomicReference`, and the callbacks compare a
+   reported tag with it by value and write it by compare-and-set, so a report about another source's consumer on the
+   same connection doesn't match it. A tag the client decodes from a frame can equal the one the source holds
+   without being the same `String`. A consumer the broker cancels, for example because its queue was deleted, is
+   retired too, since the client keeps its record and a recovery with topology recovery on would register it again.
 4. **A cancel forgets a consumer only when the client no longer has it.** A cancel that returns, or fails with a
    `ShutdownSignalException` or with an `IOException` such as "Unknown consumerTag", means the channel has no such
    consumer or no longer works. A `ChannelContinuationTimeoutException` means the reply didn't come, and any other
@@ -93,7 +98,9 @@ source believes something that stopped being true.
    which `AMQChannel.quiescingTransmit` calls before it writes the frame, or from its `MetricsCollector`, which
    `ChannelN.basicNack` calls after. A second nack makes the broker close the channel, and no nack leaves the delivery
    unanswered, so at the default `prefetchCount` of one the broker sends nothing further. The poll logs the failure at
-   `error` and stops the source, and the channel close requeues the delivery without a second nack.
+   `error` and stops the source, and the channel close requeues the delivery without a second nack. The stop takes no
+   new work into the worker from the start, as `close()` does, so a delivery the client dispatches after the channel
+   close starts no handler.
 6. **A failure after a permanent stop doesn't stop the source again.** It is logged at `debug` when the handler was
    interrupted or `close()` has stopped waiting for it, and at `warn` otherwise, since nothing else reports an
    `Error`, a checked exception thrown from Kotlin or a failed acknowledgement then. An interrupt is passed on to the
@@ -110,7 +117,8 @@ source believes something that stopped being true.
    comparison wrong. The builder keeps accepting what it accepted, since refusing a value that worked until `close()`
    changes a contract released in 0.34.0.
 9. **A publish replaces a closed channel first.** `RabbitMqConfirmPublisher` checks `isOpen()` under its lock before
-   it sends and retires the channel if it is closed, so a repair that failed once is made on the next publish.
+   it sends and retires the channel if it is closed, so a repair that failed once is made on the next publish. After
+   `close()` a publish fails instead, so it opens no channel that nothing would close.
 10. **Two log lines claim what the code did.** The park line says a copy was parked and the acknowledgement for the
     original was sent, and the failure line says a negative acknowledgement was sent. After a recovery the client
     ignores an acknowledgement for a tag from before it, and neither line claims more than that.
@@ -139,7 +147,7 @@ the recovery kept the first one.
 
 A cancel that keeps failing in a way that says nothing about the consumer, such as a `TrafficListener` that throws on
 every frame, keeps the source from registering a new consumer for as long as it fails. Registering one anyway could
-leave two consumers on the queue.
+leave two consumers on the queue. The poll still releases a held delivery while the cancel fails.
 
 Nothing persisted changes. No event, checkpoint, header or message body is written differently.
 

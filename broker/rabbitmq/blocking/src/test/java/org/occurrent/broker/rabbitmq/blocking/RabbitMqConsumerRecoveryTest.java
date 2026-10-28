@@ -230,6 +230,34 @@ class RabbitMqConsumerRecoveryTest {
                 () -> assertThat(logged.list).hasSize(1));
     }
 
+    /**
+     * Topology recovery registers the consumer again under its recorded tag, and the client keeps reporting the tag
+     * {@code basicConsume} first returned as the old one, also on the second recovery. By then the source holds the
+     * tag the first recovery reported as the new one, which the client decoded from a frame of its own, so it is equal
+     * to the old one without being the same {@code String}.
+     */
+    @Test
+    void topology_recovery_on_keeps_the_tag_across_two_recoveries_that_report_it_as_separate_strings() throws Exception {
+        String registered = new String("amq.ctag-1");
+        consumerTag.set(registered);
+        recovery.attachTo(connection);
+        RecoveryListener recoveryListener = capturedRecoveryListener();
+        ConsumerRecoveryListener consumerListener = capturedConsumerRecoveryListener();
+
+        for (int recoveries = 1; recoveries <= 2; recoveries++) {
+            recoveryListener.handleRecoveryStarted(connection);
+            consumerListener.consumerRecovered(registered, new String("amq.ctag-1"));
+            recoveryListener.handleRecovery(connection);
+        }
+        boolean noneLeft = recovery.cancelRetired(channel);
+
+        assertAll(
+                () -> assertThat(consumerTag.get()).isEqualTo("amq.ctag-1"),
+                () -> assertThat(logged.list).isEmpty(),
+                () -> assertThat(noneLeft).isTrue(),
+                () -> verifyNoInteractions(channel));
+    }
+
     @Test
     void a_consumer_whose_registration_a_recovery_started_during_is_not_held_and_the_next_cancel_removes_it() throws Exception {
         recovery.attachTo(connection);
@@ -365,6 +393,18 @@ class RabbitMqConsumerRecoveryTest {
                 () -> assertThat(thrown).isSameAs(failure),
                 () -> assertThat(noneLeft).isTrue(),
                 () -> verify(channel, times(2)).basicCancel("tag-1"));
+    }
+
+    @Test
+    void retire_clears_a_tag_equal_to_the_held_one_that_is_a_separate_string() throws Exception {
+        consumerTag.set(new String("amq.ctag-1"));
+
+        recovery.retire(new String("amq.ctag-1"));
+        recovery.cancelRetired(channel);
+
+        assertAll(
+                () -> assertThat(consumerTag.get()).isNull(),
+                () -> verify(channel).basicCancel("amq.ctag-1"));
     }
 
     @Test

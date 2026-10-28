@@ -73,7 +73,7 @@ public final class RabbitMqConsumerRecovery {
 
     /**
      * @param consumerTag The source's consumer tag. The source clears it on its own when it stops, so the recovery
-     *                    callbacks write it only by compare-and-set.
+     *                    callbacks write it only by compare-and-set, after comparing the tag by value.
      * @param queue       The queue the source consumes from, only used in log messages.
      * @param log         The source's own logger.
      */
@@ -145,6 +145,8 @@ public final class RabbitMqConsumerRecovery {
                 consumerTag.set(tag);
                 return;
             }
+            // A recovery registers a consumer again under the tag it was recorded with, so cancelling this tag also
+            // cancels the consumer the recovery registered
             retired.add(tag);
         }
         log.debug("A connection recovery under queue \"{}\" started while consumer \"{}\" was being registered. This "
@@ -157,7 +159,7 @@ public final class RabbitMqConsumerRecovery {
     public void retire(String tag) {
         requireNonNull(tag, "tag cannot be null");
         synchronized (lock) {
-            consumerTag.compareAndSet(tag, null);
+            replaceHeldTag(tag, null);
             retired.add(tag);
         }
     }
@@ -216,6 +218,13 @@ public final class RabbitMqConsumerRecovery {
         }
     }
 
+    // Under lock. By value, since a tag the client decodes from a frame can equal the held one without being the same
+    // String
+    private boolean replaceHeldTag(String expected, @Nullable String replacement) {
+        String held = consumerTag.get();
+        return expected.equals(held) && consumerTag.compareAndSet(held, replacement);
+    }
+
     // Under lock
     private boolean isRecovering() {
         return recoveryCount % 2 != 0;
@@ -263,7 +272,7 @@ public final class RabbitMqConsumerRecovery {
         public void consumerRecovered(String oldConsumerTag, String newConsumerTag) {
             // The listener is connection wide, so this is also called for every other consumer on the connection.
             synchronized (lock) {
-                if (consumerTag.compareAndSet(oldConsumerTag, newConsumerTag)) {
+                if (replaceHeldTag(oldConsumerTag, newConsumerTag)) {
                     reRegistered = true;
                 } else if (retired.remove(oldConsumerTag)) {
                     // Retired while this recovery ran, and registered again by it
@@ -281,7 +290,7 @@ public final class RabbitMqConsumerRecovery {
                 }
                 String tag = tagAtStart;
                 tagAtStart = null;
-                if (tag != null && !reRegistered && consumerTag.compareAndSet(tag, null)) {
+                if (tag != null && !reRegistered && replaceHeldTag(tag, null)) {
                     // The client keeps its record of the consumer, and the callbacks with it, until a cancel removes it
                     retired.add(tag);
                     cleared = tag;

@@ -16,6 +16,7 @@
 
 package org.occurrent.broker.rabbitmq.blocking.domain;
 
+import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.CancelCallback;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.ChannelContinuationTimeoutException;
@@ -32,6 +33,7 @@ import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqConsumerRecovery;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryFailureAction;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.subscription.RoutingOutcome;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
@@ -162,6 +164,44 @@ class RabbitMqDomainEventSourceCancelConsumerTest {
 
         verify(channel, times(2)).basicCancel(CONSUMER_TAG);
         verify(channel).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+    }
+
+    /**
+     * The client decodes the tag of a {@code basic.cancel} from the broker's own frame, so it is a separate
+     * {@code String} from the one {@code basicConsume} returned. The client also keeps its record of the consumer,
+     * which a recovery with topology recovery on would register again, so the next poll cancels it before registering
+     * another.
+     */
+    @Test
+    void a_consumer_the_broker_cancelled_is_cancelled_by_the_next_poll_which_then_registers_another() throws Exception {
+        ArgumentCaptor<CancelCallback> cancelCallback = ArgumentCaptor.forClass(CancelCallback.class);
+        verify(channel).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), cancelCallback.capture());
+        // The channel no longer has a consumer the broker cancelled
+        doThrow(new IOException("Unknown consumerTag")).when(channel).basicCancel(CONSUMER_TAG);
+
+        cancelCallback.getValue().handle(new String(CONSUMER_TAG));
+        poll();
+
+        InOrder inOrder = inOrder(channel);
+        inOrder.verify(channel).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+        inOrder.verify(channel).basicCancel(CONSUMER_TAG);
+        inOrder.verify(channel).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+    }
+
+    /**
+     * At the default {@code prefetchCount} of one the broker sends nothing further until a held delivery is answered,
+     * so a cancel that fails on every poll must not keep the release from running.
+     */
+    @Test
+    void a_cancel_that_keeps_failing_still_releases_a_held_delivery() throws Exception {
+        doThrow(new IllegalStateException("thrown by a TrafficListener")).when(channel).basicCancel(CONSUMER_TAG);
+        source.route(RoutingOutcome.DEFERRED, 1L, new BasicProperties(), new byte[0]);
+        ready.set(false);
+
+        poll();
+
+        verify(channel).basicCancel(CONSUMER_TAG);
+        verify(channel).basicNack(1L, false, true);
     }
 
     private void poll() throws ReflectiveOperationException {

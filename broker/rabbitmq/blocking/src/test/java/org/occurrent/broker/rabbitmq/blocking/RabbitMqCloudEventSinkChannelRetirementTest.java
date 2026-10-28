@@ -30,6 +30,7 @@ import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,9 +38,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -222,6 +225,31 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
         assertThat(caught.get()).isInstanceOf(RabbitMqPublishException.class);
 
         publishing.join(5000);
+    }
+
+    /**
+     * A publish that found the closed channel would otherwise open a replacement that nothing ever closes.
+     */
+    @Test
+    void a_publish_after_close_fails_and_opens_no_channel() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        Channel replacementChannel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel), Optional.of(replacementChannel));
+        AtomicBoolean open = new AtomicBoolean(true);
+        when(channel.isOpen()).thenAnswer(invocation -> open.get());
+        doAnswer(invocation -> {
+            open.set(false);
+            return null;
+        }).when(channel).close();
+        when(replacementChannel.isOpen()).thenReturn(true);
+        when(replacementChannel.waitForConfirms(anyLong())).thenReturn(true);
+        RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
+
+        sink.close();
+
+        assertThatThrownBy(() -> sink.publish(orderPlaced())).isInstanceOf(RabbitMqPublishException.class);
+        verify(connection, times(1)).openChannel();
     }
 
     private static CloudEvent orderPlaced() {

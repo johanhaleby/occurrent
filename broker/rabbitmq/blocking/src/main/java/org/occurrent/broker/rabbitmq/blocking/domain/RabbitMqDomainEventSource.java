@@ -336,9 +336,15 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
                 if (!shouldConsume && tag != null) {
                     consumerRecovery.retire(tag);
                 }
-                // Waits for the worker to finish what an earlier consumer sent it, see RabbitMqDeliveryWorker#isIdle.
-                if (consumerRecovery.cancelRetired(consumeChannel) && shouldConsume && consumerTag.get() == null && worker.isIdle()) {
-                    consumerRecovery.consume(() -> consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel));
+                try {
+                    // Waits for the worker to finish what an earlier consumer sent it, see RabbitMqDeliveryWorker#isIdle.
+                    if (consumerRecovery.cancelRetired(consumeChannel) && shouldConsume && consumerTag.get() == null && worker.isIdle()) {
+                        consumerRecovery.consume(() -> consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel));
+                    }
+                } catch (Throwable e) {
+                    // A cancel that keeps failing would otherwise leave a held delivery unanswered on every poll
+                    new RabbitMqTeardown(e).run(this::releaseHeldDeliveriesOrStop);
+                    throw e;
                 }
                 releaseHeldDeliveriesOrStop();
             } finally {
@@ -442,7 +448,9 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     private void handleCancel(String cancelledConsumerTag) {
         consumeLock.lock();
         try {
-            consumerTag.compareAndSet(cancelledConsumerTag, null);
+            // The client keeps its record of a consumer the broker cancelled, and a recovery with topology recovery on
+            // would register it again, so it is retired for a cancel that removes the record
+            consumerRecovery.retire(cancelledConsumerTag);
         } finally {
             consumeLock.unlock();
         }
@@ -630,16 +638,16 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     }
 
     /**
-     * Cancels this source's own consumer, releases every tag this source is still holding, and closes the channel,
-     * in that order, all under the same lock, then stops the coarse poll for good. Closing the channel here, rather
-     * than leaving that to {@link #close()} as an earlier revision did, is what keeps a permanent stop from leaving
-     * an already-held tag stuck: the poll this method also shuts down was the only thing that would otherwise ever
-     * release it. Closing an already-closing or already-closed channel is tolerated the same as {@link #close()}
-     * already tolerates it, since an application may still call {@link #close()} afterward. The triggering delivery
-     * for {@link UnreadableLiveFilterException} or a permanently refusing feed is never acknowledged or negatively
-     * acknowledged by hand. Closing the channel here requeues it anyway, RabbitMQ's own
-     * guarantee for a closed channel with an unacked delivery on it, which is what {@link UnreadableLiveFilterException}'s
-     * own javadoc already expects once this source's channel eventually closes.
+     * Stops the worker from starting another delivery, cancels this source's own consumer, releases every tag this
+     * source is still holding, and closes the channel, in that order, all under the same lock, then stops the coarse
+     * poll for good. Closing the channel here, rather than leaving that to {@link #close()} as an earlier revision did,
+     * is what keeps a permanent stop from leaving an already-held tag stuck. The poll this method also shuts down was
+     * the only thing that would otherwise ever release it. Closing an already-closing or already-closed channel is
+     * tolerated the same as {@link #close()} already tolerates it, since an application may still call {@link #close()}
+     * afterward. The triggering delivery for {@link UnreadableLiveFilterException} or a permanently refusing feed is
+     * never acknowledged or negatively acknowledged by hand. Closing the channel here requeues it anyway, RabbitMQ's
+     * own guarantee for a closed channel with an unacked delivery on it, which is what
+     * {@link UnreadableLiveFilterException}'s own javadoc already expects once this source's channel eventually closes.
      */
     private void stopPermanently() {
         consumeLock.lock();
@@ -649,13 +657,14 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
                 // Set under the same lock reconcileConsumption() reads it under, so whichever of the two takes the
                 // lock first decides the consumer's fate before the other reads the flag.
                 .run(() -> permanentlyStopped = true)
+                // Before the channel close requeues a delivery the client may still dispatch, like close() does
+                .run(worker::stopAcceptingWork)
                 .run(consumerRecovery::detach)
                 .run(this::cancelConsumerWhileStopping)
                 .run(this::releaseHeldIgnoringFailure)
                 .run(this::closeChannelIgnoringFailure)
                 .run(consumeLock::unlock)
                 .run(scheduler::shutdown)
-                .run(worker::stopAcceptingWork)
                 .finish();
     }
 

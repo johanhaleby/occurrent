@@ -17,8 +17,14 @@
 package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.CancelCallback;
 import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.DeliverCallback;
+import com.rabbitmq.client.Delivery;
+import com.rabbitmq.client.Envelope;
 import com.rabbitmq.client.ShutdownSignalException;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.filtermatching.DataFieldReader;
@@ -27,22 +33,31 @@ import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * {@link RabbitMqCloudEventSource#releaseHeldDeferredDelivery(Deque, java.util.function.LongConsumer)} in
@@ -161,6 +176,61 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
 
         verify(channel).close();
         verify(channel, times(1)).basicNack(1L, false, true);
+    }
+
+    /**
+     * Closing the channel puts every unacknowledged delivery back on the queue, but the client can still dispatch one
+     * it read before the close. The handler of such a delivery would write its effects, fail to acknowledge on the
+     * closed channel, and see the redelivered copy again. The worker stops accepting work before the channel is
+     * closed, so it never starts that handler. The close below dispatches the delivery and then waits until the
+     * worker has either refused it or finished handling it, so the outcome is settled before the assertion.
+     */
+    @Test
+    void a_delivery_dispatched_after_a_poll_stopped_the_source_and_closed_its_channel_is_not_handled() throws Exception {
+        Channel channel = mock(Channel.class);
+        AtomicReference<DeliverCallback> deliverCallback = new AtomicReference<>();
+        when(channel.basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class))).thenAnswer(invocation -> {
+            deliverCallback.set(invocation.getArgument(2));
+            return "consumer-tag";
+        });
+        doThrow(new IllegalStateException("thrown by a TrafficListener")).when(channel).basicNack(anyLong(), anyBoolean(), anyBoolean());
+        List<String> handled = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
+        RabbitMqDeliveryFailureAction failureAction = new RabbitMqDeliveryFailureAction(channel, DeliveryFailurePolicy.REDELIVER, null, null,
+                LoggerFactory.getLogger(RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest.class));
+        RabbitMqCloudEventSource source = new RabbitMqCloudEventSource(model, channel, "queue", 1, Duration.ofSeconds(1), failureAction,
+                subscriptionId -> true, Duration.ofSeconds(1));
+        RabbitMqDeliveryWorker worker = worker(source);
+        doAnswer(invocation -> {
+            deliverCallback.get().handle("consumer-tag", delivery(2L));
+            await().atMost(Duration.ofSeconds(5)).until(() -> !handled.isEmpty() || worker.isIdle());
+            return null;
+        }).when(channel).close();
+        source.route(RoutingOutcome.DEFERRED, 1L, new BasicProperties(), new byte[0]);
+
+        Method reconcileConsumption = RabbitMqCloudEventSource.class.getDeclaredMethod("reconcileConsumption");
+        reconcileConsumption.setAccessible(true);
+        reconcileConsumption.invoke(source);
+
+        verify(channel).close();
+        assertThat(handled).isEmpty();
+    }
+
+    private static RabbitMqDeliveryWorker worker(RabbitMqCloudEventSource source) throws ReflectiveOperationException {
+        Field worker = RabbitMqCloudEventSource.class.getDeclaredField("worker");
+        worker.setAccessible(true);
+        return (RabbitMqDeliveryWorker) worker.get(source);
+    }
+
+    private static Delivery delivery(long deliveryTag) {
+        CloudEvent cloudEvent = CloudEventBuilder.v1()
+                .withId("id-" + deliveryTag)
+                .withSource(URI.create("urn:test"))
+                .withType("t")
+                .build();
+        return new Delivery(new Envelope(deliveryTag, false, "exchange", "routingKey"),
+                RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, Map.of()), RabbitMqCloudEventMapper.toBody(cloudEvent));
     }
 
     @Test

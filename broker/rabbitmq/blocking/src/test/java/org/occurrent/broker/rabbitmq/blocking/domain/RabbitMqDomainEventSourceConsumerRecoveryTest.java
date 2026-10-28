@@ -36,6 +36,7 @@ import org.testcontainers.containers.Container;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -43,8 +44,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -91,7 +92,20 @@ class RabbitMqDomainEventSourceConsumerRecoveryTest {
         consumesAgainAfterForcedRecovery(true);
     }
 
+    /**
+     * The client reports the tag {@code basicConsume} first returned as the old tag on every recovery, so on the second
+     * one it no longer is the same {@code String} the source holds, only an equal one.
+     */
+    @Test
+    void a_source_keeps_the_consumer_the_client_recovered_across_two_recoveries_when_topology_recovery_is_on() throws Exception {
+        consumesAgainAfterForcedRecoveries(true, 2);
+    }
+
     private void consumesAgainAfterForcedRecovery(boolean topologyRecovery) throws Exception {
+        consumesAgainAfterForcedRecoveries(topologyRecovery, 1);
+    }
+
+    private void consumesAgainAfterForcedRecoveries(boolean topologyRecovery, int recoveries) throws Exception {
         ConnectionFactory sourceConnectionFactory = plainConnectionFactory();
         sourceConnectionFactory.setAutomaticRecoveryEnabled(true);
         sourceConnectionFactory.setTopologyRecoveryEnabled(topologyRecovery);
@@ -103,35 +117,50 @@ class RabbitMqDomainEventSourceConsumerRecoveryTest {
         feed.goLive("proj");
 
         try (Connection sourceConnection = sourceConnectionFactory.newConnection();
-             RabbitMqDomainEventSource<TestOrderPlaced> ignored = RabbitMqDomainEventSource.builder(sourceConnection, feed, queue)
+             RabbitMqDomainEventSource<TestOrderPlaced> source = RabbitMqDomainEventSource.builder(sourceConnection, feed, queue)
                      .declareTopology(false)
                      .pollInterval(Duration.ofMillis(200))
                      .build()) {
             // Registered after the source, so it runs after the source's own listener has judged the recovery.
-            CountDownLatch recovered = new CountDownLatch(1);
+            AtomicInteger recovered = new AtomicInteger();
             ((Recoverable) sourceConnection).addRecoveryListener(new RecoveryListener() {
                 @Override
                 public void handleRecovery(Recoverable recoverable) {
-                    recovered.countDown();
+                    recovered.incrementAndGet();
                 }
 
                 @Override
                 public void handleRecoveryStarted(Recoverable recoverable) {
                 }
             });
-            publish("order-1");
-            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(handled).contains(new TestOrderPlaced("order-1")));
+            publish("before");
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(handled).contains(new TestOrderPlaced("before")));
+            String tagBefore = consumerTag(source);
 
-            forceCloseAllConnectionsOrFail();
-            assertThat(recovered.await(30, TimeUnit.SECONDS)).as("connection recovered").isTrue();
-            publish("order-2");
+            for (int recovery = 1; recovery <= recoveries; recovery++) {
+                int expected = recovery;
+                forceCloseAllConnectionsOrFail();
+                await("connection recovered").atMost(Duration.ofSeconds(30)).until(() -> recovered.get() == expected);
+                publish("after-" + recovery);
 
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(handled).contains(new TestOrderPlaced("order-2")));
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(handled).contains(new TestOrderPlaced("after-" + expected)));
+            }
             await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5))
                     .untilAsserted(() -> assertThat(consumerCount()).isOne());
             // A record left behind would hold this source's callbacks and be registered again by a later recovery
             assertThat(((AutorecoveringConnection) sourceConnection).getRecordedConsumers()).hasSize(1);
+            if (topologyRecovery) {
+                // The client registers the consumer again under the tag it was recorded with
+                assertThat(consumerTag(source)).isEqualTo(tagBefore);
+            }
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String consumerTag(RabbitMqDomainEventSource<?> source) throws ReflectiveOperationException {
+        Field consumerTag = RabbitMqDomainEventSource.class.getDeclaredField("consumerTag");
+        consumerTag.setAccessible(true);
+        return ((AtomicReference<String>) consumerTag.get(source)).get();
     }
 
     private int consumerCount() throws Exception {
