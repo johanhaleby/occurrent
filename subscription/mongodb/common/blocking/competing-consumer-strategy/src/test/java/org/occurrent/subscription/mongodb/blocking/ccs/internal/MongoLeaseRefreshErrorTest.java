@@ -35,6 +35,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -46,6 +47,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -63,7 +65,8 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * Rethrowing an {@link Error} from a refresh round would reach nobody. It would only leave the node unable to refresh a
  * lease it holds, or to take one that has become free, for as long as it runs, so the round is logged and the next one
  * runs. The same goes for the consumers within one round. An {@link Error} from one consumer's refresh must not leave
- * the consumers after it unrefreshed, which would let their leases expire.
+ * the consumers after it unrefreshed, which would let their leases expire. And a grant the notifier threw an
+ * {@link Error} on must reach the listeners in the next round, since no later round decides it again.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -164,6 +167,43 @@ class MongoLeaseRefreshErrorTest {
         // discarded, and it cancels every later round, so this node never takes the lease that became free.
         await().atMost(10, SECONDS).untilAsserted(() ->
                 assertThat(support.hasLock("a-subscription", NODE)).as("the free lease is taken by a later round").isTrue());
+    }
+
+    @Test
+    void grants_a_lease_in_the_round_after_the_notifier_threw_an_Error_on_taking_its_grant() {
+        // Given
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        // Thrown deliberately. Nothing here runs out of memory.
+        ScheduledRefresh held = new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()),
+                new NotifierThatThrowsOnItsFirstTask(new OutOfMemoryError("unable to create native thread")));
+        otherNode = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), new ScheduledRefresh((lease, scheduler) -> {
+        }));
+        support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), held)
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(locks));
+        List<String> granted = new CopyOnWriteArrayList<>();
+        support.addListener(new CompetingConsumerListener() {
+            @Override
+            public void onConsumeGranted(String subscriptionId, String subscriberId) {
+                granted.add(subscriptionId);
+            }
+
+            @Override
+            public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+            }
+        });
+        assertThat(otherNode.registerCompetingConsumer(locks, "a-subscription", "the-other-node")).isTrue();
+        assertThat(support.registerCompetingConsumer(locks, "a-subscription", NODE)).isFalse();
+        otherNode.unregisterCompetingConsumer(locks, "a-subscription", "the-other-node");
+
+        // When
+        // The round that takes the lease, whose grant the notifier throws on, and the round after it
+        catchThrowable(round.get()::run);
+        round.get().run();
+
+        // Then
+        // A round decides a grant once, and every later round finds the lease held and decides nothing. Dropping the
+        // grant would leave the subscription paused on the node that holds its lease, with no other node able to take it.
+        assertThat(granted).containsExactly("a-subscription");
     }
 
     /**

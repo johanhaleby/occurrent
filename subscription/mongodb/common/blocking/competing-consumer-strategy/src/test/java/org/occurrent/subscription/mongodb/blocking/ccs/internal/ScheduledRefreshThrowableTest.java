@@ -26,6 +26,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -35,11 +36,13 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
@@ -47,7 +50,11 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * A scheduled executor cancels every later execution of a task once one execution throws, and nothing reads the
  * {@code ScheduledFuture} that would hold what it threw. A rethrow from {@link ScheduledRefresh.Scheduler} would
  * therefore reach nobody and only stop every later refresh, so the node would never refresh or acquire a lease again.
- * That is why every throwable is logged and the next refresh runs, a {@link VirtualMachineError} included.
+ * That is why every throwable is logged and the next refresh runs, a {@link VirtualMachineError} included, and why a
+ * throwable from logging it is caught as well.
+ * <p>
+ * A notifier that throws on taking a notification, as a cached thread pool does when it can't start a thread, gets it
+ * again from the next refresh, since a refresh decides each notification only once.
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("ScheduledRefreshThrowable")
@@ -136,6 +143,78 @@ class ScheduledRefreshThrowableTest {
         }
     }
 
+    @Nested
+    @DisplayName("when logging what a refresh threw throws too")
+    class When_logging_what_a_refresh_threw_throws_too {
+
+        @ParameterizedTest
+        @MethodSource("org.occurrent.subscription.mongodb.blocking.ccs.internal.ScheduledRefreshThrowableTest#schedules")
+        @DisplayName("the next scheduled refresh still runs")
+        void the_next_scheduled_refresh_still_runs(Schedule schedule) {
+            // Given
+            AtomicInteger runs = new AtomicInteger();
+
+            // When
+            scheduleThatThrowsOnTheFirstRun(schedule, runs, new ThrowingWhenLogged());
+
+            // Then
+            await().atMost(3, SECONDS).untilAsserted(() ->
+                    assertThat(runs.get()).as("the refreshes run so far").isGreaterThanOrEqualTo(3));
+        }
+    }
+
+    @Nested
+    @DisplayName("when the notifier throws an Error on taking a notification")
+    class When_the_notifier_throws_an_Error_on_taking_a_notification {
+
+        @Test
+        @DisplayName("the next refresh delivers it, and then the one queued behind it")
+        void the_next_refresh_delivers_it_and_then_the_one_queued_behind_it() {
+            // Given
+            List<String> delivered = new CopyOnWriteArrayList<>();
+            Runnable round = heldRefreshWithANotifierThatThrowsOnItsFirstTask();
+            Throwable thrown = catchThrowable(() -> scheduledRefresh.notifyInBackground("a-subscription", () -> delivered.add("first")));
+            scheduledRefresh.notifyInBackground("a-subscription", () -> delivered.add("second"));
+
+            // When
+            round.run();
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).as("thrown to the refresh round that handed the notification over").isNull(),
+                    () -> assertThat(delivered).containsExactly("first", "second")
+            );
+        }
+
+        @Test
+        @DisplayName("it is logged at ERROR with the subscription id and the class name of what was thrown")
+        void it_is_logged_at_error_level_with_the_subscription_id_and_the_class_name_of_what_was_thrown() {
+            // Given
+            heldRefreshWithANotifierThatThrowsOnItsFirstTask();
+
+            // When
+            catchThrowable(() -> scheduledRefresh.notifyInBackground("a-subscription", () -> {
+            }));
+
+            // Then
+            assertThat(logged.events()).singleElement().satisfies(error -> assertAll(
+                    () -> assertThat(error.getLevel()).isEqualTo(Level.ERROR),
+                    () -> assertThat(error.getArgumentArray()).contains("a-subscription", OutOfMemoryError.class.getName()),
+                    () -> assertThat(error.getThrowableProxy().getClassName()).isEqualTo(OutOfMemoryError.class.getName())
+            ));
+        }
+
+        private Runnable heldRefreshWithANotifierThatThrowsOnItsFirstTask() {
+            AtomicReference<Runnable> round = new AtomicReference<>();
+            // Thrown deliberately. Nothing here runs out of memory.
+            scheduledRefresh = new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()),
+                    new NotifierThatThrowsOnItsFirstTask(new OutOfMemoryError("unable to create native thread")));
+            scheduledRefresh.scheduleInBackground(() -> {
+            }, Duration.ofSeconds(1));
+            return round.get();
+        }
+    }
+
     private void scheduleThatThrowsOnTheFirstRun(Schedule schedule, AtomicInteger runs, Throwable thrown) {
         scheduledRefresh = new ScheduledRefresh((lease, scheduler) -> schedule.schedule(scheduler));
         scheduledRefresh.scheduleInBackground(() -> {
@@ -148,6 +227,14 @@ class ScheduledRefreshThrowableTest {
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> void sneakyThrow(Throwable thrown) throws T {
         throw (T) thrown;
+    }
+
+    // An Error from reading its message, as a second OutOfMemoryError while logging the first one would be
+    private static class ThrowingWhenLogged extends RuntimeException {
+        @Override
+        public String getMessage() {
+            throw new OutOfMemoryError("thrown while logging");
+        }
     }
 
     private static class Logged extends AppenderBase<ILoggingEvent> {

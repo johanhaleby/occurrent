@@ -28,8 +28,10 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -65,9 +67,13 @@ class ScheduledRefresh {
     // close() sends can go on running after it. close() is what ends the refresh thread.
     private final @Nullable ExecutorService notifier;
     // The notifications not yet delivered per subscription id, the first one being delivered or about to be. An id is
-    // here only while a task on the notifier delivers its notifications, so a new notification for it is queued behind
-    // them and one for an id not here starts a task of its own. Read and written under its own monitor only.
+    // here only while a task on the notifier delivers its notifications, or while it waits in notTakenByTheNotifier,
+    // so a new notification for it is queued behind them and one for an id not here starts a task of its own. Read and
+    // written under its own monitor only.
     private final Map<String, Deque<Runnable>> undelivered = new HashMap<>();
+    // The ids in undelivered whose task the notifier threw on, such as an OutOfMemoryError when it could not start a
+    // thread. The next refresh starts their task again. Read and written under the monitor of undelivered.
+    private final Set<String> notTakenByTheNotifier = new HashSet<>();
 
     /**
      * Runs every notification on the thread that runs the refresh, so a test that holds the refresh and runs it
@@ -125,7 +131,10 @@ class ScheduledRefresh {
     }
 
     void scheduleInBackground(Runnable refresh, Duration leaseTime) {
-        scheduleIt.accept(leaseTime, new Scheduler(executor, refresh));
+        scheduleIt.accept(leaseTime, new Scheduler(executor, () -> {
+            deliverWhatTheNotifierDidNotTake();
+            refresh.run();
+        }));
     }
 
     /**
@@ -133,7 +142,9 @@ class ScheduledRefresh {
      * notification handed over before it for the same {@code subscriptionId} has run, and never waits for one for
      * another subscription id, as long as the notifier has a thread free, which the one {@link #auto()} and
      * {@link #every(Duration)} make always has. A notification handed over after {@link #close()} is dropped, since
-     * nothing is left to act on it.
+     * nothing is left to act on it. When the notifier throws anything else, such as an {@link OutOfMemoryError} when it
+     * can't start a thread, that is logged at ERROR, and the next scheduled refresh hands the notifications for
+     * {@code subscriptionId} over again, in the same order.
      */
     void notifyInBackground(String subscriptionId, Runnable notification) {
         if (notifier == null) {
@@ -159,7 +170,26 @@ class ScheduledRefresh {
             synchronized (undelivered) {
                 undelivered.remove(subscriptionId);
             }
+        } catch (Throwable t) {
+            // Kept, unlike after close(), since a refresh decides each notification only once
+            synchronized (undelivered) {
+                notTakenByTheNotifier.add(subscriptionId);
+            }
+            log.error("The notifier did not take the notifications for subscription {} due to {} - {}. The next scheduled refresh hands them over again.",
+                    subscriptionId, t.getClass().getName(), t.getMessage(), t);
         }
+    }
+
+    private void deliverWhatTheNotifierDidNotTake() {
+        if (notifier == null) {
+            return;
+        }
+        List<String> subscriptionIds;
+        synchronized (undelivered) {
+            subscriptionIds = List.copyOf(notTakenByTheNotifier);
+            notTakenByTheNotifier.clear();
+        }
+        subscriptionIds.forEach(subscriptionId -> deliverNextInBackground(notifier, subscriptionId));
     }
 
     // One notification per task, so one that throws leaves the rest to the next task instead of to nobody
@@ -221,8 +251,13 @@ class ScheduledRefresh {
                 try {
                     refresh.run();
                 } catch (Throwable t) {
-                    log.error("Lease refresh failed due to {} - {}. The next scheduled refresh will run as usual.",
-                            t.getClass().getName(), t.getMessage(), t);
+                    try {
+                        log.error("Lease refresh failed due to {} - {}. The next scheduled refresh will run as usual.",
+                                t.getClass().getName(), t.getMessage(), t);
+                    } catch (Throwable whileLogging) {
+                        // Logging can throw too, such as a second OutOfMemoryError, and that would cancel every later
+                        // refresh just the same
+                    }
                 }
             };
         }
