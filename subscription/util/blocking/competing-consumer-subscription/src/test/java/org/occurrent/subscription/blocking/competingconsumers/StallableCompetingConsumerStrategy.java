@@ -16,21 +16,28 @@
 
 package org.occurrent.subscription.blocking.competingconsumers;
 
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Behaves like the strategy it wraps until {@link #stall()} is called. From then on it acts like a node whose lease
- * refresh has stopped running, the way a loaded CI runner can stop it. {@link #hasLock(String, String)} answers false,
- * so the competing consumer holds back every event it gets, and a lease the wrapped strategy is granted is given straight
- * back, since a stalled node could not keep it.
+ * Behaves like the strategy it wraps until {@link #stall()} is called. From then on {@link #hasLock(String, String)}
+ * answers false, so the competing consumer holds back every event it gets, the way it does on a loaded CI runner whose
+ * lease refresh runs late. A register call answers false without reaching the wrapped strategy, and a lease the wrapped
+ * strategy is granted is given straight back. The wrapped strategy goes on refreshing the leases it already holds, so
+ * those stay with this node until it gives them up.
+ * <p>
+ * {@link #beforeTellingOfTheNextLostLease(Runnable)} runs an action once, after the wrapped strategy has given up a lease
+ * and before the competing consumer hears of it.
  */
 final class StallableCompetingConsumerStrategy implements CompetingConsumerStrategy {
     private final CompetingConsumerStrategy delegate;
     private final Map<CompetingConsumerListener, CompetingConsumerListener> listeners = new ConcurrentHashMap<>();
+    private final AtomicReference<@Nullable Runnable> beforeTheNextLostLeaseIsTold = new AtomicReference<>();
     private volatile boolean stalled;
 
     StallableCompetingConsumerStrategy(CompetingConsumerStrategy delegate) {
@@ -41,9 +48,13 @@ final class StallableCompetingConsumerStrategy implements CompetingConsumerStrat
         stalled = true;
     }
 
+    void beforeTellingOfTheNextLostLease(Runnable action) {
+        beforeTheNextLostLeaseIsTold.set(action);
+    }
+
     @Override
     public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
-        return delegate.registerCompetingConsumer(subscriptionId, subscriberId);
+        return !stalled && delegate.registerCompetingConsumer(subscriptionId, subscriberId);
     }
 
     @Override
@@ -80,6 +91,10 @@ final class StallableCompetingConsumerStrategy implements CompetingConsumerStrat
 
             @Override
             public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+                @Nullable Runnable before = beforeTheNextLostLeaseIsTold.getAndSet(null);
+                if (before != null) {
+                    before.run();
+                }
                 listener.onConsumeProhibited(subscriptionId, subscriberId);
             }
         };

@@ -721,8 +721,8 @@ class CompetingConsumerSubscriptionModelTest {
         consumptionIsResumedAfterProhibited(true);
     }
 
-    // A stall on a loaded runner can't make a 2 second lease answer false or pass to the other node, and the event is
-    // written only once one node holds each lease and runs it, so neither a stall nor the handover can hold it back
+    // With a 2 second lease hasLock answers false once a refresh round runs 500 ms late, where a 500 ms lease did at
+    // 125 ms late. The event is written once one node holds each lease and runs it, so it doesn't race the handover.
     private void consumptionIsResumedAfterProhibited(boolean stallTheNodeThatHeldTheLeases) {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription1 = new CopyOnWriteArrayList<>();
@@ -766,6 +766,42 @@ class CompetingConsumerSubscriptionModelTest {
                .untilAsserted(() -> assertThat(cloudEventsSubscription1).hasSize(1));
         await("the event for " + subscriptionId2).failFast("the event for " + subscriptionId2 + " was delivered more than once", () -> cloudEventsSubscription2.size() > 1)
                .untilAsserted(() -> assertThat(cloudEventsSubscription2).hasSize(1));
+    }
+
+    @Test
+    void an_event_written_while_the_node_that_held_the_lease_hands_it_over_is_delivered_once() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        Duration leaseTime = Duration.ofSeconds(2);
+        StallableCompetingConsumerStrategy strategy1 = new StallableCompetingConsumerStrategy(loggingStrategy("1", mongoTemplate, leaseTime));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, strategy1);
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate, leaseTime));
+
+        String subscriberId1 = "SubscriberId1";
+        String subscriberId2 = "SubscriberId2";
+        String subscriptionId = "SubscriptionId";
+        competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+        await("node 1 to hold the lease").until(() -> strategy1.hasLock(subscriptionId, subscriberId1));
+        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+
+        // Stalled so that node 1 can't take the lease back and node 2 is the one that takes it over
+        strategy1.stall();
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        // Runs once the strategy of node 1 has given the lease up and before node 1 hears of it. Writes the event and
+        // waits until node 2 has delivered it.
+        strategy1.beforeTellingOfTheNextLostLease(() -> {
+            eventStore.write("streamId", serialize(nameDefined));
+            await("node 2 to take the lease over and deliver the event").until(() -> !cloudEvents.isEmpty());
+        });
+
+        // When
+        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId, subscriberId1);
+
+        // Then
+        await("the event").during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10))
+                .failFast("the event was delivered more than once", () -> cloudEvents.size() > 1)
+                .untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
     }
 
     @Test
