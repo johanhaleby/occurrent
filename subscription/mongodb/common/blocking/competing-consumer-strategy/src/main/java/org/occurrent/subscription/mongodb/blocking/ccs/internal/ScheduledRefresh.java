@@ -28,7 +28,6 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -128,9 +127,20 @@ class ScheduledRefresh {
         scheduleIt.accept(leaseTime, new Scheduler(executor, () -> {
             try {
                 handOverWhatTheNotifierDidNotTake();
-            } finally {
-                refresh.run();
+            } catch (Throwable handingOver) {
+                try {
+                    refresh.run();
+                } catch (Throwable refreshing) {
+                    // The JVM can throw the same preallocated OutOfMemoryError from both calls, and a throwable can't
+                    // suppress itself
+                    if (refreshing != handingOver) {
+                        refreshing.addSuppressed(handingOver);
+                    }
+                    throw refreshing;
+                }
+                throw handingOver;
             }
+            refresh.run();
         }));
     }
 
@@ -141,11 +151,12 @@ class ScheduledRefresh {
      * {@link #every(Duration)} make always has. A notification handed over after {@link #close()} is dropped, since
      * nothing is left to act on it.
      * <p>
-     * When the notifier throws anything else, such as an {@link OutOfMemoryError} when it can't start a thread, this
-     * method logs it at ERROR and returns without throwing, also when logging it throws. A later scheduled refresh
-     * hands the notifications for {@code subscriptionId} over again, in the same order. Each refresh hands the waiting
-     * subscription ids over one at a time and stops at the first one the notifier throws on, so the ones after it wait
-     * for the next refresh.
+     * When the notifier throws while it isn't shut down, such as an {@link OutOfMemoryError} when it can't start a
+     * thread, this method logs it at ERROR and returns without throwing, also when logging it throws. That includes a
+     * {@link RejectedExecutionException}, since the contract of {@code execute} lets a notifier reject a task for
+     * other reasons than {@link #close()}. A later scheduled refresh hands the notifications for {@code subscriptionId}
+     * over again, in the same order. Each refresh hands the waiting subscription ids over one at a time and stops at the
+     * first one the notifier throws on, so the ones after it wait for the next refresh.
      */
     void notifyInBackground(String subscriptionId, Runnable notification) {
         if (notifier == null) {
@@ -166,7 +177,8 @@ class ScheduledRefresh {
         handOver(notifier, subscriptionId, queued);
     }
 
-    // One subscription id at a time, so a notifier that can't start a thread is tried and logged once per refresh
+    // One subscription id at a time, so the ids already waiting add one ERROR line per refresh, not one each. A
+    // notification a refresh decides is handed over on its own and logs its own line when the notifier throws.
     private void handOverWhatTheNotifierDidNotTake() {
         if (notifier == null) {
             return;
@@ -195,15 +207,16 @@ class ScheduledRefresh {
         try {
             notifier.execute(() -> deliverUntilNoneIsLeft(notifier, subscriptionId, queued));
             return true;
-        } catch (RejectedExecutionException closed) {
-            // close() ran, and the listeners are shutting down with this instance
-            synchronized (undelivered) {
-                undelivered.remove(subscriptionId, queued);
-            }
-            return true;
         } catch (Throwable t) {
-            // Kept, unlike after close(), since a refresh decides each notification only once. Setting a flag allocates
-            // nothing, so a second OutOfMemoryError can't throw here.
+            if (notifier.isShutdown()) {
+                // close() ran, and the listeners are shutting down with this instance
+                synchronized (undelivered) {
+                    undelivered.remove(subscriptionId, queued);
+                }
+                return true;
+            }
+            // Kept, also for a RejectedExecutionException, since a refresh decides each notification only once. Setting
+            // a flag allocates nothing, so a second OutOfMemoryError can't throw here.
             synchronized (undelivered) {
                 queued.waitingForARefresh = true;
             }
@@ -224,6 +237,10 @@ class ScheduledRefresh {
         while (true) {
             Runnable next;
             synchronized (undelivered) {
+                // Only close() is meant to interrupt this thread. An interrupt that a notification sets and doesn't
+                // clear would make the first blocking call of the next one throw. Cleared before the isShutdown()
+                // check, so an interrupt close() sends after that check stays set.
+                Thread.interrupted();
                 // Dropped after close(), the same as a notification handed over after it
                 next = notifier.isShutdown() ? null : queued.notifications.poll();
                 if (next == null) {

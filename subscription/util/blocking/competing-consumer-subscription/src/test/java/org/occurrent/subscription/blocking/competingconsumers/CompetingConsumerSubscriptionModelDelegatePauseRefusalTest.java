@@ -139,9 +139,8 @@ class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
 
         // Then
         assertThat(warnings()).singleElement().satisfies(warning -> assertAll(
-                // The arguments, since the label subscriberId= and the refusal's message in the line hold both ids as text
-                () -> assertThat(warning.getArgumentArray()).contains(SUBSCRIPTION_ID, SUBSCRIBER_ID),
-                () -> assertThat(warning.getFormattedMessage()).contains("pausedByUser=true"),
+                // By position, since the refusal's message holds the subscription id too
+                () -> assertThat(warning.getArgumentArray()).startsWith(SUBSCRIPTION_ID, refusal.getClass().getName(), refusal.getMessage(), SUBSCRIBER_ID, true),
                 () -> assertThat(warning.getThrowableProxy().getClassName()).isEqualTo(refusal.getClass().getName()),
                 () -> assertThat(warning.getThrowableProxy().getMessage()).isEqualTo(refusal.getMessage())
         ));
@@ -178,9 +177,8 @@ class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
 
         // Then
         assertThat(warnings()).singleElement().satisfies(warning -> assertAll(
-                // The arguments, since the label subscriberId= and the refusal's message in the line hold both ids as text
-                () -> assertThat(warning.getArgumentArray()).contains(SUBSCRIPTION_ID, SUBSCRIBER_ID),
-                () -> assertThat(warning.getFormattedMessage()).contains("pausedByUser=false"),
+                // By position, since the refusal's message holds the subscription id too
+                () -> assertThat(warning.getArgumentArray()).startsWith(SUBSCRIPTION_ID, refusal.getClass().getName(), refusal.getMessage(), SUBSCRIBER_ID, false),
                 () -> assertThat(warning.getThrowableProxy().getClassName()).isEqualTo(refusal.getClass().getName()),
                 () -> assertThat(warning.getThrowableProxy().getMessage()).isEqualTo(refusal.getMessage())
         ));

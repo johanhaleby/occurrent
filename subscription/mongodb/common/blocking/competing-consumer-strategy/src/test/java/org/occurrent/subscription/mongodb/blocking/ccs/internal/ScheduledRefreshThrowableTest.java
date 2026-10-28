@@ -36,6 +36,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -287,6 +288,78 @@ class ScheduledRefreshThrowableTest {
                     () -> assertThat(refreshesInTheRoundTheNotifierThrewIn).as("refreshes run by the round the notifier threw in").isEqualTo(1),
                     () -> assertThat(delivered).containsExactlyInAnyOrder("subscription-1", "subscription-2")
             );
+        }
+
+        // A notifier that isn't shut down rejected the task for another reason than close(), so the notification is
+        // kept. Dropping a grant would leave the subscription paused on the node that holds its lease.
+        @Test
+        @DisplayName("and it is a RejectedExecutionException while the notifier is not shut down, the next refresh delivers it")
+        void and_it_is_a_RejectedExecutionException_while_the_notifier_is_not_shut_down_the_next_refresh_delivers_it() throws InterruptedException {
+            // Given
+            List<String> delivered = new CopyOnWriteArrayList<>();
+            notifier.throwOnEveryTask(new RejectedExecutionException("Queue capacity exceeded"));
+            scheduledRefresh.notifyInBackground("a-subscription", () -> delivered.add("first"));
+            notifier.takeEveryTask();
+
+            // When
+            round.run();
+            notifier.awaitEveryTask();
+
+            // Then
+            assertThat(delivered).containsExactly("first");
+        }
+
+        @Test
+        @DisplayName("an Error from one notification is logged at ERROR and the notification queued behind it is delivered")
+        void an_Error_from_one_notification_is_logged_at_ERROR_and_the_notification_queued_behind_it_is_delivered() throws InterruptedException {
+            // Given
+            List<String> delivered = new CopyOnWriteArrayList<>();
+            CountDownLatch delivering = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            scheduledRefresh.notifyInBackground("a-subscription", () -> {
+                delivering.countDown();
+                awaitUninterruptibly(release);
+                throw new AssertionError("a notification that failed");
+            });
+            assertThat(delivering.await(10, SECONDS)).as("the first notification is being delivered").isTrue();
+            scheduledRefresh.notifyInBackground("a-subscription", () -> delivered.add("second"));
+
+            // When
+            release.countDown();
+            notifier.awaitEveryTask();
+
+            // Then
+            assertAll(
+                    () -> assertThat(delivered).containsExactly("second"),
+                    () -> assertThat(logged.events()).singleElement().satisfies(error -> assertAll(
+                            () -> assertThat(error.getLevel()).isEqualTo(Level.ERROR),
+                            () -> assertThat(error.getArgumentArray()).startsWith("a-subscription", AssertionError.class.getName()),
+                            () -> assertThat(error.getThrowableProxy().getClassName()).isEqualTo(AssertionError.class.getName())
+                    ))
+            );
+        }
+
+        @Test
+        @DisplayName("a notification that interrupts its thread leaves the one queued behind it uninterrupted")
+        void a_notification_that_interrupts_its_thread_leaves_the_one_queued_behind_it_uninterrupted() throws InterruptedException {
+            // Given
+            AtomicReference<Boolean> interruptedWhenDelivered = new AtomicReference<>();
+            CountDownLatch delivering = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            scheduledRefresh.notifyInBackground("a-subscription", () -> {
+                delivering.countDown();
+                awaitUninterruptibly(release);
+                Thread.currentThread().interrupt();
+            });
+            assertThat(delivering.await(10, SECONDS)).as("the first notification is being delivered").isTrue();
+            scheduledRefresh.notifyInBackground("a-subscription", () -> interruptedWhenDelivered.set(Thread.currentThread().isInterrupted()));
+
+            // When
+            release.countDown();
+            notifier.awaitEveryTask();
+
+            // Then
+            assertThat(interruptedWhenDelivered.get()).as("interrupted when the second notification ran").isFalse();
         }
 
         // Handing it over again would wait for the next refresh, up to half a lease, and a prohibition queued behind a

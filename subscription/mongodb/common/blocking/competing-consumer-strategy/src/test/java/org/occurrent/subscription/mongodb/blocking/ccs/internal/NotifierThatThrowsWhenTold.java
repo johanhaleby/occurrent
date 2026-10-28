@@ -24,21 +24,30 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * A notifier that runs each task on a thread of its own, and that throws from {@code execute} for as long as it was
- * told to, as a cached thread pool throws an {@link OutOfMemoryError} when it can't start a thread. Once
+ * told to, as a cached thread pool throws an {@link OutOfMemoryError} when it can't start a thread. It is never shut
+ * down, so a {@link java.util.concurrent.RejectedExecutionException} it throws isn't one from {@code close()}. Once
  * {@link #awaitEveryTask()} returns, a test can assert on everything the tasks delivered.
  */
 class NotifierThatThrowsWhenTold extends AbstractExecutorService {
     private static final Duration TASK_TIMEOUT = Duration.ofSeconds(10);
 
     private final List<Thread> tasks = new CopyOnWriteArrayList<>();
-    private volatile Error thrown;
+    private volatile RuntimeException thrownException;
+    private volatile Error thrownError;
 
     void throwOnEveryTask(Error thrown) {
-        this.thrown = thrown;
+        this.thrownException = null;
+        this.thrownError = thrown;
+    }
+
+    void throwOnEveryTask(RuntimeException thrown) {
+        this.thrownError = null;
+        this.thrownException = thrown;
     }
 
     void takeEveryTask() {
-        this.thrown = null;
+        this.thrownException = null;
+        this.thrownError = null;
     }
 
     // Also waits for a task started while it waits
@@ -52,9 +61,13 @@ class NotifierThatThrowsWhenTold extends AbstractExecutorService {
 
     @Override
     public void execute(Runnable task) {
-        Error toThrow = thrown;
-        if (toThrow != null) {
-            throw toThrow;
+        Error error = thrownError;
+        if (error != null) {
+            throw error;
+        }
+        RuntimeException exception = thrownException;
+        if (exception != null) {
+            throw exception;
         }
         Thread thread = Thread.ofPlatform().daemon().unstarted(task);
         tasks.add(thread);

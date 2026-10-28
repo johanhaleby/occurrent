@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.mongodb.blocking.ccs.internal;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -27,6 +31,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -256,6 +261,41 @@ class MongoLeaseNotificationPerSubscriptionTest {
     }
 
     @Test
+    void an_error_a_listener_throws_in_the_background_is_logged_once_at_error_level() throws InterruptedException {
+        MongoLeaseCompetingConsumerStrategySupport node = nodeRefreshingOnItsOwn();
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        List<String> told = new CopyOnWriteArrayList<>();
+        Logged logged = new Logged();
+        Logger supportLogger = (Logger) LoggerFactory.getLogger(MongoLeaseCompetingConsumerStrategySupport.class);
+        Logger scheduledRefreshLogger = (Logger) LoggerFactory.getLogger(ScheduledRefresh.class);
+        logged.start();
+        supportLogger.addAppender(logged);
+        scheduledRefreshLogger.addAppender(logged);
+        try {
+            assertThat(rival.registerCompetingConsumer(locks, A, RIVAL)).isTrue();
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isFalse();
+            node.addListener(ThrowingListener.throwingAnError("first", told));
+
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+            assertThat(eventually(() -> !logged.failures().isEmpty())).as("the failure of the listener was logged").isTrue();
+            // Long enough for a second line, which the notifier would log right after the first
+            Thread.sleep(300);
+
+            assertThat(logged.failures()).singleElement().satisfies(failure -> {
+                assertThat(failure.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(failure.getLoggerName()).isEqualTo(MongoLeaseCompetingConsumerStrategySupport.class.getName());
+                assertThat(failure.getThrowableProxy().getClassName()).isEqualTo(AssertionError.class.getName());
+            });
+        } finally {
+            supportLogger.detachAppender(logged);
+            scheduledRefreshLogger.detachAppender(logged);
+            logged.stop();
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
+    @Test
     void a_listener_that_throws_in_the_background_does_not_stop_later_callbacks_for_other_subscriptions() throws InterruptedException {
         MongoLeaseCompetingConsumerStrategySupport node = nodeRefreshingOnItsOwn();
         MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
@@ -392,6 +432,22 @@ class MongoLeaseNotificationPerSubscriptionTest {
                 Thread.sleep(10);
             }
             Thread.sleep(200);
+        }
+    }
+
+    // The lines at WARN and above that have a throwable attached
+    private static final class Logged extends AppenderBase<ILoggingEvent> {
+        private final List<ILoggingEvent> events = new CopyOnWriteArrayList<>();
+
+        @Override
+        protected void append(ILoggingEvent event) {
+            if (event.getLevel().isGreaterOrEqual(Level.WARN) && event.getThrowableProxy() != null) {
+                events.add(event);
+            }
+        }
+
+        List<ILoggingEvent> failures() {
+            return List.copyOf(events);
         }
     }
 

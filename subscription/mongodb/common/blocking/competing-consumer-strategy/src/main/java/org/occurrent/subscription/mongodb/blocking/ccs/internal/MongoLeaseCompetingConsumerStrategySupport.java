@@ -473,8 +473,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * and a later round grants it again.
      * Dropping it could leave this instance refreshing a lease for a subscription that has stopped delivering, which
      * no grant would restart, since the listener finds the consumer running already, and which no other instance
-     * could take over. A listener that throws is logged, and the other listeners are told anyway. Once they all have
-     * been, the first {@link Error} is thrown, with any later one attached as suppressed.
+     * could take over. A listener that throws is logged once, an {@link Error} at ERROR and anything else at WARN, and
+     * the other listeners are told anyway. Nothing is thrown, since the notifier would only log it a second time.
      */
     private void notifyListenersIfStillTrue(Outcome outcome, CompetingConsumer cc) {
         if (!running) {
@@ -490,7 +490,6 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             logDebug("Dropping {} since the lock status changed before it was delivered (subscriberId={}, subscriptionId={})", outcome.notification(), cc.subscriberId, cc.subscriptionId);
             return;
         }
-        List<Throwable> errors = new ArrayList<>();
         for (CompetingConsumerListener listener : competingConsumerListeners) {
             try {
                 if (outcome.notification() == Notification.GRANTED) {
@@ -499,14 +498,14 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                     listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId);
                 }
             } catch (Throwable e) {
-                log.warn("Listener {} failed on {} due to {} - {} (subscriberId={}, subscriptionId={})",
-                        listener, outcome.notification(), e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
+                String line = "Listener {} failed on {} due to {} - {} (subscriberId={}, subscriptionId={})";
                 if (e instanceof Error) {
-                    errors.add(e);
+                    log.error(line, listener, outcome.notification(), e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
+                } else {
+                    log.warn(line, listener, outcome.notification(), e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
                 }
             }
         }
-        throwTheFirstErrorOrFailure(errors);
     }
 
     private Outcome refreshOne(MongoCollection<BsonDocument> collection, CompetingConsumer cc) {
