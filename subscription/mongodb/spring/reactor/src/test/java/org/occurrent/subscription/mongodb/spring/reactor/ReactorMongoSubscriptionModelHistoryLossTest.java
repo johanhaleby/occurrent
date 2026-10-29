@@ -19,11 +19,16 @@ package org.occurrent.subscription.mongodb.spring.reactor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoCommandException;
+import com.mongodb.ServerAddress;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
+import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonDocument;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,6 +51,8 @@ import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
+import org.springframework.data.mongodb.core.ChangeStreamEvent;
+import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.transaction.ReactiveTransactionManager;
@@ -54,6 +61,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.MonoSink;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
@@ -61,7 +69,9 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static java.time.ZoneOffset.UTC;
@@ -70,6 +80,7 @@ import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
@@ -102,6 +113,9 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
     private CommandLog commands;
     private ReactorMongoEventStore mongoEventStore;
     private ReactorMongoSubscriptionModel subscriptionModel;
+    private final HistoryLossOnCue loss = new HistoryLossOnCue();
+    private final CopyOnWriteArrayList<String> asked = new CopyOnWriteArrayList<>();
+    private Checkpoint start;
 
     @BeforeEach
     void createClients() {
@@ -296,8 +310,66 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
         assertThat(commands.changeStreamsOpened()).as("the subscription is not read again").hasSize(1);
     }
 
+    @Test
+    void a_history_loss_reported_by_a_run_that_was_cancelled_meanwhile_does_not_reach_the_listeners_of_the_subscription_made_in_its_place() throws InterruptedException {
+        // Given a change stream that reports its history lost, to a model that has not asked the listeners yet
+        Thread reporter = subscribedWhoseHistoryLossIsReportedAndHeld();
+
+        // When the subscription is cancelled and made again
+        subscriptionModel.cancelSubscription("sub").block(Duration.ofSeconds(5));
+        subscriptionModel.subscribe("sub", null, StartAt.checkpoint(start), event -> Mono.empty());
+        loss.release();
+        reporter.join(10_000);
+
+        // Then
+        assertAll(
+                () -> assertThat(asked).as("positions the listener was asked about").isEmpty(),
+                () -> assertThat(reporter.isAlive()).as("the thread that reported the loss is still running").isFalse(),
+                () -> assertThat(loss.checkedOn.get()).as("the thread the model read the error code on").isSameAs(reporter),
+                () -> assertThat(subscriptionModel.isRunning("sub")).as("the subscription made in its place runs").isTrue()
+        );
+    }
+
+    @Test
+    void a_history_loss_reported_by_the_run_that_is_current_reaches_the_listeners() throws InterruptedException {
+        // Given a change stream that reports its history lost, to a model that has not asked the listeners yet
+        Thread reporter = subscribedWhoseHistoryLossIsReportedAndHeld();
+
+        // When nothing happens to the subscription meanwhile
+        loss.release();
+        reporter.join(10_000);
+
+        // Then
+        assertAll(
+                () -> assertThat(asked).as("positions the listener was asked about").containsExactly("sub@" + start.asString()),
+                () -> assertThat(reporter.isAlive()).as("the thread that reported the loss is still running").isFalse(),
+                () -> assertThat(loss.checkedOn.get()).as("the thread the model read the error code on").isSameAs(reporter)
+        );
+    }
+
+    // The returned thread reports the loss, and the model is held on it at its read of the error code, before the listeners
+    private Thread subscribedWhoseHistoryLossIsReportedAndHeld() throws InterruptedException {
+        TemplateWhoseNextOpenLosesItsHistory template = new TemplateWhoseNextOpenLosesItsHistory(subscriberClient, databaseName);
+        subscriptionModel = modelOver(template, false);
+        start = requireNonNull(subscriptionModel.globalCheckpoint().block(Duration.ofSeconds(10)));
+        subscriptionModel.addHistoryLossListener((subscriptionId, lostFrom) -> {
+            asked.add(subscriptionId + "@" + lostFrom.asString());
+            return HistoryLossHandling.leaveToSubscriptionModel();
+        });
+        template.nextOpenIs(loss.opens());
+        subscriptionModel.subscribe("sub", null, StartAt.checkpoint(start), event -> Mono.empty());
+        assertThat(loss.opened.await(10, SECONDS)).as("the change stream was opened").isTrue();
+        Thread reporter = loss.reportedOnAThreadOfItsOwn();
+        assertThat(loss.checkingErrorCode.await(10, SECONDS)).as("the model reads the error code").isTrue();
+        return reporter;
+    }
+
     private ReactorMongoSubscriptionModel modelOver(boolean restartLostSubscriptions) {
-        return new ReactorMongoSubscriptionModel(new ReactiveMongoTemplate(subscriberClient, databaseName), eventCollection, TimeRepresentation.RFC_3339_STRING,
+        return modelOver(new ReactiveMongoTemplate(subscriberClient, databaseName), restartLostSubscriptions);
+    }
+
+    private ReactorMongoSubscriptionModel modelOver(ReactiveMongoTemplate template, boolean restartLostSubscriptions) {
+        return new ReactorMongoSubscriptionModel(template, eventCollection, TimeRepresentation.RFC_3339_STRING,
                 ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)).restartSubscriptionsOnChangeStreamHistoryLost(restartLostSubscriptions));
     }
 
@@ -323,5 +395,78 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build());
+    }
+
+    private static final class TemplateWhoseNextOpenLosesItsHistory extends ReactiveMongoTemplate {
+        private final AtomicReference<Mono<Void>> nextOpen = new AtomicReference<>();
+
+        TemplateWhoseNextOpenLosesItsHistory(MongoClient client, String databaseName) {
+            super(client, databaseName);
+        }
+
+        void nextOpenIs(Mono<Void> failing) {
+            nextOpen.set(failing);
+        }
+
+        @Override
+        public Mono<MongoCollection<Document>> getCollection(String collectionName) {
+            Mono<Void> failing = nextOpen.getAndSet(null);
+            return failing == null ? super.getCollection(collectionName) : failing.then(Mono.<MongoCollection<Document>>empty());
+        }
+
+        @Override
+        public <T> Flux<ChangeStreamEvent<T>> changeStream(String database, String collectionName, ChangeStreamOptions options, Class<T> targetType) {
+            Mono<Void> failing = nextOpen.getAndSet(null);
+            return failing == null ? super.changeStream(database, collectionName, options, targetType) : failing.thenMany(Flux.<ChangeStreamEvent<T>>empty());
+        }
+    }
+
+    private static final class HistoryLossOnCue {
+        final CountDownLatch opened = new CountDownLatch(1);
+        final CountDownLatch checkingErrorCode = new CountDownLatch(1);
+        final AtomicReference<Thread> checkedOn = new AtomicReference<>();
+        private final CountDownLatch released = new CountDownLatch(1);
+        private final AtomicReference<MonoSink<Void>> opening = new AtomicReference<>();
+        private final MongoCommandException historyLost = new MongoCommandException(new BsonDocument("ok", new BsonInt32(0))
+                .append("errmsg", new BsonString("the resume point may no longer be in the oplog"))
+                .append("code", new BsonInt32(HISTORY_LOST))
+                .append("codeName", new BsonString("ChangeStreamHistoryLost")), new ServerAddress()) {
+            @Override
+            public int getErrorCode() {
+                checkedOn.compareAndSet(null, Thread.currentThread());
+                checkingErrorCode.countDown();
+                awaitRelease();
+                return super.getErrorCode();
+            }
+        };
+
+        Mono<Void> opens() {
+            return Mono.create(sink -> {
+                opening.set(sink);
+                opened.countDown();
+            });
+        }
+
+        Thread reportedOnAThreadOfItsOwn() {
+            Thread reporter = new Thread(() -> opening.get().error(historyLost), "history-loss-reporter");
+            reporter.setDaemon(true);
+            reporter.start();
+            return reporter;
+        }
+
+        void release() {
+            released.countDown();
+        }
+
+        private void awaitRelease() {
+            try {
+                if (!released.await(10, SECONDS)) {
+                    throw new AssertionError("The error code was not released within 10 seconds");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Interrupted while the error code was held", e);
+            }
+        }
     }
 }

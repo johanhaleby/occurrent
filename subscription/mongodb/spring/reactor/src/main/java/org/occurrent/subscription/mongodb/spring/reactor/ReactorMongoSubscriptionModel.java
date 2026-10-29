@@ -619,6 +619,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         if (lostFrom == null) {
             return false;
         }
+        // Before the listeners, which can record the loss on the subscription now holding the id
+        if (!isCurrent(internalSubscription, run)) {
+            log.debug("There was not enough oplog to resume subscription {} from {}, but it was paused, resumed or cancelled meanwhile, so no listener is asked.",
+                    subscriptionId, lostFrom.asString(), throwable);
+            return true;
+        }
         HistoryLossHandling.TakeOver takeOver = null;
         try {
             for (HistoryLossListener listener : historyLossListeners) {
@@ -638,7 +644,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         }
         Run paused;
         synchronized (this) {
-            paused = !shutdown && internalSubscription.run == run && runningSubscriptions.get(subscriptionId) == internalSubscription ? pause(subscriptionId) : null;
+            paused = isCurrent(internalSubscription, run) ? pause(subscriptionId) : null;
         }
         if (paused == null) {
             log.debug("There was not enough oplog to resume subscription {} from {}, and a listener took it over, but it was paused, resumed or cancelled meanwhile, so the takeover is dropped.",
@@ -653,6 +659,13 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             log.error("The listener that took subscription {} over after its history was lost failed once it was paused, so it stays paused. Resuming it starts it again.", subscriptionId, e);
         }
         return true;
+    }
+
+    // Whether run is still the one the subscription reads with, which a pause, a cancel and a shutdown end
+    private boolean isCurrent(InternalSubscription internalSubscription, Run run) {
+        synchronized (this) {
+            return !shutdown && internalSubscription.run == run && runningSubscriptions.get(internalSubscription.subscriptionId) == internalSubscription;
+        }
     }
 
     // ChangeStreamHistoryLost (286) restarts from StartAt.now() only when configured to. Everything else
