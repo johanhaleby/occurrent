@@ -36,6 +36,7 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
+import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaHeldEvents;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
@@ -52,6 +53,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -74,6 +76,8 @@ class SagaHeldEventTest {
     private static final String PAYMENT_STREAM = "payment-stream";
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
     private static final Duration BUDGET = Duration.ofMinutes(5);
+    private static final String EXPIRY_TIMER = "expiry";
+    private static final Duration EXPIRY = Duration.ofMinutes(10);
     private static final String ITEM_ADDED_TYPE = ItemAdded.class.getName();
 
     sealed interface OrderEvent permits OrderPlaced, ItemAdded, PaymentReceived {
@@ -91,7 +95,7 @@ class SagaHeldEventTest {
     record PaymentReceived(String eventId, String orderId) implements OrderEvent {
     }
 
-    sealed interface OrderCommand permits OpenLedger, Reserve, Ship {
+    sealed interface OrderCommand permits OpenLedger, Reserve, Ship, Expire {
     }
 
     record OpenLedger(String orderId) implements OrderCommand {
@@ -101,6 +105,9 @@ class SagaHeldEventTest {
     }
 
     record Ship(String orderId) implements OrderCommand {
+    }
+
+    record Expire(String orderId) implements OrderCommand {
     }
 
     record Order(List<String> items, boolean paid) {
@@ -121,7 +128,11 @@ class SagaHeldEventTest {
                 .correlateAll(OrderEvent::orderId)
                 .startsOn(OrderPlaced.class)
                 .evolve(OrderPlaced.class, (state, e) -> new Order(List.of(), false))
-                .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new OpenLedger(e.orderId()))))
+                .react(OrderPlaced.class, (state, e) -> startsAnExpiryTimer
+                        ? List.of(SagaEffect.issue(new OpenLedger(e.orderId())), SagaEffect.startTimeout(EXPIRY_TIMER, EXPIRY))
+                        : List.of(SagaEffect.issue(new OpenLedger(e.orderId()))))
+                .evolveOnTimeout(EXPIRY_TIMER, (state, timeout) -> state)
+                .reactOnTimeout(EXPIRY_TIMER, (state, timeout) -> List.of(SagaEffect.issue(new Expire(timeout.sagaId()))))
                 .evolve(ItemAdded.class, (state, e) -> {
                     if (unevolvableItems.contains(e.item())) {
                         throw evolveFailure;
@@ -139,6 +150,7 @@ class SagaHeldEventTest {
     private final IllegalStateException evolveFailure = new IllegalStateException("cannot evolve");
     private final Set<String> failingItems = ConcurrentHashMap.newKeySet();
     private final Set<String> unevolvableItems = ConcurrentHashMap.newKeySet();
+    private volatile boolean startsAnExpiryTimer;
     private final List<OrderCommand> issued = new CopyOnWriteArrayList<>();
     private final AtomicReference<Instant> now = new AtomicReference<>(NOW);
     private final AtomicBoolean holds = new AtomicBoolean(true);
@@ -156,7 +168,11 @@ class SagaHeldEventTest {
     }
 
     private SagaExecution<OrderEvent, Order, OrderCommand> execution(SagaStateStore<Order> stateStore, SagaRunnerConfig config) {
-        return new SagaExecution<>("orders", orderSaga(), stateStore, this::dispatch, converter, config, event -> true, now::get, holds::get);
+        return execution(stateStore, config, event -> true);
+    }
+
+    private SagaExecution<OrderEvent, Order, OrderCommand> execution(SagaStateStore<Order> stateStore, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable) {
+        return new SagaExecution<>("orders", orderSaga(), stateStore, this::dispatch, converter, config, stillObtainable, now::get, holds::get);
     }
 
     private void dispatch(OrderCommand command) {
@@ -689,6 +705,105 @@ class SagaHeldEventTest {
                     () -> assertThat(store.find(ORDER).orElseThrow().failure().input()).isEqualTo(ORDER_STREAM + "@2"),
                     () -> assertThat(store.find(ORDER).orElseThrow().failure().firstFailedAt()).isEqualTo(firstFailure),
                     () -> assertThat(issued).containsExactly(new OpenLedger(ORDER)));
+        }
+    }
+
+    @Nested
+    @DisplayName("when a held event fails in the drain a timer's attempt runs")
+    class WhenAHeldEventFailsInTheDrainATimersAttemptRuns {
+
+        /** A started instance with its expiry timer due and a held copy of version 2 that a hold left behind with a drain marked as due. */
+        private SagaExecution<OrderEvent, Order, OrderCommand> startedWithADueTimerAndAHeldCopyThatFails(SagaRunnerConfig config) {
+            startsAnExpiryTimer = true;
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(store, config);
+            deliver(execution, placedAt(1));
+            CloudEvent late = itemAt(2, "bad");
+            store.hold(ORDER, new HeldEvent(ORDER, new HeldEventRef(ORDER_STREAM + "@2", ORDER_STREAM, 2L, null, late.getType(), now.get(), false, false), late));
+            store.markHeldEvents(ORDER, null);
+            failingItems.add("bad");
+            now.updateAndGet(instant -> instant.plus(EXPIRY).plusSeconds(1));
+            return execution;
+        }
+
+        private List<String> timerNames() {
+            return store.find(ORDER).orElseThrow().timers().stream().map(TimerEntry::name).toList();
+        }
+
+        @Test
+        void the_held_event_is_listed_pending_under_its_own_key_and_the_timer_stays_due_while_quarantine_is_off() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedWithADueTimerAndAHeldCopyThatFails(SagaRunnerConfig.defaults());
+
+            // When
+            execution.pollTimers();
+
+            // Then
+            assertAll(
+                    () -> assertThat(pendingItemVersions()).containsExactly(2L),
+                    () -> assertThat(heldKeys()).containsExactly(ORDER_STREAM + "@2"),
+                    () -> assertThat(timerNames()).containsExactly(EXPIRY_TIMER),
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER)),
+                    () -> assertThat(store.find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE));
+        }
+
+        @Test
+        void the_instance_is_quarantined_at_the_held_event_once_the_budget_of_that_event_has_elapsed() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedWithADueTimerAndAHeldCopyThatFails(SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET));
+            execution.pollTimers();
+            Instant firstFailure = now.get();
+            now.updateAndGet(instant -> instant.plus(BUDGET).plusSeconds(1));
+
+            // When
+            execution.pollTimers();
+
+            // Then
+            assertAll(
+                    () -> assertThat(store.find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(store.find(ORDER).orElseThrow().failure().input()).isEqualTo(ORDER_STREAM + "@2"),
+                    () -> assertThat(store.find(ORDER).orElseThrow().failure().firstFailedAt()).isEqualTo(firstFailure),
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER)));
+        }
+    }
+
+    @Nested
+    @DisplayName("when the failure of a held event is past its budget")
+    class WhenTheFailureOfAHeldEventIsPastItsBudget {
+
+        private final Predicate<CloudEvent> onlyTheDrivingDeliveryIsObtainable = event -> event.getId().equals("placed-1");
+        private final Predicate<CloudEvent> onlyTheHeldEventIsObtainable = event -> event.getId().equals("item-bad");
+
+        /** The start drives a drain that fails on version 2, and its delivery is offered again after the budget of version 2 has elapsed. */
+        private Throwable theStartIsOfferedAgainAfterTheBudget(Predicate<CloudEvent> stillObtainable) {
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(store, SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET), stillObtainable);
+            deliver(execution, itemAt(2, "bad"));
+            failingItems.add("bad");
+            deliverRefused(execution, placedAt(1));
+            now.updateAndGet(instant -> instant.plus(BUDGET).plusSeconds(1));
+            return catchThrowable(() -> execution.onCloudEvent(placedAt(1)));
+        }
+
+        @Test
+        void the_instance_is_quarantined_when_the_driving_delivery_is_the_one_that_is_still_obtainable() {
+            // When
+            Throwable thrown = theStartIsOfferedAgainAfterTheBudget(onlyTheDrivingDeliveryIsObtainable);
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(store.find(ORDER).orElseThrow().failure().input()).isEqualTo(ORDER_STREAM + "@2"));
+        }
+
+        @Test
+        void the_delivery_is_refused_and_the_instance_is_not_quarantined_when_only_the_held_event_is_still_obtainable() {
+            // When
+            Throwable thrown = theStartIsOfferedAgainAfterTheBudget(onlyTheHeldEventIsObtainable);
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).hasMessageContaining("could not apply the held event '" + ORDER_STREAM + "@2'"),
+                    () -> assertThat(store.find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE));
         }
     }
 
