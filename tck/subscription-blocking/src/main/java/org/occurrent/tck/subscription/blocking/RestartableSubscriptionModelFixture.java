@@ -103,9 +103,11 @@ public interface RestartableSubscriptionModelFixture extends SubscriptionModelFi
 
     /**
      * Whether the refusal {@link #honoursAGlobalPosition()} owes when it answers {@code false} is a
-     * {@code CatchupCannotResumeException} rather than an {@code UnsupportedStartAtException}. A catch-up model answers
-     * {@code true}: it accepts a checkpoint, and refuses a bare position because it has no live start to hand over
-     * from, with the message naming the subscription and the way out.
+     * {@code CatchupCannotResumeException} rather than an {@code UnsupportedStartAtException}. A catch-up model over an
+     * event store that writes positions answers {@code true}. It accepts a checkpoint, and refuses a bare position
+     * because it has no live start to hand over from, with the message naming the subscription and the way out. A
+     * blocking stream catch-up over an event store that writes no positions answers {@code false}, since it refuses a
+     * position above 0 with an {@code UnsupportedStartAtException} from {@code subscribe}.
      * <p>
      * Such a model also hands out, with every event it delivers, a checkpoint that does carry the proof, so
      * {@link RestartConformance} also asserts that a subscription started at the checkpoint delivered with an event
