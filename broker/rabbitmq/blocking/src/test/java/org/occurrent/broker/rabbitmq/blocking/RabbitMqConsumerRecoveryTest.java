@@ -22,6 +22,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.ChannelContinuationTimeoutException;
 import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.RecoveryListener;
 import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
 import com.rabbitmq.client.impl.recovery.ConsumerRecoveryListener;
@@ -32,7 +33,9 @@ import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,6 +51,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
+import static org.occurrent.broker.rabbitmq.blocking.RabbitMqConsumerRecovery.UNFINISHED_RECOVERY_WARNING_NANOS;
 
 /**
  * Unit tests for {@link RabbitMqConsumerRecovery} against a mocked {@link AutorecoveringConnection}, driving the two
@@ -79,7 +85,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void topology_recovery_off_clears_the_tag_when_the_recovery_finishes_without_re_registering_the_consumer() {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
 
         recoveryListener.handleRecoveryStarted(connection);
@@ -91,7 +97,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void the_tag_is_still_held_until_the_recovery_has_finished() {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
 
         recoveryListener.handleRecoveryStarted(connection);
@@ -102,7 +108,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void clearing_the_tag_logs_once_at_info_naming_the_queue_and_the_tag() {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
 
         recoveryListener.handleRecoveryStarted(connection);
@@ -118,7 +124,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void topology_recovery_on_updates_the_tag_to_the_one_the_client_registered_and_does_not_clear_it() {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
         ConsumerRecoveryListener consumerListener = capturedConsumerRecoveryListener();
 
@@ -134,7 +140,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void a_recovered_consumer_that_is_not_this_sources_does_not_count_as_this_sources_being_re_registered() {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
         ConsumerRecoveryListener consumerListener = capturedConsumerRecoveryListener();
 
@@ -148,7 +154,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void a_recovered_consumer_that_is_not_this_sources_leaves_the_tag_alone_while_the_recovery_runs() {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
         ConsumerRecoveryListener consumerListener = capturedConsumerRecoveryListener();
 
@@ -161,7 +167,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void a_consumer_registered_after_the_recovery_started_is_not_cleared() {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
 
         recoveryListener.handleRecoveryStarted(connection);
@@ -175,7 +181,7 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void a_source_without_a_tag_when_the_recovery_started_still_has_none_after_it_and_logs_nothing() {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
 
         recoveryListener.handleRecoveryStarted(connection);
@@ -188,7 +194,7 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void a_source_without_a_tag_when_the_recovery_started_keeps_one_registered_during_the_recovery() {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
 
         recoveryListener.handleRecoveryStarted(connection);
@@ -201,7 +207,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void a_recovery_that_re_registered_the_consumer_does_not_stop_the_next_recovery_from_clearing_a_tag_that_was_not() {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
         ConsumerRecoveryListener consumerListener = capturedConsumerRecoveryListener();
         recoveryListener.handleRecoveryStarted(connection);
@@ -217,7 +223,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void a_second_handleRecovery_without_a_new_start_does_not_clear_a_tag_registered_in_between() {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
         recoveryListener.handleRecoveryStarted(connection);
         recoveryListener.handleRecovery(connection);
@@ -240,7 +246,7 @@ class RabbitMqConsumerRecoveryTest {
     void topology_recovery_on_keeps_the_tag_across_two_recoveries_that_report_it_as_separate_strings() throws Exception {
         String registered = new String("amq.ctag-1");
         consumerTag.set(registered);
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
         ConsumerRecoveryListener consumerListener = capturedConsumerRecoveryListener();
 
@@ -260,7 +266,7 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void a_consumer_whose_registration_a_recovery_started_during_is_not_held_and_the_next_cancel_removes_it() throws Exception {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
 
         recovery.consume(() -> {
@@ -278,7 +284,7 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void consume_holds_the_tag_when_no_recovery_overlapped_it() throws Exception {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
 
         recovery.consume(() -> "tag-1");
 
@@ -287,7 +293,7 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void consume_registers_nothing_while_a_recovery_runs() throws Exception {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         capturedRecoveryListener().handleRecoveryStarted(connection);
 
         recovery.consume(() -> {
@@ -300,7 +306,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void a_tag_cleared_by_a_recovery_with_topology_recovery_off_is_cancelled_by_the_next_cancel() throws Exception {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
         recoveryListener.handleRecoveryStarted(connection);
         recoveryListener.handleRecovery(connection);
@@ -313,7 +319,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void a_consumer_retired_while_a_recovery_runs_is_cancelled_under_the_tag_the_recovery_registered_it_with() throws Exception {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
         ConsumerRecoveryListener consumerListener = capturedConsumerRecoveryListener();
         recoveryListener.handleRecoveryStarted(connection);
@@ -334,7 +340,7 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void a_cancel_that_a_recovery_overlapped_is_made_again_after_the_recovery() throws Exception {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
         recovery.retire("tag-1");
         doAnswer(invocation -> {
@@ -418,15 +424,15 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void attachTo_registers_one_recovery_listener_and_one_consumer_recovery_listener_that_are_the_same_instance() {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
 
         assertThat(capturedRecoveryListener()).isSameAs(capturedConsumerRecoveryListener());
     }
 
     @Test
     void attachTo_twice_registers_only_once() {
-        recovery.attachTo(connection);
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
+        recovery.attachTo(connection, channel);
 
         verify(connection, times(1)).addRecoveryListener(any());
         verify(connection, times(1)).addConsumerRecoveryListener(any());
@@ -436,20 +442,98 @@ class RabbitMqConsumerRecoveryTest {
     void attachTo_registers_nothing_on_a_connection_that_does_not_recover_by_itself() {
         Connection plainConnection = mock(Connection.class);
 
-        assertThatCode(() -> recovery.attachTo(plainConnection)).doesNotThrowAnyException();
+        assertThatCode(() -> recovery.attachTo(plainConnection, channel)).doesNotThrowAnyException();
 
         verifyNoInteractions(plainConnection);
         verifyNoInteractions(connection);
     }
 
     @Test
+    void attachTo_logs_nothing_for_a_connection_that_does_not_recover() {
+        recovery.attachTo(mock(Connection.class), channel);
+
+        assertThat(logged.list).isEmpty();
+    }
+
+    /**
+     * A {@code Connection} that wraps an {@code AutorecoveringConnection}, for metrics or tracing, hands out the
+     * client's recovering channels but calls no recovery listener, so with topology recovery off the source would stop
+     * consuming after a recovery with nothing logged.
+     */
+    @Test
+    void attachTo_logs_a_warning_naming_the_queue_for_a_connection_that_wraps_a_recovering_one() {
+        Channel recoveringChannel = mock(Channel.class, withSettings().extraInterfaces(Recoverable.class));
+
+        recovery.attachTo(mock(Connection.class), recoveringChannel);
+
+        assertThat(warnings()).singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains(QUEUE));
+    }
+
+    /**
+     * The client stops calling {@code handleRecovery} at the first listener that throws, and the source then waits for a
+     * recovery that never ends.
+     */
+    @Test
+    void a_recovery_the_client_never_reports_ended_is_logged_at_warn_once_after_the_channel_has_been_open_for_a_minute() throws Exception {
+        AtomicLong now = new AtomicLong();
+        RabbitMqConsumerRecovery clocked = new RabbitMqConsumerRecovery(consumerTag, QUEUE, log, now::get);
+        clocked.attachTo(connection, channel);
+        RecoveryListener recoveryListener = capturedRecoveryListener();
+        when(channel.isOpen()).thenReturn(true);
+
+        recoveryListener.handleRecoveryStarted(connection);
+        clocked.cancelRetired(channel);
+        now.addAndGet(UNFINISHED_RECOVERY_WARNING_NANOS - 1);
+        clocked.cancelRetired(channel);
+        List<ILoggingEvent> beforeAMinute = List.copyOf(warnings());
+        now.addAndGet(1);
+        clocked.cancelRetired(channel);
+        clocked.cancelRetired(channel);
+
+        assertAll(
+                () -> assertThat(beforeAMinute).isEmpty(),
+                () -> assertThat(warnings()).singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains(QUEUE)));
+    }
+
+    @Test
+    void a_recovery_that_waits_for_the_broker_logs_nothing_however_long_it_takes() throws Exception {
+        AtomicLong now = new AtomicLong();
+        RabbitMqConsumerRecovery clocked = new RabbitMqConsumerRecovery(consumerTag, QUEUE, log, now::get);
+        clocked.attachTo(connection, channel);
+        RecoveryListener recoveryListener = capturedRecoveryListener();
+
+        recoveryListener.handleRecoveryStarted(connection);
+        for (int minute = 0; minute < 10; minute++) {
+            clocked.cancelRetired(channel);
+            now.addAndGet(UNFINISHED_RECOVERY_WARNING_NANOS);
+        }
+
+        assertThat(warnings()).isEmpty();
+    }
+
+    @Test
+    void recoveries_changes_when_a_recovery_starts_and_when_it_ends() {
+        recovery.attachTo(connection, channel);
+        RecoveryListener recoveryListener = capturedRecoveryListener();
+        long before = recovery.recoveries();
+
+        recoveryListener.handleRecoveryStarted(connection);
+        long during = recovery.recoveries();
+        recoveryListener.handleRecovery(connection);
+
+        assertAll(
+                () -> assertThat(during).isNotEqualTo(before),
+                () -> assertThat(recovery.recoveries()).isNotEqualTo(during).isNotEqualTo(before));
+    }
+
+    @Test
     void attachTo_throws_NullPointerException_for_a_null_connection() {
-        assertThatThrownBy(() -> recovery.attachTo(null)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> recovery.attachTo(null, channel)).isInstanceOf(NullPointerException.class);
     }
 
     @Test
     void detach_removes_the_two_listeners_that_attachTo_registered_and_nothing_else() {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener registeredRecoveryListener = capturedRecoveryListener();
         ConsumerRecoveryListener registeredConsumerListener = capturedConsumerRecoveryListener();
 
@@ -466,7 +550,7 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void detach_is_idempotent() {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
 
         recovery.detach();
         recovery.detach();
@@ -477,7 +561,7 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void detach_still_removes_the_consumer_recovery_listener_when_removing_the_recovery_listener_throws() {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         ConsumerRecoveryListener registeredConsumerListener = capturedConsumerRecoveryListener();
         doThrow(new IllegalStateException("connection closed")).when(connection).removeRecoveryListener(any());
 
@@ -488,7 +572,7 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void detach_throws_the_failure_of_the_removal_that_failed() {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         IllegalStateException failure = new IllegalStateException("connection closed");
         doThrow(failure).when(connection).removeRecoveryListener(any());
 
@@ -499,7 +583,7 @@ class RabbitMqConsumerRecoveryTest {
 
     @Test
     void a_second_detach_after_a_failed_one_does_nothing() {
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         doThrow(new IllegalStateException("connection closed")).when(connection).removeRecoveryListener(any());
         catchThrowable(recovery::detach);
 
@@ -520,7 +604,7 @@ class RabbitMqConsumerRecoveryTest {
     void attachTo_after_detach_registers_nothing() {
         recovery.detach();
 
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
 
         verify(connection, never()).addRecoveryListener(any());
         verify(connection, never()).addConsumerRecoveryListener(any());
@@ -529,7 +613,7 @@ class RabbitMqConsumerRecoveryTest {
     @Test
     void a_late_recovery_callback_from_a_listener_that_was_detached_does_not_throw() {
         consumerTag.set("tag-1");
-        recovery.attachTo(connection);
+        recovery.attachTo(connection, channel);
         RecoveryListener recoveryListener = capturedRecoveryListener();
         ConsumerRecoveryListener consumerListener = capturedConsumerRecoveryListener();
         recoveryListener.handleRecoveryStarted(connection);
@@ -541,6 +625,10 @@ class RabbitMqConsumerRecoveryTest {
             recoveryListener.handleRecoveryStarted(connection);
             recoveryListener.handleRecovery(connection);
         }).doesNotThrowAnyException();
+    }
+
+    private List<ILoggingEvent> warnings() {
+        return logged.list.stream().filter(event -> event.getLevel() == Level.WARN).toList();
     }
 
     private RecoveryListener capturedRecoveryListener() {

@@ -72,8 +72,10 @@ source believes something that stopped being true.
    closes, stops for good or fails to build.
 2. **It has to be the connection the builder was given.** `Channel.getConnection()` on an `AutorecoveringChannel`
    returns the plain connection underneath it, which never calls a recovery listener. The listeners go on the
-   `AutorecoveringConnection` the source was built with, and a connection that isn't one gets none, since it never
-   recovers by itself.
+   `AutorecoveringConnection` the source was built with, and a connection that isn't one gets none. When that
+   connection or the source's channel recovers anyway, as a `Connection` that wraps an `AutorecoveringConnection` for
+   metrics or tracing does, the source logs at `warn` that it can't follow the recoveries. With topology recovery off
+   it then stops consuming after a recovery.
 3. **The poll registers and cancels a consumer only between recoveries.** `RabbitMqConsumerRecovery` counts each
    recovery that starts and each that ends. A consumer the source no longer wants is retired, which means the source
    stops holding its tag and keeps it for the next cancel. When the client reports a retired consumer registered
@@ -92,9 +94,12 @@ source believes something that stopped being true.
    failure, such as one from an application's `TrafficListener` before the frame was written, says nothing about the
    consumer. In those cases the consumer may still exist, so the next poll cancels it again and registers no new one
    until a cancel shows the consumer is gone. A cancel that a recovery overlapped is made again after the recovery.
-5. **A release that may have sent its nack stops the source.** The release puts a tag back only for a
-   `ShutdownSignalException`, which `AMQChannel.transmit` throws when the channel is closed, before it writes
-   anything, and the next poll releases it again. Any other failure can come from the application's
+5. **A release that may have sent its nack stops the source, unless the connection dropped.** The release puts a tag
+   back only for a `ShutdownSignalException` on a channel the connection is going to recover. `AMQChannel.transmit`
+   throws it when the channel is closed, before it writes anything, and the next poll releases the tag again. A channel
+   the broker closed on its own, for example with `406 PRECONDITION_FAILED`, and a channel on a connection without
+   automatic recovery never reopen, so the poll stops the source instead of trying again on every poll. Closing the
+   channel already put the delivery back on the queue. Any other failure can come from the application's
    `TrafficListener`, which `AMQChannel.quiescingTransmit` calls before it writes the frame, or from its
    `MetricsCollector`, which `ChannelN.basicNack` calls after. A collector written in Kotlin can throw a checked
    `IOException` there, and `RabbitMqDeliveryFailureAction` wraps it in a `RabbitMqSourceException` like any other
@@ -104,11 +109,20 @@ source believes something that stopped being true.
    delivery without a second nack. The stop takes no new work into the worker from the start, as `close()` does, so a
    delivery the client dispatches after the channel close starts no handler.
 
-   A socket write that fails during a release also throws an `IOException`, so it stops the source too. In 0.34.0 the
-   release put its tag back after any failure and the next poll tried again. When the write failed because the
-   connection was gone, that retry did no harm, since a closed channel refuses it and a recovered one ignores a tag
-   from before the recovery. The source can't tell a failed write from a collector that threw, so it stops in both
-   cases.
+   A socket write that fails also throws an `IOException`. At the throw the source can't tell it from a collector that
+   threw, but one poll later it can. In amqp-client 5.37.0 a failed write on an `AutorecoveringConnection` starts a
+   thread that shuts the connection down before the `IOException` reaches the source. The channel closes within
+   milliseconds with a reason the connection recovers from, and the broker puts every unacknowledged delivery on that
+   connection back on the queue. A collector that threw leaves the channel open, and no recovery starts. So after an
+   `IOException` on a recovering connection the release doesn't put the tag back and doesn't stop the source yet. The
+   first poll at least a poll interval later keeps the source when the channel has closed with a reason the connection
+   recovers from, or a recovery has started or ended since. Otherwise it stops the source as above. The source never
+   sends a second nack, and the delivery waits at most one poll interval longer for an answer.
+
+   An acknowledgement that fails with an `IOException` on a recovering connection is judged the same way, and so is
+   the acknowledgement or nack of a park. In 0.34.0 the source kept running after one. When the frame never went out
+   and the connection stayed up, the delivery sat unanswered on a live consumer, and at the default `prefetchCount` of
+   one that consumer got nothing further.
 6. **A failure after a permanent stop doesn't stop the source again.** It is logged at `debug` when the handler was
    interrupted or `close()` has stopped waiting for it, and at `warn` otherwise, since nothing else reports an
    `Error`, a checked exception thrown from Kotlin or a failed acknowledgement then. An interrupt is passed on to the
@@ -156,6 +170,12 @@ during one starts consuming on that poll. A consumer the poll registered as a re
 next poll, which then registers a new one if the source should still consume, since the source can't tell whether
 the recovery kept the first one.
 
+The source relies on the client calling the connection's `handleRecovery`. The client calls its recovery listeners
+one after another and stops at the first that throws, and a failed topology recovery skips them too. The source then
+neither registers nor cancels a consumer until the next recovery ends. It can't tell such a recovery from one that is
+still waiting for the broker, and ending the wait on a timer could register a consumer next to one the recovery
+registers again. So it logs at `warn` once the channel has been open for a minute during a recovery that hasn't ended.
+
 A cancel that keeps failing in a way that says nothing about the consumer, such as a `TrafficListener` that throws on
 every frame, keeps the source from registering a new consumer for as long as it fails. Registering one anyway could
 leave two consumers on the queue. The poll still releases a held delivery while the cancel fails.
@@ -179,6 +199,11 @@ will be wrong in some deployment.
 
 **Stop the source when the tag is stale.** Closing the channel takes it out of the connection's recovery for good, as
 ADR 133 explains for #1060, and the source would never consume again.
+
+**Close only the channel after a release that may have sent its nack, and open a new one.** It keeps the source
+consuming, but a new channel numbers its delivery tags from 1 again. A handler still finishing a delivery from the old
+channel would acknowledge a different message on the new one under the same number, and that message is lost. Every
+acknowledgement, park and held tag would need to check which channel it belongs to.
 
 **Refuse a close timeout beyond what a nano time can express in the builder.** It turns a value that closed cleanly
 into an error at startup. The saturating timeout closes the same way for every value.

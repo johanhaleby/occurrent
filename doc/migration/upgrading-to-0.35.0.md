@@ -46,9 +46,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
 #### RabbitMQ
 
 - [A RabbitMQ source consumes again after a recovery without topology recovery](#a-rabbitmq-source-consumes-again-after-a-recovery-without-topology-recovery).
-  A source on a connection with topology recovery turned off registers a new consumer after a recovery. A
-  `TrafficListener` or `MetricsCollector` that throws while the source sends a negative acknowledgement stops the
-  source. Two log lines change their text. Compiles unchanged.
+  A source on a connection with topology recovery turned off registers a new consumer after a recovery. A source stops
+  in three cases where it kept running in 0.34.0. Two log lines change their text. Compiles unchanged.
 
 #### Kafka
 
@@ -357,10 +356,23 @@ Nothing in your code changes. If you restart the source after a recovery, or tur
 the source consuming, you can stop doing that. With topology recovery on, the source keeps the consumer the client
 registered and starts no second one.
 
-A `TrafficListener` or `MetricsCollector` on the connection that throws while the source sends a negative
-acknowledgement for a held delivery now stops the source, with a line at `error`. The source can't tell whether the
-acknowledgement went out, and sending it twice makes the broker close the channel. Closing the channel puts the
-delivery back on the queue. In 0.34.0 the next poll sent it again.
+A source now stops, with a line at `error`, in three cases where 0.34.0 kept it running. Closing its channel puts the
+delivery back on the queue.
+
+- **A `TrafficListener` or `MetricsCollector` throws while the source sends a negative acknowledgement for a held
+  delivery.** The source can't tell whether it went out, and sending it twice makes the broker close the channel. In
+  0.34.0 the next poll sent it again.
+- **A negative acknowledgement or an acknowledgement fails with an `IOException` on a connection with automatic
+  recovery, and a poll interval later the connection still hasn't dropped.** A `TrafficListener` or `MetricsCollector`
+  written in Kotlin can throw one while the connection is fine. In 0.34.0 the source kept running. It sent the negative
+  acknowledgement again on the next poll, and left a delivery whose acknowledgement never went out unanswered, so at
+  the default `prefetchCount` of one the broker sent the source nothing further.
+- **Releasing a held delivery fails because its channel is closed for good.** The broker closed the channel on its
+  own, for example with `406 PRECONDITION_FAILED`, or the connection has no automatic recovery. In 0.34.0 the source
+  tried again and logged a warning on every poll.
+
+An `IOException` because the connection dropped doesn't stop the source. It keeps running and consumes again after the
+recovery.
 
 Two log lines of the delivery failure policy have new text, and a search or an alert on the old one stops matching.
 

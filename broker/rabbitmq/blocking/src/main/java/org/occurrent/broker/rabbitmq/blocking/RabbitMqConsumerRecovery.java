@@ -32,7 +32,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 
 import static java.util.Objects.requireNonNull;
 
@@ -52,16 +54,21 @@ import static java.util.Objects.requireNonNull;
  * therefore judged on the last of those. A channel's own recovery listener runs before the topology is recovered and
  * could not tell the two cases apart.
  * <p>
- * Topology recovery registers every consumer the client had a record of when the recovery started, including one the
- * source cancels while the recovery runs. So {@link #consume(Consume)} and {@link #cancelRetired(Channel)} do nothing
- * while a recovery runs, and a consumer the source no longer wants stays retired until a cancel that no recovery
- * overlapped has removed it.
+ * Topology recovery registers every consumer the client has a record of when the recovery reaches its consumers, after
+ * the channels have recovered, including one the source cancels while the recovery runs. So {@link #consume(Consume)}
+ * and {@link #cancelRetired(Channel)} do nothing from the start of a recovery to its end, and a consumer the source no
+ * longer wants stays retired until a cancel that no recovery overlapped has removed it.
+ * <p>
+ * The client calls {@code handleRecovery} on its listeners one after another and stops at the first that throws, and a
+ * failed topology recovery skips it too. The source then waits for a recovery that never ends, until the next recovery
+ * ends. {@link #cancelRetired(Channel)} logs that at {@code warn} once the channel has been open for a minute.
  */
 public final class RabbitMqConsumerRecovery {
 
     private final AtomicReference<@Nullable String> consumerTag;
     private final String queue;
     private final Logger log;
+    private final LongSupplier nanoTime;
     private final Object lock = new Object();
     private boolean detached;
     private @Nullable Runnable removal;
@@ -70,6 +77,13 @@ public final class RabbitMqConsumerRecovery {
     private long recoveryCount;
     // Consumers the source no longer wants and has not yet seen cancelled. Under lock.
     private final Set<String> retired = new LinkedHashSet<>();
+    // When cancelRetired first found the channel open during the current recovery, and whether it has warned about
+    // that recovery. Under lock.
+    private boolean openDuringRecovery;
+    private long openDuringRecoverySinceNanos;
+    private boolean warnedAboutRecovery;
+
+    static final long UNFINISHED_RECOVERY_WARNING_NANOS = TimeUnit.MINUTES.toNanos(1);
 
     /**
      * @param consumerTag The source's consumer tag. The source clears it on its own when it stops, so the recovery
@@ -78,20 +92,38 @@ public final class RabbitMqConsumerRecovery {
      * @param log         The source's own logger.
      */
     public RabbitMqConsumerRecovery(AtomicReference<@Nullable String> consumerTag, String queue, Logger log) {
+        this(consumerTag, queue, log, System::nanoTime);
+    }
+
+    RabbitMqConsumerRecovery(AtomicReference<@Nullable String> consumerTag, String queue, Logger log, LongSupplier nanoTime) {
         this.consumerTag = requireNonNull(consumerTag, "consumerTag cannot be null");
         this.queue = requireNonNull(queue, "queue cannot be null");
         this.log = requireNonNull(log, "log cannot be null");
+        this.nanoTime = requireNonNull(nanoTime, "nanoTime cannot be null");
     }
 
     /**
      * Starts following the recoveries of {@code connection}. Does nothing unless it is the client's own
-     * {@link AutorecoveringConnection}, since no other connection recovers by itself, and nothing after
+     * {@link AutorecoveringConnection}, since no other connection calls the listeners this needs, and nothing after
      * {@link #detach()}. It has to be the connection the source was built with. The one a channel reports through
      * {@link Channel#getConnection()} is the plain connection underneath, which never calls a recovery listener.
+     * <p>
+     * Logs at {@code warn} when {@code connection} is not an {@code AutorecoveringConnection} but it or
+     * {@code channel} recovers, as a {@code Connection} that wraps an {@code AutorecoveringConnection} does. With
+     * topology recovery turned off, the source then stops consuming after a recovery.
+     *
+     * @param channel The channel the source consumes on, created from {@code connection}.
      */
-    public void attachTo(Connection connection) {
+    public void attachTo(Connection connection, Channel channel) {
         requireNonNull(connection, "connection cannot be null");
+        requireNonNull(channel, "channel cannot be null");
         if (!(connection instanceof AutorecoveringConnection recovering)) {
+            if (connection instanceof Recoverable || channel instanceof Recoverable) {
+                log.warn("The connection of the source on queue \"{}\" recovers, but it is a {} rather than the client's own "
+                        + "AutorecoveringConnection, so the source can't follow its recoveries. With topology recovery turned "
+                        + "off, the source stops consuming after a recovery. Build the source with the "
+                        + "AutorecoveringConnection itself.", queue, connection.getClass().getName());
+            }
             return;
         }
         synchronized (lock) {
@@ -110,7 +142,7 @@ public final class RabbitMqConsumerRecovery {
     }
 
     /**
-     * Stops following recoveries. Safe to call more than once, and before {@link #attachTo(Connection)}.
+     * Stops following recoveries. Safe to call more than once, and before {@link #attachTo(Connection, Channel)}.
      */
     public void detach() {
         Runnable toRun;
@@ -182,10 +214,16 @@ public final class RabbitMqConsumerRecovery {
         long before;
         synchronized (lock) {
             if (isRecovering()) {
-                return false;
+                toCancel = null;
+                before = 0;
+            } else {
+                before = recoveryCount;
+                toCancel = new ArrayList<>(retired);
             }
-            before = recoveryCount;
-            toCancel = new ArrayList<>(retired);
+        }
+        if (toCancel == null) {
+            warnIfRecoveryLooksUnfinished(channel);
+            return false;
         }
         for (String tag : toCancel) {
             Throwable failure = null;
@@ -225,9 +263,58 @@ public final class RabbitMqConsumerRecovery {
         return expected.equals(held) && consumerTag.compareAndSet(held, replacement);
     }
 
+    /**
+     * How many times a recovery has started or ended since {@link #attachTo(Connection, Channel)}. Two calls that
+     * return different values mean a recovery started or ended between them.
+     */
+    public long recoveries() {
+        synchronized (lock) {
+            return recoveryCount;
+        }
+    }
+
     // Under lock
     private boolean isRecovering() {
         return recoveryCount % 2 != 0;
+    }
+
+    private void warnIfRecoveryLooksUnfinished(Channel channel) {
+        boolean channelOpen = channel.isOpen();
+        long now = nanoTime.getAsLong();
+        boolean warn;
+        synchronized (lock) {
+            warn = isRecovering() && recoveryLooksUnfinished(channelOpen, now);
+        }
+        if (warn) {
+            log.warn("A connection recovery under queue \"{}\" started, and the channel has been open again for a minute "
+                    + "without the client reporting that the recovery ended. A RecoveryListener that throws from "
+                    + "handleRecovery, or a failed topology recovery, keeps the client from reporting it. Until the next "
+                    + "recovery ends, this source neither registers a consumer nor cancels one.", queue);
+        }
+    }
+
+    // Under lock. True once per recovery, when the channel has stayed open for UNFINISHED_RECOVERY_WARNING_NANOS.
+    private boolean recoveryLooksUnfinished(boolean channelOpen, long now) {
+        if (!channelOpen) {
+            openDuringRecovery = false;
+            return false;
+        }
+        if (!openDuringRecovery) {
+            openDuringRecovery = true;
+            openDuringRecoverySinceNanos = now;
+            return false;
+        }
+        if (warnedAboutRecovery || now - openDuringRecoverySinceNanos < UNFINISHED_RECOVERY_WARNING_NANOS) {
+            return false;
+        }
+        warnedAboutRecovery = true;
+        return true;
+    }
+
+    // Under lock
+    private void startWatchingRecovery() {
+        openDuringRecovery = false;
+        warnedAboutRecovery = false;
     }
 
     private static IOException asIoException(Throwable failure) {
@@ -263,6 +350,7 @@ public final class RabbitMqConsumerRecovery {
                 if (!isRecovering()) {
                     recoveryCount++;
                 }
+                startWatchingRecovery();
                 reRegistered = false;
                 tagAtStart = consumerTag.get();
             }
@@ -288,6 +376,7 @@ public final class RabbitMqConsumerRecovery {
                 if (isRecovering()) {
                     recoveryCount++;
                 }
+                startWatchingRecovery();
                 String tag = tagAtStart;
                 tagAtStart = null;
                 if (tag != null && !reRegistered && replaceHeldTag(tag, null)) {

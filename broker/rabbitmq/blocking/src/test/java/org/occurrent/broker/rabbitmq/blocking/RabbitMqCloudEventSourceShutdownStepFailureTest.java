@@ -117,7 +117,7 @@ class RabbitMqCloudEventSourceShutdownStepFailureTest {
     private void attachToConnectionWhoseRemovalThrows(RuntimeException removalFailure) throws ReflectiveOperationException {
         AutorecoveringConnection connection = mock(AutorecoveringConnection.class);
         doThrow(removalFailure).when(connection).removeRecoveryListener(any());
-        field("consumerRecovery", RabbitMqConsumerRecovery.class).attachTo(connection);
+        field("consumerRecovery", RabbitMqConsumerRecovery.class).attachTo(connection, mock(Channel.class));
     }
 
     @SuppressWarnings("unchecked")

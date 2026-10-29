@@ -133,7 +133,7 @@ class RabbitMqDomainEventSourceCancelConsumerTest {
     @Test
     void a_consumer_paused_while_a_recovery_runs_is_cancelled_under_the_tag_the_recovery_registered_it_with_before_another_is_registered() throws Exception {
         AutorecoveringConnection connection = mock(AutorecoveringConnection.class);
-        consumerRecovery().attachTo(connection);
+        consumerRecovery().attachTo(connection, channel);
         RecoveryListener recoveryListener = captured(RecoveryListener.class, captor -> verify(connection).addRecoveryListener(captor.capture()));
         ConsumerRecoveryListener consumerListener = captured(ConsumerRecoveryListener.class, captor -> verify(connection).addConsumerRecoveryListener(captor.capture()));
         // The recovered channel has no consumer under the old tag until topology recovery registers it again

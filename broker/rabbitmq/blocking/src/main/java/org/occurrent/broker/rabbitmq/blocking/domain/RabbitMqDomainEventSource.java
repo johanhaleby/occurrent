@@ -242,6 +242,11 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // pace it, so it still applies immediately, through failureAction, from the point of failure.
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
+    // An IOException from a nack or an ack on a recovering connection, which a failed socket write throws and so does a
+    // TrafficListener or MetricsCollector written in Kotlin. Judged by stopUnlessConnectionDropped. Under consumeLock.
+    private boolean unexplainedFailure;
+    private long unexplainedFailureNanos;
+    private long recoveriesAtUnexplainedFailure;
     // When close() has to give up on a delivery, which is at this moment. Published before close() starts waiting and
     // read under consumeLock, so a projection that returns around the deadline either acknowledges before it or is
     // fenced by it, rather than racing a flag close() would set afterwards. A park or acknowledgement that already
@@ -300,7 +305,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
             throw new RabbitMqSourceException("Failed to declare topology for queue \"" + queue + "\"", e);
         }
         worker.discardOnRecovery(consumeChannel);
-        consumerRecovery.attachTo(builder.connection);
+        consumerRecovery.attachTo(builder.connection, consumeChannel);
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
@@ -315,7 +320,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         try {
             consumeLock.lock();
             try {
-                if (permanentlyStopped) {
+                if (permanentlyStopped || stopUnlessConnectionDropped()) {
                     return;
                 }
                 boolean readyForLiveDelivery = feed.isReadyForLiveDelivery();
@@ -363,22 +368,64 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         }
     }
 
-    // Under consumeLock. A release that failed in a way that may or may not have sent its nack can't be retried, since a
-    // second nack for a tag makes the broker close the channel, and can't be left either, since at the default
-    // prefetchCount of one the broker sends nothing further. Closing the channel requeues it.
+    // Under consumeLock. A release that may have sent its nack can't be retried, since a second nack for a tag makes the
+    // broker close the channel, and can't be left either, since at the default prefetchCount of one the broker sends
+    // nothing further. Closing the channel requeues it.
     private void releaseHeldDeliveriesOrStop() {
         try {
             releaseHeldDeferredDelivery();
             releaseHeldFailedDelivery();
         } catch (Throwable e) {
-            if (nackNotSent(e)) {
+            boolean lostToConnectionRecovery = failureAction.isLostToConnectionRecovery(e);
+            if (nackNotSent(e) && lostToConnectionRecovery) {
                 throw e;
             }
-            log.error("Releasing a held delivery on queue \"{}\" failed, and the negative acknowledgement may or may not "
-                    + "have been sent. Stopping this source and closing its channel, which puts that delivery back on "
-                    + "the queue.", queue, e);
+            if (lostToConnectionRecovery) {
+                log.warn("Releasing a held delivery on queue \"{}\" failed with an IOException, which a dropped connection "
+                        + "throws. Unless the channel has closed by the next poll, this source stops then and closes it, "
+                        + "which puts that delivery back on the queue.", queue, e);
+                awaitConnectionDrop();
+                return;
+            }
+            if (nackNotSent(e)) {
+                log.error("Releasing a held delivery on queue \"{}\" failed because its channel is closed, and the "
+                        + "connection is not going to recover it. Stopping this source. Closing the channel put that "
+                        + "delivery back on the queue.", queue, e);
+            } else {
+                log.error("Releasing a held delivery on queue \"{}\" failed, and the negative acknowledgement may or may "
+                        + "not have been sent. Stopping this source and closing its channel, which puts that delivery back "
+                        + "on the queue.", queue, e);
+            }
             stopPermanently();
         }
+    }
+
+    // Under consumeLock
+    private void awaitConnectionDrop() {
+        unexplainedFailure = true;
+        unexplainedFailureNanos = System.nanoTime();
+        recoveriesAtUnexplainedFailure = consumerRecovery.recoveries();
+    }
+
+    // Under consumeLock. A failed socket write on a recovering connection shuts the connection down within
+    // milliseconds, and the broker requeues every unacknowledged delivery on it. A channel still open a full poll
+    // interval later, with no recovery since, means the IOException came from somewhere else, and the delivery may sit
+    // unanswered. Stopping closes the channel, which requeues it. Returns whether this source stopped.
+    private boolean stopUnlessConnectionDropped() {
+        if (!unexplainedFailure || System.nanoTime() - unexplainedFailureNanos < pollInterval.toNanos()) {
+            return false;
+        }
+        unexplainedFailure = false;
+        boolean dropped = consumerRecovery.recoveries() != recoveriesAtUnexplainedFailure
+                || (!consumeChannel.isOpen() && failureAction.isLostToConnectionRecovery(consumeChannel.getCloseReason()));
+        if (dropped) {
+            return false;
+        }
+        log.error("A negative acknowledgement or an acknowledgement on queue \"{}\" failed with an IOException, and the "
+                + "connection under its channel did not drop, so the frame may or may not have been sent. Stopping this "
+                + "source and closing its channel, which puts that delivery back on the queue.", queue);
+        stopPermanently();
+        return true;
     }
 
     // Nacks (with requeue) a snapshot of what handleDelivery left held, if anything, bypassing DeliveryFailurePolicy
@@ -395,9 +442,9 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     //
     // A nack that failed on a closed channel never drops the tag it was for. It goes back to the front, ahead of
     // whatever this pass has not gotten to yet, and this pass stops rather than trying the next slot. The next poll
-    // retries it. Any other failure may come before the frame is written, from an application's TrafficListener, or
-    // after it, from its MetricsCollector, an IOException that basicNack declares included. The tag is not put back,
-    // and the poll stops this source instead.
+    // retries it while the connection recovers, and stops this source otherwise. Any other failure may come before the
+    // frame is written, from an application's TrafficListener, or after it, from its MetricsCollector, an IOException
+    // that basicNack declares included. The tag is not put back, see releaseHeldDeliveriesOrStop.
     private void releaseHeldDeferredDelivery() {
         releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver);
     }
@@ -493,11 +540,24 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
                 }
                 return;
             }
-            if (failureAction.isLostToConnectionRecovery(e)) {
+            if (failureAction.isLostToConnectionRecovery(e) && e instanceof ShutdownSignalException) {
                 log.warn("The connection under queue \"{}\" dropped before delivery tag {} could be acknowledged or "
                         + "rejected. RabbitMQ puts it back on the queue, and this source receives it again once a "
                         + "consumer is registered on the recovered channel.",
                         queue, deliveryTag, e);
+                return;
+            }
+            if (failureAction.isLostToConnectionRecovery(e)) {
+                log.warn("Acknowledging or rejecting delivery tag {} on queue \"{}\" failed with an IOException, which a "
+                        + "dropped connection throws. Unless the channel has closed by a poll a full poll interval from "
+                        + "now, this source stops then and closes it, which puts that delivery back on the queue.",
+                        deliveryTag, queue, e);
+                consumeLock.lock();
+                try {
+                    awaitConnectionDrop();
+                } finally {
+                    consumeLock.unlock();
+                }
                 return;
             }
             log.error("Handling delivery tag {} on queue \"{}\" failed outside this source's delivery failure policy. "
