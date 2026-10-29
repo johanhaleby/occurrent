@@ -124,8 +124,8 @@ final class NamedCatchupSupport {
     private final ConcurrentMap<String, Owned> owned = new ConcurrentHashMap<>();
     // One lock per id, held by the subscribes and the cancel of that id, and removed once no thread holds or waits for it
     private final ConcurrentMap<String, IdLock> idLocks = new ConcurrentHashMap<>();
-    // Set while a replay is launched on this thread, which can run the caller's action with the state monitor held
-    private static final ThreadLocal<Boolean> LAUNCHING_REPLAY = ThreadLocal.withInitial(() -> false);
+    // Set while this thread holds a state monitor and can run the caller's code under it, see underStateMonitor
+    private static final ThreadLocal<Boolean> REFUSING_SUBSCRIBE_AND_CANCEL = ThreadLocal.withInitial(() -> false);
 
     NamedCatchupSupport(CheckpointAwareSubscriptionModel wrapped, Class<?> modelClass) {
         this.wrapped = requireNonNull(wrapped);
@@ -268,17 +268,30 @@ final class NamedCatchupSupport {
     }
 
     // Called with the state monitor held. A replay whose start, reader and action complete on this thread runs the
-    // action here, so the mark refuses a subscribe or cancel from it that would wait for the per-id lock under the monitor.
-    // Every id is refused, not only the replaying one. A cancel holds the lock of its id while it waits for that id's
-    // state monitor, so waiting for the lock of any id under this monitor can close a cycle with another replay
+    // action here, so the launch is refused a subscribe or cancel too, see underStateMonitor
     private static void launch(CatchupState state) {
-        boolean launchingAlready = LAUNCHING_REPLAY.get();
-        LAUNCHING_REPLAY.set(true);
+        refusingSubscribeAndCancel(state.launcher);
+    }
+
+    // Runs work holding the state monitor, for work that can run the caller's code, such as disposing a replay, which
+    // cancels its action, or a pause of the wrapped model. A subscribe or cancel from that code is refused, since it
+    // would wait for the per-id lock under the monitor. Every id is refused, not only the id of state. A cancel holds the lock
+    // of its id while it waits for that id's state monitor, so waiting for the lock of any id under this monitor can
+    // close a cycle with that cancel.
+    private static void underStateMonitor(CatchupState state, Runnable work) {
+        synchronized (state) {
+            refusingSubscribeAndCancel(work);
+        }
+    }
+
+    private static void refusingSubscribeAndCancel(Runnable work) {
+        boolean refusingAlready = REFUSING_SUBSCRIBE_AND_CANCEL.get();
+        REFUSING_SUBSCRIBE_AND_CANCEL.set(true);
         try {
-            state.launcher.run();
+            work.run();
         } finally {
-            if (!launchingAlready) {
-                LAUNCHING_REPLAY.remove();
+            if (!refusingAlready) {
+                REFUSING_SUBSCRIBE_AND_CANCEL.remove();
             }
         }
     }
@@ -459,9 +472,10 @@ final class NamedCatchupSupport {
     // Runs work holding the lock of subscriptionId, which is never held across anything asynchronous, and always taken
     // before the state monitor
     private <T> T underIdLock(String subscriptionId, Supplier<T> work) {
-        if (LAUNCHING_REPLAY.get()) {
-            throw new IllegalStateException("Cannot subscribe or cancel subscription " + subscriptionId + " through the catch-up subscription model while a catch-up replay runs on the thread that subscribed it,"
-                    + " since a replay that runs on that thread can hold what the call waits for. Subscribe or cancel from another thread.");
+        if (REFUSING_SUBSCRIBE_AND_CANCEL.get()) {
+            throw new IllegalStateException("Cannot subscribe or cancel subscription " + subscriptionId + " through the catch-up subscription model from code that runs while the model holds the state of a subscription,"
+                    + " as a catch-up replay on the thread that subscribed it does, and so do a handover to the model it wraps, a stop and a shutdown. That code can hold what the call waits for."
+                    + " Subscribe or cancel from another thread.");
         }
         IdLock idLock = idLocks.compute(subscriptionId, (id, current) -> {
             IdLock used = current == null ? new IdLock() : current;
@@ -491,7 +505,8 @@ final class NamedCatchupSupport {
         String subscriptionId = replay.subscriptionId();
         SubscriptionModel delegate = replay.delegate();
         StartAt liveStartAt = StartAt.checkpoint(replayStart.liveFrom());
-        synchronized (state) {
+        // A pause of the wrapped model cancels the action of the run it pauses, which runs the caller's code
+        underStateMonitor(state, () -> {
             // A stop() that came after this launch's last check parked the subscription, and a start(..) since then
             // may have cleared stopped or run a newer launch. Either way the subscription is no longer this launch's,
             // and handing it over would hand over a replay the stop cut short.
@@ -536,7 +551,7 @@ final class NamedCatchupSupport {
             catchingUp.remove(subscriptionId, state);
             delegated.waitUntilStarted().subscribe(unused -> {
             }, state.started::tryEmitError, state.started::tryEmitEmpty);
-        }
+        });
     }
 
     // Resumes the subscription the wrapped model holds paused at liveStartAt. A start(true) of the wrapped model, or of
@@ -661,7 +676,7 @@ final class NamedCatchupSupport {
         catchingUp.values().forEach(state -> {
             // The per-state monitor closes the race with handOver: either the handover completed first (the wrapped
             // model's stop() below covers the live subscription), or the replay is disposed before it can hand over.
-            synchronized (state) {
+            underStateMonitor(state, () -> {
                 if (!state.handedOver.get() && !state.cancelled.get()) {
                     Disposable replaying = state.replaying.getAndSet(null);
                     if (replaying != null) {
@@ -669,7 +684,7 @@ final class NamedCatchupSupport {
                     }
                     state.parked.set(true);
                 }
-            }
+            });
         });
         named.stop();
     }
@@ -865,7 +880,7 @@ final class NamedCatchupSupport {
         new ArrayList<>(catchingUp.keySet()).forEach(subscriptionId -> {
             CatchupState state = catchingUp.remove(subscriptionId);
             if (state != null) {
-                synchronized (state) {
+                underStateMonitor(state, () -> {
                     state.cancelled.set(true);
                     Disposable replaying = state.replaying.get();
                     if (replaying != null) {
@@ -875,7 +890,7 @@ final class NamedCatchupSupport {
                     if (!state.handedOver.get()) {
                         state.started.tryEmitError(new SubscriptionModelShutdownException());
                     }
-                }
+                });
             }
         });
         // Safe no-op on a cold-only composition: a Spring context close (destroyMethod = "shutdown") must not throw.

@@ -961,9 +961,12 @@ and the `Flux` of an unnamed reactor subscription failed with MongoDB's own erro
 
 On the reactor stack an action can no longer subscribe or cancel a subscription through a catch-up subscription
 model while a replay runs on the thread that subscribed, which happens when the event store answers on that thread.
-The call throws `IllegalStateException` for every subscription id, not only the one replaying. Two replays whose
-actions each cancel the other's subscription would otherwise wait on each other for good. Subscribe or cancel from
-another thread.
+Neither can code that runs while the catch-up model hands a subscription over to the model it wraps, or while it
+stops or shuts down during a replay. A `doOnCancel` on the `Mono` an action returns is such code, since a pause at the
+handover, a stop and a shutdown cancel that `Mono`. The call throws `IllegalStateException` for every subscription
+id, not only the one the catch-up model works on. Two replays whose actions each cancel the other's subscription
+would otherwise wait on each other for good, and so would such code and a cancel of the same subscription on another
+thread. Subscribe or cancel from another thread.
 
 ### What happens
 
