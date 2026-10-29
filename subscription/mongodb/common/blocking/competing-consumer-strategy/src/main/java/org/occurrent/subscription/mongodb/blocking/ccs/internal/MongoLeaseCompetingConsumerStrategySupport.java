@@ -675,9 +675,6 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private void tellInBackground(ConsumerState c) {
         while (c.tellAgain && TELLING.compareAndSet(c, false, true)) {
             try {
-                // Only close() is meant to interrupt this thread. An interrupt that a listener sets and does not clear
-                // would make the first blocking call of the next one throw.
-                Thread.interrupted();
                 if (!running) {
                     return;
                 }
@@ -712,6 +709,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 break;
             }
             lastDirty = markTelling(c, change, status, told);
+            // Only close() is meant to interrupt this thread. An interrupt that a listener sets and does not clear
+            // would make the first blocking call of the next one throw, also within this tell.
+            Thread.interrupted();
             errorSeen |= tellListeners(c, change, null);
             c.told = change == Change.GRANT ? new Granted(tokenOf(status), seenLapses) : new NotGranted(seenLosses);
         }

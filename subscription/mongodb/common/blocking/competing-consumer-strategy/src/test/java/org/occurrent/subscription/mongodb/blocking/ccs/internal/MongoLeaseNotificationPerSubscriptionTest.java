@@ -60,7 +60,8 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  * A listener callback that is slow for one subscription, the way resuming a subscription whose change stream is still
  * opening is slow, must not delay what the listeners hear about another subscription. A subscription whose loss is
  * still being told hears of a later grant after the loss. A listener that throws an {@link Error} is told the current
- * answer again in the next round.
+ * answer again in the next round. A listener that interrupts its own thread does not hand the interrupt to the next
+ * listener call on that thread.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -417,6 +418,68 @@ class MongoLeaseNotificationPerSubscriptionTest {
         }
     }
 
+    @Test
+    void a_listener_that_interrupts_its_thread_does_not_hand_the_interrupt_to_the_next_background_tell() throws InterruptedException {
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        NotifierThatKeepsTheInterruptFlag notifier = new NotifierThatKeepsTheInterruptFlag();
+        MongoLeaseCompetingConsumerStrategySupport node = nodeWhoseRoundsTheTestRuns(round, notifier);
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        ListenerThatInterruptsItsThreadOnTheGrant listener = new ListenerThatInterruptsItsThreadOnTheGrant(() -> {
+        });
+        try {
+            assertThat(rival.registerCompetingConsumer(locks, A, RIVAL)).isTrue();
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isFalse();
+            node.addListener(listener);
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+            round.get().run();
+            notifier.awaitEveryTask();
+
+            takeOverLease(rival, A);
+            round.get().run();
+            notifier.awaitEveryTask();
+
+            assertThat(listener.calls).containsExactly(
+                    new ListenerThatInterruptsItsThreadOnTheGrant.Call("granted " + A, false),
+                    new ListenerThatInterruptsItsThreadOnTheGrant.Call("prohibited " + A, false));
+        } finally {
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
+    @Test
+    void a_listener_that_interrupts_its_thread_does_not_hand_the_interrupt_to_the_next_listener_call_of_the_same_tell() throws InterruptedException {
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        NotifierThatKeepsTheInterruptFlag notifier = new NotifierThatKeepsTheInterruptFlag();
+        MongoLeaseCompetingConsumerStrategySupport node = nodeWhoseRoundsTheTestRuns(round, notifier);
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        ListenerThatInterruptsItsThreadOnTheGrant listener = new ListenerThatInterruptsItsThreadOnTheGrant(() -> {
+            takeOverLease(rival, A);
+            round.get().run();
+        });
+        try {
+            assertThat(rival.registerCompetingConsumer(locks, A, RIVAL)).isTrue();
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isFalse();
+            node.addListener(listener);
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+            round.get().run();
+            notifier.awaitEveryTask();
+
+            assertThat(listener.calls).containsExactly(
+                    new ListenerThatInterruptsItsThreadOnTheGrant.Call("granted " + A, false),
+                    new ListenerThatInterruptsItsThreadOnTheGrant.Call("prohibited " + A, false));
+        } finally {
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
+    private MongoLeaseCompetingConsumerStrategySupport nodeWhoseRoundsTheTestRuns(AtomicReference<Runnable> round, NotifierThatKeepsTheInterruptFlag notifier) {
+        return new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(),
+                new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()), notifier))
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(locks));
+    }
+
     private MongoLeaseCompetingConsumerStrategySupport nodeWhoseRoundsTheTestRuns(AtomicReference<Runnable> round) {
         return new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(),
                 new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh())))
@@ -571,6 +634,34 @@ class MongoLeaseNotificationPerSubscriptionTest {
         @Override
         public void onConsumeProhibited(String subscriptionId, String subscriberId) {
             prohibited.countDown();
+        }
+    }
+
+    /**
+     * Runs {@code onTheGrant} on the grant and then interrupts the thread it was called on and returns. Records each
+     * call it is told of with whether the thread was interrupted when the call began.
+     */
+    private static final class ListenerThatInterruptsItsThreadOnTheGrant implements CompetingConsumerListener {
+        private final List<Call> calls = new CopyOnWriteArrayList<>();
+        private final Runnable onTheGrant;
+
+        private ListenerThatInterruptsItsThreadOnTheGrant(Runnable onTheGrant) {
+            this.onTheGrant = onTheGrant;
+        }
+
+        @Override
+        public void onConsumeGranted(String subscriptionId, String subscriberId) {
+            calls.add(new Call("granted " + subscriptionId, Thread.currentThread().isInterrupted()));
+            onTheGrant.run();
+            Thread.currentThread().interrupt();
+        }
+
+        @Override
+        public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+            calls.add(new Call("prohibited " + subscriptionId, Thread.currentThread().isInterrupted()));
+        }
+
+        private record Call(String name, boolean interruptedOnEntry) {
         }
     }
 
