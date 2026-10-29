@@ -313,6 +313,27 @@ class DcbCatchupSubscriptionModelTest {
     }
 
     @Test
+    void a_stored_beginning_of_time_is_not_refused_when_the_dcb_catch_up_starts_from_its_default() {
+        // Given the beginning of time stored without a live start, no event has an earlier time
+        appendTagged("name:1", nameDefined("e1"));
+        Checkpoint beginningOfTime = TimeBasedCheckpoint.beginningOfTime();
+        CheckpointStorage storage = new InMemoryCheckpointStorage();
+        storage.save("subscription", beginningOfTime);
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        DcbCatchupSubscriptionModel subscription = new DcbCatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")),
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+
+        // When
+        Throwable failure = catchThrowable(() -> subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted(Duration.ofSeconds(10)));
+
+        // Then the start is not refused and the subscription delivers what is appended to it
+        assertThat(failure).as("the start failure").isNull();
+        NameDefined appendedAfterTheStart = nameDefined("appendedAfterTheStart");
+        appendTagged("name:1", appendedAfterTheStart);
+        await().untilAsserted(() -> assertThat(received).contains(appendedAfterTheStart));
+    }
+
+    @Test
     void live_only_subscription_applies_the_dcb_query_post_filter() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
