@@ -3590,11 +3590,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                         pauseInTheWrappedModel(subscriptionId);
                     }
                 } catch (SubscriptionRefusedException e) {
-                    // The delegate no longer knows this id, most likely a catch-up subscription whose replay had
-                    // already failed before this call. That leaves nothing to pause downstream, but the lease still
-                    // needs releasing below, otherwise this node reports itself Running while holding a lease no
-                    // delegate is actually serving.
-                    log.warn("The wrapped subscription model refused to pause subscription {} due to {} - {}, so it no longer runs it here. Releasing the lease anyway (subscriberId={}, pausedByUser={})",
+                    // The delegate doesn't know this id, such as a catch-up subscription whose replay had already
+                    // failed before this call, or it knows the id and doesn't run it. The lease still needs releasing
+                    // below, otherwise this node reports itself Running while holding a lease no delegate is serving.
+                    log.warn("The wrapped subscription model refused to pause subscription {} due to {} - {}. Releasing the lease anyway (subscriberId={}, pausedByUser={})",
                             subscriptionId, e.getClass().getName(), e.getMessage(), competingConsumer.getSubscriberId(), pausedByUser, e);
                 } catch (Throwable e) {
                     // The pause can take effect before it throws, and the consumer is then paused here too

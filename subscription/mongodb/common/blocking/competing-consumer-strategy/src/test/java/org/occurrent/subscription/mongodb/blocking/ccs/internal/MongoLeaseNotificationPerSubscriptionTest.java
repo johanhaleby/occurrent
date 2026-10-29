@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.mongodb.blocking.ccs.internal;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -27,6 +31,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -40,7 +45,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 
 import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Updates.set;
@@ -256,6 +263,69 @@ class MongoLeaseNotificationPerSubscriptionTest {
     }
 
     @Test
+    void a_listener_that_throws_an_error_which_cannot_be_logged_does_not_keep_the_other_listeners_from_hearing_of_it() {
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        MongoLeaseCompetingConsumerStrategySupport node = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(),
+                new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh())))
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(locks));
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        List<String> told = new CopyOnWriteArrayList<>();
+        try {
+            assertThat(rival.registerCompetingConsumer(locks, A, RIVAL)).isTrue();
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isFalse();
+            node.addListener(ThrowingListener.throwingAnErrorWhichCannotBeLogged("first", told));
+            node.addListener(ThrowingListener.throwingAnErrorWhichCannotBeLogged("second", told));
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+
+            // The refresh runs here and so does the grant it decides, since this ScheduledRefresh has no notifier
+            Throwable thrown = catchThrowable(() -> round.get().run());
+
+            assertThat(told).containsExactlyInAnyOrder("first granted " + A, "second granted " + A);
+            assertThat(thrown).as("what the refresh threw").isNull();
+        } finally {
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
+    @Test
+    void an_error_a_listener_throws_in_the_background_is_logged_once_at_error_level() throws InterruptedException {
+        MongoLeaseCompetingConsumerStrategySupport node = nodeRefreshingOnItsOwn();
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        ErrorOnTheGrantListener listener = new ErrorOnTheGrantListener();
+        Logged logged = new Logged();
+        Logger supportLogger = (Logger) LoggerFactory.getLogger(MongoLeaseCompetingConsumerStrategySupport.class);
+        Logger scheduledRefreshLogger = (Logger) LoggerFactory.getLogger(ScheduledRefresh.class);
+        logged.start();
+        supportLogger.addAppender(logged);
+        scheduledRefreshLogger.addAppender(logged);
+        try {
+            assertThat(rival.registerCompetingConsumer(locks, A, RIVAL)).isTrue();
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isFalse();
+            node.addListener(listener);
+
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+            assertThat(listener.granted.await(10, TimeUnit.SECONDS)).as("the listener was told of the grant of " + A).isTrue();
+            takeOverLease(rival, A);
+            // The notifier tells the listener of the loss only once it is done with the grant, so a second line for
+            // the grant would already be logged by then
+            assertThat(listener.prohibited.await(10, TimeUnit.SECONDS)).as("the listener was told of the loss of " + A).isTrue();
+
+            assertThat(logged.failures()).singleElement().satisfies(failure -> {
+                assertThat(failure.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(failure.getLoggerName()).isEqualTo(MongoLeaseCompetingConsumerStrategySupport.class.getName());
+                assertThat(failure.getThrowableProxy().getClassName()).isEqualTo(AssertionError.class.getName());
+            });
+        } finally {
+            supportLogger.detachAppender(logged);
+            scheduledRefreshLogger.detachAppender(logged);
+            logged.stop();
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
+    @Test
     void a_listener_that_throws_in_the_background_does_not_stop_later_callbacks_for_other_subscriptions() throws InterruptedException {
         MongoLeaseCompetingConsumerStrategySupport node = nodeRefreshingOnItsOwn();
         MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
@@ -395,18 +465,60 @@ class MongoLeaseNotificationPerSubscriptionTest {
         }
     }
 
+    // The two lines that log a failing listener, the one the support class logs and the one the notifier logs
+    private static final class Logged extends AppenderBase<ILoggingEvent> {
+        private final List<ILoggingEvent> events = new CopyOnWriteArrayList<>();
+
+        @Override
+        protected void append(ILoggingEvent event) {
+            String message = event.getMessage();
+            if (message.startsWith("Listener {} failed on") || message.startsWith("A notification for subscription {} failed")) {
+                events.add(event);
+            }
+        }
+
+        List<ILoggingEvent> failures() {
+            return List.copyOf(events);
+        }
+    }
+
+    /**
+     * Throws an {@link AssertionError} on the grant, after counting down {@link #granted}, and counts down
+     * {@link #prohibited} on the loss.
+     */
+    private static final class ErrorOnTheGrantListener implements CompetingConsumerListener {
+        private final CountDownLatch granted = new CountDownLatch(1);
+        private final CountDownLatch prohibited = new CountDownLatch(1);
+
+        @Override
+        public void onConsumeGranted(String subscriptionId, String subscriberId) {
+            granted.countDown();
+            throw new AssertionError("failed on the grant of " + subscriptionId);
+        }
+
+        @Override
+        public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+            prohibited.countDown();
+        }
+    }
+
     /**
      * Records each call it is told of and then throws, an {@link IllegalStateException} or, made by
-     * {@link #throwingAnError}, an {@link AssertionError}.
+     * {@link #throwingAnError}, an {@link AssertionError}, or, made by {@link #throwingAnErrorWhichCannotBeLogged}, an
+     * {@link ErrorThatThrowsWhenLogged}.
      */
-    private record ThrowingListener(String name, List<String> told, boolean throwsAnError) implements CompetingConsumerListener {
+    private record ThrowingListener(String name, List<String> told, Function<String, Throwable> failure) implements CompetingConsumerListener {
 
         private ThrowingListener(String name, List<String> told) {
-            this(name, told, false);
+            this(name, told, IllegalStateException::new);
         }
 
         private static ThrowingListener throwingAnError(String name, List<String> told) {
-            return new ThrowingListener(name, told, true);
+            return new ThrowingListener(name, told, message -> new AssertionError(message));
+        }
+
+        private static ThrowingListener throwingAnErrorWhichCannotBeLogged(String name, List<String> told) {
+            return new ThrowingListener(name, told, message -> new ErrorThatThrowsWhenLogged());
         }
 
         @Override
@@ -422,10 +534,11 @@ class MongoLeaseNotificationPerSubscriptionTest {
         }
 
         private void fail(String message) {
-            if (throwsAnError) {
-                throw new AssertionError(message);
+            Throwable thrown = failure.apply(message);
+            if (thrown instanceof Error error) {
+                throw error;
             }
-            throw new IllegalStateException(message);
+            throw (RuntimeException) thrown;
         }
     }
 
