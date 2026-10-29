@@ -8,6 +8,11 @@ Accepted. Resolves #748, deferred by [ADR 123](0123-a-step-conditions-counts-are
 Consequences section. 0125 is the current maximum, re-audited across every remote branch at write time per the
 max-plus-one rule.
 
+In 0.35.0, the `delete` remedy below reads differently on a subscription that does not declare commit order.
+[ADR 156](0156-a-saga-holds-an-event-that-arrives-before-its-instance-starts.md) holds a non-start event for an
+instance that does not exist instead of skipping it, so after `delete` a later event of that id is held, not skipped.
+To abandon an instance there, keep a terminal envelope and remove its held events, as the runbook shows.
+
 ## Context
 
 A flow saga instance's position is a step name, persisted as `FlowStateImpl.currentStep()`. Nothing checks that name
