@@ -9,8 +9,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
 ### Changes that can break the build
 
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
-  `SagaEnvelope` gains a 14th record component and `SagaRunnerConfig` a 6th. **Breaks the build** if you use a record
-  pattern over either.
+  `SagaEnvelope` gains its 14th to 18th record components and `SagaRunnerConfig` a 6th. **Breaks the build** if you
+  use a record pattern over either.
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). `DomainEventFeed` and
   `CatchupProjectionFeed` lose both `accept(..)` overloads, on the blocking and the reactor stack. **Breaks the build**
   if you still call one of them.
@@ -27,6 +27,11 @@ The compiler finds those for you. The other sections compile fine and behave dif
   A saga keeps the highest applied version per stream and event type, and applies a late version instead of skipping
   it. Saga instances store a new `streamMarks` field. Breaks the build only for a record pattern over `SagaEnvelope` or
   `SagaRunnerConfig`.
+- [A saga holds an event that arrives before its instance starts](#a-saga-holds-an-event-that-arrives-before-its-instance-starts).
+  The event is kept in the state store and applied after the start, and `run` refuses a store that cannot hold it. Stop
+  the saga on every node to upgrade. Compiles unchanged on the shipped stores.
+- [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
+  event keeps its own clock. Compiles unchanged.
 
 ### DCB
 
@@ -108,7 +113,8 @@ is gone from that instance's document after its next save. A document without th
 `SagaEnvelope.positionWatermark()` is deprecated.
 
 A 0.34.0 node reads a document that 0.35.0 saved, and the other way round. A rolling upgrade works, and so does going
-back to 0.34.0.
+back to 0.34.0, except for a saga that holds events, which has to
+[stop on every node](#stop-the-saga-on-every-node-to-upgrade).
 
 A failure record whose input is `position:N` was written for a position-only event. On an `ACTIVE` instance 0.35.0
 treats it as no record, so the next failure starts a fresh budget and the next successful delivery clears it.
@@ -287,8 +293,11 @@ A reaction that ran for a late event runs once. A redelivery of that event is sk
 An event is pending when it was handed to the saga and failed. The instance records its stream version before the
 exception reaches the subscription, whether or not quarantine is on, so a broker that parks the event afterwards does
 not lose it. An operator who replays the parked event after the instance has applied more than a window of later
-versions still gets it applied, once. An instance keeps at most as many pending versions per stream and event type as the
-window, and when one more fails it drops the smallest and logs an error naming the stream.
+versions still gets it applied, once. An instance keeps every pending version until it applies, up to 10 000 in all,
+and logs a warning naming the stream and type once one stream's pending versions of one type outnumber the window. A
+failed version it cannot list is held instead, as
+[A saga holds an event that arrives before its instance starts](#a-saga-holds-an-event-that-arrives-before-its-instance-starts)
+describes.
 
 An instance that failed on an event under 0.34.0 or earlier holds that failure in its failure record, which names the
 event but not its type. If another event fails before the first is offered again, the failure record is replaced, and the
@@ -329,12 +338,14 @@ is applied as before. Late versions are recognised from the instance's next save
 `streamWatermarks` is still written with the highest version of each stream. A 0.34.0 node reads a document that
 0.35.0 saved, ignores `streamMarks`, and replaces the document without it on its next save. The next 0.35.0 node then
 reads it as an old document. A rolling upgrade works, and so does going back to 0.34.0, which loses late events on that
-stretch as it did before.
+stretch as it did before. A saga that holds events is the exception, and has to
+[stop on every node](#stop-the-saga-on-every-node-to-upgrade).
 
 ### A record pattern over `SagaEnvelope` or `SagaRunnerConfig` stops compiling
 
 A record pattern has to name every component of the canonical constructor. `SagaEnvelope` gains `streamMarks` as its
-14th component and `SagaRunnerConfig` gains `reorderWindow` as its 6th:
+14th component and `heldEventsChecked`, `drainedHeldKeys`, `selfHeldKeys` and `startMark` as its 15th to 18th, and
+`SagaRunnerConfig` gains `reorderWindow` as its 6th:
 
 ```java
 // Before, stops compiling
@@ -344,14 +355,15 @@ case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detectio
 case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detection, var quarantineAfter, var reorderWindow) -> ...
 ```
 
-The same applies to `SagaEnvelope`, which needs a `var streamMarks` after its `failure` binding, and to an
+The same applies to `SagaEnvelope`, which needs `var streamMarks, var heldEventsChecked, var drainedHeldKeys,
+var selfHeldKeys, var startMark` after its `failure` binding, and to an
 `instanceof` pattern as much as a `switch` case. `SagaEnvelope.StreamMarks` and `SagaEnvelope.TypeMark` are new types
 and only matter to a `SagaStateStore` implemented outside this repository, which has to persist `streamMarks`. A store
 that ignores it keeps working, and every instance then reads as it did before 0.35.0, so late versions are not
 recognised.
 
-Constructor calls are not affected. The 13-argument `SagaEnvelope` constructor and the five-argument
-`SagaRunnerConfig` constructor stay, and fill in no marks and a window of 256. `SagaExecutionSupport.EventMeta` gains an
+Constructor calls are not affected. The 13-argument and 14-argument `SagaEnvelope` constructors and the five-argument
+`SagaRunnerConfig` constructor stay, and fill in what they leave out with no marks, nothing held and a window of 256. `SagaExecutionSupport.EventMeta` gains an
 `eventType` component too, and it lives in an `internal` package.
 
 ### Why there is no recipe
@@ -359,6 +371,111 @@ Constructor calls are not affected. The 13-argument `SagaEnvelope` constructor a
 `UpgradeToOccurrent_0_35` does not rewrite these patterns. A record pattern's arity is a compiler-enforced fact, so
 the way `UpgradeToOccurrent_0_34` appends `var appendId` to a `WriteResult` pattern could be extended to these two
 records, but the 0.34.0 change to the same two records got a guide entry and no recipe, and this follows that.
+
+## A saga holds an event that arrives before its instance starts
+
+Up to 0.34.0 a saga skipped a non-start event whose instance had not started, and acknowledged it. A feed that delivers
+out of commit order can hand the saga order 2 before the event that starts the instance, order 1, and order 2's reaction
+then never ran. 0.35.0 keeps such an event in the state store and applies it once the instance starts. The reason is in
+[ADR 156](../architecture/decisions/0156-a-saga-holds-an-event-that-arrives-before-its-instance-starts.md), and the
+report is [#1317](https://github.com/johanhaleby/occurrent/issues/1317).
+
+### Who is affected
+
+A saga whose subscription model does not declare that it delivers in commit order, which is every model that cannot
+promise an event never arrives before its start. A saga on a model that declares it holds nothing and keeps the 0.34.0
+behaviour.
+
+### What changes
+
+- A non-start event for an instance that has not started is held, and applied after the start's reaction, each as an
+  input of its own. A timer of an instance that has not started is still skipped.
+- A held event whose start never arrives stays held until it is removed. The first time a saga holds an event on a node,
+  it logs one INFO naming the store.
+- A failed event that the instance cannot list as pending is held too, and applied when it arrives again. That covers an
+  instance at its limit of 10 000 pending versions, a pending write that keeps losing its compare-and-set or fails in the
+  store, and an event that another delivery passed by a whole reorder window while it was failing.
+- Nothing drops a pending version any more. The saga logs a warning once one stream's pending versions of one type
+  outnumber the reorder window.
+- `SagaRunner.run` throws an `IllegalStateException` when the subscription can hold and the state store does not
+  implement the new `SagaHeldEvents` interface. `SagaStateStore.inMemory()` and `SpringMongoSagaStateStore` both implement it.
+- `SagaStateStore.delete(sagaId)` removes the instance's held events first. After a delete, a later event of that id is
+  held rather than skipped, so keep a completed instance instead when more of its events may still arrive.
+
+### What to do
+
+A saga on one of the shipped stores needs no code change. The MongoDB store creates one new collection per saga, named
+after the saga's collection with `-held-events`, with an index on `sagaId` and `heldAt`. A deployment whose database
+role cannot create collections or indexes has to create it before the saga starts, or grant that.
+
+A `SagaStateStore` implemented outside this repository has to implement `SagaHeldEvents` as well, or `run` refuses it.
+It also has to persist the four new `SagaEnvelope` components, described under
+[Stored saga state](#stored-saga-state-for-held-events) below.
+
+Held events can build up when a saga is deployed onto a live topic, since the later events of instances that began
+before it are held for a start that never arrives. This finds them, per saga id with the oldest first:
+
+```javascript
+db.getCollection("<saga collection>-held-events").aggregate([
+  { $group: { _id: "$sagaId", count: { $sum: 1 }, oldest: { $min: "$heldAt" } } },
+  { $sort: { oldest: 1 } }
+])
+```
+
+### Stop the saga on every node to upgrade
+
+A 0.34.0 node skips an event that arrives before its start, and its save replaces the instance document without the
+fields 0.35.0 uses to drain held events. So for a saga that holds events, stop its consumers on every node and start them
+on 0.35.0 together. Going back to 0.34.0 works the same way. 0.34.0 ignores the held collection and skips early events
+again, and a later upgrade drains what is still held on the next input.
+
+### Stored saga state for held events
+
+A saga instance document gains four fields, all written only by 0.35.0:
+
+| Field | What it holds | A document without it |
+| --- | --- | --- |
+| `heldEventsChecked` | true once the instance has applied what was held for it | reads as false, so the next input drains |
+| `drainedHeldKeys` | the held events the last drain applied, kept until that drain ends | reads as empty |
+| `selfHeldKeys` | failed events the instance keeps outstanding until they apply | reads as empty |
+| `startMark` | the start event's stream id, stream version and position | reads as no start recorded |
+
+A held document has an `_id` of the saga id and the event's key, the `sagaId` again for the index, the stream id, stream version, position when the event
+has one, type, `heldAt`, whether it is `selfHeld` or `outstanding`, and the CloudEvent as JSON. `SagaEnvelope` gains
+these as its 15th to 18th components. The 14-argument constructor stays and fills in nothing held.
+
+## A saga's quarantine budget runs per failing event
+
+Up to 0.34.0 the quarantine budget belonged to the instance. The first failure wrote a `firstFailedAt`, and a later
+failure of a different event kept it. Under a broker's PARK action a failure parked and forgotten days ago then made the
+first failure of an unrelated event quarantine the instance. 0.35.0 gives each failing event its own clock. The reason
+is in [ADR 157](../architecture/decisions/0157-a-sagas-quarantine-budget-runs-per-input.md), and the report is
+[#1318](https://github.com/johanhaleby/occurrent/issues/1318).
+
+### Who is affected
+
+A saga with quarantine turned on through `SagaRunnerConfig.withQuarantineAfter(Duration)`.
+
+### What changes
+
+The saga measures how long an event has been failing from the instant on its pending entry, or from the failure record's
+`firstFailedAt` when the record names that event, or from now. So `SagaFailure.firstFailedAt()` is when the event the
+record names first failed.
+
+| Sequence | 0.34.0 | 0.35.0 |
+| --- | --- | --- |
+| Versions 7, 8, 7, 8 fail in turn | measured from the first failure | each measured from its own first failure, so 7 still reaches the budget |
+| Version 7 fails and is parked, version 8 fails once a week later | 8 quarantines the instance on its first failure | 8 starts its own clock |
+| Version 7 is parked, replayed after `quarantineAfter`, and fails again | measured from the first failure | quarantines the instance on that first replay failure |
+
+The last row is intended, since the parked event has been failing for longer than the budget. Fix the cause before
+replaying a parked event on an instance with quarantine on.
+
+### Stored saga state
+
+Each pending version records when it first failed, in a `pendingSince` list beside `pending` in `streamMarks`. A
+document without it falls back to the failure record's `firstFailedAt` for the event the record names, and any other
+event starts its clock on its next failure.
 
 ## The deprecated `accept(..)` on the projection feeds is removed
 
