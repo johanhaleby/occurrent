@@ -608,6 +608,78 @@ class StreamCatchupHistoryLossOwnershipTest {
         );
     }
 
+    @Test
+    void a_loss_the_old_run_reports_inside_a_resume_at_a_kept_checkpoint_does_not_refuse_a_pause_and_resume_of_the_healthy_subscription() {
+        // Given a subscription whose old run reports the loss of its token inside a resume at a kept checkpoint, before the live model resumes
+        create();
+        catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
+        liveModel.beforeTheNextResumeAt(() -> liveModel.losesTheHistoryOf(ID, TOKEN));
+
+        // When the subscription is resumed at the kept checkpoint, paused and resumed
+        Throwable repositioning = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN)));
+        catchup.pauseSubscription(ID);
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(repositioning).as("thrown by the resume at the kept checkpoint").isNull();
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(liveModel.lossesReported).as("losses the live model reported").containsExactly(TOKEN),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").containsExactly(ID, ID),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty()
+        );
+    }
+
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_a_subscription_that_lost_its_history_after_a_resume_at_a_kept_checkpoint() {
+        // Given a subscription that a loss paused and a resume at a kept checkpoint resumed
+        terminallyPausedAfterALoss();
+        catchup.resumeSubscription(ID, StartAt.checkpoint(TOKEN));
+
+        // When the resumed run loses the history of the kept checkpoint
+        liveModel.losesTheHistoryOf(ID, TOKEN);
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString()).hasMessageNotContaining(LATER_TOKEN.asString());
+        assertAll(
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model, the one at the kept checkpoint").containsExactly(ID),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged, one for each loss").containsExactly(terminalFailureLog(ID, LATER_TOKEN), terminalFailureLog(ID, TOKEN))
+        );
+    }
+
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_a_subscription_whose_run_reopened_inside_the_takeover_window_lost_the_history_again() {
+        // Given a loss reported, with the subscription resumed between the pause and what follows it, so the run is open again
+        create();
+        catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
+        AtomicReference<Throwable> inTheWindow = new AtomicReference<>();
+        liveModel.betweenTheNextTakeOverPauseAndWhatFollows(() -> inTheWindow.set(catchThrowable(() -> catchup.resumeSubscription(ID))));
+        liveModel.losesTheHistoryOf(ID, TOKEN);
+        assertThat(liveModel.isRunning(ID)).as("reopened by the resume inside the window").isTrue();
+
+        // When the reopened run loses the history of the same token again
+        liveModel.losesTheHistoryOf(ID, TOKEN);
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(inTheWindow.get()).as("thrown by the resume inside the window").isNull();
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertAll(
+                () -> assertThat(liveModel.lossesReported).as("losses the live model reported").containsExactly(TOKEN, TOKEN),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model, the one inside the window").containsExactly(ID),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isFalse(),
+                () -> assertThat(received).as("events delivered").isEmpty(),
+                () -> assertThat(signals).as("catch-up signals, so no takeover replay ran").isEmpty(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty()
+        );
+    }
+
     private void terminallyPausedAfterALoss() {
         create();
         catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());

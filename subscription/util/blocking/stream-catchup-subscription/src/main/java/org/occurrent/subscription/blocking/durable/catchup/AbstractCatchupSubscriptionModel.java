@@ -357,14 +357,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             return seen.clears() == clearsWhenReported;
         }
 
-        // Returns what was recorded, or null
-        @Nullable Checkpoint clear() {
-            return state.getAndUpdate(seen -> new State(seen.clears() + 1, null)).lostFrom();
-        }
-
-        // Puts back what clear() returned, unless a loss was recorded since
-        void restore(Checkpoint lostFrom) {
-            state.updateAndGet(seen -> seen.lostFrom() == null ? new State(seen.clears(), lostFrom) : seen);
+        void clear() {
+            state.updateAndGet(seen -> new State(seen.clears() + 1, null));
         }
     }
 
@@ -776,23 +770,26 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // The position given here wins over the live start the last replay handed over, and over a takeover
                 // the live delegate's loss of it asked for, which is asked for again when the live delegate throws
                 HandedOver dropped = handedOver.remove(subscriptionId);
-                // Cleared before the live delegate resumes, so a loss of the position given here is recorded afresh
-                Subscribed made = subscribed.get(subscriptionId);
-                Checkpoint lost = made == null ? null : made.historyLost().clear();
                 // A held replay delivers nothing, and only a call holding the claim runs it again, so it ends only once
                 // the live delegate has resumed and is put back when that throws
                 Subscription resumed;
                 try {
                     resumed = repositionable.resumeSubscription(subscriptionId, startAt);
                 } catch (RuntimeException | Error e) {
-                    if (made != null && lost != null) {
-                        made.historyLost().restore(lost);
-                    }
                     if (dropped != null) {
                         handedOver.putIfAbsent(subscriptionId, dropped);
                     }
                     putBack(inTheWay, e);
                     throw e;
+                }
+                // Cleared only once the live delegate has resumed. The run that lost the history was paused before
+                // that, so its listener read a generation this clear moves past. Its afterPause records nothing after
+                // this clear, and what it recorded before is cleared here, though its error may already be logged. A
+                // loss of the position given here recorded before this clear is reported again when a
+                // resumeSubscription(String) reopens at it.
+                Subscribed made = subscribed.get(subscriptionId);
+                if (made != null) {
+                    made.historyLost().clear();
                 }
                 inTheWay.forEach(ReplayInTheWay::end);
                 models.forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);

@@ -62,6 +62,8 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     private volatile @Nullable RuntimeException nextRepositioningResumeThrows;
     private volatile Runnable betweenTheNextTakeOverPauseAndWhatFollows = () -> {
     };
+    private volatile Runnable beforeTheNextResumeAt = () -> {
+    };
 
     final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
@@ -92,6 +94,12 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     // Runs once, after the next takeover has paused the subscription and before what follows the pause
     HistoryLosingLiveModel betweenTheNextTakeOverPauseAndWhatFollows(Runnable betweenTheNextTakeOverPauseAndWhatFollows) {
         this.betweenTheNextTakeOverPauseAndWhatFollows = betweenTheNextTakeOverPauseAndWhatFollows;
+        return this;
+    }
+
+    // Runs once, at the start of the next resume at a given position and before the subscription is resumed
+    HistoryLosingLiveModel beforeTheNextResumeAt(Runnable beforeTheNextResumeAt) {
+        this.beforeTheNextResumeAt = beforeTheNextResumeAt;
         return this;
     }
 
@@ -147,6 +155,10 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
 
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+        Runnable beforeThisResume = beforeTheNextResumeAt;
+        beforeTheNextResumeAt = () -> {
+        };
+        beforeThisResume.run();
         RuntimeException failure = nextRepositioningResumeThrows;
         if (failure != null) {
             nextRepositioningResumeThrows = null;
