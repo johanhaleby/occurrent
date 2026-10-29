@@ -34,6 +34,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorStreamCatchupSubscriptionModelHistoryLossTest.LosingLiveStartModel;
@@ -418,6 +419,47 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
 
         assertThat(catchup.isRunning(ID)).isTrue();
         assertThat(wrapped.restartedFromThePresent).as("restarts from the present").isEmpty();
+    }
+
+    @Test
+    void a_cancel_whose_returned_mono_is_never_subscribed_still_cancels_in_the_wrapped_model_and_clears_a_subscription_paused_for_good() {
+        // Given a subscription paused for good by a loss from a later token
+        replayAndHandOver();
+        wrapped.losesTheHistoryFrom(ID, LATER_TOKEN);
+        assertThatThrownBy(() -> catchup.resumeSubscription(ID)).isInstanceOf(CatchupCannotResumeException.class);
+
+        // When the caller drops what the cancel returns
+        catchup.cancelSubscription(ID);
+        Throwable resume = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then the id is unknown rather than paused for good
+        assertAll(
+                () -> assertThat(resume).as("what a resume throws").isInstanceOf(UnknownSubscriptionException.class),
+                () -> assertThat(wrapped.cancelled).as("cancels that reached the wrapped model").containsExactly(ID)
+        );
+    }
+
+    @Test
+    void a_cancel_whose_returned_mono_is_subscribed_runs_the_cancel_of_the_wrapped_model_once() {
+        // Given a wrapped model whose cancel does nothing until it is subscribed to, and completes when told to
+        replayAndHandOver();
+        wrapped.losesTheHistoryFrom(ID, LATER_TOKEN);
+        Sinks.Empty<Void> wrappedCancel = Sinks.empty();
+        wrapped.cancelCompletesWhen = wrappedCancel.asMono();
+        AtomicBoolean cancelCompleted = new AtomicBoolean();
+
+        // When the caller subscribes to what the cancel returns, and the wrapped cancel completes
+        catchup.cancelSubscription(ID).subscribe(__ -> {
+        }, failure -> {
+        }, () -> cancelCompleted.set(true));
+        wrappedCancel.tryEmitEmpty();
+
+        // Then
+        assertAll(
+                () -> assertThat(cancelCompleted).as("the cancel completed").isTrue(),
+                () -> assertThat(wrapped.cancelled).as("cancels that reached the wrapped model").containsExactly(ID),
+                () -> assertThat(catchThrowable(() -> catchup.resumeSubscription(ID))).as("what a resume throws").isInstanceOf(UnknownSubscriptionException.class)
+        );
     }
 
     @Test

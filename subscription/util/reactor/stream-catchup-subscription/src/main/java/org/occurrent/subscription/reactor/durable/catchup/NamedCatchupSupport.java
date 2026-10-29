@@ -269,8 +269,8 @@ final class NamedCatchupSupport {
 
     // Called with the state monitor held. A replay whose start, reader and action complete on this thread runs the
     // action here, so the mark refuses a subscribe or cancel from it that would wait for the per-id lock under the monitor.
-    // Every id is refused, not only the replaying one. A cancel of another id takes that id's state monitor, so two replays whose
-    // actions cancel each other's subscription would each hold the monitor the other waits for
+    // Every id is refused, not only the replaying one. A cancel holds the lock of its id while it waits for that id's
+    // state monitor, so waiting for the lock of any id under this monitor can close a cycle with another replay
     private static void launch(CatchupState state) {
         boolean launchingAlready = LAUNCHING_REPLAY.get();
         LAUNCHING_REPLAY.set(true);
@@ -835,7 +835,13 @@ final class NamedCatchupSupport {
             forget(subscriptionId, record);
             return Mono.empty();
         }
-        return named.cancelSubscription(subscriptionId).doFinally(__ -> forget(subscriptionId, record));
+        Mono<Void> cancelled = named.cancelSubscription(subscriptionId).doFinally(__ -> forget(subscriptionId, record)).cache();
+        // Subscribed here and cached, so ownership is forgotten even when nothing subscribes to what this returns,
+        // and a wrapped cancel that does nothing until subscribed is not run twice
+        cancelled.subscribe(unused -> {
+        }, throwable -> log.warn("Could not cancel subscription {} in the wrapped model {}. That model may still hold the subscription.",
+                subscriptionId, named.getClass().getName(), throwable));
+        return cancelled;
     }
 
     // Removes only the record the cancel read, so a subscribe of the id after the cancel keeps its own
