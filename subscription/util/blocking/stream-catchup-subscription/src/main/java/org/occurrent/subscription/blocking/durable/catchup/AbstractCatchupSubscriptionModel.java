@@ -321,7 +321,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      *                                delegate resumed there reports a loss of it again.
      * @param historyLost             The position the live delegate lost the history from when no replay of this model
      *                                could take the loss over, and {@code null} before that. Once set, a resume refuses
-     *                                with {@link CatchupCannotResumeException} until the subscription is cancelled.
+     *                                with {@link CatchupCannotResumeException} until the subscription is cancelled, or
+     *                                until {@link AbstractCatchupSubscriptionModel#resumeSubscription(String, StartAt)}
+     *                                resumes it at a position the live delegate still has the history from.
      */
     private record Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action,
                               CompletableFuture<Void> cancelledReplayReturned, AtomicReference<@Nullable Checkpoint> lostLiveStart,
