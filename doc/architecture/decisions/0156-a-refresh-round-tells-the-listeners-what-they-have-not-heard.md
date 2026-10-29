@@ -35,10 +35,13 @@ The record says either "not granted" or "granted with token T". Two counts on th
 hides:
 
 - `lapses` goes up when `hasLock` answers no for an acquired status, and when a locked step replaces an acquired
-  status. A grant told before the latest lapse is told again, since a listener may have acted on that no.
-- `losses` goes up when a locked step replaces an acquired status. A record that has not seen the latest loss owes a
-  prohibition, also for a lease whose grant was never told, since a caller may have learned of that lease from
-  `registerCompetingConsumer` or `hasLock`.
+  status with one that is not acquired or has another token. A grant told before the latest lapse is told again,
+  since a listener may have acted on that no.
+- `losses` goes up when a locked step replaces an acquired status with one that is not acquired or has another token.
+  A record that has not seen the latest loss owes a prohibition, also for a lease whose grant was never told, since a
+  caller may have learned of that lease from `registerCompetingConsumer` or `hasLock`.
+
+A commit that extends a lease, and a register that gets the same token back, change neither count.
 
 A round never calls a listener. When the comparison finds something owed, it hands a tell to the notifier for the
 subscription, as ADR 140 decided. `ScheduledRefresh` keeps no queue any more. A hand-over the notifier throws on is
@@ -49,9 +52,10 @@ nothing costs one log line per round.
 A tell says the current difference, not each change in the order a round decided it. A grant that was undone before
 it was told may never be told, but the prohibition after it is.
 
-A listener that throws a `RuntimeException` is logged at WARN and the record moves on. A listener that throws an
-`Error` is logged at ERROR and the record stays unfinished, so the next round tells every listener the current answer
-again. One case stays open. When the `Error` came on a prohibition and the same tell then granted a new token, the next
+What a listener throws during a tell on a notifier thread is logged, a `RuntimeException` at WARN and an `Error` at
+ERROR. During the tell a register, release or unregister makes on its own thread, the call throws it instead. After a
+`RuntimeException` the record moves on. After an `Error` the record stays unfinished, so the next round tells every
+listener the current answer again. One case stays open. When the `Error` came on a prohibition and the same tell then granted a new token, the next
 round repeats only the grant.
 
 ### Register, release and unregister
@@ -60,7 +64,8 @@ Only one tell for a consumer calls its listeners at a time. A register, release 
 tell for that consumer is running, and then at most the change its own locked step made. Anything else that is owed,
 it hands to the notifier. When another tell is running, the call doesn't wait for it, since that tell may be inside a
 listener that waits for a lock the caller holds, the deadlock in ADR 113. It
-returns, and the running tell tells the change after its own, or hands it to the notifier.
+returns, and the running tell tells the change after its own, or hands it to the notifier. When a tell on a notifier
+thread throws from the strategy's own code instead, the next round tells that change.
 
 That replaces the promise in the last Decision paragraph of ADR 140, that registering, unregistering and releasing
 call the listeners on the caller's thread before they return, with the following sentence:
@@ -72,9 +77,8 @@ call the listeners on the caller's thread before they return, with the following
 
 Every call site in `CompetingConsumerSubscriptionModel` handles a callback that arrives later on another thread. Each
 one records its own state before the call, so the callback finds nothing left to do, or reads the state again after
-the call. The sites are in `forgetCancelled`, `stopConsumer`, `takeTheStepsOfASubscribe`, `pauseSubscription`,
-`unregisterOrAtLeastGiveUpTheLease`, `giveTheLeaseBackIfItThrows`, `registerAndStartIfGranted` and
-`registerAsRunning`. A callback on a notifier thread takes the same lock and reconcile path that every callback a
+the call. The calls made while the model shuts down need neither, since it ignores every callback once shutdown has
+begun. A callback on a notifier thread takes the same lock and reconcile path that every callback a
 round decided already takes.
 
 An unregister keeps the consumer until its lease is removed and its listeners have heard the prohibition. Meanwhile
@@ -91,10 +95,11 @@ prohibition by pausing the subscription and releasing its lease.
 ## Consequences
 
 A listener can be told the same thing twice. That happens after an `OutOfMemoryError` cut a tell short, and after an
-`Error`, once per round for as long as a listener keeps throwing it. A listener can also be told a prohibition with no
+`Error`, once per round for as long as a listener keeps throwing it. It also happens when a lease is lost between a
+tell's read of the counts and its read of the status. The tell then records the prohibition against the older loss
+count, and tells it again. A listener can also be told a prohibition with no
 grant before it. The `CompetingConsumerListener` javadoc says both, and `CompetingConsumerSubscriptionModel` handles
-both. ADR 113's "one change of status is reported once" now holds except after a throwable cut a tell short and after
-a listener's `Error`.
+both. ADR 113's "one change of status is reported once" now holds except in those three cases.
 
 An `Error` that a listener throws during a tell on a notifier thread reaches the log at ERROR and not the caller. In
 0.34.0 a listener's `Error` from a register, release or unregister came out of `subscribe`, `resume` or `cancel`.
