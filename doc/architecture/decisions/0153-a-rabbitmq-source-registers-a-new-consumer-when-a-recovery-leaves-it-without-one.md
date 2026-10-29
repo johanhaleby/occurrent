@@ -120,15 +120,16 @@ source believes something that stopped being true.
    The source counts each close of its channel that the connection recovers from, with a shutdown listener on the
    channel. The client adds that listener again to every channel a recovery opens, so the count moves once per drop
    and never when a recovery ends. The source judges which closes those are with amqp-client's default recovery
-   triggering condition, which recovers from every close the application didn't start, and from a close after a
-   missed heartbeat. A `ConnectionFactory` given a condition of its own that differs from the default isn't followed,
+   triggering condition, which recovers from every connection close the application didn't start, and from a close
+   after a missed heartbeat. A `ConnectionFactory` given a condition of its own that differs from the default isn't followed,
    since the client doesn't expose the one a connection was built with.
 
-   The source reads the count after a delivery arrives and before its ack or nack, and before each release. The
-   release of held deliveries reads it again after the deferred ones and before the failed ones, so a drop counted
-   while it released a deferred delivery can't explain a failure releasing a failed one. After an `IOException` on a
-   recovering connection the release doesn't put the tag back and doesn't stop the source yet. The first poll at
-   least a poll interval after the oldest such failure keeps the source when the count has moved since the highest
+   The source reads the count after a delivery arrives and before its ack or nack. Each release of held deliveries
+   reads it after it takes its snapshot of the held tags, so every tag it finds arrived before the read. The failed
+   deliveries are released after the deferred ones, with a snapshot and a read of their own, so a drop counted while a
+   deferred delivery was released can't explain a failure for a failed delivery that arrived after that drop. After an
+   `IOException` on a recovering connection the release doesn't put the tag back and doesn't stop the source yet. The
+   first poll at least a poll interval after the oldest unresolved failure keeps the source when the count has moved since the highest
    read before a failure's call, since that drop came after every one of those deliveries and put them back on the
    queue. Otherwise it stops the source as above. A later failure with the same read doesn't put that poll off, and
    the source never sends a second nack. A later failure with a higher read starts the interval again, since the drop
@@ -148,17 +149,25 @@ source believes something that stopped being true.
    and the connection stayed up, the delivery sat unanswered on a live consumer, and at the default `prefetchCount` of
    one that consumer got nothing further.
 
-   The same listener stops the source on its next poll after a close of a `Recoverable` channel that no recovery
-   reopens. The broker closes the channel after a delivery outlived `consumer_timeout`, say. Without the stop, a source
-   with nothing held would consume nothing and log nothing. The stop is logged at `warn` when the application closed
-   the channel or its connection, and at `error` otherwise.
+   The same listener stops the source on its next poll after a close that no recovery reopens. The broker closes the
+   channel after a delivery outlived `consumer_timeout`, say. Without the stop, a source with nothing held would
+   consume nothing and log nothing. The stop is logged at `warn` when the application closed the channel or its
+   connection, and at `error` otherwise.
 
-   A channel that isn't `Recoverable` gives the source no way to tell a close that a recovery reopens from one that
-   ends the channel. A connection without automatic recovery hands out such channels, and so can a `Connection` that
-   wraps an `AutorecoveringConnection` and its channels, for tracing say. Over such a wrapper, stopping on the close
-   would stop the source on every connection drop. So the source logs at `warn` when it's built on a channel that
-   isn't `Recoverable`, and a close of that channel doesn't stop it. A release or an acknowledgement that then fails
-   still stops it as above.
+   Which closes are final depends on the channel:
+
+   - On a `Recoverable` channel, every close other than a connection close the default condition recovers from.
+   - On the client's own `AMQChannel`, which a connection without automatic recovery hands out, every close, since
+     nothing reopens it.
+   - On any other channel, a close of the channel alone, and a connection close the default condition doesn't recover
+     from, since the client underneath reopens neither. A `Connection` that wraps an `AutorecoveringConnection` and its
+     channels, for tracing say, hands out such a channel.
+
+   A connection close the default condition recovers from, on that last kind of channel, may be one a recovery
+   underneath reopens. Stopping on it would stop the source on every connection drop, so it doesn't stop the source,
+   and the source logs at `warn` when it's built on such a channel. A release or an acknowledgement that fails during
+   a drop still stops it as above. When the connection isn't the `AutorecoveringConnection` itself either, the source
+   can't follow its recoveries, and with topology recovery turned off it stops consuming after one.
 6. **A failure after a permanent stop doesn't stop the source again.** It is logged at `debug` when the handler was
    interrupted or `close()` has stopped waiting for it, and at `warn` otherwise, since nothing else reports an
    `Error`, a checked exception thrown from Kotlin or a failed acknowledgement then. An interrupt is passed on to the

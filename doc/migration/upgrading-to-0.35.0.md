@@ -372,10 +372,11 @@ delivery back on the queue.
 - **Its channel is closed for good.** The broker closed the channel on its own, for example with
   `406 PRECONDITION_FAILED` after a delivery outlived `consumer_timeout`, or a connection without automatic recovery
   closed. In 0.34.0 a source holding a delivery tried to release it again and logged a warning on every poll, and one
-  holding none consumed nothing and logged nothing. A source holding none stops too when its channel is from an
-  `AutorecoveringConnection`. On a channel that isn't `Recoverable`, such as one from a connection without automatic
-  recovery, a source holding none keeps running as in 0.34.0, and the source logs a warning when it's built. When the
-  application closed the channel or its connection, the line is at `warn`.
+  holding none consumed nothing and logged nothing. A source holding none stops too, and when the application closed
+  the channel or its connection, the line is at `warn`. On a channel that wraps the client's own and isn't
+  `Recoverable`, a connection close that the client recovers from doesn't stop the source, as in 0.34.0, since a
+  recovery under the wrapper may reopen the channel. The source logs a warning when it's built on such a channel, and
+  if no recovery reopens it, the source stays up and consumes nothing.
 
 An `IOException` because the connection dropped doesn't stop the source. It keeps running and consumes again after the
 recovery.
