@@ -255,8 +255,15 @@ final class PositionCatchupPipeline {
     private static CatchupCannotResumeException startsAfterPositionWithoutLiveStart(@Nullable String subscriptionId, long position) {
         return new CatchupCannotResumeException("Cannot start catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId) + " after position " + position
                 + ", because the checkpoint holds no live start read before position " + position + " was, and an event that committed below position " + position
-                + " after it was read would never be delivered. Start the subscription from the beginning, or from the checkpoint it delivered with the event at position " + position
+                + " after it was read would never be delivered. " + cancelFirst(subscriptionId)
+                + "Start the subscription from the beginning, or from the checkpoint it delivered with the event at position " + position
                 + ", which EventMetadata.getCheckpoint() returns.");
+    }
+
+    // A named subscription may run under a durable model that reads the refused checkpoint from its storage again on
+    // the next start, which only a cancel deletes
+    private static String cancelFirst(@Nullable String subscriptionId) {
+        return subscriptionId == null ? "" : "If the subscription stores its checkpoint, cancel it first, which deletes that checkpoint. ";
     }
 
     // A replay again from a position above 0, with a token read now, skips an event below that position that was
@@ -264,7 +271,7 @@ final class PositionCatchupPipeline {
     private static CatchupCannotResumeException liveStartLostAbovePositionZero(@Nullable String subscriptionId, long origin, Checkpoint lostLiveStart) {
         return new CatchupCannotResumeException("Cannot replay catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId) + " again from position " + origin
                 + ", because the subscription model no longer has the history from its live start, and a replay from there with a live start read now would never deliver an event before position "
-                + origin + " that was written after the lost live start was read. Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay. Lost live start: "
+                + origin + " that was written after the lost live start was read. " + cancelFirst(subscriptionId) + "Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay. Lost live start: "
                 + lostLiveStart.asString());
     }
 
