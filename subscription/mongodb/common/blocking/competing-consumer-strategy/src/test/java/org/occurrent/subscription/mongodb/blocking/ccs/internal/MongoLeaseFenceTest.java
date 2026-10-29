@@ -160,7 +160,9 @@ class MongoLeaseFenceTest {
         assertThat(locks.countDocuments(heldByTheHolder()))
                 .as("the round after the failed release releases the lease, so no other node waits for it to expire")
                 .isZero();
-        assertThat(told).isEmpty();
+        assertThat(told)
+                .as("the round tells the prohibition the failed unregister could not, since the listener was told it held the lease")
+                .containsExactly("prohibited");
         round.get().run();
         assertThat(locks.countDocuments(heldByTheHolder()))
                 .as("once the lease is released the consumer is forgotten, so no later round takes the lease for it")

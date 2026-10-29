@@ -8,6 +8,12 @@ Accepted. Resolves part of [#1166](https://github.com/johanhaleby/occurrent/issu
 lease strategies, `SpringMongoLeaseCompetingConsumerStrategy` and `NativeMongoLeaseCompetingConsumerStrategy`,
 which share `MongoLeaseCompetingConsumerStrategySupport`.
 
+Amended by [ADR 156](0156-a-refresh-round-tells-the-listeners-what-they-have-not-heard.md). A round now hands the notifier a tell that says the difference between what the
+listeners were last told and the status, instead of each change in the order the round decided it, and
+`ScheduledRefresh` keeps no queue. When the node wins a lease back with the same token before the prohibition was
+told, the listeners are told the grant again instead of the prohibition. A register, release or unregister calls the
+listeners before it returns only for its own change and only while no other tell for that consumer runs.
+
 ## Context
 
 Each strategy refreshes every lease on the node from one scheduled thread. The strategies schedule it with

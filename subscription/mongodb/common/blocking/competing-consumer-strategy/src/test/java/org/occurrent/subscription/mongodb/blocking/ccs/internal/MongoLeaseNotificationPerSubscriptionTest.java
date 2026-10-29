@@ -40,6 +40,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -57,8 +58,10 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * A listener callback that is slow for one subscription, the way resuming a subscription whose change stream is still
- * opening is slow, must not delay what the listeners hear about another subscription. Each subscription still hears of
- * its own grants and losses in the order they were decided.
+ * opening is slow, must not delay what the listeners hear about another subscription. A subscription whose loss is
+ * still being told hears of a later grant after the loss. A listener that throws an {@link Error} is told the current
+ * answer again in the next round. A listener that interrupts its own thread does not hand the interrupt to the next
+ * listener call on that thread.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -167,7 +170,7 @@ class MongoLeaseNotificationPerSubscriptionTest {
     }
 
     @Test
-    void each_subscription_still_gets_its_own_grants_and_losses_in_the_order_they_were_decided() throws InterruptedException {
+    void a_subscription_whose_loss_is_still_being_told_hears_of_a_later_grant_after_the_loss() throws InterruptedException {
         MongoLeaseCompetingConsumerStrategySupport node = nodeRefreshingOnItsOwn();
         MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
         RecordingListener listener = new RecordingListener();
@@ -254,8 +257,10 @@ class MongoLeaseNotificationPerSubscriptionTest {
 
             rival.unregisterCompetingConsumer(locks, A, RIVAL);
 
-            assertThat(eventually(() -> told.size() >= 2)).as("both listeners heard of the grant of " + A + ", told so far " + told).isTrue();
-            assertThat(told).containsExactlyInAnyOrder("first granted " + A, "second granted " + A);
+            assertThat(eventually(() -> told.contains("first granted " + A) && told.contains("second granted " + A)))
+                    .as("both listeners heard of the grant of " + A + ", told so far " + told).isTrue();
+            // Both throw an Error, so each round tells them the grant again until the lease is lost
+            assertThat(told).containsOnly("first granted " + A, "second granted " + A);
         } finally {
             node.shutdown();
             rival.shutdown();
@@ -290,7 +295,11 @@ class MongoLeaseNotificationPerSubscriptionTest {
 
     @Test
     void an_error_a_listener_throws_in_the_background_is_logged_once_at_error_level() throws InterruptedException {
-        MongoLeaseCompetingConsumerStrategySupport node = nodeRefreshingOnItsOwn();
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        NotifierThatThrowsWhenTold notifier = new NotifierThatThrowsWhenTold();
+        MongoLeaseCompetingConsumerStrategySupport node = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(),
+                new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()), notifier))
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(locks));
         MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
         ErrorOnTheGrantListener listener = new ErrorOnTheGrantListener();
         Logged logged = new Logged();
@@ -305,10 +314,13 @@ class MongoLeaseNotificationPerSubscriptionTest {
             node.addListener(listener);
 
             rival.unregisterCompetingConsumer(locks, A, RIVAL);
+            // Rounds are run here, since a round between the failing grant and the loss would tell the grant again and log it again
+            round.get().run();
+            notifier.awaitEveryTask();
             assertThat(listener.granted.await(10, TimeUnit.SECONDS)).as("the listener was told of the grant of " + A).isTrue();
             takeOverLease(rival, A);
-            // The notifier tells the listener of the loss only once it is done with the grant, so a second line for
-            // the grant would already be logged by then
+            round.get().run();
+            notifier.awaitEveryTask();
             assertThat(listener.prohibited.await(10, TimeUnit.SECONDS)).as("the listener was told of the loss of " + A).isTrue();
 
             assertThat(logged.failures()).singleElement().satisfies(failure -> {
@@ -349,6 +361,129 @@ class MongoLeaseNotificationPerSubscriptionTest {
             node.shutdown();
             rival.shutdown();
         }
+    }
+
+    @Test
+    void a_listener_that_throws_an_error_on_a_grant_is_told_of_it_again_in_the_next_round() {
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        MongoLeaseCompetingConsumerStrategySupport node = nodeWhoseRoundsTheTestRuns(round);
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        ListenerThatThrowsAnErrorOnce listener = ListenerThatThrowsAnErrorOnce.onTheFirst("granted");
+        try {
+            assertThat(rival.registerCompetingConsumer(locks, A, RIVAL)).isTrue();
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isFalse();
+            node.addListener(listener);
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+
+            round.get().run();
+            OptionalLong tokenAfterTheFirstGrant = node.fencingToken(A);
+            round.get().run();
+
+            // The listener may not have acted on a grant it threw an Error on, and no other round decides the grant
+            // again, so the next round tells it once more under the same lease
+            assertThat(listener.calls).containsExactly("granted " + A, "granted " + A);
+            assertThat(node.hasLock(A, NODE)).isTrue();
+            assertThat(node.fencingToken(A)).isPresent().isEqualTo(tokenAfterTheFirstGrant);
+        } finally {
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
+    @Test
+    void a_prohibition_an_error_cut_short_is_told_again_before_the_grant_of_a_new_lease() {
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        MongoLeaseCompetingConsumerStrategySupport node = nodeWhoseRoundsTheTestRuns(round);
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        ListenerThatThrowsAnErrorOnce interrupted = ListenerThatThrowsAnErrorOnce.onTheFirst("prohibited");
+        ListenerThatThrowsAnErrorOnce other = ListenerThatThrowsAnErrorOnce.onTheFirst("");
+        node.addListener(interrupted);
+        node.addListener(other);
+        try {
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isTrue();
+            takeOverLease(rival, A);
+
+            // No round runs between these two, so the second prohibition can only come from the new lease being compared with the first
+            round.get().run();
+            assertThat(other.calls).as("what the other listener heard of the loss").containsExactly("granted " + A, "prohibited " + A);
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+            round.get().run();
+
+            // The prohibition of the first lease is told again before the grant of the new one, since a listener that
+            // threw an Error on it may still be running under the lease that was lost
+            assertThat(interrupted.calls).containsExactly("granted " + A, "prohibited " + A, "prohibited " + A, "granted " + A);
+        } finally {
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
+    @Test
+    void a_listener_that_interrupts_its_thread_does_not_hand_the_interrupt_to_the_next_background_tell() throws InterruptedException {
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        NotifierThatKeepsTheInterruptFlag notifier = new NotifierThatKeepsTheInterruptFlag();
+        MongoLeaseCompetingConsumerStrategySupport node = nodeWhoseRoundsTheTestRuns(round, notifier);
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        ListenerThatInterruptsItsThreadOnTheGrant listener = new ListenerThatInterruptsItsThreadOnTheGrant(() -> {
+        });
+        try {
+            assertThat(rival.registerCompetingConsumer(locks, A, RIVAL)).isTrue();
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isFalse();
+            node.addListener(listener);
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+            round.get().run();
+            notifier.awaitEveryTask();
+
+            takeOverLease(rival, A);
+            round.get().run();
+            notifier.awaitEveryTask();
+
+            assertThat(listener.calls).containsExactly(
+                    new ListenerThatInterruptsItsThreadOnTheGrant.Call("granted " + A, false),
+                    new ListenerThatInterruptsItsThreadOnTheGrant.Call("prohibited " + A, false));
+        } finally {
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
+    @Test
+    void a_listener_that_interrupts_its_thread_does_not_hand_the_interrupt_to_the_next_listener_call_of_the_same_tell() throws InterruptedException {
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        NotifierThatKeepsTheInterruptFlag notifier = new NotifierThatKeepsTheInterruptFlag();
+        MongoLeaseCompetingConsumerStrategySupport node = nodeWhoseRoundsTheTestRuns(round, notifier);
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        ListenerThatInterruptsItsThreadOnTheGrant listener = new ListenerThatInterruptsItsThreadOnTheGrant(() -> {
+            takeOverLease(rival, A);
+            round.get().run();
+        });
+        try {
+            assertThat(rival.registerCompetingConsumer(locks, A, RIVAL)).isTrue();
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isFalse();
+            node.addListener(listener);
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+            round.get().run();
+            notifier.awaitEveryTask();
+
+            assertThat(listener.calls).containsExactly(
+                    new ListenerThatInterruptsItsThreadOnTheGrant.Call("granted " + A, false),
+                    new ListenerThatInterruptsItsThreadOnTheGrant.Call("prohibited " + A, false));
+        } finally {
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
+    private MongoLeaseCompetingConsumerStrategySupport nodeWhoseRoundsTheTestRuns(AtomicReference<Runnable> round, NotifierThatKeepsTheInterruptFlag notifier) {
+        return new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(),
+                new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()), notifier))
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(locks));
+    }
+
+    private MongoLeaseCompetingConsumerStrategySupport nodeWhoseRoundsTheTestRuns(AtomicReference<Runnable> round) {
+        return new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(),
+                new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh())))
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(locks));
     }
 
     private MongoLeaseCompetingConsumerStrategySupport nodeRefreshingOnItsOwn() {
@@ -465,14 +600,14 @@ class MongoLeaseNotificationPerSubscriptionTest {
         }
     }
 
-    // The two lines that log a failing listener, the one the support class logs and the one the notifier logs
+    // The two lines that log a failing listener, the one for a listener the support class tells and the one for a tell that fails as a whole
     private static final class Logged extends AppenderBase<ILoggingEvent> {
         private final List<ILoggingEvent> events = new CopyOnWriteArrayList<>();
 
         @Override
         protected void append(ILoggingEvent event) {
             String message = event.getMessage();
-            if (message.startsWith("Listener {} failed on") || message.startsWith("A notification for subscription {} failed")) {
+            if (message.startsWith("Listener {} failed on") || message.startsWith("Telling the listeners of subscription {} failed")) {
                 events.add(event);
             }
         }
@@ -499,6 +634,69 @@ class MongoLeaseNotificationPerSubscriptionTest {
         @Override
         public void onConsumeProhibited(String subscriptionId, String subscriberId) {
             prohibited.countDown();
+        }
+    }
+
+    /**
+     * Runs {@code onTheGrant} on the grant and then interrupts the thread it was called on and returns. Records each
+     * call it is told of with whether the thread was interrupted when the call began.
+     */
+    private static final class ListenerThatInterruptsItsThreadOnTheGrant implements CompetingConsumerListener {
+        private final List<Call> calls = new CopyOnWriteArrayList<>();
+        private final Runnable onTheGrant;
+
+        private ListenerThatInterruptsItsThreadOnTheGrant(Runnable onTheGrant) {
+            this.onTheGrant = onTheGrant;
+        }
+
+        @Override
+        public void onConsumeGranted(String subscriptionId, String subscriberId) {
+            calls.add(new Call("granted " + subscriptionId, Thread.currentThread().isInterrupted()));
+            onTheGrant.run();
+            Thread.currentThread().interrupt();
+        }
+
+        @Override
+        public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+            calls.add(new Call("prohibited " + subscriptionId, Thread.currentThread().isInterrupted()));
+        }
+
+        private record Call(String name, boolean interruptedOnEntry) {
+        }
+    }
+
+    /**
+     * Records each call it is told of, as {@code granted} or {@code prohibited} and the subscription id, and throws an
+     * {@link AssertionError} on the first call of the kind given to {@link #onTheFirst}, none for an empty kind.
+     */
+    private static final class ListenerThatThrowsAnErrorOnce implements CompetingConsumerListener {
+        private final List<String> calls = new CopyOnWriteArrayList<>();
+        private final String kind;
+        private final AtomicBoolean thrown = new AtomicBoolean();
+
+        private ListenerThatThrowsAnErrorOnce(String kind) {
+            this.kind = kind;
+        }
+
+        static ListenerThatThrowsAnErrorOnce onTheFirst(String kind) {
+            return new ListenerThatThrowsAnErrorOnce(kind);
+        }
+
+        @Override
+        public void onConsumeGranted(String subscriptionId, String subscriberId) {
+            record("granted", subscriptionId);
+        }
+
+        @Override
+        public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+            record("prohibited", subscriptionId);
+        }
+
+        private void record(String call, String subscriptionId) {
+            calls.add(call + " " + subscriptionId);
+            if (call.equals(kind) && thrown.compareAndSet(false, true)) {
+                throw new AssertionError("failed on the first " + call + " of " + subscriptionId);
+            }
         }
     }
 

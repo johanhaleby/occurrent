@@ -35,6 +35,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.time.*;
@@ -44,6 +46,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -53,6 +57,7 @@ import static com.mongodb.client.model.Updates.set;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * What happens when the scheduled refresh and an application thread are inside the same consumer at the same time.
@@ -249,6 +254,304 @@ class MongoLeaseRaceTest {
         assertThat(node.hasLock(subscription)).isFalse();
     }
 
+    @Test
+    void grants_a_lease_taken_back_after_a_release_whose_lease_removal_failed() {
+        String subscription = "a-subscription";
+        Node node = new Node("the-node", locks);
+        assertThat(node.register(subscription)).isTrue();
+
+        Throwable thrown = catchThrowable(() -> node.release(subscription, intercepting(locks, failing())));
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("MongoDB is having a bad day");
+
+        // The first round stands the consumer down and finds its prohibition due, which is dropped here. The second
+        // takes the lease back, and the document still names this node, so it is the same lease.
+        node.droppingHandOvers.set(true);
+        node.refresh();
+        node.droppingHandOvers.set(false);
+        node.refresh();
+
+        assertThat(node.changes)
+                .as("the lease is held again, so the last thing the listener heard has to be that it may consume")
+                .last().isEqualTo("granted:" + subscription);
+        assertThat(node.hasLock(subscription)).isTrue();
+    }
+
+    @Test
+    void prohibits_a_consumer_whose_release_failed_when_a_rival_then_takes_the_lease() {
+        String subscription = "a-subscription";
+        Node rival = new Node("the-rival", locks);
+        Node node = new Node("the-node", locks);
+        assertThat(node.register(subscription)).isTrue();
+
+        Throwable thrown = catchThrowable(() -> node.release(subscription, intercepting(locks, failing())));
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("MongoDB is having a bad day");
+        expireLeaseFor(subscription);
+        assertThat(rival.register(subscription)).isTrue();
+        node.refresh();
+        node.refresh();
+
+        assertThat(node.changes)
+                .as("the release threw before it could tell the prohibition, so a round has to, "
+                        + "or the listener keeps believing it holds a lease the rival holds")
+                .last().isEqualTo("prohibited:" + subscription);
+        assertThat(node.hasLock(subscription)).isFalse();
+    }
+
+    @Test
+    void leaves_every_listener_prohibited_when_one_of_them_releases_the_lease_from_inside_its_grant() {
+        String subscription = "a-subscription";
+        Node node = new Node("the-node", locks);
+        AtomicBoolean released = new AtomicBoolean();
+        Runnable releaseOnce = () -> {
+            if (released.compareAndSet(false, true)) {
+                node.release(subscription, locks);
+            }
+        };
+        RecordingListener first = new RecordingListener(releaseOnce);
+        RecordingListener second = new RecordingListener(releaseOnce);
+        node.support.addListener(first);
+        node.support.addListener(second);
+
+        node.register(subscription);
+
+        assertThat(released).as("whichever listener was told the grant first released").isTrue();
+        assertThat(first.calls).as("the listener set has no order, so both have to end prohibited").last().isEqualTo("prohibited");
+        assertThat(second.calls).last().isEqualTo("prohibited");
+        assertThat(node.changes).last().isEqualTo("prohibited:" + subscription);
+        assertThat(node.hasLock(subscription)).isFalse();
+    }
+
+    @Test
+    void tells_the_prohibition_of_an_unregister_whose_lease_removal_failed() {
+        String subscription = "a-subscription";
+        Node node = new Node("the-node", locks);
+        assertThat(node.register(subscription)).isTrue();
+
+        Throwable thrown = catchThrowable(() -> node.unregister(subscription, intercepting(locks, failing())));
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("MongoDB is having a bad day");
+        node.refresh();
+        node.refresh();
+
+        assertThat(node.changes)
+                .as("the unregister threw before it could tell the prohibition, so a round has to")
+                .containsExactly("granted:" + subscription, "prohibited:" + subscription);
+        assertThat(node.hasLock(subscription)).isFalse();
+
+        node.refresh();
+        assertThat(node.hasLock(subscription)).as("the consumer is forgotten, so no round takes the lease for it").isFalse();
+        assertThat(locks.countDocuments(eq("subscriberId", "the-node"))).isZero();
+        assertThat(node.changes).hasSize(2);
+    }
+
+    @Test
+    void prohibits_a_consumer_whose_unregister_failed_when_it_registers_again_and_a_rival_holds_the_lease() {
+        String subscription = "a-subscription";
+        Node rival = new Node("the-rival", locks);
+        Node node = new Node("the-node", locks);
+        ListenerThatThrowsOnProhibition other = new ListenerThatThrowsOnProhibition(new RuntimeException("a listener having a bad day"));
+        node.support.addListener(other);
+        assertThat(node.register(subscription)).isTrue();
+
+        Throwable unregistered = catchThrowable(() -> node.unregister(subscription, intercepting(locks, failing())));
+        assertThat(unregistered).isInstanceOf(IllegalStateException.class).hasMessage("MongoDB is having a bad day");
+        expireLeaseFor(subscription);
+        assertThat(rival.register(subscription)).isTrue();
+        AtomicReference<Boolean> registered = new AtomicReference<>();
+        Throwable thrown = catchThrowable(() -> registered.set(node.register(subscription)));
+
+        assertThat(node.changes)
+                .as("the failed unregister left the consumer owing a prohibition, and registering again without the lease does not cancel it")
+                .last().isEqualTo("prohibited:" + subscription);
+        assertThat(thrown)
+                .as("the prohibition was owed before this call, so it is told after the call returns, "
+                        + "and what a listener throws is logged instead of thrown at a caller that did not cause it")
+                .isNull();
+        assertThat(registered.get()).isFalse();
+        assertThat(other.prohibitedOn).hasSize(1);
+    }
+
+    @Test
+    void throws_what_a_listener_throws_on_the_prohibition_of_a_register_that_loses_the_lease_it_held() {
+        String subscription = "a-subscription";
+        Node rival = new Node("the-rival", locks);
+        Node node = new Node("the-node", locks);
+        RuntimeException listenerFailure = new RuntimeException("a listener having a bad day");
+        node.support.addListener(new ListenerThatThrowsOnProhibition(listenerFailure));
+        assertThat(node.register(subscription)).isTrue();
+        expireLeaseFor(subscription);
+        assertThat(rival.register(subscription)).isTrue();
+
+        Throwable thrown = catchThrowable(() -> node.register(subscription));
+
+        assertThat(node.changes).last().isEqualTo("prohibited:" + subscription);
+        assertThat(thrown)
+                .as("this prohibition is the outcome of the call itself, so it is told on the caller's thread and the caller sees what a listener throws")
+                .isSameAs(listenerFailure);
+    }
+
+    @Test
+    void does_not_turn_a_grant_being_told_into_a_prohibition_when_a_register_lands_meanwhile() throws Exception {
+        String subscription = "a-subscription";
+        Object model = new Object();
+        Node rival = new Node("the-rival", locks);
+        Node node = new Node("the-node", locks, model);
+        assertThat(rival.register(subscription)).isTrue();
+        assertThat(node.register(subscription)).isFalse();
+        expireLeaseFor(subscription);
+
+        Thread refresh;
+        synchronized (model) {
+            refresh = run(node::refresh);
+            awaitBlockedOn(refresh, model);
+            assertThat(node.register(subscription))
+                    .as("the round took the lease and holds it, so the register finds it held")
+                    .isTrue();
+        }
+        refresh.join();
+
+        assertThat(node.changes)
+                .as("the lease is held throughout, so the listener hears the grant once and never a prohibition")
+                .containsExactly("granted:" + subscription);
+        assertThat(node.hasLock(subscription)).isTrue();
+    }
+
+    @Test
+    void prohibits_a_lease_the_register_reported_when_it_is_lost_before_its_grant_was_told() throws Exception {
+        String subscription = "a-subscription";
+        Object model = new Object();
+        Node rival = new Node("the-rival", locks);
+        Node node = new Node("the-node", locks, model);
+        assertThat(node.register(subscription)).isTrue();
+        expireLeaseFor(subscription);
+        assertThat(rival.register(subscription)).isTrue();
+
+        Thread refresh;
+        synchronized (model) {
+            refresh = run(node::refresh);
+            awaitBlockedOn(refresh, model);
+            rival.unregister(subscription, locks);
+            assertThat(node.register(subscription))
+                    .as("the rival gave the lease up, so the register takes it")
+                    .isTrue();
+            // Stands in for a second round that loses the commit, since the round thread is held and cannot run one
+            node.release(subscription, locks);
+        }
+        refresh.join();
+
+        assertThat(node.changes)
+                .as("the lease was lost twice, and the register told its caller it held the lease in between")
+                .filteredOn(change -> change.equals("prohibited:" + subscription))
+                .hasSize(2);
+        assertThat(node.changes).last().isEqualTo("prohibited:" + subscription);
+        assertThat(node.hasLock(subscription)).isFalse();
+    }
+
+    @Test
+    void does_not_tell_or_throw_the_change_of_a_round_on_the_thread_that_registers() throws Exception {
+        String subscription = "a-subscription";
+        Object model = new Object();
+        ExecutorService notifier = Executors.newCachedThreadPool();
+        try {
+            Node rival = new Node("the-rival", locks);
+            Node node = new Node("the-node", locks, model, notifier);
+            ListenerThatThrowsOnProhibition other = new ListenerThatThrowsOnProhibition(new RuntimeException("a listener having a bad day"));
+            node.support.addListener(other);
+            AtomicReference<Boolean> registered = new AtomicReference<>();
+            AtomicReference<Throwable> thrown = new AtomicReference<>();
+
+            Thread register;
+            synchronized (model) {
+                register = run(() -> thrown.set(catchThrowable(() -> registered.set(node.register(subscription)))));
+                awaitBlockedOn(register, model);
+                expireLeaseFor(subscription);
+                assertThat(rival.register(subscription)).isTrue();
+                node.refresh();
+            }
+            register.join();
+            notifier.shutdown();
+            assertThat(notifier.awaitTermination(LONG_ENOUGH.toMillis(), TimeUnit.MILLISECONDS))
+                    .as("the prohibition has run before anything is asserted, since joining the register does not wait for it")
+                    .isTrue();
+
+            assertThat(registered.get()).isTrue();
+            assertThat(thrown.get())
+                    .as("the register tells its own grant only, so what the listener throws on the round's prohibition does not reach it")
+                    .isNull();
+            assertThat(other.grantedOn).containsExactly(register);
+            assertThat(other.prohibitedOn).hasSize(1);
+            assertThat(other.prohibitedOn.getFirst())
+                    .as("the round's prohibition goes to the notifier")
+                    .isNotSameAs(register);
+        } finally {
+            notifier.shutdownNow();
+        }
+    }
+
+    /**
+     * Waits until {@code thread} is blocked entering {@code monitor}, by the lock the JVM names for it and not by
+     * {@link Thread.State#BLOCKED}, since a thread can block briefly on a monitor of the driver first.
+     */
+    private static void awaitBlockedOn(Thread thread, Object monitor) throws InterruptedException {
+        String lockName = monitor.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(monitor));
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (System.nanoTime() < deadline) {
+            ThreadInfo info = ManagementFactory.getThreadMXBean().getThreadInfo(thread.threadId());
+            // Null once the thread has ended
+            if (info != null && lockName.equals(info.getLockName())) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("Thread " + thread.getName() + " never blocked on " + lockName);
+    }
+
+    /**
+     * Records every call, and runs {@code onGrant} after each grant.
+     */
+    private static final class RecordingListener implements CompetingConsumerListener {
+        private final List<String> calls = Collections.synchronizedList(new ArrayList<>());
+        private final Runnable onGrant;
+
+        private RecordingListener(Runnable onGrant) {
+            this.onGrant = onGrant;
+        }
+
+        @Override
+        public void onConsumeGranted(String subscriptionId, String subscriberId) {
+            calls.add("granted");
+            onGrant.run();
+        }
+
+        @Override
+        public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+            calls.add("prohibited");
+        }
+    }
+
+    /**
+     * Records the thread of every call, and throws {@code failure} on a prohibition.
+     */
+    private static final class ListenerThatThrowsOnProhibition implements CompetingConsumerListener {
+        private final List<Thread> grantedOn = Collections.synchronizedList(new ArrayList<>());
+        private final List<Thread> prohibitedOn = Collections.synchronizedList(new ArrayList<>());
+        private final RuntimeException failure;
+
+        private ListenerThatThrowsOnProhibition(RuntimeException failure) {
+            this.failure = failure;
+        }
+
+        @Override
+        public void onConsumeGranted(String subscriptionId, String subscriberId) {
+            grantedOn.add(Thread.currentThread());
+        }
+
+        @Override
+        public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+            prohibitedOn.add(Thread.currentThread());
+            throw failure;
+        }
+    }
+
     private static Thread run(Runnable runnable) {
         Thread thread = new Thread(runnable);
         thread.start();
@@ -264,6 +567,10 @@ class MongoLeaseRaceTest {
         private final MongoLeaseCompetingConsumerStrategySupport support;
         private final AtomicReference<Runnable> scheduledRefresh = new AtomicReference<>();
         private final List<String> changes = Collections.synchronizedList(new ArrayList<>());
+        /**
+         * While set, a tell the strategy hands over is dropped, as if the notifier had not taken it.
+         */
+        private final AtomicBoolean droppingHandOvers = new AtomicBoolean();
 
         private Node(String subscriberId, MongoCollection<BsonDocument> collectionForRefresh) {
             this(subscriberId, collectionForRefresh, new Object());
@@ -274,8 +581,23 @@ class MongoLeaseRaceTest {
          *              are synchronized on itself.
          */
         private Node(String subscriberId, MongoCollection<BsonDocument> collectionForRefresh, Object model) {
+            this(subscriberId, collectionForRefresh, model, null);
+        }
+
+        /**
+         * @param notifier What each tell a round or a call hands over runs on, or {@code null} to run it on the thread
+         *                 that hands it over.
+         */
+        private Node(String subscriberId, MongoCollection<BsonDocument> collectionForRefresh, Object model, ExecutorService notifier) {
             this.subscriberId = subscriberId;
-            ScheduledRefresh heldRefresh = new ScheduledRefresh((lease, scheduler) -> scheduledRefresh.set(scheduler.refresh()));
+            ScheduledRefresh heldRefresh = new ScheduledRefresh((lease, scheduler) -> scheduledRefresh.set(scheduler.refresh()), notifier) {
+                @Override
+                void notifyInBackground(String subscriptionId, Runnable tell) {
+                    if (!droppingHandOvers.get()) {
+                        super.notifyInBackground(subscriptionId, tell);
+                    }
+                }
+            };
             this.support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), heldRefresh)
                     .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(collectionForRefresh));
             this.support.addListener(new CompetingConsumerListener() {

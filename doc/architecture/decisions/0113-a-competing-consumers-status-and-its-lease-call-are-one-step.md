@@ -7,6 +7,9 @@ Date: 2026-08-08
 Accepted. Fixes #651. Leaves the hand-back [ADR 112](0112-a-competing-consumer-can-be-paused-while-still-waiting-for-the-lock.md)
 added on the subscription model's side alone, and says why the strategy needs none of its own.
 
+Amended by [ADR 156](0156-a-refresh-round-tells-the-listeners-what-they-have-not-heard.md), which works out what the listeners are owed by comparing what they were last
+told with the status, so a change can be reported again after a tell was cut short.
+
 ## Context
 
 `MongoLeaseCompetingConsumerStrategySupport` keeps a map from competing consumer to status for one

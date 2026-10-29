@@ -139,10 +139,23 @@ public interface CompetingConsumerStrategy {
     /**
      * A {@code CompetingConsumerListener} will be called when certain life-cycle events occurs.
      * <p>
-     * It is told what changed rather than what is currently true, so a subscriber is told once each time the answer for
-     * it moves and not once per round of whatever coordination the strategy runs. A listener may therefore treat every
-     * call as something to act on. Registering a listener is optional: a consumer that would rather ask than be told
-     * uses {@link CompetingConsumerStrategy#hasLock(String, String)}, which answers the same thing.
+     * A listener is told when the answer for a subscriber moves, and not once per round of whatever coordination the
+     * strategy runs. It can still be told the same thing twice in a row. That can happen, for example, after a failure
+     * such as an {@link OutOfMemoryError} cut a call short, or after a listener threw an {@link Error}, since the
+     * strategy may then tell it the current answer again in its next round. So a listener acts on a call as "this is
+     * now true" rather than as "this just changed".
+     * <p>
+     * A grant that was undone before the strategy got to tell it may never be told, but the prohibition after it is,
+     * so a listener can be told that a subscriber may not consume without having been told that it may.
+     * <p>
+     * A listener can be called on another thread after the
+     * {@link CompetingConsumerStrategy#registerCompetingConsumer(String, String) register},
+     * {@link CompetingConsumerStrategy#releaseCompetingConsumer(String, String) release} or
+     * {@link CompetingConsumerStrategy#unregisterCompetingConsumer(String, String) unregister} that caused the call has
+     * returned, and then that call does not throw what the listener throws.
+     * <p>
+     * Registering a listener is optional. A consumer that would rather ask than be told uses
+     * {@link CompetingConsumerStrategy#hasLock(String, String)}, which answers the same thing.
      */
     interface CompetingConsumerListener {
 
