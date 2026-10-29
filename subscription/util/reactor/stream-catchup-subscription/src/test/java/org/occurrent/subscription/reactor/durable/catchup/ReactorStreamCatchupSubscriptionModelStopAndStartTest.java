@@ -295,8 +295,7 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
     }
 
     // The stop comes before the replay reads anything, so the replay delivers nothing and goes straight to the
-    // handover on another thread. There it waits for the subscription's lock, which the subscribe on this thread holds
-    // until the start(false) has run.
+    // handover on another thread, which it reaches only once the start(false) has run on this thread.
     @Test
     void a_replay_that_stop_cut_short_does_not_hand_over_when_start_false_runs_before_it_reaches_the_handover() throws InterruptedException {
         WrappedModel wrapped = new WrappedModel();
@@ -577,18 +576,24 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
                 cloudEvent -> Mono.fromRunnable(() -> delivered.add(subscriptionId + ":" + cloudEvent.getId())));
     }
 
-    // The next subscribe runs beforeTheReplay while it holds the subscription's lock, then hands the checkpoint to the
-    // returned thread, which runs the replay up to the handover and waits there for that lock. whileTheReplayWaits
-    // then runs on the subscribing thread, which still holds it.
+    // The next subscribe runs beforeTheReplay and then whileTheReplayWaits on the subscribing thread as its replay reads
+    // the checkpoint, then hands the checkpoint to the returned thread, which runs the rest of that replay up to the
+    // handover. The subscribe returns once that thread has.
     private static AtomicReference<Thread> replayOnAnotherThread(WrappedModel wrapped, Runnable beforeTheReplay, Runnable whileTheReplayWaits) {
         AtomicReference<Thread> replaying = new AtomicReference<>();
         wrapped.nextCheckpoint = sink -> {
             beforeTheReplay.run();
+            whileTheReplayWaits.run();
             Thread thread = new Thread(() -> sink.success(WrappedModel.TOKEN));
+            thread.setDaemon(true);
             replaying.set(thread);
             thread.start();
-            awaitBlocked(thread);
-            whileTheReplayWaits.run();
+            try {
+                thread.join(5_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
         };
         return replaying;
     }

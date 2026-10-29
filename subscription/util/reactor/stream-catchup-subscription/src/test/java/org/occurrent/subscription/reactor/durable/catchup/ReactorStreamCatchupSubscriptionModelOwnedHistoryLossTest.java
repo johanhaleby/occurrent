@@ -317,34 +317,37 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
     }
 
     @Test
-    void a_subscribe_or_cancel_from_inside_a_replay_that_runs_on_the_thread_that_launched_it_is_refused_and_leaves_the_replay_alone() {
+    void a_subscribe_or_cancel_from_inside_a_replay_that_runs_on_the_thread_that_launched_it_goes_through_and_the_cancel_ends_the_replay() {
         AtomicReference<Throwable> straightToLive = new AtomicReference<>();
         AtomicReference<Throwable> throughAReplay = new AtomicReference<>();
         AtomicReference<Throwable> cancel = new AtomicReference<>();
         AtomicBoolean triedOnce = new AtomicBoolean();
+        List<String> replayedForTheOther = new CopyOnWriteArrayList<>();
 
         Subscription subscription = catchup.subscribe(ID, FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), event -> Mono.fromRunnable(() -> {
             received.add(event.getId());
             if (triedOnce.compareAndSet(false, true)) {
-                straightToLive.set(catchThrowable(() -> catchup.subscribe("other", FILTER, StartAt.checkpoint(LIVE_TOKEN), action())));
-                throughAReplay.set(catchThrowable(() -> catchup.subscribe("other", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), action())));
+                straightToLive.set(catchThrowable(() -> catchup.subscribe("straight", FILTER, StartAt.checkpoint(LIVE_TOKEN), action())));
+                throughAReplay.set(catchThrowable(() -> catchup.subscribe("replayed", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                        other -> Mono.fromRunnable(() -> replayedForTheOther.add(other.getId())))));
                 cancel.set(catchThrowable(() -> catchup.cancelSubscription(ID).block(Duration.ofSeconds(5))));
             }
         }));
         Throwable waitForTheStart = catchThrowable(() -> subscription.waitUntilStarted().block(Duration.ofSeconds(5)));
 
         assertAll(
-                () -> assertThat(waitForTheStart).as("what waiting for the start threw").isNull(),
-                () -> assertThat(straightToLive.get()).as("a straight to live subscribe").isInstanceOf(IllegalStateException.class).hasMessageContaining("Subscribe or cancel from another thread"),
-                () -> assertThat(throughAReplay.get()).as("a subscribe through a replay").isInstanceOf(IllegalStateException.class).hasMessageContaining("Subscribe or cancel from another thread"),
-                () -> assertThat(cancel.get()).as("a cancel").isInstanceOf(IllegalStateException.class).hasMessageContaining("Subscribe or cancel from another thread"),
-                () -> assertThat(received).as("replayed").containsExactly("e1", "e2", "e3"),
-                () -> assertThat(wrapped.subscribeCalls).as("subscribes delegated, the handover of the replay only").hasValue(1),
-                () -> assertThat(wrapped.cancelled).as("cancels that reached the wrapped model").isEmpty(),
-                () -> assertThat(catchup.isRunning(ID)).as("the replayed subscription runs").isTrue()
+                () -> assertThat(straightToLive.get()).as("a straight to live subscribe").isNull(),
+                () -> assertThat(throughAReplay.get()).as("a subscribe through a replay").isNull(),
+                () -> assertThat(cancel.get()).as("a cancel").isNull(),
+                () -> assertThat(waitForTheStart).as("what waiting for the start threw").isInstanceOf(IllegalStateException.class).hasMessage("Subscription " + ID + " was cancelled before it started."),
+                () -> assertThat(received).as("replayed before the cancel").containsExactly("e1"),
+                () -> assertThat(replayedForTheOther).as("replayed for the subscribe through a replay").containsExactly("e1", "e2", "e3"),
+                () -> assertThat(wrapped.subscribeCalls).as("subscribes delegated, the straight to live one and the handover of the other replay").hasValue(2),
+                () -> assertThat(wrapped.cancelled).as("cancels that reached the wrapped model").containsExactly(ID),
+                () -> assertThat(catchup.isRunning(ID)).as("the cancelled subscription runs").isFalse(),
+                () -> assertThat(catchup.isRunning("straight")).as("the straight to live subscription runs").isTrue(),
+                () -> assertThat(catchup.isRunning("replayed")).as("the subscription made through a replay runs").isTrue()
         );
-        // The mark is gone once the replay has launched
-        assertThat(catchup.subscribe("other", FILTER, StartAt.checkpoint(LIVE_TOKEN), action()).id()).isEqualTo("other");
     }
 
     @Test

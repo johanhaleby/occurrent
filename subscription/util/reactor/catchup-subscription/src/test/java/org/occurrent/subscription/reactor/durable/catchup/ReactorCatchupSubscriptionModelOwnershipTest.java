@@ -55,7 +55,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -131,21 +130,16 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
     }
 
     @Test
-    void a_cancel_refused_inside_the_replay_leaves_the_subscription_routed_to_the_model_that_replayed_it() {
+    void a_cancel_the_wrapped_model_refuses_leaves_the_subscription_routed_to_the_model_that_replayed_it() {
         HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
         ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
-        AtomicReference<Throwable> refused = new AtomicReference<>();
 
-        Subscription replayed = catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), __ -> {
-            try {
-                catchup.cancelSubscription("replayed");
-            } catch (IllegalStateException e) {
-                refused.set(e);
-            }
-            return Mono.empty();
-        });
+        Subscription replayed = catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), __ -> Mono.empty());
         StepVerifier.create(replayed.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(10));
-        assertThat(refused.get()).as("the cancel of the subscription from the thread that replays it").isInstanceOf(IllegalStateException.class);
+        wrapped.refusesTheCancel(new IllegalArgumentException("refused by the wrapped model"));
+        assertThatThrownBy(() -> catchup.cancelSubscription("replayed"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("refused by the wrapped model");
         // Routed to the agnostic model, which is not the stream model the dispatcher falls back to, and with the replay
         // over there is nothing for it to find by asking.
         assertThat(catchup.isCatchingUp("replayed")).isFalse();
@@ -240,6 +234,11 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
         private final Set<String> paused = ConcurrentHashMap.newKeySet();
         private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
+        private volatile @Nullable RuntimeException cancelRefusal;
+
+        void refusesTheCancel(RuntimeException refusal) {
+            cancelRefusal = refusal;
+        }
 
         void losesTheHistoryFrom(String subscriptionId, Checkpoint lostFrom) {
             for (HistoryLossListener listener : listeners) {
@@ -336,6 +335,10 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
 
         @Override
         public Mono<Void> cancelSubscription(String subscriptionId) {
+            RuntimeException refusal = cancelRefusal;
+            if (refusal != null) {
+                throw refusal;
+            }
             subscribed.remove(subscriptionId);
             paused.remove(subscriptionId);
             return Mono.empty();

@@ -959,14 +959,11 @@ A catch-up subscription you build yourself is affected too, also when the MongoD
 restart, which is how that model is built by default. There the subscription used to end with an error in the log,
 and the `Flux` of an unnamed reactor subscription failed with MongoDB's own error, code 286. It now stops as below.
 
-On the reactor stack an action can no longer subscribe or cancel a subscription through a catch-up subscription
-model while a replay runs on the thread that subscribed, which happens when the event store answers on that thread.
-Neither can code that runs while the catch-up model hands a subscription over to the model it wraps, or while it
-stops or shuts down during a replay. A `doOnCancel` on the `Mono` an action returns is such code, since a pause at the
-handover, a stop and a shutdown cancel that `Mono`. The call throws `IllegalStateException` for every subscription
-id, not only the one the catch-up model works on. Two replays whose actions each cancel the other's subscription
-would otherwise wait on each other for good, and so would such code and a cancel of the same subscription on another
-thread. Subscribe or cancel from another thread.
+On the reactor stack, code that a catch-up subscription model runs can subscribe, cancel, stop or shut down through
+that model, from the thread that runs the code or from another thread. That code is an action, a `doOnCancel` on the
+`Mono` an action returns, or a handler on `waitUntilStarted()`. A subscribe of an id throws
+`DuplicateSubscriptionIdException` until the model the catch-up wraps has completed its cancel of that id.
+`ReactorMongoSubscriptionModel` completes it before `cancelSubscription` returns.
 
 ### What happens
 
