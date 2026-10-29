@@ -25,6 +25,10 @@ ships no release operation, so deleting the instance is the only way out of quar
 that on without being asked. Decision point 3 records the new default, and Decision point 1 and the Consequences no
 longer promise a release. No release is scheduled.
 
+[ADR 157](0157-a-sagas-quarantine-budget-runs-per-input.md) changes how the budget in Decision point 3 is measured, for
+[#1318](https://github.com/johanhaleby/occurrent/issues/1318). Each failing input keeps its own clock instead of the
+instance keeping one, and that ADR has the rule.
+
 The three questions this decision could not settle on its own were ruled at that gate and are recorded in
 **Rulings at the design gate** near the end of this file. One of them, the non-replayable source, ships as a
 narrowing rather than a closure, and [#918](https://github.com/johanhaleby/occurrent/issues/918) is its recorded
