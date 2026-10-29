@@ -49,6 +49,8 @@ other sections compile fine and behave differently, so read them first.
   token value saved under 0.34.0 isn't valid. **Breaks the build** if you create a token, call
   `new DcbEventStream(events, head)` or `new DcbDomainEventStream(events, head)`, or call `value()`, which a
   `DcbEventStore` of your own usually does.
+- [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, an append that
+  only shares a type with a condition's tagged criteria no longer makes the condition refuse.
 
 ### Subscriptions and catch-up
 
@@ -694,6 +696,43 @@ A recipe could rewrite `value()` to `version()`. That rename would compile, and 
 needs the criteria the read was given, and a recipe can't tell from the call site which criteria those were. Rewriting
 `failIfEventsMatch(criteria, token)` to `failIfEventsMatch(token)` would compile too, but a condition that used other
 criteria than its read would then append on the read's criteria instead of throwing.
+
+## Criteria with tags conflict on their tags
+
+On the MongoDB stores, the check of a conditional append reads only the tag markers of an item with tags, and no longer
+the markers of its types. An append that only shares a type with the criteria then no longer makes the check refuse.
+Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
+`SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
+`DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way, so the
+stores agree. An item without tags is checked against its type markers as before. The change is the first part of
+[#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
+[ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
+describes it.
+
+### What stays the same
+
+- An append of an event that matches the criteria still makes the check refuse, since such an event has every tag of
+  the item it matches.
+- Every append still increments a marker for each type and each tag of its events, so two appends of one type still
+  can't commit at the same time on MongoDB, whatever their tags.
+- Nothing changes on disk, so 0.34.0 and 0.35.0 nodes can append to the same store. A conditional append from a 0.34.0
+  node still increments type markers that 0.35.0 no longer reads for criteria with tags. That can make a 0.35.0 check
+  refuse an append and the command retry, and it can't let an append through. Going back to 0.34.0 is safe for the
+  data.
+
+### Who is affected
+
+- **Code that counted on the refusal.** A command whose conditional append failed because an event of the same type
+  with other tags was appended now succeeds. If the decision depends on every event of that type, read with criteria
+  that hold only the type.
+- **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
+  `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
+  succeed, so a store that still reads the type marker for an item with tags fails the case.
+- **Code that saved a token value.** For criteria with tags, a 0.34.0 token value is a sum over tag and type markers,
+  and 0.35.0 compares it against the tag markers only. An old value can then let an append through that should have
+  been refused. Read again instead, as
+  [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
+  says.
 
 ## A catch-up needs the event store itself
 

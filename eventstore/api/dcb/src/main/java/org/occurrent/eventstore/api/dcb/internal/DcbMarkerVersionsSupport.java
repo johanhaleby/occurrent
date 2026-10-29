@@ -63,8 +63,10 @@ public final class DcbMarkerVersionsSupport {
     }
 
     /**
-     * The marker keys of {@code criteria}, one per tag and one per type of every item, or {@link #MATCH_ALL_MARKER_KEY}
-     * for {@link DcbCriteria.MatchAll}. Never combine a tag and a type into one key, ADR 21 depends on it.
+     * The marker keys of {@code criteria}, or {@link #MATCH_ALL_MARKER_KEY} for {@link DcbCriteria.MatchAll}. An item
+     * with at least one tag gives one key per tag and none for its types, since every event it matches has all of its
+     * tags. An item without tags gives one key per type. Never combine a tag and a type into one key, ADR 21
+     * depends on it.
      */
     public static Set<String> queryMarkerKeys(DcbCriteria criteria) {
         requireNonNull(criteria, "Criteria cannot be null");
@@ -73,8 +75,11 @@ public final class DcbMarkerVersionsSupport {
         }
         TreeSet<String> keys = new TreeSet<>();
         for (DcbCriterion item : items(criteria)) {
-            item.tags().forEach(tag -> keys.add(tagKey(tag)));
-            item.types().forEach(type -> keys.add(typeKey(type)));
+            if (item.tags().isEmpty()) {
+                item.types().forEach(type -> keys.add(typeKey(type)));
+            } else {
+                item.tags().forEach(tag -> keys.add(tagKey(tag)));
+            }
         }
         return Collections.unmodifiableSortedSet(keys);
     }

@@ -111,7 +111,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
                     .as("A conditional append with a consistency token must report the versions its criteria ended at")
                     .isPresent();
             assertThat(result.markerVersions().orElseThrow().keys())
-                    .as("One entry per marker key of the criteria, a tag key per tag and a type key per type")
+                    .as("One entry per marker key of the criteria, a tag key per tag for an item with tags and a type key per type for an item without tags")
                     .containsExactly(KEY_A, KEY_DEPOSITED);
         }
 
