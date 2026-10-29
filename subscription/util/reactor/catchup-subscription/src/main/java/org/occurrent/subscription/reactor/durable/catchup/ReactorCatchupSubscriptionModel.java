@@ -235,14 +235,15 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         // Claim the owner slot before subscribing, so a life-cycle call racing the subscribe reaches the model that
         // owns the replay before that model has registered the replay itself; roll the claim back if the subscribe
         // refuses, so the id stays free.
-        if (subscriptionOwners.putIfAbsent(subscriptionId, routed) != null) {
+        Route route = new Route(routed);
+        if (subscriptionOwners.putIfAbsent(subscriptionId, route) != null) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         final Subscription subscription;
         try {
             subscription = routed.subscribe(subscriptionId, filter, startAt, action);
         } catch (RuntimeException e) {
-            subscriptionOwners.remove(subscriptionId, routed);
+            subscriptionOwners.remove(subscriptionId, route);
             throw e;
         }
         return subscription;
@@ -251,15 +252,27 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     // Which inner model a named subscription was routed to, so a per-subscription life-cycle call reaches the model
     // that may still be replaying it. It is also the duplicate-id guard across the inner models, which cannot see each
     // other's replays because an id stays invisible to the wrapped model until the handover.
-    private final ConcurrentMap<String, SubscriptionModel> subscriptionOwners = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Route> subscriptionOwners = new ConcurrentHashMap<>();
+
+    // One per subscribe, so a cancel that ends forgets only the route it read and never that of a later subscribe
+    private static final class Route {
+        private final SubscriptionModel owner;
+        // Read and written only inside a compute of subscriptionOwners on this route's id
+        private int cancelsUnderWay;
+        private boolean cancelEnded;
+
+        private Route(SubscriptionModel owner) {
+            this.owner = owner;
+        }
+    }
 
     // Routes a per-subscription life-cycle call. The record above answers for every id this dispatcher created, and a
     // replay still in flight is the one state the wrapped model cannot answer for, so the inner models are asked next.
     // Anything left belongs to the wrapped model, and every inner model forwards there, so one of them gives its answer.
     private SubscriptionModel ownerOf(String subscriptionId) {
-        SubscriptionModel owner = subscriptionOwners.get(subscriptionId);
-        if (owner != null) {
-            return owner;
+        Route route = subscriptionOwners.get(subscriptionId);
+        if (route != null) {
+            return route.owner;
         }
         SubscriptionModel replaying = innerModelCatchingUp(subscriptionId);
         return replaying != null ? replaying : anyInnerModel();
@@ -377,18 +390,47 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     /**
      * Passes the cancel to the inner catch-up model that holds the subscription, see
-     * {@link ReactorStreamCatchupSubscriptionModel#cancelSubscription(String)}. Until this method returns, a subscribe of
-     * {@code subscriptionId} through this model throws {@link DuplicateSubscriptionIdException}. After that, only a
-     * subscribe that this model routes to that same inner model throws it, while the cancel that inner model sent the
-     * wrapped model has not ended.
+     * {@link ReactorStreamCatchupSubscriptionModel#cancelSubscription(String)}. Until the {@code Mono} this returns has
+     * completed or failed, and every other cancel of {@code subscriptionId} through this model has too, a subscribe of
+     * that id through this model throws {@link DuplicateSubscriptionIdException}, and the other calls for that id reach
+     * that inner model. That holds also when nothing subscribes to the {@code Mono}.
      */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
-        SubscriptionModel owner = ownerOf(subscriptionId);
-        // Forgotten only once the owner took the cancel, so later calls still reach the owner after a cancel it refuses
-        Mono<Void> cancelled = owner.cancelSubscription(subscriptionId);
-        subscriptionOwners.remove(subscriptionId);
-        return cancelled;
+        Route route = subscriptionOwners.computeIfPresent(subscriptionId, (id, current) -> {
+            current.cancelsUnderWay++;
+            return current;
+        });
+        if (route == null) {
+            return ownerOf(subscriptionId).cancelSubscription(subscriptionId);
+        }
+        Mono<Void> cancelled;
+        try {
+            cancelled = route.owner.cancelSubscription(subscriptionId);
+        } catch (RuntimeException | Error e) {
+            // Kept, so later calls still reach the owner after a cancel it refuses
+            cancelEnds(subscriptionId, route, false);
+            throw e;
+        }
+        Mono<Void> ended = cancelled.doOnTerminate(() -> cancelEnds(subscriptionId, route, true)).cache();
+        // Subscribed here so the route is forgotten even when nothing subscribes to what this returns. The owner logs
+        // a cancel that fails.
+        ended.subscribe(unused -> {
+        }, failure -> {
+        });
+        return ended;
+    }
+
+    // Forgets the route once no cancel of it is under way and one of them has ended
+    private void cancelEnds(String subscriptionId, Route route, boolean ended) {
+        subscriptionOwners.computeIfPresent(subscriptionId, (id, current) -> {
+            if (current != route) {
+                return current;
+            }
+            current.cancelEnded |= ended;
+            current.cancelsUnderWay--;
+            return current.cancelsUnderWay == 0 && current.cancelEnded ? null : current;
+        });
     }
 
     @Override
