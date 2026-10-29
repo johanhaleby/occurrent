@@ -33,6 +33,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
@@ -44,16 +45,22 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Updates.set;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -66,7 +73,8 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * lease it holds, or to take one that has become free, for as long as it runs, so the round is logged and the next one
  * runs. The same goes for the consumers within one round. An {@link Error} from one consumer's refresh must not leave
  * the consumers after it unrefreshed, which would let their leases expire. And a grant the notifier threw an
- * {@link Error} on must reach the listeners in a later round, since no other round decides it again.
+ * {@link Error} on must reach the listeners in a later round, since no other round decides it again. So must a change
+ * whose hand-over or telling throws, or whose task the notifier never ran.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -212,6 +220,126 @@ class MongoLeaseRefreshErrorTest {
         );
     }
 
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Decision.class)
+    @DisplayName("tells the listeners of a decision in the next round when handing it over threw an Error")
+    void tells_the_listeners_of_a_decision_in_the_next_round_when_handing_it_over_threw_an_Error(Decision decision) throws InterruptedException {
+        // Given
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        AtomicLong clock = new AtomicLong();
+        ScheduledRefresh handOverThatThrowsOnce = new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh())) {
+            private final AtomicBoolean thrown = new AtomicBoolean();
+
+            @Override
+            void notifyInBackground(String subscriptionId, Runnable tell) {
+                if (thrown.compareAndSet(false, true)) {
+                    // Thrown deliberately. Nothing here runs out of memory.
+                    throw new LinkageError("handing over the tell for " + subscriptionId + " fails");
+                }
+                super.notifyInBackground(subscriptionId, tell);
+            }
+        };
+        otherNode = aNodeThatNeverRefreshes();
+        support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), handOverThatThrowsOnce, clock::get)
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(locks));
+        assertThat(support.registerCompetingConsumer(locks, "the-other-subscription", NODE)).isTrue();
+        Calls calls = new Calls();
+        support.addListener(calls);
+        decision.arrange(this, clock);
+        int before = calls.size();
+        Object otherLeaseExpiresAtBefore = expiresAtOf("the-other-subscription");
+        // expiresAt is computed on the database clock, so a refresh a few milliseconds later writes a later one
+        Thread.sleep(50);
+
+        // When
+        Throwable thrown = catchThrowable(round.get()::run);
+        round.get().run();
+
+        // Then
+        // Nothing else decides the change again, so the round after the one whose hand-over threw has to tell it, once.
+        // The round that threw must still have refreshed the consumer after it, or that lease would expire.
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the round whose hand-over threw").isNull(),
+                () -> assertThat(calls.since(before)).as("what the listeners were told").containsExactly(decision.told),
+                () -> assertThat(expiresAtOf("the-other-subscription")).as("the lease of the other consumer").isNotEqualTo(otherLeaseExpiresAtBefore)
+        );
+    }
+
+    @Test
+    void tells_the_listeners_of_a_grant_in_the_next_round_when_telling_them_threw_an_Error_in_the_strategys_own_code() throws InterruptedException {
+        // Given
+        Thread testThread = Thread.currentThread();
+        AtomicBoolean thrownOnce = new AtomicBoolean();
+        LongSupplier clockThatThrowsOnceInTheTell = () -> {
+            if (Thread.currentThread() != testThread && thrownOnce.compareAndSet(false, true)) {
+                // Thrown deliberately. Nothing here runs out of memory.
+                throw new LinkageError("reading the clock in the tell fails");
+            }
+            return System.nanoTime();
+        };
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        NotifierThatThrowsWhenTold notifier = new NotifierThatThrowsWhenTold();
+        ScheduledRefresh held = new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()), notifier);
+        otherNode = aNodeThatNeverRefreshes();
+        support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), held, clockThatThrowsOnceInTheTell)
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(locks));
+        Calls calls = new Calls();
+        support.addListener(calls);
+        assertThat(otherNode.registerCompetingConsumer(locks, "a-subscription", "the-other-node")).isTrue();
+        assertThat(support.registerCompetingConsumer(locks, "a-subscription", NODE)).isFalse();
+        otherNode.unregisterCompetingConsumer(locks, "a-subscription", "the-other-node");
+
+        // When
+        // The round that takes the lease, whose tell the clock breaks on the notifier's thread, and the round after it
+        round.get().run();
+        notifier.awaitEveryTask();
+        round.get().run();
+        notifier.awaitEveryTask();
+
+        // Then
+        // A round decides a grant once, so dropping the tell would leave the subscription paused on the node that holds its lease
+        assertAll(
+                () -> assertThat(thrownOnce).as("the clock threw in the tell").isTrue(),
+                () -> assertThat(calls.since(0)).as("what the listeners were told").containsExactly("granted"),
+                () -> assertThat(support.hasLock("a-subscription", NODE)).isTrue()
+        );
+    }
+
+    @Test
+    void tells_the_listeners_of_a_change_in_the_next_round_when_the_notifier_took_its_task_and_never_ran_it() throws InterruptedException {
+        // Given
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        NotifierThatDropsTheFirstTask notifier = new NotifierThatDropsTheFirstTask();
+        ScheduledRefresh held = new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()), notifier);
+        otherNode = aNodeThatNeverRefreshes();
+        support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), held)
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(locks));
+        Calls calls = new Calls();
+        support.addListener(calls);
+        assertThat(otherNode.registerCompetingConsumer(locks, "a-subscription", "the-other-node")).isTrue();
+        assertThat(support.registerCompetingConsumer(locks, "a-subscription", NODE)).isFalse();
+        otherNode.unregisterCompetingConsumer(locks, "a-subscription", "the-other-node");
+
+        // When
+        // The round that takes the lease, whose task the notifier drops, and the round after it
+        round.get().run();
+        round.get().run();
+        notifier.awaitEveryTask();
+
+        // Then
+        // Nothing says the dropped task was lost, so the grant has to come from the round after it
+        assertThat(calls.since(0)).as("after the round that followed the dropped task").containsExactly("granted");
+
+        // When
+        expireLeaseOf("a-subscription");
+        assertThat(otherNode.registerCompetingConsumer(locks, "a-subscription", "the-other-node")).isTrue();
+        round.get().run();
+        notifier.awaitEveryTask();
+
+        // Then
+        assertThat(calls.since(0)).as("after the round that found the lease taken").containsExactly("granted", "prohibited");
+    }
+
     /**
      * The consumers of a round are refreshed in no particular order, so each of them takes its turn as the one whose
      * refresh throws. For all but the last consumer of the round, the consumers after it are the ones that go unrefreshed
@@ -249,10 +377,54 @@ class MongoLeaseRefreshErrorTest {
     }
 
     /**
+     * Logging what a refresh threw can throw as well, as it does when memory runs out, and that must not end the round
+     * either.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"c0", "c1", "c2", "c3"})
+    @DisplayName("refreshes the other consumers of the round when the refresh of one of them throws an Error that cannot be logged")
+    void refreshes_the_other_consumers_of_the_round_when_the_refresh_of_one_of_them_throws_an_Error_that_cannot_be_logged(String failing) throws InterruptedException {
+        // Given
+        AtomicReference<Runnable> scheduledRefresh = new AtomicReference<>();
+        ScheduledRefresh held = new ScheduledRefresh((lease, scheduler) -> scheduledRefresh.set(scheduler.refresh()));
+        support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), held)
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(
+                        throwingForTheLeaseOf(failing, locks, ErrorThatThrowsWhenLogged::new)));
+        List<String> consumers = List.of("c0", "c1", "c2", "c3");
+        consumers.forEach(id -> assertThat(support.registerCompetingConsumer(locks, id, NODE)).isTrue());
+        List<String> others = consumers.stream().filter(id -> !id.equals(failing)).toList();
+        Map<String, Object> expiresAtBefore = expiresAtOf(others);
+        // expiresAt is computed on the database clock, so a refresh a few milliseconds later writes a later one
+        Thread.sleep(50);
+
+        // When
+        Throwable thrown = catchThrowable(scheduledRefresh.get()::run);
+
+        // Then
+        // The round throws what the refresh threw, not what logging it threw, and the consumers after the failing one
+        // are refreshed either way, since their leases would otherwise expire and another node would take them over.
+        Map<String, Object> expiresAtAfter = expiresAtOf(others);
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(ErrorThatThrowsWhenLogged.class),
+                () -> assertThat(others).allSatisfy(id ->
+                        assertThat(expiresAtAfter.get(id)).as("the lease of " + id).isNotEqualTo(expiresAtBefore.get(id)))
+        );
+    }
+
+    /**
      * Rounds run at a fixed rate, the first one right away, so register before scheduling the refresh.
      */
     private static ScheduledRefresh everyRound() {
         return new ScheduledRefresh((lease, scheduler) -> scheduler.fixedRate(Duration.ZERO, ROUND_EVERY));
+    }
+
+    private static MongoLeaseCompetingConsumerStrategySupport aNodeThatNeverRefreshes() {
+        return new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), new ScheduledRefresh((lease, scheduler) -> {
+        }));
+    }
+
+    private void expireLeaseOf(String subscriptionId) {
+        locks.updateOne(eq("_id", subscriptionId), set("expiresAt", Instant.now().minus(Duration.ofSeconds(2))));
     }
 
     private Object expiresAtOf(String subscriptionId) {
@@ -267,8 +439,15 @@ class MongoLeaseRefreshErrorTest {
      * A collection that throws an {@link Error} for every write to the lease of {@code subscriptionId}, and forwards
      * everything else. Writes are told apart by the filter they are given, which names the lease by its {@code _id}.
      */
-    @SuppressWarnings("unchecked")
     private static MongoCollection<BsonDocument> throwingAnErrorForTheLeaseOf(String subscriptionId, MongoCollection<BsonDocument> delegate) {
+        return throwingForTheLeaseOf(subscriptionId, delegate, () -> new LinkageError("refreshing the lease of " + subscriptionId + " fails"));
+    }
+
+    /**
+     * Like {@link #throwingAnErrorForTheLeaseOf}, throwing what {@code error} makes.
+     */
+    @SuppressWarnings("unchecked")
+    private static MongoCollection<BsonDocument> throwingForTheLeaseOf(String subscriptionId, MongoCollection<BsonDocument> delegate, Supplier<Error> error) {
         return (MongoCollection<BsonDocument>) Proxy.newProxyInstance(
                 MongoCollection.class.getClassLoader(),
                 new Class<?>[]{MongoCollection.class},
@@ -276,16 +455,88 @@ class MongoLeaseRefreshErrorTest {
                     boolean write = method.getName().equals("updateOne") || method.getName().equals("findOneAndUpdate");
                     if (write && args[0] instanceof Bson filter
                             && filter.toBsonDocument(BsonDocument.class, MongoClientSettings.getDefaultCodecRegistry()).toJson().contains("\"" + subscriptionId + "\"")) {
-                        throw new LinkageError("refreshing the lease of " + subscriptionId + " fails");
+                        throw error.get();
                     }
                     try {
                         Object result = method.invoke(delegate, args);
                         return result instanceof MongoCollection<?> another
-                                ? throwingAnErrorForTheLeaseOf(subscriptionId, (MongoCollection<BsonDocument>) another)
+                                ? throwingForTheLeaseOf(subscriptionId, (MongoCollection<BsonDocument>) another, error)
                                 : result;
                     } catch (InvocationTargetException e) {
                         throw e.getCause();
                     }
                 });
+    }
+
+    /**
+     * What a round decides about {@code a-subscription} and hands over, each arranged by {@link #arrange} against a
+     * node that holds the other subscription. {@link #told} is the one call the listeners are to hear of it.
+     */
+    private enum Decision {
+        GRANT("a grant", "granted") {
+            @Override
+            void arrange(MongoLeaseRefreshErrorTest test, AtomicLong clock) {
+                assertThat(test.otherNode.registerCompetingConsumer(test.locks, "a-subscription", "the-other-node")).isTrue();
+                assertThat(test.support.registerCompetingConsumer(test.locks, "a-subscription", NODE)).isFalse();
+                test.otherNode.unregisterCompetingConsumer(test.locks, "a-subscription", "the-other-node");
+            }
+        },
+        PROHIBITION("a prohibition", "prohibited") {
+            @Override
+            void arrange(MongoLeaseRefreshErrorTest test, AtomicLong clock) {
+                assertThat(test.support.registerCompetingConsumer(test.locks, "a-subscription", NODE)).isTrue();
+                test.expireLeaseOf("a-subscription");
+                assertThat(test.otherNode.registerCompetingConsumer(test.locks, "a-subscription", "the-other-node")).isTrue();
+            }
+        },
+        REGRANT_AFTER_HAS_LOCK_ANSWERED_NO("a regrant after hasLock answered no", "granted") {
+            @Override
+            void arrange(MongoLeaseRefreshErrorTest test, AtomicLong clock) {
+                assertThat(test.support.registerCompetingConsumer(test.locks, "a-subscription", NODE)).isTrue();
+                clock.addAndGet(LEASE.toNanos());
+                assertThat(test.support.hasLock("a-subscription", NODE)).isFalse();
+            }
+        };
+
+        private final String label;
+        private final String told;
+
+        Decision(String label, String told) {
+            this.label = label;
+            this.told = told;
+        }
+
+        abstract void arrange(MongoLeaseRefreshErrorTest test, AtomicLong clock);
+
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    /**
+     * Records each call it is told of, as {@code granted} or {@code prohibited}.
+     */
+    private static final class Calls implements CompetingConsumerListener {
+        private final List<String> calls = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void onConsumeGranted(String subscriptionId, String subscriberId) {
+            calls.add("granted");
+        }
+
+        @Override
+        public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+            calls.add("prohibited");
+        }
+
+        int size() {
+            return calls.size();
+        }
+
+        List<String> since(int from) {
+            List<String> all = List.copyOf(calls);
+            return all.subList(from, all.size());
+        }
     }
 }
