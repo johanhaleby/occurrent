@@ -250,6 +250,31 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return subscribe(filter, startAt, true);
     }
 
+    /**
+     * Does what {@link #subscribe(SubscriptionFilter, StartAt)} does, except when the oplog no longer reaches back to
+     * where the {@code Flux} reads from, as it opens or after it has read change stream documents. The {@code Flux} then
+     * fails with {@link HistoryLostException}, whatever {@code restartSubscriptionsOnChangeStreamHistoryLost} is
+     * configured to, and its {@link HistoryLostException#lostFrom()} is the position of the last document read, or the
+     * position the {@code Flux} opened at when it has read none.
+     */
+    @Override
+    public Flux<CloudEvent> subscribeFailingOnHistoryLoss(@Nullable SubscriptionFilter filter, StartAt startAt) {
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        return Flux.defer(() -> {
+            MongoCommons.refuseCatchupPosition(startAt);
+            AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
+            AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
+            AtomicReference<@Nullable OpenedAt> openedAt = new AtomicReference<>();
+            return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, openedAt::set, currentStartAt::set, () -> {
+            }).retryWhen(unboundedBackoff().filter(throwable -> !isChangeStreamHistoryLost(throwable) && shouldRestart(null, throwable, () -> {
+            }))).onErrorMap(ReactorMongoSubscriptionModel::isChangeStreamHistoryLost, throwable -> {
+                // Null only for a stream that never opened at a position, which has none to name
+                Checkpoint lostFrom = MongoCommons.lostFrom(currentStartAt.get(), openedAt.get());
+                return lostFrom == null ? throwable : new HistoryLostException(lostFrom, throwable);
+            });
+        });
+    }
+
     private Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt, boolean failIfStartLost) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         Checkpoint start = failIfStartLost && !startAt.isDynamic() && startAt instanceof StartAt.StartAtCheckpoint position ? position.checkpoint : null;

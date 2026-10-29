@@ -128,6 +128,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // A non-DCB position means the catch-up already handed over and the live subscription stored a change-stream
         // token (or the caller asked to start live directly). Subscribe live, still applying the DCB query post-filter.
         if (!isDcbCatchupPosition(subscriptionId, firstStartAt)) {
+            refuseIfLiveStartLost(subscriptionId, firstStartAt);
             return subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, firstStartAt), action, holdPaused);
         }
 

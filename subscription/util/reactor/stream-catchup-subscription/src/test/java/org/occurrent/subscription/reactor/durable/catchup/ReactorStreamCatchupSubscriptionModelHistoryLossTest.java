@@ -530,7 +530,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     // Events at positions 1 to head, where a read can be blocked or failed
-    private static final class ScriptedReader implements UnscopedPositionOrderedReader {
+    static final class ScriptedReader implements UnscopedPositionOrderedReader {
         volatile long head = 3;
         private final AtomicReference<Mono<Void>> beforeEachRead = new AtomicReference<>(Mono.empty());
 
@@ -571,7 +571,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
     // Loses the live start it opens at when the test says so and asks its listeners as the Mongo model does.
     // Without a taker, restarts from the present or ends the subscription.
-    private static final class LosingLiveStartModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
+    static final class LosingLiveStartModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
         private enum State {RUNNING, PAUSED}
 
         enum Loses {WHEN_THE_TEST_SAYS, ON_THE_THREAD_OF_SUBSCRIBE, ON_ANOTHER_THREAD_WHILE_SUBSCRIBE_WAITS}
@@ -600,6 +600,14 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         };
         volatile Runnable beforeTheNextResumeAtAPosition = () -> {
         };
+        // Runs on the thread of every subscribe(id, ..) before the model registers the subscription
+        volatile Runnable beforeSubscribeRegisters = () -> {
+        };
+        final AtomicInteger subscribeCalls = new AtomicInteger();
+        final AtomicInteger starts = new AtomicInteger();
+        private volatile @Nullable Checkpoint refusedStart;
+        private volatile @Nullable RuntimeException refusal;
+        volatile boolean startResumesPausedSubscriptions;
         volatile Loses loses = Loses.WHEN_THE_TEST_SAYS;
         volatile UnaryOperator<Checkpoint> reportsTheLostPositionAs = UnaryOperator.identity();
 
@@ -613,6 +621,28 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
         void losesTheNextOpen() {
             opensToLose.set(1);
+        }
+
+        // The next subscribe(id, ..) at start throws failure instead of registering the subscription
+        void refusesTheSubscribeAt(Checkpoint start, RuntimeException failure) {
+            refusal = failure;
+            refusedStart = start;
+        }
+
+        // What the listeners answer for a loss, without pausing or restarting anything
+        HistoryLossHandling asksTheListeners(String subscriptionId, Checkpoint lostFrom) {
+            for (HistoryLossListener listener : listeners) {
+                HistoryLossHandling handling = listener.handleHistoryLoss(subscriptionId, lostFrom);
+                if (handling instanceof HistoryLossHandling.TakeOver) {
+                    return handling;
+                }
+            }
+            return HistoryLossHandling.leaveToSubscriptionModel();
+        }
+
+        // The oplog loses the history from lostFrom for a subscription, wherever it opened
+        void losesTheHistoryFrom(String subscriptionId, Checkpoint lostFrom) {
+            reportsLoss(subscriptionId, lostFrom);
         }
 
         void losesTheLiveStartOnTheNextCheckWhetherItRuns() {
@@ -638,9 +668,12 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         }
 
         private void losesTheLiveStartOf(String subscriptionId) {
-            Held lost = held.get(subscriptionId);
+            reportsLoss(subscriptionId, held.get(subscriptionId).position());
+        }
+
+        private void reportsLoss(String subscriptionId, Checkpoint lostFrom) {
             for (HistoryLossListener listener : listeners) {
-                if (listener.handleHistoryLoss(subscriptionId, reportsTheLostPositionAs.apply(lost.position())) instanceof HistoryLossHandling.TakeOver takeOver) {
+                if (listener.handleHistoryLoss(subscriptionId, reportsTheLostPositionAs.apply(lostFrom)) instanceof HistoryLossHandling.TakeOver takeOver) {
                     held.computeIfPresent(subscriptionId, (id, current) -> current.at(current.position(), State.PAUSED));
                     beforeTheTakeoverRuns.run();
                     takeOversRun.incrementAndGet();
@@ -697,8 +730,20 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         }
 
         @Override
+        public Flux<CloudEvent> subscribeFailingOnHistoryLoss(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.error(new AssertionError("The cold primitive must not be used by the named catch-up path"));
+        }
+
+        @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            subscribeCalls.incrementAndGet();
+            beforeSubscribeRegisters.run();
             Checkpoint position = ((StartAt.StartAtCheckpoint) startAt).checkpoint;
+            RuntimeException refused = refusal;
+            if (refused != null && position.equals(refusedStart)) {
+                refusal = null;
+                throw refused;
+            }
             held.put(subscriptionId, new Held(action, position, State.RUNNING));
             opened(subscriptionId);
             if (openThatLoses != null && loses != Loses.WHEN_THE_TEST_SAYS) {
@@ -810,6 +855,16 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
+            starts.incrementAndGet();
+            if (resumeSubscriptionsAutomatically && startResumesPausedSubscriptions) {
+                List.copyOf(held.keySet()).forEach(subscriptionId -> {
+                    Held current = held.get(subscriptionId);
+                    if (current != null && current.state() == State.PAUSED) {
+                        held.put(subscriptionId, current.at(current.position(), State.RUNNING));
+                        opened(subscriptionId);
+                    }
+                });
+            }
         }
 
         @Override

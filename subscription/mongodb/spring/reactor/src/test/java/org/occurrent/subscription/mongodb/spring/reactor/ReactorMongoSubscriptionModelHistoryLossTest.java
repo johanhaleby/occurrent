@@ -23,6 +23,7 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.BsonDocument;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -153,6 +154,85 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
                 .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOfSatisfying(HistoryLostException.class,
                         lost -> assertThat(lost.lostFrom().asString()).isEqualTo(requireNonNull(start).asString())))
                 .verify(Duration.ofSeconds(15));
+    }
+
+    @Test
+    void a_flux_that_fails_on_history_loss_fails_with_the_start_when_the_oplog_lost_it_and_never_opens_a_second_change_stream_when_the_model_restarts_lost_subscriptions() {
+        verifiesTheFluxThatFailsOnHistoryLossFailsWithTheStart(true);
+    }
+
+    @Test
+    void a_flux_that_fails_on_history_loss_fails_with_the_start_when_the_oplog_lost_it_and_never_opens_a_second_change_stream_when_the_model_ends_lost_subscriptions() {
+        verifiesTheFluxThatFailsOnHistoryLossFailsWithTheStart(false);
+    }
+
+    private void verifiesTheFluxThatFailsOnHistoryLossFailsWithTheStart(boolean restartLostSubscriptions) {
+        subscriptionModel = modelOver(restartLostSubscriptions);
+        Checkpoint start = requireNonNull(subscriptionModel.globalCheckpoint().block(Duration.ofSeconds(10)));
+        NameDefined written = nameDefined();
+        write(written);
+        StepVerifier.create(subscriptionModel.subscribeFailingOnHistoryLoss(null, StartAt.checkpoint(start)).map(CloudEvent::getId).take(1))
+                .expectNext(written.eventId())
+                .expectComplete()
+                .verify(Duration.ofSeconds(10));
+        int openedBefore = commands.changeStreamsOpened().size();
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "aggregate", new Document("errorCode", HISTORY_LOST));
+
+        StepVerifier.create(subscriptionModel.subscribeFailingOnHistoryLoss(null, StartAt.checkpoint(start)))
+                .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOfSatisfying(HistoryLostException.class,
+                        lost -> assertThat(lost.lostFrom().asString()).isEqualTo(start.asString())))
+                .verify(Duration.ofSeconds(15));
+
+        assertThat(commands.changeStreamsOpened()).as("change streams opened by the Flux that lost its start").hasSize(openedBefore + 1);
+    }
+
+    @Test
+    void a_flux_that_fails_on_history_loss_fails_when_the_oplog_loses_the_history_after_it_read_and_does_not_start_again_from_the_present_when_the_model_restarts_lost_subscriptions() {
+        verifiesTheFluxThatFailsOnHistoryLossFailsAfterReading(true);
+    }
+
+    @Test
+    void a_flux_that_fails_on_history_loss_fails_when_the_oplog_loses_the_history_after_it_read_and_does_not_start_again_from_the_present_when_the_model_ends_lost_subscriptions() {
+        verifiesTheFluxThatFailsOnHistoryLossFailsAfterReading(false);
+    }
+
+    private void verifiesTheFluxThatFailsOnHistoryLossFailsAfterReading(boolean restartLostSubscriptions) {
+        subscriptionModel = modelOver(restartLostSubscriptions);
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<Throwable> failures = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribeFailingOnHistoryLoss(null, StartAt.now()).subscribe(event -> delivered.add(event.getId()), failures::add);
+        await().atMost(10, SECONDS).until(() -> commands.changeStreamsOpened().size() == 1);
+        NameDefined first = nameDefined();
+        write(first);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(first.eventId()));
+
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", HISTORY_LOST));
+
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(failures).hasSize(1));
+        NameDefined afterTheLoss = nameDefined();
+        write(afterTheLoss);
+        await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(6)).untilAsserted(() -> {
+            assertThat(failures.getFirst()).isInstanceOfSatisfying(HistoryLostException.class, lost -> assertThat(lost.lostFrom().asString()).as("position it had read to").isNotBlank());
+            assertThat(commands.changeStreamsOpened()).as("change streams opened, so none from the present").hasSize(1);
+            assertThat(delivered).as("delivered").containsExactly(first.eventId());
+        });
+    }
+
+    @Test
+    void a_flux_that_fails_on_history_loss_and_lost_its_history_before_it_read_anything_from_now_fails_with_the_position_it_opened_at() {
+        subscriptionModel = modelOver(true);
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "aggregate", new Document("errorCode", HISTORY_LOST));
+
+        StepVerifier.create(subscriptionModel.subscribeFailingOnHistoryLoss(null, StartAt.now()))
+                .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOfSatisfying(HistoryLostException.class, lost -> {
+                    CommandLog.Sent opened = commands.changeStreamsOpened().getFirst();
+                    assertThat(BsonDocument.parse(lost.lostFrom().asString()).getTimestamp("operationTime"))
+                            .as("the operation time of the lost position, and the one the change stream opened at")
+                            .isEqualTo(opened.changeStreamStage().getTimestamp("startAtOperationTime"));
+                }))
+                .verify(Duration.ofSeconds(15));
+
+        assertThat(commands.changeStreamsOpened()).as("change streams opened").hasSize(1);
     }
 
     @Test

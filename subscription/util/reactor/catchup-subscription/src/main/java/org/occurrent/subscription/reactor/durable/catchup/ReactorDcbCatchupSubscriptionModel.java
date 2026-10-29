@@ -316,7 +316,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
             // Not a DCB catch-up position, so go straight to live. Apply the same in-process DCB floor the replay-to-live
             // path and the DcbSubscriptionModel adapter apply, so a backend that does not honor the filter server-side
             // still only delivers events matching the criteria.
-            return subscriptionModel.subscribe(DcbSubscriptionFilter.filter(criteria), resolved == null ? startAt : resolved)
+            return PositionCatchupPipeline.straightToLive(subscriptionModel, DcbSubscriptionFilter.filter(criteria), resolved == null ? startAt : resolved)
                     .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria));
         }
 

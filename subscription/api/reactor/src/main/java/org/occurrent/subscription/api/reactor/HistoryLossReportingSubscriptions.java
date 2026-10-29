@@ -67,6 +67,21 @@ public interface HistoryLossReportingSubscriptions extends SubscriptionModelCapa
     Flux<CloudEvent> subscribeFailingIfStartLost(@Nullable SubscriptionFilter filter, StartAt startAt);
 
     /**
+     * Subscribes from {@code startAt}, and fails the returned {@code Flux} with {@link HistoryLostException} whenever
+     * this model loses the history it reads from, as it opens at {@code startAt} or after it has delivered events. It
+     * never restarts the subscription from the current time, whatever this model is configured to do.
+     * {@link #subscribeFailingIfStartLost} fails only on a loss of {@code startAt} itself.
+     * {@link HistoryLostException#lostFrom()} is the position the subscription had read to when the history was lost.
+     * While nothing has been read it is {@code startAt}'s position, or, for a start that names no position such as
+     * {@link StartAt#now()}, the position the subscription opened at.
+     *
+     * @param filter  The filter to use, or {@code null} for no filter.
+     * @param startAt The position to start from.
+     * @return The events from {@code startAt} on.
+     */
+    Flux<CloudEvent> subscribeFailingOnHistoryLoss(@Nullable SubscriptionFilter filter, StartAt startAt);
+
+    /**
      * Finds the {@link HistoryLossReportingSubscriptions} capability of {@code subscriptionModel}.
      *
      * @param subscriptionModel The subscription model to look in.

@@ -32,6 +32,7 @@ import org.occurrent.subscription.api.reactor.HistoryLostException;
 import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.internal.LongestReplay;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,9 +82,11 @@ import static java.util.Objects.requireNonNull;
  * redelivers the events in between. A catch-up whose replay loses the token 4 times in a row fails instead of
  * replaying a fifth time. A token can still leave the history after that check, before the wrapped model opens its
  * change stream at it. When the wrapped model has {@link HistoryLossReportingSubscriptions}, the live half is read
- * through {@link HistoryLossReportingSubscriptions#subscribeFailingIfStartLost}, and a loss of that token runs the
+ * through {@link HistoryLossReportingSubscriptions#subscribeFailingOnHistoryLoss}, and a loss of that token runs the
  * replay again from the position the first attempt started from, with a token read then. That counts as one of the
- * replays run again. Any other wrapped model handles the lost history as it would without this pipeline.
+ * replays run again. A loss of any later position fails the {@code Flux} with {@link CatchupCannotResumeException}
+ * instead of restarting it from the present. Any other wrapped model handles the lost history as it would without
+ * this pipeline.
  */
 @NullMarked
 final class PositionCatchupPipeline {
@@ -174,17 +177,53 @@ final class PositionCatchupPipeline {
                             }
                             Checkpoint liveFrom = replayStart.liveFrom();
                             StartAt liveStartAt = StartAt.checkpoint(liveFrom);
-                            Flux<CloudEvent> live = (subscriptionModel instanceof SubscriptionModelCapability capabilities ? HistoryLossReportingSubscriptions.findIn(capabilities) : Optional.<HistoryLossReportingSubscriptions>empty())
-                                    .map(reporting -> reporting.subscribeFailingIfStartLost(liveSubscriptionFilter, liveStartAt))
+                            Flux<CloudEvent> live = historyLossReportingOf(subscriptionModel)
+                                    .map(reporting -> reporting.subscribeFailingOnHistoryLoss(liveSubscriptionFilter, liveStartAt))
                                     .orElseGet(() -> subscriptionModel.subscribe(liveSubscriptionFilter, liveStartAt));
                             return live
                                     .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)))
-                                    .onErrorResume(throwable -> throwable instanceof HistoryLostException lost && samePosition(lost.lostFrom(), liveFrom),
-                                            __ -> replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, null, replayAgainAfterLiveStartLost(subscriptionModel, replayStart, null, counted, longestReplay),
-                                                    cache, counted + 1, longestReplay));
+                                    .onErrorResume(HistoryLostException.class, lost -> samePosition(lost.lostFrom(), liveFrom)
+                                            ? replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, null, replayAgainAfterLiveStartLost(subscriptionModel, replayStart, null, counted, longestReplay),
+                                            cache, counted + 1, longestReplay)
+                                            : Flux.error(historyLostOnUnnamedFlux(lost)));
                         });
                     }));
         });
+    }
+
+    /**
+     * Goes live on {@code subscriptionModel} from {@code startAt} without a replay, for an unnamed catch-up whose start
+     * is not a position it replays from. A checkpoint start the model no longer has the history back to fails the
+     * {@code Flux} with {@link CatchupCannotResumeException} before anything is read. When the model has
+     * {@link HistoryLossReportingSubscriptions}, it is read through
+     * {@link HistoryLossReportingSubscriptions#subscribeFailingOnHistoryLoss}, and a later loss of the history fails
+     * the {@code Flux} with {@link CatchupCannotResumeException} too, instead of restarting it from the present. Any
+     * other model handles a lost history as it would without a catch-up.
+     */
+    static Flux<CloudEvent> straightToLive(CheckpointAwareSubscriptionModel subscriptionModel, SubscriptionFilter filter, StartAt startAt) {
+        return Flux.defer(() -> {
+            Flux<CloudEvent> live = historyLossReportingOf(subscriptionModel)
+                    .map(reporting -> reporting.subscribeFailingOnHistoryLoss(filter, startAt).onErrorMap(HistoryLostException.class, PositionCatchupPipeline::historyLostOnUnnamedFlux))
+                    .orElseGet(() -> subscriptionModel.subscribe(filter, startAt));
+            if (startAt.isDynamic() || !(startAt instanceof StartAt.StartAtCheckpoint position)) {
+                return live;
+            }
+            return subscriptionModel.canResumeFrom(position.checkpoint)
+                    .flatMapMany(canResume -> canResume ? live : Flux.error(HistoryLossMessages.cannotStartFrom(null, position.checkpoint)));
+        });
+    }
+
+    static Optional<HistoryLossReportingSubscriptions> historyLossReportingOf(CheckpointAwareSubscriptionModel subscriptionModel) {
+        return subscriptionModel instanceof SubscriptionModelCapability capabilities ? HistoryLossReportingSubscriptions.findIn(capabilities) : Optional.empty();
+    }
+
+    // Logged here, since the Flux is the only place the failure surfaces and its subscriber may drop it
+    private static CatchupCannotResumeException historyLostOnUnnamedFlux(HistoryLostException lost) {
+        String lostFrom = lost.lostFrom().asString();
+        log.error(HistoryLossMessages.UNNAMED_TERMINAL_FAILURE_LOG, lostFrom, lostFrom, lost);
+        CatchupCannotResumeException failure = HistoryLossMessages.historyLost(null, lost.lostFrom());
+        failure.initCause(lost);
+        return failure;
     }
 
     /**
