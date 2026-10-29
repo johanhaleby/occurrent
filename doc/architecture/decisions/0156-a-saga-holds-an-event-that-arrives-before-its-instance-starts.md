@@ -121,7 +121,10 @@ deliberate. Holding the copy forever would keep its bytes and never run its reac
 
 A held copy is applied through `process`, with its own meta and its own failure handling. When it fails, the driving
 input is refused as any failing input is, the failed version is listed pending or self-held as below, and REDELIVER
-retries the driving input, which drains first.
+retries the driving input, which drains first. When the held copy's failure quarantines the instance instead, the
+driving input is acknowledged without being applied, as every later input of a quarantined instance is, and quarantine
+engages only on a subscription that retains its history. A held copy whose conversion or `evolve` throws while the drain
+checks whether it ends the instance is applied at once, so that failure is its own as well.
 
 **The lookup on every keyed delivery.** Where the delivery holds, every keyed delivery to a started instance reads the
 held copy with its own key once, after the drain and before classifying the delivery. A self-held copy not marked
@@ -169,11 +172,15 @@ after some deliverer applied it, so that ERROR shows a model that broke the cont
    a write that succeeded may have added it already. When the answer proves the version applied or lists it pending,
    `unmarkSelfHeld` pulls the key and the failure is rethrown. Otherwise the key stays. A version kept while the answer
    has it behind the window logs a WARN, since nothing proves it applied, and if it did, its reaction runs again.
-3. `hold` inserts the copy with `selfHeld` true. A duplicate key is a copy already held, which is always the case for a
-   held copy that failed.
-4. The original failure is rethrown, so the delivery is refused and never acknowledged.
+3. For the delivery's own event, `hold` inserts the copy with `selfHeld` true, and a duplicate key is a copy already
+   held. A held copy that failed is never inserted again. When it is gone, it was applied or proven applied since it
+   failed, so the key is pulled and nothing is held.
+4. `markHeldEvents(sagaId, null)` makes a drain due once more. A drain that read the instance after step 1 and ended
+   before step 3 found no copy and wrote the flag true, and without this mark the copy would wait for a drain that is
+   never due.
+5. The original failure is rethrown, so the delivery is refused and never acknowledged.
 
-Both writes raise the version, so a whole-instance save that read before them loses and reads them back. While the key
+Both marks raise the version, so a whole-instance save that read before them loses and reads them back. While the key
 is in `selfHeldKeys`, classification treats the version as outstanding however far behind the window it is, so the
 redelivery applies it once, and that save pulls the key and adds it to `drainedHeldKeys`. A version proven applied on a
 later read has its key pruned before anything is classified. When one of the self-hold's own writes fails, one ERROR

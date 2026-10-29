@@ -381,8 +381,18 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 unmarkSelfHeld(heldEvents, sagaId, key);
                 return;
             }
+            if (heldCopy && heldEvents.held(sagaId, List.of(key)).isEmpty()) {
+                // Released since it failed, which happens only once it is applied or proven applied, so holding it
+                // again would apply it a second time.
+                unmarkSelfHeld(heldEvents, sagaId, key);
+                return;
+            }
             warnIfKeptBehindTheReorderWindow(sagaId, before, meta);
-            heldEvents.hold(sagaId, heldEvent(sagaId, cloudEvent, meta, true, false));
+            if (!heldCopy) {
+                heldEvents.hold(sagaId, heldEvent(sagaId, cloudEvent, meta, true, false));
+            }
+            // Again, because a drain that ended between the first mark and the copy would otherwise leave no drain due.
+            heldEvents.markHeldEvents(sagaId, null);
         } catch (Throwable storeFailure) {
             rethrowIfNotTheInstances(storeFailure);
             logCouldNotKeep(sagaId, meta, failure, storeFailure);
@@ -1015,8 +1025,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         if (!othersLeft) {
             return false;
         }
-        E event = converter.toDomainEvent(body.cloudEvent());
-        return saga.isTerminal(saga.evolve(current.state(), SagaInput.event(event, EventMetadata.from(body.cloudEvent()))));
+        try {
+            E event = converter.toDomainEvent(body.cloudEvent());
+            return saga.isTerminal(saga.evolve(current.state(), SagaInput.event(event, EventMetadata.from(body.cloudEvent()))));
+        } catch (Throwable failure) {
+            rethrowIfNotTheInstances(failure);
+            // Applied now instead, so the failure is the held event's own and not the delivery's that drove the drain.
+            return false;
+        }
     }
 
     private void release(SagaHeldEvents<S> heldEvents, String sagaId, String key) {
