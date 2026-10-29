@@ -1903,6 +1903,26 @@ class StreamCatchupSubscriptionModelTest {
         }
     }
 
+    @ParameterizedTest
+    @MethodSource("beginningOfTimeAsStored")
+    void a_stored_beginning_of_time_is_not_refused_at_the_default_start_and_replays_the_history(Checkpoint storedBeginningOfTime) {
+        // Given the beginning of time stored without a live start, no event has an earlier time
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        List<DomainEvent> history = List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)));
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        storage.save("subscription", storedBeginningOfTime);
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+
+        // When the subscription starts at the model default
+        Throwable failure = catchThrowable(() -> subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted(Duration.ofSeconds(10)));
+
+        // Then the start is not refused and every event is delivered
+        assertThat(failure).as("the start failure").isNull();
+        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history));
+    }
+
     @Test
     void a_replay_origin_at_the_beginning_of_time_read_back_as_a_string_still_replays_every_event() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
@@ -1926,6 +1946,10 @@ class StreamCatchupSubscriptionModelTest {
     static Stream<Checkpoint> catchUpCheckpointsOfTheTimeKind() {
         StringBasedCheckpoint someLiveStart = new StringBasedCheckpoint("some live start");
         return Stream.of(CatchupTimeCheckpoint.of(asTime(at(2)), someLiveStart, BEGINNING_OF_TIME), TimeBasedCheckpoint.from(at(2)), new StringBasedCheckpoint(asTime(at(2))));
+    }
+
+    static Stream<Checkpoint> beginningOfTimeAsStored() {
+        return Stream.of(TimeBasedCheckpoint.beginningOfTime(), new StringBasedCheckpoint(BEGINNING_OF_TIME));
     }
 
     static Stream<Checkpoint> catchUpCheckpointsOfThePositionKind() {

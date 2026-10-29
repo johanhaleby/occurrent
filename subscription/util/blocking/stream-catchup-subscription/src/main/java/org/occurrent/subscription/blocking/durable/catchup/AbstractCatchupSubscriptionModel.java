@@ -2270,17 +2270,19 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Refuses {@code stored} when it is a time without a live start, which a catch-up stored before the live start was
      * kept. A resume from it would go live from a live start read now and miss an event whose time is earlier than the
      * stored time but which was written after the earlier replay read past it. A time the caller starts from instead is
-     * a start by event time, which reads its live start before the replay. A stored position without a live start is
-     * refused where the replay resolves its start, as {@link #positionReplayStart} describes.
+     * a start by event time, which reads its live start before the replay. The beginning of time is not refused, since
+     * no event has an earlier time. A stored position without a live start is refused where the replay resolves its
+     * start, as {@link #positionReplayStart} describes.
      *
-     * @throws CatchupCannotResumeException if {@code stored} is a time without a live start
+     * @throws CatchupCannotResumeException if {@code stored} is a time after the beginning of time without a live start
      */
     protected static void refuseIfStoredWithoutLiveStart(String subscriptionId, @Nullable Checkpoint stored) {
         // A marked form always holds a live start
         if (stored == null || CatchupCheckpoints.isMarked(stored)) {
             return;
         }
-        if (StreamCatchupSubscriptionModel.isTimeBasedCheckpoint(stored) && !CatchupTimeCheckpoint.isCatchupTimeCheckpoint(stored)) {
+        if (StreamCatchupSubscriptionModel.isTimeBasedCheckpoint(stored) && !CatchupTimeCheckpoint.isCatchupTimeCheckpoint(stored)
+                && !timeOf(stored.asString()).isBeginningOfTime()) {
             throw new CatchupCannotResumeException("Cannot resume catch-up subscription " + subscriptionId + " from stored checkpoint \"" + stored.asString() + "\", because it holds no live start,"
                     + " and an event with an earlier time that was written after the earlier replay read past that time would never be delivered."
                     + " Delete the checkpoint and start the subscription from the beginning of time, or from a checkpoint it delivered with an event, which EventMetadata.getCheckpoint() returns.");
