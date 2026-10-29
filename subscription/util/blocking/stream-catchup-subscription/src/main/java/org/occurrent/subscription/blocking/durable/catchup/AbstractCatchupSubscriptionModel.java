@@ -2204,7 +2204,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     private static CatchupCannotResumeException startsAfterPositionWithoutLiveStart(String subscriptionId, long position) {
         return new CatchupCannotResumeException("Cannot start catch-up subscription " + subscriptionId + " after position " + position + ", because the checkpoint holds no live start read before position " + position
-                + " was, and an event that committed below position " + position + " after it was read would never be delivered. Start the subscription from the beginning, or from the checkpoint it delivered with the event at position "
+                + " was, and an event that committed below position " + position + " after it was read would never be delivered. Cancel the subscription first, which deletes the checkpoint stored for it."
+                + " Then start the subscription from the beginning, or from the checkpoint it delivered with the event at position "
                 + position + ", which EventMetadata.getCheckpoint() returns.");
     }
 
@@ -2213,7 +2214,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private static CatchupCannotResumeException liveStartLostAfterTheBeginning(String subscriptionId, String origin, Checkpoint lostLiveStart) {
         return new CatchupCannotResumeException("Cannot replay catch-up subscription " + subscriptionId + " again from " + origin + ", because the subscription model no longer has the history from its live start,"
                 + " and a replay from there with a live start read now would never deliver an event before " + origin + " that was written after the lost live start was read."
-                + " Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay. Lost live start: " + lostLiveStart.asString());
+                + " Cancel the subscription first, which deletes the checkpoint stored for it. Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay. Lost live start: " + lostLiveStart.asString());
     }
 
     // Null when the wrapped model can still resume from the live start, or when this attempt should no longer replay
@@ -2285,7 +2286,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 && !timeOf(stored.asString()).isBeginningOfTime()) {
             throw new CatchupCannotResumeException("Cannot resume catch-up subscription " + subscriptionId + " from stored checkpoint \"" + stored.asString() + "\", because it holds no live start,"
                     + " and an event with an earlier time that was written after the earlier replay read past that time would never be delivered."
-                    + " Delete the checkpoint and start the subscription from the beginning of time, or from a checkpoint it delivered with an event, which EventMetadata.getCheckpoint() returns.");
+                    + " Cancel the subscription, which deletes the checkpoint, and start it from the beginning of time, or from a checkpoint it delivered with an event, which EventMetadata.getCheckpoint() returns.");
         }
     }
 
