@@ -22,6 +22,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.SagaHeldEvents;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaFilters;
@@ -255,6 +256,7 @@ public final class SagaRunner<E, C> {
 
         SagaRunnerConfig effectiveConfig = quarantineOnlyIfTheEventCanBeAskedForAgain(subscriptionId, config);
         HoldRule holdRule = holdRuleFor(subscriptionId);
+        refuseAStoreThatCannotHold(subscriptionId, holdRule, stateStore);
         SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig,
                 retentionCheckFor(subscriptionId, effectiveConfig), Instant::now, holdRule.holds());
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
@@ -356,6 +358,18 @@ public final class SagaRunner<E, C> {
     private HoldRule holdRuleFor(String subscriptionId) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return new HoldRule(true, () -> true);
+    }
+
+    // A feed that can deliver an event before its instance's start needs somewhere to keep the event until the start
+    // arrives, and skipping it instead loses its reaction.
+    private void refuseAStoreThatCannotHold(String subscriptionId, HoldRule holdRule, SagaStateStore<?> stateStore) {
+        if (holdRule.canHold() && !(stateStore instanceof SagaHeldEvents<?>)) {
+            throw new IllegalStateException("Saga subscription '" + subscriptionId + "' runs on " + subscriptionModel.getClass().getName()
+                                            + ", which can deliver an event before the event that starts its instance, and the state store "
+                                            + stateStore.getClass().getName() + " has nowhere to hold such an event until the start arrives. "
+                                            + "Use a state store that implements " + SagaHeldEvents.class.getName()
+                                            + ", as SagaStateStore.inMemory() and SpringMongoSagaStateStore do, or run the saga on a subscription model that delivers in commit order.");
+        }
     }
 
     private record HoldRule(boolean canHold, BooleanSupplier holds) {

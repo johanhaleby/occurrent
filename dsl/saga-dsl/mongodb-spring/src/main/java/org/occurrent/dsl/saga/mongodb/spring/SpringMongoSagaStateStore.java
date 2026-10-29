@@ -355,7 +355,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public Optional<SagaEnvelope<S>> findWithoutState(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        Query query = Query.query(where(ID).is(sagaId));
+        // From the primary, because a hold reads the instance after inserting the event, and a secondary that has not
+        // seen the start's save yet would leave the event held with no drain due.
+        Query query = Query.query(where(ID).is(sagaId)).withReadPreference(ReadPreference.primary());
         projectEverySagaInstanceMember(query);
         // The watermarks on top of that, which SagaInstance does not expose and the quarantine decision does need. It
         // compares the failing input against them to recognise an input the instance has already handled, and the
@@ -445,6 +447,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public void delete(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        // Held events first, so a delete that stops half way never keeps held events for an instance it removed.
+        retryStrategy.execute(() -> mongoOperations.remove(Query.query(where(HELD_SAGA_ID).is(sagaId)), heldCollectionName));
         retryStrategy.execute(() -> mongoOperations.remove(Query.query(where(ID).is(sagaId)), collectionName));
         synchronized (retainedEventWarningLatch) {
             retainedEventWarningLatch.remove(sagaId);

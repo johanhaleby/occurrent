@@ -125,6 +125,9 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * event recreate the instance from its start event and run the process a second time. Delete an instance only once its
      * source can no longer redeliver any of its events, until then let a TTL expire it, so a late redelivery still finds
      * the terminal instance and is skipped rather than resurrecting it.
+     * <p>
+     * A store that also implements {@link SagaHeldEvents} removes the events held for the instance first, then the
+     * instance. An event held between the two waits for a start, and is applied if one ever arrives.
      */
     void delete(String sagaId);
 
