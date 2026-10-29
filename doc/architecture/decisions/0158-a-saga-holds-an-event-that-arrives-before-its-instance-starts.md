@@ -1,4 +1,4 @@
-# 156. A saga holds an event that arrives before its instance starts, unless its subscription delivers in commit order
+# 158. A saga holds an event that arrives before its instance starts, unless its subscription delivers in commit order
 
 Date: 2026-10-29
 

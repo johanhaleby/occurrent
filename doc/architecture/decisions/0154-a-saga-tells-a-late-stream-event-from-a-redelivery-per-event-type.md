@@ -13,7 +13,7 @@ Amended in place on 2026-10-29, before 0.35.0 shipped. A pending version is no l
 [#1330](https://github.com/johanhaleby/occurrent/issues/1330), and the Decision and Consequences say what replaces the
 drop. An event that comes before its instance's start is held instead of skipped, for
 [#1317](https://github.com/johanhaleby/occurrent/issues/1317), as
-[ADR 156](0156-a-saga-holds-an-event-that-arrives-before-its-instance-starts.md) decides. The time a pending version has
+[ADR 158](0158-a-saga-holds-an-event-that-arrives-before-its-instance-starts.md) decides. The time a pending version has
 been failing is kept beside it, for [#1318](https://github.com/johanhaleby/occurrent/issues/1318), as
 [ADR 157](0157-a-sagas-quarantine-budget-runs-per-input.md) decides.
 
@@ -67,7 +67,7 @@ The version failed in the saga, it arrived further behind than the window, or it
 applies events (it could not be routed to an instance, or the instance was already completed or quarantined). The first
 can be recorded, because the saga knows it happened. The second and third cannot be told from a redelivery, so they are
 the cases this decision leaves open, listed under Consequences. An event that comes before the event that starts its
-instance is held until the start arrives, as ADR 156 decides.
+instance is held until the start arrives, as ADR 158 decides.
 
 **A version that failed in the saga is recorded as pending, and a pending version is applied however far behind it is.**
 A broker can park a failing event and move on, and an operator can replay it hours later, after the instance applied
@@ -87,7 +87,7 @@ Every pending version stays pending until a save applies it. Dropping one would 
 never ran, once the instance moved the window past it. The saga logs a warning naming the stream, the type and the
 window when the pending versions of one type grow past the window, because the instance then grows with every
 further failure. An instance lists at most 10 000 pending versions across its streams. A version that fails past that
-cannot be listed, and ADR 156 says what keeps it instead.
+cannot be listed, and ADR 158 says what keeps it instead.
 
 The failure record keeps its older role as a fallback. A record naming an event still says that the event was never
 applied, so the saga treats that event as new however far behind it is, and at or below the floor too. This covers an
@@ -121,7 +121,7 @@ watermark and no marks. `streamWatermarks` is still written with the highest ver
 
 **Exactly-once holds when the feed keeps a stream's order to within the reorder window per event type, or when the event
 failed in the saga.** For a failed event that needs qualifying. On a feed that can deliver an event before its instance's
-start, a failed event is listed pending or kept as a self-held event (ADR 156) whatever the window did meanwhile, unless
+start, a failed event is listed pending or kept as a self-held event (ADR 158) whatever the window did meanwhile, unless
 the store stays down through every retry. It can then be applied twice, in the one case the second row's warning names.
 On a feed that delivers in commit order it holds for a subscription model that keeps that contract, and an error names
 an event where the model did not. These are the cases that fall outside the precondition:
@@ -131,9 +131,9 @@ an event where the model did not. These are the cases that fall outside the prec
 | The write that records a failed version fails because the store is down | The version is not pending and not kept. A replay is applied only while the instance is less than a window ahead of it | Error in the log, naming the event |
 | The compare-and-set that lists a failed version lost every attempt, or the failure path's read finds the version behind the window after this delivery saw it as new, or a retry of the delivery finds it there after an earlier attempt saw it as new | On a feed that can hold, the version is kept as self-held and applied by the next drain. It is applied twice only if it had applied and a whole window of its type was applied during its own failure handling. On a feed that delivers in commit order, an error names the event. A held event whose listing fails is kept as self-held on any feed | A warning when it is kept behind the window. The error on a commit-order feed |
 | An event the saga cannot route to an instance is parked | There is no instance to write on | Error, already logged |
-| An event arrives before the event that starts its instance | Held until the start arrives, unless the feed delivers in commit order, where it cannot happen (ADR 156) | One info line the first time a subscription holds on a node |
+| An event arrives before the event that starts its instance | Held until the start arrives, unless the feed delivers in commit order, where it cannot happen (ADR 158) | One info line the first time a subscription holds on a node |
 | The instance is completed or quarantined | Inert by design | Quarantine logs |
-| A version that did not fail arrives more than the window behind, without a restart replaying it | Skipped as a redelivery, unless the delivery finds a held copy of it, as ADR 156 describes | One warning per stream |
+| A version that did not fail arrives more than the window behind, without a restart replaying it | Skipped as a redelivery, unless the delivery finds a held copy of it, as ADR 158 describes | One warning per stream |
 
 The sixth row is the one this design cannot close. A restart from an old checkpoint delivers a long run of behind-window
 versions that are all correct skips, and a reordered version looks the same. Throwing on each would block the replay, and

@@ -9,7 +9,7 @@ Consequences section. 0125 is the current maximum, re-audited across every remot
 max-plus-one rule.
 
 In 0.35.0, the `delete` remedy below reads differently on a subscription that does not declare commit order.
-[ADR 156](0156-a-saga-holds-an-event-that-arrives-before-its-instance-starts.md) holds a non-start event for an
+[ADR 158](0158-a-saga-holds-an-event-that-arrives-before-its-instance-starts.md) holds a non-start event for an
 instance that does not exist instead of skipping it, so after `delete` a later event of that id is held, not skipped.
 To abandon an instance there, keep a terminal envelope and remove its held events, as the runbook shows.
 

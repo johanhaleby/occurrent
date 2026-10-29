@@ -377,7 +377,7 @@ records, but the 0.34.0 change to the same two records got a guide entry and no 
 Up to 0.34.0 a saga skipped a non-start event whose instance had not started, and acknowledged it. A feed that delivers
 out of commit order can hand the saga order 2 before the event that starts the instance, order 1, and order 2's reaction
 then never ran. 0.35.0 keeps such an event in the state store and applies it once the instance starts. The reason is in
-[ADR 156](../architecture/decisions/0156-a-saga-holds-an-event-that-arrives-before-its-instance-starts.md), and the
+[ADR 158](../architecture/decisions/0158-a-saga-holds-an-event-that-arrives-before-its-instance-starts.md), and the
 report is [#1317](https://github.com/johanhaleby/occurrent/issues/1317).
 
 ### Who is affected
