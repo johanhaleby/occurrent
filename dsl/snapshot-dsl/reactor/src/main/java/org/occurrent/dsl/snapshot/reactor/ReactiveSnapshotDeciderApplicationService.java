@@ -126,8 +126,8 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
 
     /**
      * Execute a single command and emit the folded state after the decision. The state type {@code S} may be nullable,
-     * but a {@link Mono} cannot carry a null value, so a decider that folds to null is refused with a
-     * {@link NullPointerException} before anything is written. The blocking
+     * but a {@link Mono} cannot carry a null value, so when a decider folds to null, none of the command's events are
+     * written and the {@code Mono} fails with a {@link NullPointerException}. The blocking
      * {@link org.occurrent.dsl.snapshot.blocking.SnapshotDeciderApplicationService} returns a null state instead. Use
      * {@link #executeAndReturnDecision} for a nullable state.
      */
@@ -136,8 +136,9 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
     }
 
     /**
-     * Execute a single command and emit the folded state after the decision. The decider is refused before anything is
-     * written if it folds to a null state. See {@link #executeAndReturnState(String, Object, ReactiveSnapshotDecider)}.
+     * Execute a single command and emit the folded state after the decision. If the decider folds to a null state, none
+     * of the command's events are written and the {@code Mono} fails. See
+     * {@link #executeAndReturnState(String, Object, ReactiveSnapshotDecider)}.
      */
     public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(UUID streamId, C command, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
         return doExecuteAndReturnState(streamId.toString(), List.of(command), snapshotDecider);
@@ -145,8 +146,9 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
 
     /**
      * Execute {@code commands} and emit the folded state after the decision. The commands are decided as one unit and
-     * appended once, so only the state after the last command is checked. If that state is null, nothing is written, not
-     * even the events the earlier commands decided. See {@link #executeAndReturnState(String, Object, ReactiveSnapshotDecider)}.
+     * appended once, so only the state after the last command is checked. If that state is null, no events are
+     * written, not even the ones the earlier commands decided. See
+     * {@link #executeAndReturnState(String, Object, ReactiveSnapshotDecider)}.
      */
     public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(String streamId, List<C> commands, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
         return doExecuteAndReturnState(streamId, commands, snapshotDecider);
@@ -154,8 +156,9 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
 
     /**
      * Execute {@code commands} and emit the folded state after the decision. The commands are decided as one unit and
-     * appended once, so only the state after the last command is checked. If that state is null, nothing is written, not
-     * even the events the earlier commands decided. See {@link #executeAndReturnState(String, List, ReactiveSnapshotDecider)}.
+     * appended once, so only the state after the last command is checked. If that state is null, no events are
+     * written, not even the ones the earlier commands decided. See
+     * {@link #executeAndReturnState(String, List, ReactiveSnapshotDecider)}.
      */
     public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(UUID streamId, List<C> commands, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
         return doExecuteAndReturnState(streamId.toString(), commands, snapshotDecider);

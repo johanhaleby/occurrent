@@ -451,8 +451,9 @@ old text said more than the source knew.
 ## The reactive `executeAndReturnState` emits a non-null state
 
 `executeAndReturnState` on `ReactiveSnapshotDeciderApplicationService` and `ReactiveSnapshotDcbDeciderApplicationService`
-returns `Mono<@NonNull S>` instead of `Mono<S>`. The state type `S` may still be nullable, and a `null` state is still
-refused before anything is written, so nothing changes at runtime. See
+returns `Mono<@NonNull S>` instead of `Mono<S>`. The state type `S` may still be nullable. The new signature
+changes nothing at runtime. A `null` state still writes none of the command's events and fails with a
+`NullPointerException`. See
 [#1119](https://github.com/johanhaleby/occurrent/issues/1119).
 
 ### Who is affected
