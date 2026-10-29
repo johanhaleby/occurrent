@@ -194,8 +194,9 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
     @Test
     void a_subscription_started_at_a_bare_global_position_is_refused() {
         if (restartable().honoursAGlobalPosition()) {
+            // A fresh id, so the result rests on the supplied position and not on progress stored under the original id
             restartAfterALateCommit(true, "honours a global position", false,
-                    (restarted, id, storedPosition, recorded) -> restarted.subscribe(id, null, StartAt.checkpoint(storedPosition.get()), recorded));
+                    (restarted, originalId, storedPosition, recorded) -> restarted.subscribe(subscriptionId(), null, StartAt.checkpoint(storedPosition.get()), recorded));
             return;
         }
         String id = subscriptionId();
@@ -228,8 +229,9 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
             // start from.
             return;
         }
+        // A fresh id, so the result rests on the supplied checkpoint and not on progress stored under the original id
         restartAfterALateCommit(true, "hands out a checkpoint with every event it delivers", true,
-                (restarted, id, storedPosition, recorded) -> restarted.subscribe(id, null, StartAt.checkpoint(storedPosition.get()), recorded));
+                (restarted, originalId, storedPosition, recorded) -> restarted.subscribe(subscriptionId(), null, StartAt.checkpoint(storedPosition.get()), recorded));
     }
 
     /**
@@ -280,12 +282,14 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
             }
 
             RecordedEvents afterTheRestart = new RecordedEvents();
-            // A store that commits in position order has no positions to hand back from a delivered event, so the
-            // fixture's own starting point stands in for the one an application would have stored.
-            Supplier<Checkpoint> storedPosition = () -> late.commitsInPositionOrder()
-                    ? fixture().aCheckpointToStartFrom()
-                    : storesTheDeliveredCheckpoint
+            // The checkpoint delivered with the event is read first, so a model that refuses a bare position has to
+            // deliver one on a store that commits in position order too. A store that commits in position order has
+            // no positions to hand back from a delivered event, so for a bare position the fixture's own starting point
+            // stands in for the one an application would have stored.
+            Supplier<Checkpoint> storedPosition = () -> storesTheDeliveredCheckpoint
                     ? checkpointDeliveredWith(deliveredBefore, overtaking)
+                    : late.commitsInPositionOrder()
+                    ? fixture().aCheckpointToStartFrom()
                     : GlobalCheckpoint.of(positionDelivered(deliveredBefore, overtaking));
             assertThat(resume.start(restarted, id, storedPosition, afterTheRestart).waitUntilStarted(deliveryTimeout()))
                     .as("the rebuilt subscription must report started, or whichever branch runs below reports a missing "
