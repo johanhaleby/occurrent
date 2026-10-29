@@ -269,7 +269,13 @@ public final class SagaExecutionSupport {
                 null,
                 true,
                 failureAfter(current, meta, terminal),
-                streamMarks);
+                streamMarks,
+                // A save that starts the instance marks a drain as due and records where the start sits, so the drain can
+                // tell a held event that came before the start from one that came after.
+                !starting && current.heldEventsChecked(),
+                isNew ? Set.of() : current.drainedHeldKeys(),
+                isNew ? Set.of() : current.selfHeldKeys(),
+                starting ? startMark(meta) : current.startMark());
         return Outcome.processed(next, commands, expectedVersion);
     }
 
@@ -454,7 +460,8 @@ public final class SagaExecutionSupport {
             // before it began. Start detection reads that flag rather than the document, so a later redelivery of the
             // start event still runs onStart.
             SagaEnvelope<S> inserted = new SagaEnvelope<>(sagaId, saga.initialState(), status, 1, List.of(), Map.of(),
-                    null, now, now, null, null, false, record, withPending(Map.of(), Map.of(), meta, reorderWindow, failingSince(null, meta, now)));
+                    null, now, now, null, null, false, record, withPending(Map.of(), Map.of(), meta, reorderWindow, failingSince(null, meta, now)),
+                    false, Set.of(), Set.of(), null);
             return new FailureRecord<>(inserted, 0, quarantined);
         }
         return new FailureRecord<>(withFailure(current, record, status, now, meta, replaced, reorderWindow), current.version(), quarantined);
@@ -471,7 +478,12 @@ public final class SagaExecutionSupport {
                 current.streamWatermarks(), null, current.createdAt(), now, current.completedAt(),
                 current.currentStep(), current.started(), record,
                 withPending(withReplacedFailure(current.streamMarks(), current.streamWatermarks(), replaced, meta, reorderWindow),
-                        current.streamWatermarks(), meta, reorderWindow, failingSince(current, meta, now)));
+                        current.streamWatermarks(), meta, reorderWindow, failingSince(current, meta, now)),
+                current.heldEventsChecked(), current.drainedHeldKeys(), current.selfHeldKeys(), current.startMark());
+    }
+
+    private static SagaEnvelope.@Nullable StartMark startMark(EventMeta meta) {
+        return meta.streamId() == null || meta.streamVersion() == null ? null : new SagaEnvelope.StartMark(meta.streamId(), meta.streamVersion(), meta.position());
     }
 
     // The stream marks after the version meta describes has failed. It is listed as pending among the versions of its

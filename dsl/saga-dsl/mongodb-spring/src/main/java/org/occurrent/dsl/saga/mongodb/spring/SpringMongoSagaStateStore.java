@@ -16,20 +16,27 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.mongodb.MongoException;
+import com.mongodb.ReadPreference;
 import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
+import org.bson.BsonMaximumSizeExceededException;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.saga.HeldEvent;
+import org.occurrent.dsl.saga.HeldEventRef;
 import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaEnvelope.StartMark;
 import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
 import org.occurrent.dsl.saga.SagaFailure;
+import org.occurrent.dsl.saga.SagaHeldEvents;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStateStoreQueries;
 import org.occurrent.dsl.saga.SagaStatus;
@@ -42,6 +49,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Query;
@@ -51,6 +59,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -79,7 +88,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * @param <S> the user state type
  */
 @NullMarked
-public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S> {
+public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S>, SagaHeldEvents<S> {
 
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
 
@@ -114,6 +123,25 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String UPDATED_AT = "updatedAt";
     private static final String COMPLETED_AT = "completedAt";
     private static final String STARTED = "started";
+    private static final String HELD_EVENTS_CHECKED = "heldEventsChecked";
+    private static final String DRAINED_HELD_KEYS = "drainedHeldKeys";
+    private static final String SELF_HELD_KEYS = "selfHeldKeys";
+    private static final String START_MARK = "startMark";
+    private static final String START_MARK_STREAM_ID = "streamId";
+    private static final String START_MARK_VERSION = "version";
+    private static final String START_MARK_POSITION = "position";
+    // Fields of a held event's document, in the held collection named after the saga collection.
+    private static final String HELD_COLLECTION_SUFFIX = "-held-events";
+    private static final String HELD_SAGA_ID = "sagaId";
+    private static final String HELD_KEY = "key";
+    private static final String HELD_STREAM_ID = "streamId";
+    private static final String HELD_VERSION = "version";
+    private static final String HELD_POSITION = "position";
+    private static final String HELD_TYPE = "type";
+    private static final String HELD_AT = "heldAt";
+    private static final String HELD_SELF_HELD = "selfHeld";
+    private static final String HELD_OUTSTANDING = "outstanding";
+    private static final String HELD_CLOUD_EVENT = "cloudEvent";
     // The failure record is flattened into top-level fields rather than a sub-document, for the same reason currentStep
     // is one, because both enumeration queries project the SagaInstance members and neither may decode the state, and a
     // quarantined instance whose state no longer decodes is exactly the instance somebody is looking for.
@@ -131,7 +159,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final List<String> EVERY_FIELD_EXCEPT_THE_STATE = List.of(STATUS, VERSION, TIMERS,
             NEXT_TIMER_FIRES_AT, STREAM_WATERMARKS, POSITION_WATERMARK, STREAM_MARKS, CREATED_AT, UPDATED_AT,
             COMPLETED_AT, STARTED, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE,
-            FAILURE_MESSAGE);
+            FAILURE_MESSAGE, HELD_EVENTS_CHECKED, DRAINED_HELD_KEYS, SELF_HELD_KEYS, START_MARK);
 
     // Field names inside a persisted FlowState document.
     private static final String FLOW_CURRENT_STEP = "currentStep";
@@ -207,6 +235,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private final MongoOperations mongoOperations;
     private final String collectionName;
+    private final String heldCollectionName;
     private final Class<S> stateType;
     // Non-null only for a flow saga: used to serialize FlowState.received as CloudEvents (stable types, package-independent).
     private final @Nullable CloudEventConverter<Object> cloudEventConverter;
@@ -254,6 +283,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         this.retryStrategy = Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
+        this.heldCollectionName = collectionName + HELD_COLLECTION_SUFFIX;
         this.stateType = Objects.requireNonNull(stateType, "stateType cannot be null");
         if (stateType == FlowState.class && cloudEventConverter == null) {
             // A flow saga's FlowState holds domain events, and this store serializes them as CloudEvents through the
@@ -271,6 +301,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         retryStrategy.execute(() -> {
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(UPDATED_AT)));
+            // The drain reads an instance's held events by saga id, and an operator counts and ages them per saga id.
+            mongoOperations.getCollection(heldCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(HELD_SAGA_ID), Indexes.ascending(HELD_AT)));
         });
     }
 
@@ -330,6 +362,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // record it writes carries them over untouched, so projecting them away would quarantine the instance and
         // drop them at the same time.
         query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK).include(STREAM_MARKS);
+        // The held-event fields too, since compareAndSaveWithoutState writes every field it is given and unsets the rest.
+        includeHeldEventFields(query);
         Supplier<@Nullable Document> read = () -> mongoOperations.findOne(query, Document.class, collectionName);
         return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
@@ -456,6 +490,25 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // them is.
         if (!envelope.started()) {
             document.append(STARTED, false);
+        }
+        // Each written only when it says something, so a missing field reads as the value an instance stored before
+        // 0.35.0 has. A drain is due, nothing is drained or self-held, and there is no start mark.
+        if (envelope.heldEventsChecked()) {
+            document.append(HELD_EVENTS_CHECKED, true);
+        }
+        if (!envelope.drainedHeldKeys().isEmpty()) {
+            document.append(DRAINED_HELD_KEYS, new ArrayList<>(envelope.drainedHeldKeys()));
+        }
+        if (!envelope.selfHeldKeys().isEmpty()) {
+            document.append(SELF_HELD_KEYS, new ArrayList<>(envelope.selfHeldKeys()));
+        }
+        StartMark startMark = envelope.startMark();
+        if (startMark != null) {
+            Document mark = new Document(START_MARK_STREAM_ID, startMark.streamId()).append(START_MARK_VERSION, startMark.version());
+            if (startMark.position() != null) {
+                mark.append(START_MARK_POSITION, startMark.position());
+            }
+            document.append(START_MARK, mark);
         }
         SagaFailure failure = envelope.failure();
         if (failure != null) {
@@ -590,7 +643,180 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // currentStep is only honoured when the state was projected away; with a state present the envelope re-derives it.
         return new SagaEnvelope<>(sagaId, state, status, version, timers, streamWatermarks, positionWatermark,
                 readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT),
-                document.getString(CURRENT_STEP), started, toFailure(document), toStreamMarks(document));
+                document.getString(CURRENT_STEP), started, toFailure(document), toStreamMarks(document),
+                document.getBoolean(HELD_EVENTS_CHECKED, false), new HashSet<>(document.getList(DRAINED_HELD_KEYS, String.class, List.of())),
+                new HashSet<>(document.getList(SELF_HELD_KEYS, String.class, List.of())), toStartMark(document));
+    }
+
+    private static @Nullable StartMark toStartMark(Document document) {
+        Document mark = document.get(START_MARK, Document.class);
+        if (mark == null) {
+            return null;
+        }
+        Object position = mark.get(START_MARK_POSITION);
+        return new StartMark(mark.getString(START_MARK_STREAM_ID), ((Number) mark.get(START_MARK_VERSION)).longValue(),
+                position == null ? null : ((Number) position).longValue());
+    }
+
+    private static void includeHeldEventFields(Query query) {
+        query.fields().include(HELD_EVENTS_CHECKED).include(DRAINED_HELD_KEYS).include(SELF_HELD_KEYS).include(START_MARK);
+    }
+
+    @Override
+    public boolean hold(String sagaId, HeldEvent event) {
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        Objects.requireNonNull(event, "event cannot be null");
+        Document document = toHeldDocument(sagaId, event);
+        Supplier<Boolean> insert = () -> {
+            try {
+                mongoOperations.insert(document, heldCollectionName);
+                return true;
+            } catch (DuplicateKeyException e) {
+                // Inside the supplier, as in compareAndSave, so a held copy already there is an answer and not a retry.
+                return false;
+            }
+        };
+        return withoutRetryingASizeRefusal(insert, "hold the event '" + event.key() + "' for saga instance '" + sagaId + "'");
+    }
+
+    @Override
+    public boolean markOutstanding(String sagaId, String key) {
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        Objects.requireNonNull(key, "key cannot be null");
+        // A $set of a boolean the document already has, so the document never grows.
+        Query query = Query.query(where(ID).is(heldId(sagaId, key)));
+        Supplier<@Nullable Document> modify = () -> mongoOperations.findAndModify(query, new Update().set(HELD_OUTSTANDING, true), Document.class, heldCollectionName);
+        return retryStrategy.execute(modify) != null;
+    }
+
+    @Override
+    public Optional<SagaEnvelope<S>> markHeldEvents(String sagaId, @Nullable String selfHeldKey) {
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        // started is stored only when false, so a started instance is one where it is not false.
+        Query query = Query.query(where(ID).is(sagaId).and(STARTED).ne(false).and(STATUS).is(SagaStatus.ACTIVE.name()));
+        projectEverySagaInstanceMember(query);
+        query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK).include(STREAM_MARKS);
+        includeHeldEventFields(query);
+        Update update = new Update().unset(HELD_EVENTS_CHECKED).inc(VERSION, 1);
+        if (selfHeldKey != null) {
+            update.addToSet(SELF_HELD_KEYS, selfHeldKey);
+        }
+        Supplier<@Nullable Document> modify = () -> mongoOperations.findAndModify(query, update, FindAndModifyOptions.options().returnNew(false), Document.class, collectionName);
+        @Nullable Document before = withoutRetryingASizeRefusal(modify, "mark saga instance '" + sagaId + "' as holding events");
+        return Optional.ofNullable(before).map(this::toEnvelope);
+    }
+
+    @Override
+    public void unmarkSelfHeld(String sagaId, String selfHeldKey) {
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        Objects.requireNonNull(selfHeldKey, "selfHeldKey cannot be null");
+        Query query = Query.query(where(ID).is(sagaId));
+        Update update = new Update().pull(SELF_HELD_KEYS, selfHeldKey).inc(VERSION, 1);
+        retryStrategy.execute(() -> mongoOperations.updateFirst(query, update, collectionName));
+    }
+
+    @Override
+    public List<HeldEventRef> heldIndex(String sagaId) {
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        Query query = Query.query(where(HELD_SAGA_ID).is(sagaId)).withReadPreference(ReadPreference.primary());
+        query.fields().exclude(HELD_CLOUD_EVENT);
+        Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, heldCollectionName);
+        return retryStrategy.execute(read).stream().map(SpringMongoSagaStateStore::toHeldEventRef).toList();
+    }
+
+    @Override
+    public List<HeldEvent> held(String sagaId, Collection<String> keys) {
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        Objects.requireNonNull(keys, "keys cannot be null");
+        if (keys.isEmpty()) {
+            return List.of();
+        }
+        List<Document> ids = keys.stream().map(key -> heldId(sagaId, key)).toList();
+        Query query = Query.query(where(ID).in(ids)).withReadPreference(ReadPreference.primary());
+        Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, heldCollectionName);
+        return retryStrategy.execute(read).stream().map(document -> new HeldEvent(sagaId, toHeldEventRef(document),
+                CLOUD_EVENT_JSON_FORMAT.deserialize(document.getString(HELD_CLOUD_EVENT).getBytes(StandardCharsets.UTF_8)))).toList();
+    }
+
+    @Override
+    public void release(String sagaId, String key) {
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        Objects.requireNonNull(key, "key cannot be null");
+        retryStrategy.execute(() -> mongoOperations.remove(Query.query(where(ID).is(heldId(sagaId, key))), heldCollectionName));
+    }
+
+    // The saga id and the key together, so one held copy exists per instance and key, and a second hold is a duplicate.
+    private static Document heldId(String sagaId, String key) {
+        return new Document(HELD_SAGA_ID, sagaId).append(HELD_KEY, key);
+    }
+
+    private static Document toHeldDocument(String sagaId, HeldEvent event) {
+        HeldEventRef ref = event.ref();
+        Document document = new Document(ID, heldId(sagaId, ref.key()))
+                .append(HELD_SAGA_ID, sagaId)
+                .append(HELD_KEY, ref.key())
+                .append(HELD_TYPE, ref.type())
+                .append(HELD_AT, Date.from(ref.heldAt()))
+                .append(HELD_SELF_HELD, ref.selfHeld())
+                // Always written, so marking it outstanding later replaces a boolean in place and never grows the document.
+                .append(HELD_OUTSTANDING, ref.outstanding());
+        if (ref.streamId() != null) {
+            document.append(HELD_STREAM_ID, ref.streamId());
+        }
+        if (ref.version() != null) {
+            document.append(HELD_VERSION, ref.version());
+        }
+        if (ref.position() != null) {
+            document.append(HELD_POSITION, ref.position());
+        }
+        // The CloudEvent as its JSON format, kept as text so it reads back exactly as it was delivered and an operator
+        // can read it in the shell.
+        return document.append(HELD_CLOUD_EVENT, new String(CLOUD_EVENT_JSON_FORMAT.serialize(event.cloudEvent()), StandardCharsets.UTF_8));
+    }
+
+    private static HeldEventRef toHeldEventRef(Document document) {
+        Object version = document.get(HELD_VERSION);
+        Object position = document.get(HELD_POSITION);
+        return new HeldEventRef(document.getString(HELD_KEY), document.getString(HELD_STREAM_ID),
+                version == null ? null : ((Number) version).longValue(), position == null ? null : ((Number) position).longValue(),
+                document.getString(HELD_TYPE), document.getDate(HELD_AT).toInstant(),
+                document.getBoolean(HELD_SELF_HELD, false), document.getBoolean(HELD_OUTSTANDING, false));
+    }
+
+    // A write refused because it would take a document past MongoDB's size limit changed nothing and would be refused
+    // again, so it is caught inside the attempt, as a duplicate key is, and thrown as RefusedForSizeException once the
+    // retry strategy has returned. Any strategy, the caller's own included, then does not retry it.
+    private <T extends @Nullable Object> T withoutRetryingASizeRefusal(Supplier<T> write, String what) {
+        AtomicReference<@Nullable RuntimeException> refusal = new AtomicReference<>();
+        T result = retryStrategy.execute(() -> {
+            try {
+                return write.get();
+            } catch (RuntimeException e) {
+                if (!isRefusedForSize(e)) {
+                    throw e;
+                }
+                refusal.set(e);
+                return null;
+            }
+        });
+        RuntimeException refused = refusal.get();
+        if (refused != null) {
+            throw new RefusedForSizeException("Could not " + what + ", because the write would take a document past MongoDB's size limit", refused);
+        }
+        return result;
+    }
+
+    static boolean isRefusedForSize(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof BsonMaximumSizeExceededException) {
+                return true;
+            }
+            // BSONObjectTooLarge, and its two update forms, where the resulting document or the update itself is too large.
+            if (cause instanceof MongoException mongoException && Set.of(10334, 17419, 17420).contains(mongoException.getCode())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static List<Document> toMarksDocuments(Map<String, StreamMarks> streamMarks) {

@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
@@ -65,6 +66,18 @@ import static java.util.Objects.requireNonNull;
  *                          of the same type, which a feed that reorders can deliver, be told from a redelivery. Empty
  *                          for an instance stored before 0.35.0, which reads as every type of a stream being applied up to
  *                          that stream's watermark
+ * @param heldEventsChecked whether the instance has drained every event held for it. Only the save that ends a drain
+ *                          writes {@code true}, and holding an event unsets it, so an input finding it {@code false} on a
+ *                          started instance drains first. Absent reads as {@code false}, so an instance stored before
+ *                          0.35.0 drains once
+ * @param drainedHeldKeys   the keys of the held events this instance applied since its last completed drain. They prove
+ *                          an apply whose release did not happen, for example because the process stopped in between
+ * @param selfHeldKeys      the keys of versions that failed on this instance and are held because they could not be
+ *                          listed as pending. A version whose key is here is applied when it arrives, however far
+ *                          behind it is, and applying it removes the key
+ * @param startMark         the event that started the instance, or {@code null} for one stored before 0.35.0. A held
+ *                          event of the start's stream with a lower version committed before the start, so the drain
+ *                          releases it without applying it
  * @param <S>               the user state type
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
@@ -80,7 +93,11 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        @Nullable String currentStep,
                                                        boolean started,
                                                        @Nullable SagaFailure failure,
-                                                       Map<String, StreamMarks> streamMarks) implements SagaInstance {
+                                                       Map<String, StreamMarks> streamMarks,
+                                                       boolean heldEventsChecked,
+                                                       Set<String> drainedHeldKeys,
+                                                       Set<String> selfHeldKeys,
+                                                       @Nullable StartMark startMark) implements SagaInstance {
 
     public SagaEnvelope {
         requireNonNull(sagaId, "sagaId cannot be null");
@@ -88,12 +105,25 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         timers = List.copyOf(timers);
         streamWatermarks = Map.copyOf(streamWatermarks);
         streamMarks = Map.copyOf(streamMarks);
+        drainedHeldKeys = Set.copyOf(drainedHeldKeys);
+        selfHeldKeys = Set.copyOf(selfHeldKeys);
         if (state != null) {
             // currentStep duplicates something state already knows, which is the kind of field that drifts. Re-derive it
             // here rather than trusting callers to keep the two aligned: a passed value is honoured only when there is no
             // state to derive from, which is exactly the projected-read case a store needs it for.
             currentStep = state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
         }
+    }
+
+    /**
+     * An envelope with nothing held for it and no start mark, which reads as an instance with a drain due.
+     */
+    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
+                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
+                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep,
+                        boolean started, @Nullable SagaFailure failure, Map<String, StreamMarks> streamMarks) {
+        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
+                completedAt, currentStep, started, failure, streamMarks, false, Set.of(), Set.of(), null);
     }
 
     /**
@@ -184,6 +214,19 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     public record TypeMark(long mark, List<Long> applied, long horizon) {
         public TypeMark {
             applied = List.copyOf(applied);
+        }
+    }
+
+    /**
+     * The event that started an instance.
+     *
+     * @param streamId the stream the start was written to
+     * @param version  the start's stream version
+     * @param position the start's global position, or {@code null} when it carried none
+     */
+    public record StartMark(String streamId, long version, @Nullable Long position) {
+        public StartMark {
+            requireNonNull(streamId, "streamId cannot be null");
         }
     }
 
