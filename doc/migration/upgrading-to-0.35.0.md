@@ -983,20 +983,24 @@ any position other than the beginning could skip that event.
 - An error in the log each time MongoDB reports the loss, naming the subscription and the resume token that is gone.
   For a subscription with an id, the MongoDB subscription model logs a warning next to it, that it paused the
   subscription and a listener took it over, as it has since 0.34.0. On a blocking catch-up subscription model you call
-  directly, the warning is all you get when a `resumeSubscription(id, startAt)` returns before the error is logged. When
-  you paused or resumed the subscription just before MongoDB reported the loss, neither is logged and
+  directly, the warning is all you get when a `resumeSubscription(id, startAt)` at another position returns before the
+  error is logged. When it returns after the error, an information line says that resuming no longer throws for that
+  loss. When you paused or resumed the subscription just before MongoDB reported the loss, neither is logged and
   `resumeSubscription(id)` isn't refused. A subscription you resume with `resumeSubscription(id)` opens at the lost
   token again, MongoDB reports the loss again, and the subscription stops as described here, without skipping an
-  event. One you resume with `resumeSubscription(id, startAt)` opens at `startAt`.
+  event. One you resume with `resumeSubscription(id, startAt)` opens at `startAt` when it is a resume token.
 - On the reactor stack `waitUntilStarted()` of a subscription with an id completes before the MongoDB subscription
   model finds the token gone, so it doesn't tell you the subscription stopped. Check `isPaused(id)` instead.
 - The subscription is paused, `isPaused(id)` answers `true`, and it delivers nothing.
 - From the moment the error is logged, `resumeSubscription(id)` throws `CatchupCannotResumeException` until you
   cancel the subscription, or, on a blocking catch-up subscription model you call directly, until a
   `resumeSubscription(id, startAt)` at a resume token the oplog still has runs it again, see
-  [How to recover](#how-to-recover). A `resumeSubscription(id)` after the pause but before the error isn't refused
-  yet, and the subscription opens at the lost token again and is paused again, with a second error. On the blocking
-  stack `start(true)` throws `CatchupCannotResumeException` too. On the reactor stack `start(true)` resumes the
+  [How to recover](#how-to-recover). A `resumeSubscription(id, startAt)` at a resume token that is gone doesn't end
+  the refusal, even when its own error comes before it returns. A `resumeSubscription(id)` after the pause but before
+  the error isn't refused yet, and the subscription opens at the lost token again and is paused again, with a second
+  error. The same can happen after an error logged while a `resumeSubscription(id, startAt)` at anything other than a
+  resume token still runs, and then the subscription opens at the token that error names. On the blocking stack
+  `start(true)` throws `CatchupCannotResumeException` too. On the reactor stack `start(true)` resumes the
   subscription in the MongoDB subscription model, which finds the token gone again and pauses it again with one more
   error.
 - On the blocking stack, a subscription you start from a resume token that is already gone throws
