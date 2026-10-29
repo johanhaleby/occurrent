@@ -72,7 +72,7 @@ class ScheduledRefreshNotifierTest {
     }
 
     @Test
-    void a_notification_handed_over_after_close_is_dropped_also_while_one_for_the_same_id_is_being_delivered() throws InterruptedException {
+    void a_notification_handed_over_after_close_is_dropped_also_while_another_is_still_being_delivered() throws InterruptedException {
         ScheduledRefresh refresh = ScheduledRefresh.auto();
         CountDownLatch release = new CountDownLatch(1);
         CompletableFuture<Thread> deliveredOn = new CompletableFuture<>();
@@ -86,7 +86,7 @@ class ScheduledRefreshNotifierTest {
             Thread notifier = deliveredOn.join();
 
             refresh.close();
-            refresh.notifyInBackground("s1", () -> delivered.add("handed over after close()"));
+            refresh.notifyInBackground("s2", () -> delivered.add("handed over after close()"));
             release.countDown();
 
             assertThat(notifier.join(EVENTUALLY)).as("the notifier thread ends once the first notification returns").isTrue();
