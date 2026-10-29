@@ -95,12 +95,20 @@ prohibition by pausing the subscription and releasing its lease.
 
 ## Consequences
 
-A listener can be told the same thing twice. That happens after an `OutOfMemoryError` cut a tell short, and after an
-`Error`, once per round for as long as a listener keeps throwing it. It also happens when a lease is lost between a
-tell's read of the status and its read of the counts. The tell then tells the grant once more, and the prohibition
-after it. A listener can also be told a prohibition with no
-grant before it. The `CompetingConsumerListener` javadoc says both, and `CompetingConsumerSubscriptionModel` handles
-both. ADR 113's "one change of status is reported once" now holds except in those three cases.
+A listener can be told the same thing twice in a row, in five cases:
+
+- After an `OutOfMemoryError` cut a tell short.
+- After a listener threw an `Error`, once per round for as long as it keeps throwing it.
+- When a lease is lost between a tell's read of the status and its read of the counts. The tell then tells the grant
+  once more, and the prohibition after it.
+- When the node wins a lease back with the same token before the prohibition was told. The listeners are told the
+  grant again instead of the prohibition.
+- When `hasLock` answered no for a lease the node still holds. The next round tells the grant again, since a listener
+  may have acted on that no. 0.34.0 did the same.
+
+A listener can also be told a prohibition with no grant before it. The `CompetingConsumerListener` javadoc says both,
+and `CompetingConsumerSubscriptionModel` handles both. ADR 113's "one change of status is reported once" now holds
+except in those five cases.
 
 An `Error` that a listener throws during a tell on a notifier thread reaches the log at ERROR and not the caller. In
 0.34.0 a listener's `Error` from a register, release or unregister came out of `subscribe`, `resume` or `cancel`.

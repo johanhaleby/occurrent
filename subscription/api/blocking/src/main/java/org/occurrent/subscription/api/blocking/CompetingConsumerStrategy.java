@@ -140,10 +140,10 @@ public interface CompetingConsumerStrategy {
      * A {@code CompetingConsumerListener} will be called when certain life-cycle events occurs.
      * <p>
      * A listener is told when the answer for a subscriber moves, and not once per round of whatever coordination the
-     * strategy runs. It can still be told the same thing twice in a row. That happens after a failure such as an
-     * {@link OutOfMemoryError} cut a call short, or after a listener threw an {@link Error}, since the strategy may then
-     * tell it the current answer again in its next round. It also happens when a lease is lost just as the strategy
-     * reads what to tell. So a listener acts on a call as "this is now true" rather than as "this just changed".
+     * strategy runs. It can still be told the same thing twice in a row. That can happen, for example, after a failure
+     * such as an {@link OutOfMemoryError} cut a call short, or after a listener threw an {@link Error}, since the
+     * strategy may then tell it the current answer again in its next round. So a listener acts on a call as "this is
+     * now true" rather than as "this just changed".
      * <p>
      * A grant that was undone before the strategy got to tell it may never be told, but the prohibition after it is,
      * so a listener can be told that a subscriber may not consume without having been told that it may.

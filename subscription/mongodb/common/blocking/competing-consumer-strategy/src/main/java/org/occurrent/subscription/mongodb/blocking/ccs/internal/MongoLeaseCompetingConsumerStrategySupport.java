@@ -657,7 +657,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             boolean errorSeen = tellListeners(c, change, failures);
             told = change == Change.GRANT ? new Granted(tokenOf(status), seenLapses) : new NotGranted(seenLosses);
             // After an Error the record keeps asking for this change, so the next round tells the current answer again.
-            // The next change is worked out from what the listeners were told, so the repeat is not handed over at once.
+            // The next change is worked out from what the listeners were told, so this step doesn't ask for the repeat.
+            // When another call asked for a tell while this step ran, the tell handed over below repeats it at once.
             if (!errorSeen) {
                 c.told = told;
             }

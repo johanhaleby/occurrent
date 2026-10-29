@@ -225,9 +225,9 @@ everything below, so a competing consumer built on it needs no change.
 
 ### What changes
 
-* A listener can be told the same thing twice in a row. That happens after an `OutOfMemoryError` cut a call short,
-  when a lease is lost while the strategy works out what to tell, and in every round for as long as a listener keeps
-  throwing an `Error`.
+* A listener can be told the same thing twice in a row. That can happen, for example, after an `OutOfMemoryError` cut a
+  call short, when a lease is lost while the strategy works out what to tell, and in every round for as long as a
+  listener keeps throwing an `Error`.
 * A listener can be told a prohibition with no grant before it. A grant that was undone before the strategy got to tell
   it may never be told, but the prohibition after it is.
 * A register, release or unregister may call the listeners before it returns, and throw what they throw, but only for
