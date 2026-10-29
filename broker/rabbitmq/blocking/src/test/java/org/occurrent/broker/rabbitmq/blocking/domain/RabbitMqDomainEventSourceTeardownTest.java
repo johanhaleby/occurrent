@@ -17,12 +17,14 @@
 package org.occurrent.broker.rabbitmq.blocking.domain;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.CancelCallback;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.DeliverCallback;
 import com.rabbitmq.client.Delivery;
 import com.rabbitmq.client.Envelope;
+import com.rabbitmq.client.ShutdownSignalException;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
@@ -206,6 +208,32 @@ class RabbitMqDomainEventSourceTeardownTest {
         InOrder inOrder = inOrder(channel);
         inOrder.verify(channel).basicCancel("consumer-tag-1");
         inOrder.verify(channel).close();
+    }
+
+    /**
+     * A channel the broker closed has no consumer left to cancel, and the client says so with a runtime exception.
+     */
+    @SuppressWarnings("unchecked")
+    @Test
+    void close_does_not_throw_and_still_closes_the_channel_when_cancelling_the_consumer_fails_with_a_runtime_exception() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        when(channel.basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class))).thenReturn("consumer-tag-1");
+        doThrow(new AlreadyClosedException(new ShutdownSignalException(false, false, null, channel))).when(channel).basicCancel("consumer-tag-1");
+        DomainEventFeed<Object> feed = mock(DomainEventFeed.class);
+        when(feed.hasProjection()).thenReturn(true);
+        when(feed.isReadyForLiveDelivery()).thenReturn(true);
+        RabbitMqDomainEventSource<Object> source = RabbitMqDomainEventSource.builder(connection, feed, "queue")
+                .declareTopology(false)
+                .pollInterval(Duration.ofMillis(20))
+                .build();
+        verify(channel, timeout(2000)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+
+        Throwable thrown = catchThrowable(source::close);
+
+        assertThat(thrown).isNull();
+        verify(channel).close();
     }
 
     /**

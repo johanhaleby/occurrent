@@ -49,6 +49,7 @@ import java.util.Map;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -69,7 +70,9 @@ import static org.mockito.Mockito.withSettings;
 class RabbitMqDomainEventSourceIoFailureTest {
 
     private static final Duration POLL_INTERVAL = Duration.ofMillis(500);
+    private static final Duration SLOW_POLL_INTERVAL = Duration.ofSeconds(1);
     private static final long DELIVERY_TAG = 1L;
+    private static final long FAILED_DELIVERY_TAG = 2L;
 
     private final Channel channel = mock(Channel.class, withSettings().extraInterfaces(Recoverable.class));
     private final RabbitMqDomainEventSource<Object> source = sourceOn(channel);
@@ -316,6 +319,52 @@ class RabbitMqDomainEventSourceIoFailureTest {
         verify(channel, never()).close();
     }
 
+    /**
+     * The drop requeued the earlier delivery, and the later one arrived after it. The poll that judges the earlier
+     * failure must leave the later one its own interval, and stop for it only once that has passed.
+     */
+    @Test
+    void a_failure_after_a_counted_drop_gets_a_poll_interval_of_its_own_when_the_earlier_failure_is_already_due() throws Exception {
+        doThrow(new IOException("thrown by a MetricsCollector written in Kotlin")).when(channel).basicAck(anyLong(), anyBoolean());
+        when(channel.isOpen()).thenReturn(true);
+        RabbitMqDomainEventSource<Object> slowSource = sourceOn(channel, SLOW_POLL_INTERVAL);
+
+        handleDeliveryOrStop(slowSource);
+        sleep(SLOW_POLL_INTERVAL.multipliedBy(6).dividedBy(10));
+        channelShutDown(droppedConnection());
+        handleDeliveryOrStop(slowSource);
+        sleep(SLOW_POLL_INTERVAL.multipliedBy(5).dividedBy(10));
+        poll(slowSource);
+        verify(channel, never()).close();
+        sleep(SLOW_POLL_INTERVAL.plusMillis(100));
+        poll(slowSource);
+
+        verify(channel).close();
+    }
+
+    /**
+     * Counted while the first release runs, so it came before the second tag was nacked and can't explain its failure.
+     */
+    @Test
+    void a_drop_counted_while_releasing_the_deferred_delivery_does_not_explain_a_failure_releasing_the_failed_one() throws Exception {
+        doAnswer(invocation -> {
+            channelShutDown(droppedConnection());
+            return null;
+        }).when(channel).basicNack(eq(DELIVERY_TAG), anyBoolean(), anyBoolean());
+        doThrow(new IOException("Connection reset")).when(channel).basicNack(eq(FAILED_DELIVERY_TAG), anyBoolean(), anyBoolean());
+        when(channel.isOpen()).thenReturn(true);
+        source.route(RoutingOutcome.DEFERRED, DELIVERY_TAG, new BasicProperties(), new byte[0]);
+        source.route(RoutingOutcome.NOT_DELIVERABLE, FAILED_DELIVERY_TAG, new BasicProperties(), new byte[0]);
+
+        poll();
+        verify(channel, never()).close();
+        waitAPollInterval();
+        poll();
+
+        verify(channel).close();
+        verify(channel, times(1)).basicNack(FAILED_DELIVERY_TAG, false, true);
+    }
+
     private void connectionDropped() {
         when(channel.isOpen()).thenReturn(false);
         when(channel.getCloseReason()).thenReturn(droppedConnection());
@@ -335,19 +384,27 @@ class RabbitMqDomainEventSourceIoFailureTest {
         return new ShutdownSignalException(true, false, null, mock(Connection.class));
     }
 
-    @SuppressWarnings("unchecked")
     private static RabbitMqDomainEventSource<Object> sourceOn(Channel channel) {
+        return sourceOn(channel, POLL_INTERVAL);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static RabbitMqDomainEventSource<Object> sourceOn(Channel channel, Duration pollInterval) {
         DomainEventFeed<Object> feed = mock(DomainEventFeed.class);
         when(feed.hasProjection()).thenReturn(true);
         when(feed.isReadyForLiveDelivery()).thenReturn(true);
         when(feed.acceptOrDeferCloudEvent(any(CloudEvent.class))).thenReturn(RoutingOutcome.DELIVERED);
         RabbitMqDeliveryFailureAction failureAction = new RabbitMqDeliveryFailureAction(channel, DeliveryFailurePolicy.REDELIVER, null, null,
                 LoggerFactory.getLogger(RabbitMqDomainEventSourceIoFailureTest.class));
-        return new RabbitMqDomainEventSource<>(feed, channel, "queue", 1, POLL_INTERVAL, failureAction, Duration.ofSeconds(1));
+        return new RabbitMqDomainEventSource<>(feed, channel, "queue", 1, pollInterval, failureAction, Duration.ofSeconds(1));
     }
 
     private static void waitAPollInterval() throws InterruptedException {
-        Thread.sleep(POLL_INTERVAL.toMillis() + 100);
+        sleep(POLL_INTERVAL.plusMillis(100));
+    }
+
+    private static void sleep(Duration duration) throws InterruptedException {
+        Thread.sleep(duration.toMillis());
     }
 
     private void poll() throws ReflectiveOperationException {
@@ -361,6 +418,10 @@ class RabbitMqDomainEventSourceIoFailureTest {
     }
 
     private void handleDeliveryOrStop() throws ReflectiveOperationException {
+        handleDeliveryOrStop(source);
+    }
+
+    private static void handleDeliveryOrStop(RabbitMqDomainEventSource<Object> source) throws ReflectiveOperationException {
         Method method = RabbitMqDomainEventSource.class.getDeclaredMethod("handleDeliveryOrStop", Delivery.class, long.class);
         method.setAccessible(true);
         method.invoke(source, delivery(), DELIVERY_TAG);
