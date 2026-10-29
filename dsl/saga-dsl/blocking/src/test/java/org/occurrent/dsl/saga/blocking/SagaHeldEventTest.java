@@ -116,13 +116,18 @@ class SagaHeldEventTest {
      * Every event issues a command, so an event that is skipped shows up as a missing one, and the items are kept in the
      * order they were applied.
      */
-    private static Saga<OrderEvent, Order, OrderCommand> orderSaga() {
+    private Saga<OrderEvent, Order, OrderCommand> orderSaga() {
         return Saga.<OrderEvent, Order, OrderCommand>builder(null)
                 .correlateAll(OrderEvent::orderId)
                 .startsOn(OrderPlaced.class)
                 .evolve(OrderPlaced.class, (state, e) -> new Order(List.of(), false))
                 .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new OpenLedger(e.orderId()))))
-                .evolve(ItemAdded.class, (state, e) -> state.withItem(e.item()))
+                .evolve(ItemAdded.class, (state, e) -> {
+                    if (unevolvableItems.contains(e.item())) {
+                        throw evolveFailure;
+                    }
+                    return state.withItem(e.item());
+                })
                 .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))))
                 .evolve(PaymentReceived.class, (state, e) -> new Order(state.items(), true))
                 .react(PaymentReceived.class, (state, e) -> List.of(SagaEffect.issue(new Ship(e.orderId()))))
@@ -131,7 +136,9 @@ class SagaHeldEventTest {
     }
 
     private final IllegalStateException reservationFailure = new IllegalStateException("cannot reserve");
+    private final IllegalStateException evolveFailure = new IllegalStateException("cannot evolve");
     private final Set<String> failingItems = ConcurrentHashMap.newKeySet();
+    private final Set<String> unevolvableItems = ConcurrentHashMap.newKeySet();
     private final List<OrderCommand> issued = new CopyOnWriteArrayList<>();
     private final AtomicReference<Instant> now = new AtomicReference<>(NOW);
     private final AtomicBoolean holds = new AtomicBoolean(true);
@@ -634,6 +641,28 @@ class SagaHeldEventTest {
             // Then
             assertAll(
                     () -> assertThat(refused).hasCause(reservationFailure),
+                    () -> assertThat(store.find(ORDER).orElseThrow().failure().input()).isEqualTo(ORDER_STREAM + "@2"),
+                    () -> assertThat(store.find(ORDER).orElseThrow().failure().firstFailedAt()).isEqualTo(firstFailure),
+                    () -> assertThat(store.find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(pendingItemVersions()).containsExactly(2L));
+        }
+
+        @Test
+        void a_held_event_whose_evolve_throws_while_the_drain_checks_whether_it_ends_the_instance_fails_as_itself_and_not_as_the_start() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(store, SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET));
+            deliver(execution, itemAt(2, "unevolvable"));
+            deliver(execution, paymentAt(PAYMENT_STREAM, 1));
+            unevolvableItems.add("unevolvable");
+            Instant firstFailure = now.get();
+
+            // When
+            Throwable refused = deliverRefused(execution, placedAt(1));
+
+            // Then
+            assertAll(
+                    () -> assertThat(refused).hasMessageContaining("could not apply the held event '" + ORDER_STREAM + "@2'"),
+                    () -> assertThat(refused).hasCause(evolveFailure),
                     () -> assertThat(store.find(ORDER).orElseThrow().failure().input()).isEqualTo(ORDER_STREAM + "@2"),
                     () -> assertThat(store.find(ORDER).orElseThrow().failure().firstFailedAt()).isEqualTo(firstFailure),
                     () -> assertThat(store.find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
