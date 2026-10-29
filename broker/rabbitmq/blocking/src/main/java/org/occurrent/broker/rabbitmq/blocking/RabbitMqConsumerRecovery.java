@@ -159,9 +159,12 @@ public final class RabbitMqConsumerRecovery {
 
     /**
      * Registers the source's consumer by calling {@code basicConsume}, and holds the tag it returns. Does nothing while
-     * a recovery runs. When a recovery starts before {@code basicConsume} returns, the client may have recorded that
-     * consumer for the recovery to register again, so the source does not hold its tag. The consumer is retired
-     * instead, and the next {@link #cancelRetired(Channel)} cancels it.
+     * a recovery runs. The lock is not held across {@code basicConsume}, so a recovery can start between the check and
+     * the call. With topology recovery on, the client may then replay the new consumer's tag on the same channel. The
+     * broker answers with a 530 connection close and a second recovery registers a consumer again. Unacknowledged
+     * deliveries go back on their queues and are delivered again, and no event is lost. The source does not hold the
+     * tag in that case. It retires it, and the next {@link #cancelRetired(Channel)} cancels it. Holding the lock
+     * across the call would avoid the close, see issue 1354.
      */
     public void consume(Consume basicConsume) throws IOException {
         requireNonNull(basicConsume, "basicConsume cannot be null");
@@ -178,8 +181,8 @@ public final class RabbitMqConsumerRecovery {
                 consumerTag.set(tag);
                 return;
             }
-            // A recovery registers a consumer again under the tag it was recorded with, so cancelling this tag also
-            // cancels the consumer the recovery registered
+            // A recovery that started mid-call can replay this tag on the same channel, which makes the broker close
+            // the connection (issue 1354). Cancelling the tag cancels the consumer that ends up holding it
             retired.add(tag);
         }
         log.debug("A connection recovery under queue \"{}\" started while consumer \"{}\" was being registered. This "

@@ -213,7 +213,11 @@ The poll waits out a recovery before it registers or cancels a consumer. A sourc
 the consumer the recovery registers again until its first poll after the recovery, and a source that should resume
 during one starts consuming on that poll. A consumer the poll registered as a recovery started is cancelled by the
 next poll, which then registers a new one if the source should still consume, since the source can't tell whether
-the recovery kept the first one.
+the recovery kept the first one. The poll doesn't hold its lock while it registers, so a recovery can start in that
+gap. With topology recovery on, the client can then replay the new consumer's tag on the same channel, and the broker
+answers with a 530 connection close and a second recovery. Deliveries that were not acknowledged are delivered again
+and no event is lost. [#1354](https://github.com/johanhaleby/occurrent/issues/1354) tracks holding the lock across
+the registration.
 
 The source relies on the client calling the connection's `handleRecovery`. The client calls its recovery listeners
 one after another, and one that throws from `handleTopologyRecoveryStarted` or `handleRecovery` keeps the client from
