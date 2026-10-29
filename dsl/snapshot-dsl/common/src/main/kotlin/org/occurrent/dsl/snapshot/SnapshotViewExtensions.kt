@@ -108,6 +108,14 @@ fun <S, E : Any> dcbSnapshotView(initialState: S, block: DcbSnapshotViewBuilder<
 }
 
 /**
+ * Builds a [DcbSnapshotView] whose fold begins from no state. The block and the returned `DcbSnapshotView` see `S?`
+ * rather than `S`, since the fold starts from `null` until a handler replaces it. See [dcbSnapshotView] for the
+ * handler block and the read boundary.
+ */
+fun <S, E : Any> dcbSnapshotView(block: DcbSnapshotViewBuilder<S?, E>.() -> Unit): DcbSnapshotView<S?, E> =
+    dcbSnapshotView(null, block)
+
+/**
  * Receiver for the [dcbSnapshotView] block: the [SnapshotViewBuilder] surface plus the DCB read boundary.
  */
 class DcbSnapshotViewBuilder<S, E : Any> @PublishedApi internal constructor(initialState: S) {

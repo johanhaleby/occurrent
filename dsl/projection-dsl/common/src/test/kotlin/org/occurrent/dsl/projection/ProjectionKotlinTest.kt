@@ -218,6 +218,30 @@ class ProjectionKotlinTest {
         }
 
         @Test
+        fun `dcbProjection with no argument starts from null and keeps the read boundary from the block`() {
+            val projection = dcbProjection<Boolean, AccountEvent, String> {
+                tags("username:bob")
+                id { it.accountId }
+                on<AccountRegistered> { state, _ -> state ?: true }
+            }
+
+            assertThat(projection.projection().view().initialState()).isNull()
+            assertThat(projection.criteria()).isEqualTo(DcbCriteria.tags(Tag.of("username", "bob")))
+        }
+
+        @Test
+        fun `dcbSingletonProjection with no argument starts from null and keeps the read boundary from the block`() {
+            val projection = dcbSingletonProjection<Boolean, AccountEvent> {
+                tags("username:bob")
+                on<AccountRegistered> { state, _ -> state ?: true }
+            }
+
+            assertThat(projection.projection().view().initialState()).isNull()
+            assertThat(projection.projection().id()).isNull()
+            assertThat(projection.criteria()).isEqualTo(DcbCriteria.tags(Tag.of("username", "bob")))
+        }
+
+        @Test
         fun `java Projection builder with no initial state builds a projection whose state is nullable`() {
             // The type arguments are non-null, so this stops compiling if the Java factory stops returning a nullable state.
             val projection: Projection<Boolean?, AccountEvent, String> = Projection.builder<Boolean, AccountEvent, String>()

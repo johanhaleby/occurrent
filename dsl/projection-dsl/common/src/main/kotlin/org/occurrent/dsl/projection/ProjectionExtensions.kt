@@ -74,6 +74,14 @@ fun <S, E : Any, ID : Any> dcbProjection(initialState: S, block: DcbProjectionBu
 }
 
 /**
+ * Builds a keyed [DcbProjection] whose fold begins from no state. The block and the returned `DcbProjection` see `S?`
+ * rather than `S`, since the fold starts from `null` until a handler replaces it. See [dcbProjection] for the handler
+ * block and the read boundary.
+ */
+fun <S, E : Any, ID : Any> dcbProjection(block: DcbProjectionBuilder<S?, E, ID>.() -> Unit): DcbProjection<S?, E, ID> =
+    dcbProjection(null, block)
+
+/**
  * Builds a single-instance capability-agnostic [Projection]: it holds one view state rather than one per key, so no
  * `id { }` is needed. The runtime keys the single slot by the projection's own identity (the subscription id when run
  * through a runner, or the `@Projection` id). Use [projection] with an `id { }` block for a keyed, multi-instance read
@@ -112,6 +120,14 @@ fun <S, E : Any> dcbSingletonProjection(initialState: S, block: DcbProjectionBui
     builder.block()
     return builder.build()
 }
+
+/**
+ * Builds a single-instance [DcbProjection] whose fold begins from no state. The block and the returned
+ * `DcbProjection` see `S?` rather than `S`, since the fold starts from `null` until a handler replaces it. See
+ * [dcbSingletonProjection] for the read boundary.
+ */
+fun <S, E : Any> dcbSingletonProjection(block: DcbProjectionBuilder<S?, E, String>.() -> Unit): DcbProjection<S?, E, String> =
+    dcbSingletonProjection(null, block)
 
 /**
  * Receiver for the [projection] block. Delegates to the Java [Projection.Builder] so the Java and Kotlin surfaces
