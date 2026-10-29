@@ -35,6 +35,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [A capability that acts on a subscription is not found past a wrapper](#a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper).
   `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. Compiles unchanged.
+- [A `CompetingConsumerListener` can be told the same thing twice, and after the call returns](#a-competingconsumerlistener-can-be-told-the-same-thing-twice-and-after-the-call-returns).
+  A listener of your own on a MongoDB lease strategy can hear the same answer twice, a prohibition with no grant
+  before it, and the change of a register, release or unregister after that call returned. Compiles unchanged.
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). Call `acceptAndWait(..)` instead, which
   `accept(..)` already forwarded to. `UpgradeToOccurrent_0_34` renames the calls, but only while the project still
   depends on 0.33.0 or 0.34.0. Breaks the build.
@@ -205,6 +208,47 @@ The code compiles unchanged, and there is no OpenRewrite recipe, because the met
 what the lookup answers changes. Nothing stored changes. See
 [ADR 151](../architecture/decisions/0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md) and
 [#1251](https://github.com/johanhaleby/occurrent/issues/1251).
+
+## A `CompetingConsumerListener` can be told the same thing twice, and after the call returns
+
+In 0.34.0 a `CompetingConsumerListener` added to `SpringMongoLeaseCompetingConsumerStrategy` or
+`NativeMongoLeaseCompetingConsumerStrategy` was told each change of a lease once. A `registerCompetingConsumer`,
+`releaseCompetingConsumer` or `unregisterCompetingConsumer` told the listeners of the change it made before it
+returned, and threw what they threw. An `OutOfMemoryError` at the wrong moment could lose a grant or a prohibition for
+good, which [#1349](https://github.com/johanhaleby/occurrent/issues/1349) fixes, and the fix needs both promises to go.
+
+### Who is affected
+
+Code that implements `CompetingConsumerStrategy.CompetingConsumerListener` itself and adds it to one of the two MongoDB
+lease strategies with `addListener`. `CompetingConsumerSubscriptionModel` adds itself as a listener and handles
+everything below, so a competing consumer built on it needs no change.
+
+### What changes
+
+* A listener can be told the same thing twice in a row. That happens after an `OutOfMemoryError` cut a call short,
+  when a lease is lost while the strategy works out what to tell, and in every round for as long as a listener keeps
+  throwing an `Error`.
+* A listener can be told a prohibition with no grant before it. A grant that was undone before the strategy got to tell
+  it may never be told, but the prohibition after it is.
+* A register, release or unregister may call the listeners before it returns, and throw what they throw, but only for
+  the change it made itself and only while nothing else is calling them about that consumer, and anything else they
+  are told, which can include that change, comes on a notifier thread, before or after the call returns, where what
+  they throw is logged. A listener's `Error` that came out of `subscribe`, `resume` or `cancel` in 0.34.0 can end up
+  only in the log, at ERROR.
+
+### What to do
+
+* Act on each call as "this is now true" rather than as "this just changed". On `onConsumeGranted`, start consuming
+  unless the subscriber already does. On `onConsumeProhibited`, stop unless it has already stopped. A second call with
+  the same answer then does nothing.
+* Don't expect the listener to have been called once `registerCompetingConsumer`, `releaseCompetingConsumer` or
+  `unregisterCompetingConsumer` returns. Use the `boolean` that `registerCompetingConsumer` returns, or ask
+  `hasLock(subscriptionId, subscriberId)`, when the caller needs the answer at once.
+* Don't count on catching what the listener throws around one of those calls. Handle the failure inside the listener,
+  since on a notifier thread the strategy only logs it.
+
+The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
+See [ADR 156](../architecture/decisions/0156-a-refresh-round-tells-the-listeners-what-they-have-not-heard.md).
 
 ## A saga applies a stream version that arrives after a higher one
 
