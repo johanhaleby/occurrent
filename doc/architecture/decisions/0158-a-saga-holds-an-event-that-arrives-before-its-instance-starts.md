@@ -10,8 +10,9 @@ half of [#1330](https://github.com/johanhaleby/occurrent/issues/1330). ADR 154 h
 and points here. [ADR 128](0128-a-renamed-or-removed-step-refuses-its-parked-instances.md) shipped in 0.34.0, and its
 `delete` remedy reads differently on a subscription that can hold, so it gets a pointer in its Status section.
 
-Which subscription models deliver in commit order is decided by unit CO1, which adds the `CommitOrderedSubscriptions`
-capability. Until it merges, every subscription holds.
+Which subscription models deliver in commit order is up to each model, through the `CommitOrderedSubscriptions`
+capability that [#1366](https://github.com/johanhaleby/occurrent/pull/1366) adds. No model implements it yet, so for
+now every subscription holds.
 
 ## Context
 
@@ -41,11 +42,12 @@ without stalling anything.
 - `holds` is asked per delivery, on the delivering thread, as `!deliversInCommitOrder(subscriptionId)`. A model that
   does not implement the capability holds.
 
-Commit order here means what CO1's contract says. Every earlier commit matching the subscription was delivered and its
-listener returned normally, and a delivery whose listener throws is retried in place before anything after it. On such
-a feed an event cannot arrive before its start, so nothing is held, and an event before the start is still skipped as
-in 0.34.0. A model that answers true and breaks that contract is that model's defect, and the ERROR of cause 5 below is
-where it shows.
+Commit order here means what the `CommitOrderedSubscriptions` contract says. No event is delivered before every earlier
+event matching the subscription was delivered and its listener returned normally, where an event is earlier when it
+committed earlier or was written earlier in the same commit. A delivery whose listener throws is retried in place before
+anything after it. On such a feed an event cannot arrive before its start, also when both were written in one commit, so
+nothing is held, and an event before the start is still skipped as in 0.34.0. A model that answers true and breaks that
+contract is that model's defect, and the ERROR of cause 5 below is where it shows.
 
 The capability is not on `SubscriptionModelCapability`'s unwrap list, so a wrapper declares commit order only by
 implementing it. Any wrapper can break commit order, with a thread pool, a catch-up handover or a parking listener, and

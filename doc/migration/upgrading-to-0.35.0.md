@@ -382,9 +382,9 @@ report is [#1317](https://github.com/johanhaleby/occurrent/issues/1317).
 
 ### Who is affected
 
-A saga whose subscription model does not declare that it delivers in commit order, which is every model that cannot
-promise an event never arrives before its start. A saga on a model that declares it holds nothing and keeps the 0.34.0
-behaviour.
+A saga whose subscription model does not declare, through the new `CommitOrderedSubscriptions` capability, that it
+delivers in commit order. None of the subscription models in Occurrent declares it yet, so that is every saga until one
+does. A saga on a model that declares it holds nothing and keeps the 0.34.0 behaviour.
 
 ### What changes
 

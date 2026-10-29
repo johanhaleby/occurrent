@@ -31,10 +31,13 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,7 +82,10 @@ import static java.util.Objects.requireNonNull;
  * <h2>Events that arrive before their instance starts</h2>
  * A subscription can deliver a non-start event before the event that starts its instance, for example a broker
  * consumer with several messages in flight, or a catch-up handing over to its live feed. The saga then holds the event
- * in the state store and applies it once the instance starts. A run therefore needs a store that implements
+ * in the state store and applies it once the instance starts. On a subscription model that declares through
+ * {@link CommitOrderedSubscriptions} that it delivers the subscription in commit order, nothing arrives before its
+ * start, and such an event is skipped as in 0.34.0. A model that does not declare it for every subscription, with
+ * {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()}, needs a store that implements
  * {@link SagaHeldEvents}, which {@code SagaStateStore.inMemory()} and {@code SpringMongoSagaStateStore} both do, and
  * {@code run} refuses any other store with an {@link IllegalStateException}. An event whose start never arrives stays
  * held until it is removed.
@@ -351,21 +357,32 @@ public final class SagaRunner<E, C> {
         return config;
     }
 
-    /**
-     * What {@link SagaExecution} asks before it stops retrying an event, once per attempt that reaches the budget
-     * rather than once per event. Every model reaching this has promised to hold everything it delivers, so the answer
-     * should always be yes, and the MongoDB models give it without a read because their answer is a constant rather
-     * than because the question is skipped.
-     */
     // Whether this saga's feed can deliver an event before its instance's start, and whether the delivery in progress
     // may, in which case the saga holds early events and keeps a failed one it cannot list. The only place that
-    // answers either, so nothing downstream asks the subscription model.
-    // TODO CO1: answer from CommitOrderedSubscriptions once CO1 adds it, canHold from deliversEveryEventInCommitOrder()
-    //  and holds from deliversInCommitOrder(subscriptionId), as plan 2.1 of #1317 has them. Until then no model declares
-    //  commit order, so both are true, which is what a model without the declaration answers.
+    // answers either, so nothing downstream asks the subscription model. A model that does not declare commit order
+    // holds, wrapped or not
     private HoldRule holdRuleFor(String subscriptionId) {
-        requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        return new HoldRule(true, () -> true);
+        Optional<CommitOrderedSubscriptions> ordered = CommitOrderedSubscriptions.findIn(subscriptionModel);
+        if (ordered.isEmpty()) {
+            warnIfAWrapperHidesCommitOrder(subscriptionId);
+        }
+        boolean canHold = ordered.map(o -> !o.deliversEveryEventInCommitOrder()).orElse(true);
+        BooleanSupplier holds = ordered.<BooleanSupplier>map(o -> () -> !o.deliversInCommitOrder(subscriptionId)).orElse(() -> true);
+        return new HoldRule(canHold, holds);
+    }
+
+    // A wrapper is not unwrapped for commit order, so a declaration below it goes unused, which costs a held-events read
+    // on every keyed delivery rather than losing anything
+    private void warnIfAWrapperHidesCommitOrder(String subscriptionId) {
+        SubscriptionModelCapability model = subscriptionModel;
+        while (model instanceof SubscriptionModelWrapper wrapper) {
+            model = wrapper.getWrappedSubscriptionModel();
+            if (model instanceof CommitOrderedSubscriptions) {
+                log.warn("Saga subscription '{}' runs on {}, which does not declare commit order, although the model it wraps, {}, does. A wrapper can break commit order, so a declaration below it is not used, and the saga holds every event that arrives before its instance's start and reads the held events once for each delivery to a started instance. A wrapper that keeps commit order declares it by implementing {}.",
+                        subscriptionId, subscriptionModel.getClass().getName(), model.getClass().getName(), CommitOrderedSubscriptions.class.getName());
+                return;
+            }
+        }
     }
 
     // A feed that can deliver an event before its instance's start needs somewhere to keep the event until the start
@@ -383,6 +400,12 @@ public final class SagaRunner<E, C> {
     private record HoldRule(boolean canHold, BooleanSupplier holds) {
     }
 
+    /**
+     * What {@link SagaExecution} asks before it stops retrying an event, once per attempt that reaches the budget
+     * rather than once per event. Every model reaching this has promised to hold everything it delivers, so the answer
+     * should always be yes, and the MongoDB models give it without a read because their answer is a constant rather
+     * than because the question is skipped.
+     */
     private Predicate<CloudEvent> retentionCheckFor(String subscriptionId, SagaRunnerConfig config) {
         if (config.quarantineAfter().isEmpty()) {
             return event -> false;
