@@ -55,9 +55,9 @@ import java.util.function.Predicate;
  * <p>
  * Each consumer keeps a record of what its listeners were last told, next to the status of its lease. The record
  * changes only once the listeners have been told, so a throwable anywhere in a refresh round or in telling the
- * listeners, an {@link OutOfMemoryError} included, leaves the record behind the status. Every refresh round compares
- * the two for each consumer and has the listeners told the difference, so a grant or a prohibition that a throwable
- * cut short is told by a later round instead of being lost.
+ * listeners, an {@link OutOfMemoryError} included, can keep the record from catching up with the status. Every refresh
+ * round compares the two for each consumer and has the listeners told the difference, so a grant or a prohibition that
+ * a throwable cut short is told by a later round instead of being lost.
  */
 @NullMarked
 public class MongoLeaseCompetingConsumerStrategySupport {
@@ -535,7 +535,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             long losses = c.losses;
             Status status = statusOf(c);
             if (whatToTell(c.told, status, lapses, losses, isFresh(status)) != Change.NOTHING) {
-                // Set before telling is read, so a tell under way finds it once it lets go of the guard
+                // Set before telling is read, so a tell under way finds it once it clears telling
                 c.tellAgain = true;
                 if (!c.telling) {
                     scheduledRefresh.notifyInBackground(cc.subscriptionId, c.tellInBackground);
@@ -643,7 +643,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Status status = statusOf(c);
         Told told = c.told;
         Change change = whatToTell(told, status, seenLapses, seenLosses, isFresh(status));
-        // Read again after the status. A lost lease and a new one can both land between the first read of the counts
+        // Read again after the status. A lost lease and a new one can both happen between the first read of the counts
         // and the status read, and only counts read after the status show that the change is no longer this call's.
         long lapsesNow = c.lapses;
         long lossesNow = c.losses;
@@ -720,7 +720,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         }
     }
 
-    // Leaves the record asking for this change until the listeners have all been told it, and returns that record
+    // Marks the record as owing this change until the listeners have all been told it, and returns that record
     private static Told markTelling(ConsumerState c, Change change, @Nullable Status status, Told told) {
         if (change == Change.PROHIBIT && told instanceof NotGranted) {
             return told;
@@ -825,9 +825,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     /**
-     * What the listeners of a consumer were last told. {@link Granted} with a lapse count of {@code UNSEEN} is written before the
-     * first listener is told a change, so a tell that a throwable cuts short leaves a record that asks for that change
-     * again.
+     * What the listeners of a consumer were last told. {@link Granted} with a lapse count of {@code UNSEEN} is written
+     * before the first listener is told a change, so after a tell that a throwable cuts short, the record still asks
+     * for that change again.
      */
     sealed interface Told permits NotGranted, Granted {
     }

@@ -154,7 +154,7 @@ public interface CompetingConsumerStrategy {
      * {@link CompetingConsumerStrategy#unregisterCompetingConsumer(String, String) unregister} that caused the call has
      * returned, and then that call does not throw what the listener throws.
      * <p>
-     * Registering a listener is optional: a consumer that would rather ask than be told uses
+     * Registering a listener is optional. A consumer that would rather ask than be told uses
      * {@link CompetingConsumerStrategy#hasLock(String, String)}, which answers the same thing.
      */
     interface CompetingConsumerListener {

@@ -8,6 +8,9 @@ Accepted. Resolves part of [#1166](https://github.com/johanhaleby/occurrent/issu
 lease strategies, `SpringMongoLeaseCompetingConsumerStrategy` and `NativeMongoLeaseCompetingConsumerStrategy`,
 which share `MongoLeaseCompetingConsumerStrategySupport`.
 
+Amended by [ADR 156](0156-a-refresh-round-tells-the-listeners-what-they-have-not-heard.md), under which a register, release or unregister calls the listeners before it
+returns only for its own change and only while no other tell for that consumer runs.
+
 ## Context
 
 Each strategy refreshes every lease on the node from one scheduled thread. The strategies schedule it with
