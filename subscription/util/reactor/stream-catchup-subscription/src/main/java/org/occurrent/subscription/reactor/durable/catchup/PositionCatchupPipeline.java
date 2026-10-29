@@ -261,7 +261,7 @@ final class PositionCatchupPipeline {
     }
 
     // A named subscription may run under a durable model that reads the refused checkpoint from its storage again on
-    // the next start, which only a cancel deletes
+    // the next start, which a cancel deletes
     private static String cancelFirst(@Nullable String subscriptionId) {
         return subscriptionId == null ? "" : "If the subscription stores its checkpoint, cancel it first, which deletes that checkpoint. ";
     }
