@@ -132,22 +132,32 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      * @param byType the versions applied per cloud event type
      * @param pending the versions per cloud event type that were handed to the executor and failed, ascending, so still
      *                outstanding. A version in here is applied when it arrives again however far behind the highest
-     *                one applied it is, because it is known not to have been applied. Applying it removes it. At
-     *                most the reorder window many are kept per type
+     *                one applied it is, because it is known not to have been applied. Applying it removes it, and
+     *                nothing else does
      * @param legacyFailed the versions of the stream whose failure was recorded before the executor listed failed versions
      *                as pending, ascending, so the event type is not known. A stream version names exactly one event, so
      *                the version is enough to recognise it. It is treated like a pending version and removed when the
      *                version is applied. It is filled only when such a failure record is replaced by another input's, so
-     *                it holds at most the one record an instance carried over from before, and at most the reorder window
-     *                many are kept
+     *                it holds at most the one record an instance carried over from before
+     * @param pendingSince when each version in {@code pending} first failed, by version. The quarantine budget of an input
+     *                runs from here, so a failure of one input never moves the clock of another. A pending version
+     *                missing from it falls back to the failure record's {@code firstFailedAt} when the record names it,
+     *                and otherwise to the moment it fails again
      */
-    public record StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending, List<Long> legacyFailed) {
+    public record StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending, List<Long> legacyFailed,
+                              Map<Long, Instant> pendingSince) {
         public StreamMarks {
             legacyFailed = List.copyOf(legacyFailed);
             byType = Map.copyOf(byType);
             Map<String, List<Long>> copied = new HashMap<>();
             pending.forEach((type, versions) -> copied.put(type, List.copyOf(versions)));
             pending = Map.copyOf(copied);
+            pendingSince = Map.copyOf(pendingSince);
+        }
+
+        /** Marks that know no instant for their pending versions. */
+        public StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending, List<Long> legacyFailed) {
+            this(floor, byType, pending, legacyFailed, Map.of());
         }
 
         /** Marks with no failure recorded before pending existed. */
