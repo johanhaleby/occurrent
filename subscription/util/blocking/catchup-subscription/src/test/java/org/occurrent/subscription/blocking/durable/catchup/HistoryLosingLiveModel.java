@@ -60,6 +60,8 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     private volatile @Nullable Checkpoint lossReportedInsideSubscribe;
     private volatile @Nullable RuntimeException nextSubscribeThrows;
     private volatile @Nullable RuntimeException nextRepositioningResumeThrows;
+    private volatile Runnable betweenTheNextTakeOverPauseAndWhatFollows = () -> {
+    };
 
     final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
@@ -85,6 +87,23 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     HistoryLosingLiveModel failingTheNextRepositioningResumeWith(RuntimeException failure) {
         nextRepositioningResumeThrows = failure;
         return this;
+    }
+
+    // Runs once, after the next takeover has paused the subscription and before what follows the pause
+    HistoryLosingLiveModel betweenTheNextTakeOverPauseAndWhatFollows(Runnable betweenTheNextTakeOverPauseAndWhatFollows) {
+        this.betweenTheNextTakeOverPauseAndWhatFollows = betweenTheNextTakeOverPauseAndWhatFollows;
+        return this;
+    }
+
+    // What the listeners answer for a loss, without pausing the subscription or running what follows the pause
+    HistoryLossHandling asksTheListenersAbout(String subscriptionId, Checkpoint lostFrom) {
+        for (HistoryLossListener listener : listeners) {
+            HistoryLossHandling handling = listener.handleHistoryLoss(subscriptionId, lostFrom);
+            if (handling instanceof HistoryLossHandling.TakeOver) {
+                return handling;
+            }
+        }
+        return HistoryLossHandling.leaveToSubscriptionModel();
     }
 
     // The change stream of a running subscription fails because its position is gone from the oplog
@@ -156,6 +175,10 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         for (HistoryLossListener listener : listeners) {
             if (listener.handleHistoryLoss(subscriptionId, lostFrom) instanceof HistoryLossHandling.TakeOver takeOver) {
                 paused.put(subscriptionId, new Open(open.filter(), open.action(), StartAt.checkpoint(lostFrom)));
+                Runnable betweenThePauseAndWhatFollows = betweenTheNextTakeOverPauseAndWhatFollows;
+                betweenTheNextTakeOverPauseAndWhatFollows = () -> {
+                };
+                betweenThePauseAndWhatFollows.run();
                 takeOver.afterPause().run();
                 return;
             }

@@ -484,6 +484,45 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
         );
     }
 
+    @Test
+    void a_loss_reported_for_a_run_a_cancel_ended_whose_takeover_the_wrapped_model_never_runs_does_not_refuse_a_resume_of_the_subscription_made_since() {
+        // Given an id subscribed through the catch-up, cancelled and subscribed again
+        replayAndHandOver();
+        catchup.cancelSubscription(ID).block(Duration.ofSeconds(5));
+        received.clear();
+        replayAndHandOver();
+
+        // When the wrapped model asks for the run the cancel ended, finds it stale and runs no takeover, and the new subscription is paused and resumed
+        HistoryLossHandling answered = wrapped.asksTheListeners(ID, LATER_TOKEN);
+        catchup.pauseSubscription(ID);
+        Throwable resume = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then the new subscription resumes and runs
+        assertAll(
+                () -> assertThat(answered).as("the answer for the stale report").isInstanceOf(HistoryLossHandling.TakeOver.class),
+                () -> assertThat(resume).as("what a resume of the subscription made since throws").isNull(),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(logged.errors()).as("errors logged").isEmpty(),
+                () -> assertThat(wrapped.takeOversRun).as("takeovers the wrapped model ran").hasValue(0)
+        );
+    }
+
+    @Test
+    void a_loss_reported_for_the_subscription_made_after_a_cancel_and_taken_over_by_the_wrapped_model_refuses_a_resume_of_it() {
+        // Given an id subscribed through the catch-up, cancelled and subscribed again
+        replayAndHandOver();
+        catchup.cancelSubscription(ID).block(Duration.ofSeconds(5));
+        received.clear();
+        replayAndHandOver();
+
+        // When the wrapped model reports a loss of the current run and runs the takeover after pausing it
+        wrapped.losesTheHistoryFrom(ID, LATER_TOKEN);
+
+        // Then the subscription is paused for good
+        assertPausedForGoodFrom(LATER_TOKEN);
+        assertThat(wrapped.takeOversRun).as("takeovers the wrapped model ran").hasValue(1);
+    }
+
     // Paused with the one error the catch-up logs, nothing restarted from the present, and every resume refused
     private void assertPausedForGoodFrom(Checkpoint lostFrom) {
         assertAll(

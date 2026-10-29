@@ -607,9 +607,11 @@ final class NamedCatchupSupport {
             }
         }
         // No replay of this model can take the loss over without skipping events, so the subscription stays paused.
-        // Recorded before the wrapped model pauses it, so a resume that finds it paused refuses.
-        record.historyLost = lostFrom;
+        // Recorded in afterPause, which the wrapped model runs only for a run that is still current, so a late report
+        // never reaches a subscription made since. A resume before it is recorded reopens at the lost position and is
+        // paused again.
         return HistoryLossHandling.takeOver(() -> {
+            record.historyLost = lostFrom;
             String lost = lostFrom.asString();
             log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, lost, lost);
         });

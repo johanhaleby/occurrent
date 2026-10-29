@@ -39,6 +39,7 @@ import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -52,6 +53,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -515,6 +518,94 @@ class StreamCatchupHistoryLossOwnershipTest {
         // Then
         assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(LATER_TOKEN.asString());
         assertThat(liveModel.isRunning(OTHER_ID)).as("healthy subscription running").isTrue();
+    }
+
+    @Test
+    void a_loss_reported_for_a_run_a_cancel_ended_whose_takeover_the_live_model_never_runs_does_not_refuse_a_resume_of_the_subscription_made_since() {
+        // Given an id subscribed, cancelled and subscribed again at another checkpoint
+        create();
+        catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
+        catchup.cancelSubscription(ID);
+        catchup.subscribe(ID, StartAt.checkpoint(LATER_TOKEN), action());
+
+        // When the live model is asked for the run the cancel ended and runs no takeover, and the new subscription is paused and resumed
+        HistoryLossHandling answered = liveModel.asksTheListenersAbout(ID, TOKEN);
+        catchup.pauseSubscription(ID);
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(answered).as("answer for the stale report").isInstanceOf(HistoryLossHandling.TakeOver.class),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+    }
+
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_a_subscription_made_after_a_cancel_whose_loss_the_live_model_took_over() {
+        // Given an id subscribed, cancelled and subscribed again at another checkpoint
+        create();
+        catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
+        catchup.cancelSubscription(ID);
+        catchup.subscribe(ID, StartAt.checkpoint(LATER_TOKEN), action());
+
+        // When the live model reports a loss of the new run and runs the takeover after pausing it
+        liveModel.losesTheHistoryOf(ID, LATER_TOKEN);
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(LATER_TOKEN.asString());
+        assertAll(
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, LATER_TOKEN))
+        );
+    }
+
+    @Test
+    void a_loss_whose_takeover_runs_after_the_subscription_is_resumed_at_a_kept_checkpoint_does_not_refuse_a_pause_and_resume_of_the_healthy_subscription() {
+        // Given a loss reported, with the subscription resumed at a kept checkpoint between the pause and what follows it
+        create();
+        catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
+        AtomicReference<Throwable> repositioning = new AtomicReference<>();
+        liveModel.betweenTheNextTakeOverPauseAndWhatFollows(() -> repositioning.set(catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(TOKEN)))));
+        liveModel.losesTheHistoryOf(ID, LATER_TOKEN);
+
+        // When the subscription is paused and resumed
+        catchup.pauseSubscription(ID);
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(repositioning.get()).as("thrown by the resume at the kept checkpoint").isNull();
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+    }
+
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_a_subscription_whose_loss_the_live_model_took_over_after_a_hook_that_repositioned_nothing() {
+        // Given a loss reported, with something that does not reposition the subscription run between the pause and what follows it
+        create();
+        catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
+        AtomicInteger hookRuns = new AtomicInteger();
+        liveModel.betweenTheNextTakeOverPauseAndWhatFollows(hookRuns::incrementAndGet);
+        liveModel.losesTheHistoryOf(ID, LATER_TOKEN);
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(LATER_TOKEN.asString());
+        assertAll(
+                () -> assertThat(hookRuns).as("times the hook ran").hasValue(1),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, LATER_TOKEN))
+        );
     }
 
     private void terminallyPausedAfterALoss() {
