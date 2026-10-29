@@ -131,7 +131,7 @@ class RabbitMqDomainEventSourceNonRecoverableChannelTest {
     void building_a_source_on_the_clients_own_channel_does_not_warn_about_it() throws Exception {
         RabbitMqDomainEventSource<Object> source = built(mock(ChannelN.class));
         try {
-            assertThat(wrapperWarnings()).isEmpty();
+            assertThat(wrapperWarningsOfEitherWording()).isEmpty();
         } finally {
             source.close();
         }
@@ -141,7 +141,7 @@ class RabbitMqDomainEventSourceNonRecoverableChannelTest {
         return Stream.of(
                 argumentSet("a Recoverable channel and a close of the channel alone",
                         mock(Channel.class, withSettings().extraInterfaces(Recoverable.class)), new ShutdownSignalException(false, false, null, mock(Channel.class))),
-                argumentSet("the client's own channel and a connection close the client recovers from",
+                argumentSet("the client's own channel and a dropped connection",
                         mock(ChannelN.class), new ShutdownSignalException(true, false, null, mock(Connection.class))),
                 argumentSet("a wrapper channel and a close of the channel alone",
                         mock(Channel.class), new ShutdownSignalException(false, false, null, mock(Channel.class))),
@@ -153,6 +153,13 @@ class RabbitMqDomainEventSourceNonRecoverableChannelTest {
     private List<ILoggingEvent> wrapperWarnings() {
         return logged.list.stream()
                 .filter(event -> event.getFormattedMessage().contains("which is neither Recoverable nor the client's own channel"))
+                .toList();
+    }
+
+    private List<ILoggingEvent> wrapperWarningsOfEitherWording() {
+        return logged.list.stream()
+                .filter(event -> event.getFormattedMessage().contains("which is neither Recoverable nor the client's own channel")
+                        || event.getFormattedMessage().contains("isn't Recoverable"))
                 .toList();
     }
 

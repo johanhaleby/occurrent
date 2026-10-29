@@ -289,7 +289,7 @@ class RabbitMqDeliveryFailureActionTest {
     }
 
     /**
-     * A close the client recovers from on a {@code Recoverable} channel is reopened, so it ends nothing. On a wrapper
+     * After a dropped connection a {@code Recoverable} channel is reopened, so that close ends nothing. On a wrapper
      * around the client's own channel a recovery underneath may reopen it without telling the source, so that close
      * isn't final there either. The client's own channel has no recovery underneath, so every close is final.
      */

@@ -118,23 +118,23 @@ source believes something that stopped being true.
    failed" on a connection a memory alarm has blocked.
 
    The source counts each close of its channel that the connection recovers from, with a shutdown listener on the
-   channel. The client adds that listener again to every channel a recovery opens, so the count moves once per drop
-   and never when a recovery ends. The source judges which closes those are with amqp-client's default recovery
-   triggering condition, which recovers from every connection close the application didn't start, and from a close
-   after a missed heartbeat. A `ConnectionFactory` given a condition of its own that differs from the default isn't followed,
-   since the client doesn't expose the one a connection was built with.
+   channel. The client adds that listener again to every channel a recovery opens, so the count moves once per drop and
+   never when a recovery ends. The source judges which closes those are with amqp-client's default recovery triggering
+   condition, which recovers from every connection close the application didn't start, and from a close after a missed
+   heartbeat. A `ConnectionFactory` given a condition of its own that differs from the default isn't followed, since the
+   client doesn't expose the one a connection was built with.
 
-   The source reads the count after a delivery arrives and before its ack or nack. Each release of held deliveries
-   reads it after it takes its snapshot of the held tags, so every tag it finds arrived before the read. The failed
-   deliveries are released after the deferred ones, with a snapshot and a read of their own, so a drop counted while a
-   deferred delivery was released can't explain a failure for a failed delivery that arrived after that drop. After an
+   The source reads the count after a delivery arrives and before its ack or nack. Each release of held deliveries reads
+   it after it takes its snapshot of the held tags, so every tag it finds arrived before the read. The failed deliveries
+   are released after the deferred ones, with a snapshot and a read of their own, so a drop counted while a deferred
+   delivery was released can't explain a failure for a failed delivery that arrived after that drop. After an
    `IOException` on a recovering connection the release doesn't put the tag back and doesn't stop the source yet. The
-   first poll at least a poll interval after the oldest unresolved failure keeps the source when the count has moved since the highest
-   read before a failure's call, since that drop came after every one of those deliveries and put them back on the
-   queue. Otherwise it stops the source as above. A later failure with the same read doesn't put that poll off, and
-   the source never sends a second nack. A later failure with a higher read starts the interval again, since the drop
-   counted in between put every earlier delivery back on the queue. A delivery waits up to about two poll intervals
-   for an answer, since the failure can come just after a poll.
+   first poll at least a poll interval after the oldest unresolved failure keeps the source when the count has moved
+   since the highest read before a failure's call, since that drop came after every one of those deliveries and put them
+   back on the queue. Otherwise it stops the source as above. A later failure with the same read doesn't put that poll
+   off, and the source never sends a second nack. A later failure with a higher read starts the interval again, since
+   the drop counted in between put every earlier delivery back on the queue. A delivery waits up to about two poll
+   intervals for an answer, since the failure can come just after a poll.
 
    A connection that closes more than a poll interval after the failed write, because the thread that shuts it down
    starts late, say, stops the source as well, and the source doesn't consume again. Nothing is lost, since the stop

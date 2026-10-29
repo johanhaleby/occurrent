@@ -371,15 +371,22 @@ delivery back on the queue.
   the default `prefetchCount` of one the broker sent the source nothing further.
 - **Its channel is closed for good.** The broker closed the channel on its own, for example with
   `406 PRECONDITION_FAILED` after a delivery outlived `consumer_timeout`, or a connection without automatic recovery
-  closed. In 0.34.0 a source holding a delivery tried to release it again and logged a warning on every poll, and one
-  holding none consumed nothing and logged nothing. A source holding none stops too, and when the application closed
-  the channel or its connection, the line is at `warn`. On a channel that wraps the client's own and isn't
-  `Recoverable`, a connection close that the client recovers from doesn't stop the source, as in 0.34.0, since a
-  recovery under the wrapper may reopen the channel. The source logs a warning when it's built on such a channel, and
-  if no recovery reopens it, the source stays up and consumes nothing.
+  closed the client's own channel. In 0.34.0 a source holding a delivery tried to release it again and logged a warning
+  on every poll, and one holding none consumed nothing and logged nothing. A source holding none stops too, and when the
+  application closed the channel or its connection, the line is at `warn`. On a channel that wraps the client's own and
+  isn't `Recoverable`, a connection close that amqp-client's default recovery-triggering condition accepts doesn't stop
+  the source, as in 0.34.0, whether or not the connection under the wrapper recovers, since a recovery there may reopen
+  the channel. The source logs a warning when it's built on such a channel, and if no recovery reopens it, the source
+  stays up and consumes nothing.
 
 An `IOException` because the connection dropped doesn't stop the source. It keeps running and consumes again after the
 recovery.
+
+The source judges recovery by amqp-client's default recovery-triggering condition, since the client doesn't expose the
+one a connection was built with. If you give a `ConnectionFactory` a condition of your own with
+`setConnectionRecoveryTriggeringCondition`, the source stays up and consumes nothing after a close your condition
+rejects and the default accepts. [#1353](https://github.com/johanhaleby/occurrent/issues/1353) proposes letting you give
+the source your condition.
 
 Two log lines of the delivery failure policy have new text, and a search or an alert on the old one stops matching.
 

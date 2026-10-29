@@ -185,9 +185,11 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * This source also stops for good on its next poll, also when it holds no delivery, when its channel is closed and
  * nothing reopens it. The broker closes the channel after a delivery outlived the broker's {@code consumer_timeout},
- * say, and nothing reopens a channel of a connection without automatic recovery. On a channel that wraps the client's
- * own and isn't {@code Recoverable}, a recovery underneath may reopen the channel after a connection close the client
- * recovers from, so that close doesn't stop this source. This source logs a warning when it's built on such a channel.
+ * say, and nothing reopens the client's own channel of a connection without automatic recovery. On a channel that
+ * wraps the client's own and isn't {@code Recoverable}, a connection close that amqp-client's default
+ * recovery-triggering condition accepts doesn't stop this source, whether or not anything underneath recovers, since a
+ * recovery may reopen the channel. If nothing reopens it, this source stays up and consumes nothing. This source logs
+ * a warning when it's built on such a channel.
  * <p>
  * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
  * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
@@ -195,6 +197,12 @@ import static java.util.Objects.requireNonNull;
  * queue, which is the same at-least-once delivery this source gives you everywhere else. A delivery still waiting
  * for the worker thread when the connection drops is not handled at all. It is dropped as soon as the recovery
  * starts, since RabbitMQ delivers it again on the recovered channel.
+ * <p>
+ * This source judges recovery by amqp-client's default recovery-triggering condition, since the client doesn't expose
+ * the one a connection was built with. On a connection whose {@code ConnectionFactory} was given a condition of its own
+ * with {@code setConnectionRecoveryTriggeringCondition}, this source stays up and consumes nothing after a close that
+ * condition rejects and the default accepts. <a href="https://github.com/johanhaleby/occurrent/issues/1353">#1353</a>
+ * proposes letting you give this source that condition.
  */
 public final class RabbitMqCloudEventSource implements AutoCloseable {
 
@@ -229,7 +237,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     private final Deque<Long> heldDeferredDeliveryTags = new ConcurrentLinkedDeque<>();
     // A REDELIVER-policy failure (a handler or filter that fails on every attempt, say) is held here instead of
     // nacked on the spot, released the same way heldDeferredDeliveryTags is: a snapshot per pollInterval under
-    // consumeLock, via the same releaseHeldDeferredDelivery(Deque, LongConsumer) helper. Without this a
+    // consumeLock, via the same releaseHeldDeferredDelivery(Deque, Runnable, LongConsumer) helper. Without this a
     // poison message under REDELIVER (the default policy) would nack-and-redeliver as fast as the broker
     // round-trips it, keeping this source's worker thread busy at prefetchCount(1) instead of being paced like DEFERRED
     // already is. PARK is never held here: parking exists to move a failed delivery out of the retry loop, not to
@@ -316,11 +324,12 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         consumerRecovery.attachTo(builder.connection, consumeChannel);
         if (failureAction.mayHideRecovery()) {
             log.warn("The channel of the source on queue \"{}\" is a {}, which is neither Recoverable nor the client's own "
-                    + "channel, so after a connection close that the client recovers from, the source can't tell whether a "
-                    + "recovery is going to reopen the channel. Such a close doesn't stop the source, and a dropped connection "
-                    + "while it acknowledges or holds a delivery does. When the connection isn't the AutorecoveringConnection "
-                    + "itself either, the source stops consuming after a recovery with topology recovery turned off. Build the "
-                    + "source with the AutorecoveringConnection itself.", queue, consumeChannel.getClass().getName());
+                    + "channel, so after a connection close that amqp-client's default recovery-triggering condition "
+                    + "accepts, the source can't tell whether a recovery is going to reopen the channel. Such a close doesn't "
+                    + "stop the source, and a dropped connection while it acknowledges or holds a delivery does. When the "
+                    + "connection isn't the AutorecoveringConnection itself either, the source stops consuming after a "
+                    + "recovery with topology recovery turned off. Build the source with the AutorecoveringConnection itself.",
+                    queue, consumeChannel.getClass().getName());
         }
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
     }

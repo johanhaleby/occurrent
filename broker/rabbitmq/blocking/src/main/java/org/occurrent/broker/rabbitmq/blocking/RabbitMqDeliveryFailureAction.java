@@ -251,8 +251,8 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
 
     /**
      * Whether the delivery's channel is neither {@link Recoverable} nor the client's own {@link AMQChannel}, as a
-     * channel from a {@code Connection} that wraps the client's own is, so a recovery underneath may reopen it
-     * without the source being told.
+     * channel a wrapping {@code Connection} hands out can be, so a recovery underneath may reopen it without the
+     * source being told.
      */
     public boolean mayHideRecovery() {
         return !(consumeChannel instanceof Recoverable) && !(consumeChannel instanceof AMQChannel);
