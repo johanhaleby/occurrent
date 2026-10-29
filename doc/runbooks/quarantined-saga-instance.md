@@ -161,9 +161,9 @@ SagaInstance instance = quarantined.getFirst();
 SagaFailure failure = instance.failure();
 // failure.input()          the failing event's redelivery key, a stream id with its stream version
 // failure.position()       the event's global position when the store assigns one, otherwise null
-// failure.firstFailedAt()  when this instance started failing, strictly when its first failure record
-//                          was written, which is later than the first failure itself if an earlier
-//                          failure recorded nothing
+// failure.firstFailedAt()  when the event the record names first failed, strictly when that failure
+//                          was first recorded, on the record or on the event's pending entry, which is
+//                          later than the first failure itself if an earlier failure recorded nothing
 // failure.failureType()    the class name of the exception that stopped the processing. Usually one the
 //                          saga or its command dispatcher threw, and it can also be a store or
 //                          converter failure, since the runner catches the whole path including the
@@ -173,13 +173,14 @@ SagaFailure failure = instance.failure();
 //                          so the log lines are where a long message survives whole
 ```
 
-Read `firstFailedAt()` as the start of the instance's current run of failing, and not as the first time
-`failure.input()` itself failed. Reading it the other way under-reports how long the instance has been stuck.
+Read `firstFailedAt()` as how long `failure.input()` has been failing. Each failing event keeps its own clock, so
+another event that failed on the same instance before it does not move it. A record written before 0.35.0 can hold an
+earlier instant, from when the instance started failing on some other event.
 
-It is a floor rather than an exact incident start. The value is when the first failure record was written, and an
-earlier failure that recorded nothing, a failing timeout or a write that lost its compare-and-set for instance, makes
-that later than when the instance started failing. So the instance may have been failing for longer than the
-difference between `firstFailedAt()` and now.
+It is a floor rather than an exact incident start. The value is when the failure was first recorded, and an earlier
+failure of the same event that recorded nothing, one whose writes all lost their compare-and-set for instance, makes
+that later than when the event started failing. So the event may have been failing for longer than the difference
+between `firstFailedAt()` and now.
 
 The record holds the exception's class name and message, and not its stack trace. Take the stack trace from the log
 lines under "How you find out" above, which are the only place it exists.
@@ -245,6 +246,14 @@ It is still quarantined, and 0.34.0 has nothing that replays it.
 In every case the instance stays where it is. What you have gained is knowing whether the process it was running
 finished some other way, which is what you need before step 5.
 
+**Replaying a parked event costs its whole clock.** A parked event's clock keeps running while it is parked. When you
+replay it on an instance with quarantine on and it fails again after `quarantineAfter` has passed since its first
+failure, that first replay failure quarantines the instance. Fix the cause before you replay.
+
+When the log says the saga could not apply a held event while draining its held events, the delivery that drove the
+drain was refused as well. Under PARK, replay that delivery too once the cause is fixed, even if its reaction ran. A
+replay of an event the instance already applied is skipped as a redelivery, and it still applies the held events first.
+
 ### 5. [you] Delete the instance, once you have decided not to recover it
 
 `SagaStateStore.delete(sagaId)` is the call, and whether you have anything to call it on depends on how the store was
@@ -262,10 +271,12 @@ If you let the Spring Boot starter default the store, there is nothing to inject
 `SagaInstances` is the only handle you were given and it is deliberately read-only. Delete the document instead:
 
 ```javascript
+db.getCollection("saga-order-fulfilment-held-events").deleteMany({ sagaId: "order-4711" })
 db.getCollection("saga-order-fulfilment").deleteOne({ _id: "order-4711" })
 ```
 
-That removes the same document, since the instance is one document keyed by its saga id. It skips one piece of
+The first line removes the events the saga holds for the instance, which the Java call removes first as well, and the
+second removes the instance. That is the same document the Java call removes, since the instance is one document keyed by its saga id. It skips one piece of
 bookkeeping the Java call also does, which is dropping the saga id from the store's in-memory latch for the
 retained-event warning a flow saga gets when it crosses the size threshold. The consequence is that if this saga id
 comes back and crosses that threshold again, the warning stays suppressed until the entry is evicted or the
@@ -277,7 +288,7 @@ a delete that races that redelivery lets the event recreate the instance and run
 subscription replay, a reset checkpoint, and a redelivery after a crash are all ways that happens.
 
 So delete an instance only once its source can no longer redeliver any of its events. Leaving it in `QUARANTINED`
-until then is safe, because the runner skips every event addressed to it. It is not free, though. Every later event addressed to that instance is still delivered and still reads the
+until then is safe, because the runner skips every event addressed to it, and the events it holds stay held. It is not free, though. Every later event addressed to that instance is still delivered and still reads the
 instance from the state store before the runner skips it, so a correlation id that keeps receiving events keeps
 paying a lookup for each one.
 
@@ -285,6 +296,10 @@ The business process the instance was running is a separate question, and Occurr
 half way through fulfilment when its instance stopped is still half way through it after you delete the row. Finish or
 compensate it through whatever your application uses for that, before or after the delete, and not by expecting the
 saga to pick it up again.
+
+On a subscription that holds an event arriving before its instance starts, a later non-start event of a deleted id is
+held rather than skipped, and it stays held until a start event for that id arrives or you remove it. Leaving the
+instance `QUARANTINED` avoids that, because a quarantined instance skips those events.
 
 ### 6. [you] Verify
 
@@ -324,6 +339,34 @@ Whether an instance should be quarantined at all is a question about your saga r
 `evolve` that throws on an event it does not recognise, rather than ignoring it, quarantines an instance for something
 that was never a failure. `SagaRunnerConfig.redeliveryDetection` under `REQUIRED`, which is its default, already
 refuses an event with no redelivery key before the saga sees it.
+
+## Events a saga holds
+
+A saga whose subscription can deliver an event before its instance starts keeps that event in a second collection,
+named after the saga's collection with `-held-events`, and applies it once the instance starts. The first time a saga
+holds an event on a node, it logs one INFO naming the store. An event whose start never arrives stays there, so a saga
+deployed onto a live topic collects the later events of instances that began before it. This counts them per saga id,
+oldest first, on the collection's `sagaId` and `heldAt` index:
+
+```javascript
+db.getCollection("saga-order-fulfilment-held-events").aggregate([
+  { $group: { _id: "$sagaId", count: { $sum: 1 }, oldest: { $min: "$heldAt" } } },
+  { $sort: { oldest: 1 } }
+])
+```
+
+Remove the ones for an id you know will never start:
+
+```javascript
+db.getCollection("saga-order-fulfilment-held-events").deleteMany({ sagaId: "order-4711" })
+```
+
+A held event marked `selfHeld` is a failed event the instance keeps until it applies. One left on a `COMPLETED` instance
+is never applied, since a completed instance skips its events, and removing it is safe.
+
+A failed event the saga could not keep, because the store failed while it was holding it, is logged at ERROR with "could
+not keep it". Under PARK, its parked copy may then be the only copy left, so replay that event once the store is
+back.
 
 ## Rollback considerations
 
