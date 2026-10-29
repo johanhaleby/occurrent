@@ -28,9 +28,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
@@ -39,6 +41,9 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.SortBy;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
@@ -69,6 +74,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -230,6 +236,68 @@ class StreamCatchupSubscriptionModelTest {
         subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(received).containsExactly(event1, event2));
+    }
+
+    static Stream<Named<Function<InMemoryEventStore, EventStoreQueries>>> storesThatWriteNoPosition() {
+        Function<InMemoryEventStore, EventStoreQueries> writesNoPosition = store -> store;
+        Function<InMemoryEventStore, EventStoreQueries> isNoPositionOrderedReader = QueriesOnlyEventStore::new;
+        return Stream.of(Named.of("a position ordered reader that writes no position", writesNoPosition), Named.of("a store that is no position ordered reader", isNoPositionOrderedReader));
+    }
+
+    static Stream<Arguments> positionsAboveZeroOnStoresThatWriteNoPosition() {
+        List<Checkpoint> positions = List.of(GlobalCheckpoint.of(1), GlobalCheckpoint.of(2, new StringBasedCheckpoint("some live start"), 0, 4));
+        return storesThatWriteNoPosition().flatMap(store -> positions.stream().map(position -> Arguments.of(store, Named.of(position.asString(), position))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("storesThatWriteNoPosition")
+    void a_start_at_global_position_0_replays_the_whole_history_by_time_and_then_goes_live_when_the_store_does_not_write_position(Function<InMemoryEventStore, EventStoreQueries> storeAsTheModelSeesIt) {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        assertThat(eventStore.writesPosition()).isFalse();
+        List<DomainEvent> history = List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)));
+        StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("live start read now");
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, liveStartReadNow);
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, storeAsTheModelSeesIt.apply(eventStore), new CatchupSubscriptionModelConfig(100));
+
+        // When
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
+
+        // Then
+        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history));
+        assertThat(model.liveStarts).as("the wrapped model goes live from the live start read before the replay, and is never opened at the position")
+                .containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
+    }
+
+    @ParameterizedTest
+    @MethodSource("positionsAboveZeroOnStoresThatWriteNoPosition")
+    void a_start_after_a_global_position_above_0_is_refused_by_subscribe_and_starts_nothing_when_the_store_does_not_write_position(Function<InMemoryEventStore, EventStoreQueries> storeAsTheModelSeesIt, Checkpoint position) {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        writeAt(eventStore, "event1", at(1));
+        writeAt(eventStore, "event2", at(2));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
+        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage storage = savesRecordedIn(saved);
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, storeAsTheModelSeesIt.apply(eventStore),
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        try {
+            // When
+            Throwable failure = catchThrowable(() -> subscription.subscribe("subscription", StartAt.checkpoint(position), toDomainEvents(received)));
+
+            // Then the call itself is refused, before a Subscription exists to wait on
+            assertThat(failure).isInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessageContaining("after a global position, since the event store doesn't write one");
+            assertThat(received).as("delivered").isEmpty();
+            assertThat(saved).as("stored").isEmpty();
+            assertThat(storage.read("subscription")).as("the stored checkpoint").isNull();
+            assertThat(model.liveStarts).as("handed over").isEmpty();
+            assertThat(model.isRunning("subscription")).as("subscribed in the wrapped model").isFalse();
+        } finally {
+            subscription.shutdown();
+        }
     }
 
     @Test
@@ -2131,6 +2199,35 @@ class StreamCatchupSubscriptionModelTest {
         @Override
         public long count(Filter filter) {
             throw new AssertionError("Position-enabled beginning-of-time catch-up must not use the time-based count path");
+        }
+    }
+
+    // Reads by time through an in-memory store while exposing no PositionOrderedReader, as a store that has no notion of a position does
+    private static final class QueriesOnlyEventStore implements EventStoreQueries, CatchupReads {
+        private final InMemoryEventStore delegate;
+
+        private QueriesOnlyEventStore(InMemoryEventStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+            return TimeOrderedCatchupReads.over(this).openCatchupReadScope(notBefore);
+        }
+
+        @Override
+        public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+            return delegate.query(filter, skip, limit, sortBy);
+        }
+
+        @Override
+        public long count(Filter filter) {
+            return delegate.count(filter);
+        }
+
+        @Override
+        public boolean exists(Filter filter) {
+            return delegate.exists(filter);
         }
     }
 

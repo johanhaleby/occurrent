@@ -813,6 +813,10 @@ replay from there whose live start is lost still replays again, as
 [When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay)
 describes.
 
+A blocking stream catch-up over an event store that writes no positions used to open the change stream at the present
+for `StartAt.checkpoint(GlobalCheckpoint.of(n))`, and skipped every event before it. Position 0 now replays from the
+beginning of time, and a position above 0 throws `UnsupportedStartAtException`.
+
 The last row also covers a catch-up from a specific time, `StartAt.checkpoint(TimeBasedCheckpoint)` or a time start in
 Spring Boot. When its replay outlasts the change stream history, it now fails at once instead of replaying again.
 
