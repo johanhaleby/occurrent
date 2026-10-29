@@ -14,6 +14,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). `DomainEventFeed` and
   `CatchupProjectionFeed` lose both `accept(..)` overloads, on the blocking and the reactor stack. **Breaks the build**
   if you still call one of them.
+- [The reactive `executeAndReturnState` emits a non-null state](#the-reactive-executeandreturnstate-emits-a-non-null-state).
+  `ReactiveSnapshotDeciderApplicationService` and `ReactiveSnapshotDcbDeciderApplicationService` return
+  `Mono<@NonNull S>`. **Breaks the build** for Kotlin code that writes the result type as `Mono<State?>`.
 
 ### Sagas
 
@@ -55,6 +58,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 #### Kafka
 
 ### Snapshots
+
+- [The reactive `executeAndReturnState` emits a non-null state](#the-reactive-executeandreturnstate-emits-a-non-null-state).
+  The emitted state is declared non-null. Breaks the build only for a Kotlin `Mono<State?>` written by hand.
 
 ### The rewrite recipe
 
@@ -441,3 +447,22 @@ Two log lines of the delivery failure policy have new text, and a search or an a
 
 Both are still logged at `warn`. After a recovery the client ignores an acknowledgement for a tag from before it, so the
 old text said more than the source knew.
+
+## The reactive `executeAndReturnState` emits a non-null state
+
+`executeAndReturnState` on `ReactiveSnapshotDeciderApplicationService` and `ReactiveSnapshotDcbDeciderApplicationService`
+returns `Mono<@NonNull S>` instead of `Mono<S>`. The state type `S` may still be nullable. The new signature
+changes nothing at runtime. A `null` state still writes none of the command's events and fails with a
+`NullPointerException`. See
+[#1119](https://github.com/johanhaleby/occurrent/issues/1119).
+
+### Who is affected
+
+Kotlin code that writes the result type of the call by hand as `Mono<State?>`. Kotlin reads the annotation, and a
+`Mono<State>` can't be assigned to a `Mono<State?>`. Java code, and Kotlin code that lets the compiler infer the type,
+compile unchanged.
+
+### What to do
+
+Drop the `?` from the hand-written `Mono<State?>`. There is no OpenRewrite recipe, since the compiler reports every
+place that needs it.

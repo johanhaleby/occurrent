@@ -25,7 +25,6 @@ import org.occurrent.dsl.decider.adaptEvents
 import org.occurrent.eventstore.api.dcb.DcbAppendResult
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import reactor.core.publisher.Mono
-import java.util.concurrent.atomic.AtomicReference
 
 // A DcbDecider carries both the read boundary (derived from the command) and the tags for the events it emits, so the
 // caller no longer passes a separate DcbCriteria. The decider's event type may be a subtype of the service event type
@@ -42,6 +41,7 @@ import java.util.concurrent.atomic.AtomicReference
  * boundary-mismatch one, so the message points at the actual cause.
  */
 @PublishedApi
+// Bodies inlined by callers compiled against an earlier version call this, so its JVM signature must not change
 internal fun <C : Any, E : Any> dcbCriteriaFor(commands: List<C>, dcbDecider: DcbDecider<C, *, E>): DcbCriteria =
     dcbDecider.criteriaFor(commands)
 
@@ -97,38 +97,34 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
     commands: List<C>,
     dcbDecider: DcbDecider<C, S, SubE>
 ): Mono<Decider.Decision<S, E>> {
+    // The Java service resolves the criteria and creates the decision reference per subscription
     val widened: Decider<C, S, E> = dcbDecider.decider().adaptEvents()
     val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
-    // Defer so the AtomicReference is created per subscription, and so criteria resolution (and the
-    // IllegalArgumentException it may throw) happens per subscription rather than eagerly. A shared AtomicReference
-    // would let concurrent or repeat subscribers see each other's decision.
-    return Mono.defer {
-        val criteria = dcbCriteriaFor(commands, dcbDecider)
-        val options = DcbExecuteOptions.options<E>().tagGenerator(tags)
-        val decision = AtomicReference<Decider.Decision<S, E>>()
-        execute(criteria, options) { events: List<E> ->
-            val result = widened.decideOnEvents(events, commands)
-            decision.set(result)
-            result.events
-        }.then(Mono.fromCallable { requireNotNull(decision.get()) { "The decider produced no decision" } })
-    }
+    return DcbDeciderApplicationService(this).executeAndReturnDecision(commands, DcbDecider.from(widened, dcbDecider.criteria(), tags))
 }
 
 /**
  * Execute a command and return the folded state after the decision.
  *
- * The state is bound to a non-null type because a [Mono] cannot carry a null value. A decider whose folded state can be
- * null (the common "does not exist yet" initial state) should use [executeAndReturnDecision] and read its state, or
+ * The state is bound to a non-null type because a [Mono] cannot carry a null value. A decider that folds to null is
+ * refused with a [NullPointerException] before anything is appended. A decider whose folded state can be null (the
+ * common "does not exist yet" initial state) should use [executeAndReturnDecision] and read its state, or
  * [executeAndReturnEvents], instead.
  */
 inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnState(command: C, dcbDecider: DcbDecider<C, S, SubE>): Mono<S> =
-    executeAndReturnDecision(command, dcbDecider).map { it.state }
+    executeAndReturnState(listOf(command), dcbDecider)
 
 /**
- * Execute commands and return the folded state after the decision.
+ * Execute commands and return the folded state after the decision. The commands are decided as one unit and appended
+ * once, so only the state after the last command is checked. If that state is null, nothing is appended, not even the
+ * events the earlier commands decided. See the single-command overload.
  */
-inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnState(commands: List<C>, dcbDecider: DcbDecider<C, S, SubE>): Mono<S> =
-    executeAndReturnDecision(commands, dcbDecider).map { it.state }
+inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnState(commands: List<C>, dcbDecider: DcbDecider<C, S, SubE>): Mono<S> {
+    // Delegated so the null state is refused inside the decider callback, before the append, as the Java service does
+    val widened: Decider<C, S, E> = dcbDecider.decider().adaptEvents()
+    val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
+    return DcbDeciderApplicationService(this).executeAndReturnState(commands, DcbDecider.from(widened, dcbDecider.criteria(), tags))
+}
 
 /**
  * Execute a command and return the new events decided by [dcbDecider].

@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.snapshot.reactor;
 
+import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.service.reactor.dcb.DcbApplicationService;
@@ -100,11 +101,13 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
     }
 
     /**
-     * Execute a single command and emit the folded state after the decision (even when nothing was appended). A {@link Mono}
-     * cannot carry a null value, so the snapshot state {@code S} must be non-null here. A decider that folds to null is
-     * refused before anything is written. Use {@link #executeAndReturnDecision} for a nullable state.
+     * Execute a single command and emit the folded state after the decision (even when nothing was appended). The state type
+     * {@code S} may be nullable, but a {@link Mono} cannot carry a null value, so a decider that folds to null is refused
+     * with a {@link NullPointerException} before anything is written. The blocking
+     * {@code org.occurrent.dsl.snapshot.blocking.SnapshotDcbDeciderApplicationService} returns a null state instead. Use
+     * {@link #executeAndReturnDecision} for a nullable state.
      */
-    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(C command, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+    public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(C command, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
         return doExecuteAndReturnState(List.of(command), snapshotDcbDecider);
     }
 
@@ -114,11 +117,11 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
      * state is null, nothing is written, not even the events the earlier commands decided. See
      * {@link #executeAndReturnState(Object, ReactiveSnapshotDcbDecider)}.
      */
-    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+    public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
         return doExecuteAndReturnState(commands, snapshotDcbDecider);
     }
 
-    private <C, S extends @Nullable Object> Mono<S> doExecuteAndReturnState(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+    private <C, S extends @Nullable Object> Mono<@NonNull S> doExecuteAndReturnState(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
         return doExecute(commands, snapshotDcbDecider, true).map(executed -> executed.decision().state());
     }
 

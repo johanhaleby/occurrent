@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.dcb.reactor;
 
+import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.service.reactor.dcb.DcbApplicationService;
@@ -111,11 +112,13 @@ public final class DcbDeciderApplicationService<E> {
     }
 
     /**
-     * Execute a single command and emit the folded state after the decision. The state is bound to a non-null type
-     * because a {@link Mono} cannot carry a null value. A decider that folds to null is refused before anything is
-     * appended. Use {@link #executeAndReturnDecision} for a nullable state.
+     * Execute a single command and emit the folded state after the decision. The state type {@code S} may be nullable,
+     * but a {@link Mono} cannot carry a null value, so a decider that folds to null is refused with a
+     * {@link NullPointerException} before anything is appended. The blocking
+     * {@code org.occurrent.dsl.dcb.blocking.DcbDeciderApplicationService} returns a null state instead. Use
+     * {@link #executeAndReturnDecision} for a nullable state.
      */
-    public <C, S> Mono<S> executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider) {
+    public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider) {
         return doExecuteAndReturnState(List.of(command), dcbDecider);
     }
 
@@ -124,11 +127,11 @@ public final class DcbDeciderApplicationService<E> {
      * and appended once, so only the state after the last command is checked. If that state is null, nothing is
      * appended, not even the events the earlier commands decided. See {@link #executeAndReturnState(Object, DcbDecider)}.
      */
-    public <C, S> Mono<S> executeAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+    public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
         return doExecuteAndReturnState(commands, dcbDecider);
     }
 
-    private <C, S> Mono<S> doExecuteAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+    private <C, S extends @Nullable Object> Mono<@NonNull S> doExecuteAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
         return doExecuteAndReturnDecision(commands, dcbDecider, true).map(Decider.Decision::state);
     }
 

@@ -129,6 +129,8 @@ public final class SnapshotDeciderApplicationService<E> {
 
     /**
      * Execute a single command and return the folded state after the decision.
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(String streamId, C command, SnapshotDecider<C, S, E> snapshotDecider) {
         return executeAndReturnDecision(streamId, command, snapshotDecider).state();
@@ -136,6 +138,8 @@ public final class SnapshotDeciderApplicationService<E> {
 
     /**
      * Execute a single command and return the folded state after the decision.
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(UUID streamId, C command, SnapshotDecider<C, S, E> snapshotDecider) {
         return executeAndReturnDecision(streamId, command, snapshotDecider).state();
@@ -143,6 +147,8 @@ public final class SnapshotDeciderApplicationService<E> {
 
     /**
      * Execute {@code commands} and return the folded state after the decision.
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(String streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
         return executeAndReturnDecision(streamId, commands, snapshotDecider).state();
@@ -150,6 +156,8 @@ public final class SnapshotDeciderApplicationService<E> {
 
     /**
      * Execute {@code commands} and return the folded state after the decision.
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(UUID streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
         return executeAndReturnDecision(streamId, commands, snapshotDecider).state();

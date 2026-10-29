@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference
  * boundary-mismatch one, so the message points at the actual cause.
  */
 @PublishedApi
+// Bodies inlined by callers compiled against an earlier version call this, so its JVM signature must not change
 internal fun <C : Any, E : Any> dcbCriteriaFor(commands: List<C>, dcbDecider: DcbDecider<C, *, E>): DcbCriteria =
     dcbDecider.criteriaFor(commands)
 
@@ -92,13 +93,28 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
     commands: List<C>,
     dcbDecider: DcbDecider<C, S, SubE>
 ): Decider.Decision<S, E> {
-    val criteria = dcbCriteriaFor(commands, dcbDecider)
     val widened: Decider<C, S, E> = dcbDecider.decider().adaptEvents()
     val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
-    val options = DcbExecuteOptions.options<E>().tagGenerator(tags)
+    return decideAndAppend(commands, DcbDecider.from(widened, dcbDecider.criteria(), tags), refuseNullState = false)
+}
+
+/**
+ * Decide [commands] with [dcbDecider] and append the new events. When [refuseNullState] is set, a null state after the
+ * last command throws [NullPointerException] before anything is appended.
+ */
+@PublishedApi
+// Not inline, so the public inline functions keep only the widening that needs the reified event type, and a fix here
+// reaches callers without a recompile
+internal fun <C : Any, S, E : Any> DcbApplicationService<E>.decideAndAppend(commands: List<C>, dcbDecider: DcbDecider<C, S, E>, refuseNullState: Boolean): Decider.Decision<S, E> {
+    val criteria = dcbCriteriaFor(commands, dcbDecider)
+    val options = DcbExecuteOptions.options<E>().tagGenerator(dcbDecider.tags())
     val decision = AtomicReference<Decider.Decision<S, E>>()
     execute(criteria, options) { events: List<E> ->
-        val result = widened.decideOnEvents(events, commands)
+        val result = dcbDecider.decider().decideOnEvents(events, commands)
+        // Refused inside the decide function, which runs before the append, so a rejected command is never committed
+        if (refuseNullState && result.state == null) {
+            throw NullPointerException("The decider produced a null state, but executeAndReturnState cannot return null. Use executeAndReturnDecision for a nullable state.")
+        }
         decision.set(result)
         result.events
     }
@@ -107,15 +123,24 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
 
 /**
  * Execute a command and return the folded state after the decision.
+ *
+ * The state is bound to a non-null type. A decider that folds to null, such as one written in Java with a non-null
+ * state type, is refused with a [NullPointerException] before anything is appended. A decider whose folded state can be
+ * null should use [executeAndReturnDecision] and read its state instead.
  */
 inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnState(command: C, dcbDecider: DcbDecider<C, S, SubE>): S =
-    executeAndReturnDecision(command, dcbDecider).state
+    executeAndReturnState(listOf(command), dcbDecider)
 
 /**
- * Execute commands and return the folded state after the decision.
+ * Execute commands and return the folded state after the decision. The commands are decided as one unit and appended
+ * once, so only the state after the last command is checked. If that state is null, nothing is appended, not even the
+ * events the earlier commands decided. See the single-command overload.
  */
-inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnState(commands: List<C>, dcbDecider: DcbDecider<C, S, SubE>): S =
-    executeAndReturnDecision(commands, dcbDecider).state
+inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnState(commands: List<C>, dcbDecider: DcbDecider<C, S, SubE>): S {
+    val widened: Decider<C, S, E> = dcbDecider.decider().adaptEvents()
+    val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
+    return decideAndAppend(commands, DcbDecider.from(widened, dcbDecider.criteria(), tags), refuseNullState = true).state
+}
 
 /**
  * Execute a command and return the new events decided by [dcbDecider].
