@@ -27,7 +27,8 @@ import org.slf4j.Logger;
  * <p>
  * Each instance logs one message, and each class that logs this way creates its instances in static fields. So this
  * class and every format string are loaded along with that class, rather than on the first failure, when there may be
- * no memory left for them. A string literal passed at the call would only be created the first time that call runs.
+ * no memory left for them. A string literal passed at the call can be created as late as the first time that call
+ * runs, which is when HotSpot creates it.
  */
 final class FailureLogging {
     private final Logger log;
