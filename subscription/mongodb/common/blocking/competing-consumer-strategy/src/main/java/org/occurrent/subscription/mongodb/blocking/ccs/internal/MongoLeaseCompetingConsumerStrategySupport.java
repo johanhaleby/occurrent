@@ -705,6 +705,10 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Told told = c.told;
         boolean errorSeen = false;
         while (true) {
+            // Only close() is meant to interrupt this thread. An interrupt that a listener sets and does not clear
+            // would make the first blocking call of the next one throw, also within this tell. Cleared before the
+            // running check, so an interrupt that close() sends after that check stays set.
+            Thread.interrupted();
             Status status = statusOf(c);
             // After the status. A locked step changes the counts before the status, so counts read after it include
             // every lease lost before that status, and a grant of a new lease comes after the prohibition of the old.
@@ -716,9 +720,6 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 return errorSeen;
             }
             markTelling(c, change, status, told);
-            // Only close() is meant to interrupt this thread. An interrupt that a listener sets and does not clear
-            // would make the first blocking call of the next one throw, also within this tell.
-            Thread.interrupted();
             errorSeen |= tellListeners(c, change, null);
             told = change == Change.GRANT ? new Granted(tokenOf(status), seenLapses) : new NotGranted(seenLosses);
             // Never written after an Error, so the record never reads as owing nothing while that listener is owed
