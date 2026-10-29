@@ -83,8 +83,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
   `startAtGlobalPosition` and `startAtDcbPosition` above 0 are refused at start, and deprecated for removal. Compiles
   with a removal warning.
 - [A stream catch-up over an event store without positions replays from position 0](#a-stream-catch-up-over-an-event-store-without-positions-replays-from-position-0).
-  `startAt = StartPosition.BEGINNING` replays the history over a store with stream position off, where in 0.34 it got
-  none of it. Compiles unchanged.
+  `startAt = StartPosition.BEGINNING` replays the history over a store with stream position off, where from 0.30.0 to
+  0.34.0 it got none of it. Compiles unchanged.
 
 ### Brokers
 
@@ -701,7 +701,9 @@ replay from there whose live start is lost still replays again, as
 describes.
 
 On an event store that writes no positions, a blocking stream catch-up throws `UnsupportedStartAtException` instead for
-`StartAt.checkpoint(GlobalCheckpoint.of(n))` with `n` above 0, as
+`StartAt.checkpoint(GlobalCheckpoint.of(n))`, `startAtGlobalPosition` or a stored `position:<n>`, with `n` above 0, and
+for a stored one also when it holds a live start. Over such a store none of them replayed in 0.34. They went live at the
+present, as
 [A stream catch-up over an event store without positions replays from position 0](#a-stream-catch-up-over-an-event-store-without-positions-replays-from-position-0)
 describes.
 
@@ -722,8 +724,8 @@ replays again from there instead.
 A subscription that is refused, and has no such checkpoint stored with its state, can only start from the beginning
 again: `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or `StartAt.checkpoint(GlobalCheckpoint.of(0))`. Cancel it
 first with `cancelSubscription(id)`, which deletes its stored checkpoint. A blocking catch-up holds a refused resume,
-and holds the stored checkpoint it read with it, so deleting the checkpoint and resuming is refused again. With the
-application stopped, deleting the stored checkpoint is enough. From then on it delivers a checkpoint with every event.
+and holds the stored checkpoint it read with it, so deleting the checkpoint and resuming is refused again. With every
+instance of the application stopped, deleting the stored checkpoint is enough. From then on it delivers a checkpoint with every event.
 For a refused replay whose live start was lost, size the change stream history to reach back across the replay. On
 MongoDB that is the oplog.
 
@@ -735,18 +737,20 @@ every value above 0 is refused. Use `StartPosition.BEGINNING` or `DcbStartAt.beg
 A blocking `StreamCatchupSubscriptionModel` over an event store that writes no positions handed
 `StartAt.checkpoint(GlobalCheckpoint.of(n))` to the subscription model it wraps, without a replay. The MongoDB
 subscription model opened the change stream at the present for it, and skipped every event before it with no error.
-Position 0 now replays from the beginning of time and then goes live. A position above 0 throws
+Every release from 0.30.0 to 0.34.0 did that. Position 0 now replays from the beginning of time and then goes live. A
+position above 0, whether passed, from `startAtGlobalPosition`, or read from the stored checkpoint, throws
 `UnsupportedStartAtException` from `subscribe(..)`, since the store has no position to replay after.
 
 ### Who is affected
 
-A Spring Boot application on the blocking MongoDB starter with `startAt = StartPosition.BEGINNING` on `@Subscription`,
-`@Projection`, `@Saga` or `@Snapshot`, which Spring Boot starts at position 0, over an event store that writes no
-stream positions. A store
-writes none when `occurrent.event-store.stream.position` is `false`. It also writes none when stream position is on
-only by default and the store started against a collection that already held events without a `position`, since it
-then turns stream position off for itself and logs how to turn it on. In 0.34 such a subscription got none of the
-history, only the events written after it started.
+A Spring Boot application on the blocking MongoDB starter with `startAt = StartPosition.BEGINNING` or
+`startAtGlobalPosition = 0` on `@Subscription`, `@Projection`, `@Saga` or `@Snapshot`, which Spring Boot starts at
+position 0, over an event store that writes no stream positions. A store writes none when
+`occurrent.event-store.stream.position` is `false`. It also writes none when stream position is on only by default and
+the store started against a collection that already held events without a `position`, since it then turns stream
+position off for itself and logs how to turn it on. On any release from 0.30.0 to 0.34.0 such a subscription got none
+of the history, only the events written after it started. An application that upgrades straight from 0.30, 0.31, 0.32
+or 0.33 is affected in the same way.
 
 The same goes for code that starts a blocking stream catch-up at `StartAt.checkpoint(GlobalCheckpoint.of(n))` over such
 a store. A DCB event store always writes positions.
@@ -756,10 +760,10 @@ a store. A DCB event store always writes positions.
 Under `resumeBehavior = SAME_AS_START_AT` there is nothing to do. The subscription keeps no checkpoint, and replays the
 whole history the next time it starts.
 
-Under the default `resumeBehavior`, a subscription that went live this way in 0.34 stored a checkpoint as it handled
-events, and resumes from that checkpoint in 0.35, so it still never gets the history. To get it, stop the
-application, delete the checkpoint stored for the subscription, and start the application again. The subscription then
-replays the whole history, including the events it already handled after it went live in 0.34, so rebuild the read
+Under the default `resumeBehavior`, a subscription that went live this way before 0.35 stored a checkpoint as it handled
+events, and resumes from that checkpoint in 0.35, so it still never gets the history. To get it, stop every instance of
+the application, delete the checkpoint stored for the subscription, and start the application again. The subscription
+then replays the whole history, including the events it already handled after it went live, so rebuild the read
 model it feeds first, or make sure its handler can take an event it already handled.
 
 For a start above position 0 in your own code, start from `StartAtTime.beginningOfTime()` or from a time instead.
