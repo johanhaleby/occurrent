@@ -69,11 +69,12 @@ the executor:
 1. inserts a copy with `SagaHeldEvents.hold`. The key is the event's redelivery key, or its CloudEvent id and source
    when it has none, as for an event the saga cannot route. A duplicate key is a redelivery of an event already held.
 2. reads the instance from the primary.
-   - Absent or not started: the event is acknowledged and the start's delivery applies it.
-   - Started and active: `markHeldEvents(sagaId, null)` marks the instance as having events to drain, and the delivery
-     drains them.
-   - Completed: the copy is released with a WARN, which is what 0.34.0 does with an event that arrives after completion.
-   - Quarantined: the copy stays and the event is acknowledged.
+   - When the instance is absent or not started, the event is acknowledged and the start's delivery applies it.
+   - When it is started and active, `markHeldEvents(sagaId, null)` marks the instance as having events to drain, and
+     the delivery drains them.
+   - When it is completed, the copy is released with a WARN, which is what 0.34.0 does with an event that arrives after
+     completion.
+   - When it is quarantined, the copy stays and the event is acknowledged.
 
 A hold creates no instance, and nothing that lists instances sees a held event.
 
