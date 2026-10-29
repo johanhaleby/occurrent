@@ -950,11 +950,20 @@ Every subscription made through `CatchupSubscriptionModel`, `StreamCatchupSubscr
 - the reactive starter when `occurrent.event-store.capabilities` contains `DCB` and the context has a DCB store, or
   when it contains `STREAM` and the stream store writes positions, which is the default
 
-`restart-on-change-stream-history-lost` keeps its meaning only where the starter composes no catch-up subscription.
+`restart-on-change-stream-history-lost` keeps its meaning only where the starter composes no catch-up subscription,
+and in one case on the blocking stack. A subscription that opened at the present when MongoDB answered with no
+operation time, and loses the history before it reads anything, still restarts from now when the property is `true`.
+[#1358](https://github.com/johanhaleby/occurrent/issues/1358) tracks it.
 
 A catch-up subscription you build yourself is affected too, also when the MongoDB subscription model under it doesn't
 restart, which is how that model is built by default. There the subscription used to end with an error in the log,
 and the `Flux` of an unnamed reactor subscription failed with MongoDB's own error, code 286. It now stops as below.
+
+On the reactor stack an action can no longer subscribe or cancel a subscription through a catch-up subscription
+model while a replay runs on the thread that subscribed, which happens when the event store answers on that thread.
+The call throws `IllegalStateException` for every subscription id, not only the one replaying. Two replays whose
+actions each cancel the other's subscription would otherwise wait on each other for good. Subscribe or cancel from
+another thread.
 
 ### What happens
 
@@ -973,7 +982,10 @@ any position other than the beginning could skip that event.
 
 - One error in the log, naming the subscription and the resume token that is gone. For a subscription with an id, the
   MongoDB subscription model logs a warning next to it, that it paused the subscription and a listener took it over,
-  as it has since 0.34.0.
+  as it has since 0.34.0. When you paused, resumed or cancelled the subscription just before MongoDB reported the
+  loss, neither is logged, but `resumeSubscription(id)` still throws as below.
+- On the reactor stack `waitUntilStarted()` of a subscription with an id completes before the MongoDB subscription
+  model finds the token gone, so it doesn't tell you the subscription stopped. Check `isPaused(id)` instead.
 - The subscription is paused, `isPaused(id)` answers `true`, and it delivers nothing.
 - `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription. On the blocking
   stack `start(true)` throws it too. On the reactor stack `start(true)` resumes the subscription in the MongoDB
@@ -982,10 +994,13 @@ any position other than the beginning could skip that event.
   `CatchupCannotResumeException` from `subscribe`, and nothing is stored. Under competing consumers the start runs
   when a node acquires the lease, so it fails there. On the reactor stack such a subscription with an id is paused as
   above once the MongoDB subscription model opens it, and nothing is stored.
-- In Spring Boot that start is a `startAt = BEGINNING` subscription restarted after it went live, since the starter
-  then resumes it from its stored resume token. The blocking starter fails to register it, which can keep the
-  application from starting. A blocking subscription with the default `startAt`, and every reactive one, is paused as
-  above instead, and the application starts.
+- In Spring Boot the blocking starter starts from the stored resume token for these annotation starts under the
+  default `resumeBehavior`, once the subscription has stored a checkpoint. On `@Subscription` they are `startAt =
+  BEGINNING` and `startAtGlobalPosition`, on `@StreamSubscription` also `startAtISO8601` and
+  `startAtTimeEpochMillis`, and on `@DcbSubscription` `startAt = BEGINNING` and `startAtDcbPosition`. So does a `SubscriptionResumePoints` bean that answers a resume token. The
+  blocking starter fails to register such a subscription when the token is gone, which can keep the application from
+  starting. A blocking subscription with the default `startAt` or `NOW`, and every reactive one, is paused as above
+  instead, and the application starts.
 - The `Flux` of an unnamed reactor subscription fails with `CatchupCannotResumeException`.
 
 ### How to recover
@@ -1055,7 +1070,8 @@ after the subscription has read events.
 ### What to do
 
 Implement it so that the returned `Flux` fails with `HistoryLostException` whenever your model loses the history it
-reads from, as it opens or later, and so that your model never restarts the subscription by itself. Set `lostFrom` to
+reads from, as it opens or later, and so that your model never restarts the subscription from the current time.
+Retrying another error from the position the subscription has read to is fine. Set `lostFrom` to
 the position the subscription had read to, or to the position it opened at when it has read nothing. There is no
 default implementation, because a model that can't report a later loss would let a catch-up subscription skip events
 without saying so. The rewrite recipe doesn't add the method, since it has to be written for your model.
