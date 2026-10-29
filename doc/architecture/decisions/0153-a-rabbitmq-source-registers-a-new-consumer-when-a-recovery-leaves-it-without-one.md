@@ -89,10 +89,10 @@ source believes something that stopped being true.
    without being the same `String`. A consumer the broker cancels, for example because its queue was deleted, is
    retired too, since the client keeps its record and a recovery with topology recovery on would register it again.
 4. **A cancel forgets a consumer only when the client no longer has it.** A cancel that returns, or fails with a
-   `ShutdownSignalException` or with an `IOException` such as "Unknown consumerTag", means the channel has no such
-   consumer or no longer works. A `ChannelContinuationTimeoutException` means the reply didn't come, and any other
-   failure, such as one from an application's `TrafficListener` before the frame was written, says nothing about the
-   consumer. In those cases the consumer may still exist, so the next poll cancels it again and registers no new one
+   `ShutdownSignalException`, with an `IOException` that wraps one, or with the `IOException` "Unknown consumerTag",
+   means the channel has no such consumer or no longer works. Any other failure says nothing about the consumer. A
+   `ChannelContinuationTimeoutException` means the reply didn't come, and an `IOException` from an application's
+   `TrafficListener`, or NIO's "Frame enqueuing failed", can come before the frame was written. In those cases the consumer may still exist, so the next poll cancels it again and registers no new one
    until a cancel shows the consumer is gone. A cancel that a recovery overlapped is made again after the recovery.
 5. **A release that may have sent its nack stops the source, unless the connection dropped.** The release puts a tag
    back only for a `ShutdownSignalException` on a channel the connection is going to recover. `AMQChannel.transmit`
@@ -110,19 +110,34 @@ source believes something that stopped being true.
    delivery the client dispatches after the channel close starts no handler.
 
    A socket write that fails also throws an `IOException`. At the throw the source can't tell it from a collector that
-   threw, but one poll later it can. In amqp-client 5.37.0 a failed write on an `AutorecoveringConnection` starts a
-   thread that shuts the connection down before the `IOException` reaches the source. The channel closes within
-   milliseconds with a reason the connection recovers from, and the broker puts every unacknowledged delivery on that
-   connection back on the queue. A collector that threw leaves the channel open, and no recovery starts. So after an
-   `IOException` on a recovering connection the release doesn't put the tag back and doesn't stop the source yet. The
-   first poll at least a poll interval later keeps the source when the channel has closed with a reason the connection
-   recovers from, or a recovery has started or ended since. Otherwise it stops the source as above. The source never
-   sends a second nack, and the delivery waits at most one poll interval longer for an answer.
+   threw, but a poll interval later it can. In amqp-client 5.37.0 a failed write on an `AutorecoveringConnection`
+   starts a thread that shuts the connection down, then rethrows. The channel closes within milliseconds with a reason
+   the connection recovers from, and the broker puts every unacknowledged delivery on that connection back on the
+   queue. A collector that threw leaves the channel open, and so does NIO's "Frame enqueuing failed" on a connection a
+   memory alarm has blocked.
+
+   The source counts each close of its channel that the connection recovers from, with a shutdown listener on the
+   channel. The client adds that listener again to every channel a recovery opens, so the count moves once per drop
+   and never when a recovery ends. The source reads the count after a delivery arrives and before its ack or nack,
+   and before each release. After an `IOException` on a recovering connection the release doesn't put the tag back and
+   doesn't stop the source yet. The first poll at least a poll interval after the oldest such failure keeps the source
+   when the count has moved since the read before the newest failure's call, since that drop came after every one of
+   those deliveries and put them back on the queue. Otherwise it stops the source as above. A later failure doesn't
+   put that poll off, and the source never sends a second nack. A delivery waits up to about two poll intervals for
+   an answer, since the failure can come just after a poll.
+
+   A count of recovery starts and ends would misjudge two cases. A whole recovery can finish between the failure and a
+   read taken after it, and a failure on a channel a recovery has already reopened is followed by the end of that
+   recovery, which is no drop.
 
    An acknowledgement that fails with an `IOException` on a recovering connection is judged the same way, and so is
    the acknowledgement or nack of a park. In 0.34.0 the source kept running after one. When the frame never went out
    and the connection stayed up, the delivery sat unanswered on a live consumer, and at the default `prefetchCount` of
    one that consumer got nothing further.
+
+   The same listener stops the source on its next poll after a close that no recovery reopens. The broker closes the
+   channel after a delivery outlived `consumer_timeout`, say, and a connection without automatic recovery closes it
+   for good. Without the stop, a source with nothing held would consume nothing and log nothing.
 6. **A failure after a permanent stop doesn't stop the source again.** It is logged at `debug` when the handler was
    interrupted or `close()` has stopped waiting for it, and at `warn` otherwise, since nothing else reports an
    `Error`, a checked exception thrown from Kotlin or a failed acknowledgement then. An interrupt is passed on to the
@@ -171,7 +186,8 @@ next poll, which then registers a new one if the source should still consume, si
 the recovery kept the first one.
 
 The source relies on the client calling the connection's `handleRecovery`. The client calls its recovery listeners
-one after another and stops at the first that throws, and a failed topology recovery skips them too. The source then
+one after another, and one that throws from `handleTopologyRecoveryStarted` or `handleRecovery` keeps the client from
+calling `handleRecovery` on the listeners after it. The source then
 neither registers nor cancels a consumer until the next recovery ends. It can't tell such a recovery from one that is
 still waiting for the broker, and ending the wait on a timer could register a consumer next to one the recovery
 registers again. So it logs at `warn` once the channel has been open for a minute during a recovery that hasn't ended.

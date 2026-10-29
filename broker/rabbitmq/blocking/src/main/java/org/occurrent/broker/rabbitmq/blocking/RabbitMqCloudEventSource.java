@@ -182,6 +182,9 @@ import static java.util.Objects.requireNonNull;
  * source stops for good, as it does for an {@link Error} a handler throws, an {@link AssertionError} aside, which goes
  * through {@link DeliveryFailurePolicy} like any other handler failure.
  * <p>
+ * This source also stops for good when the broker closes its channel, after a delivery outlived the broker's
+ * {@code consumer_timeout} say, since nothing reopens that channel.
+ * <p>
  * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
  * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
  * nothing, so RabbitMQ requeues the message as well. You end up with a parked copy and a copy still on the original
@@ -229,11 +232,19 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     // pace it, so it still applies immediately, through failureAction, from the point of failure.
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
+    // Raised by onChannelShutdown for every close of the channel that a connection recovery reopens. The client adds the
+    // listener again to every channel a recovery opens, so this counts each drop, and the end of a recovery counts
+    // nothing.
+    private final AtomicLong connectionDrops = new AtomicLong();
+    // A close of the channel that no recovery reopens. The next poll stops this source.
+    private volatile @Nullable ShutdownSignalException closedForGood;
     // An IOException from a nack or an ack on a recovering connection, which a failed socket write throws and so does a
-    // TrafficListener or MetricsCollector written in Kotlin. Judged by stopUnlessConnectionDropped. Under consumeLock.
+    // TrafficListener or MetricsCollector written in Kotlin. Judged by stopUnlessConnectionDropped. The time is the
+    // oldest unresolved failure's, and the drop count is the one read before the newest unresolved failure's call. A
+    // drop after that read requeued every delivery the failures were for. Under consumeLock.
     private boolean unexplainedFailure;
     private long unexplainedFailureNanos;
-    private long recoveriesAtUnexplainedFailure;
+    private long dropsBeforeUnexplainedFailure;
     // When close() has to give up on a delivery, which is at this moment. Published before close() starts waiting and
     // read under consumeLock, so a handler that returns around the deadline either acknowledges before it or is
     // fenced by it, rather than racing a flag close() would set afterwards. A park or acknowledgement that already
@@ -260,6 +271,16 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         this.worker = new RabbitMqDeliveryWorker("rabbitmq-cloudevent-source-worker-" + queue, queue, log);
         this.consumerRecovery = new RabbitMqConsumerRecovery(consumerTag, queue, log);
         this.closeTimeout = closeTimeout;
+        consumeChannel.addShutdownListener(this::onChannelShutdown);
+    }
+
+    // Runs on a thread of the client, so it only records the close for the poll to act on.
+    private void onChannelShutdown(ShutdownSignalException cause) {
+        if (failureAction.isLostToConnectionRecovery(cause)) {
+            connectionDrops.incrementAndGet();
+        } else {
+            closedForGood = cause;
+        }
     }
 
     /**
@@ -307,7 +328,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             boolean shouldConsume = !permanentlyStopped && subscriptionId != null && model.isRunning(subscriptionId) && readinessSource.test(subscriptionId);
             consumeLock.lock();
             try {
-                if (permanentlyStopped || stopUnlessConnectionDropped()) {
+                if (permanentlyStopped || stopIfClosedForGood() || stopUnlessConnectionDropped()) {
                     return;
                 }
                 String tag = consumerTag.get();
@@ -346,6 +367,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     // broker close the channel, and can't be left either, since at the default prefetchCount of one the broker sends
     // nothing further. Closing the channel requeues it.
     private void releaseHeldDeliveriesOrStop() {
+        long dropsBeforeRelease = connectionDrops.get();
         try {
             releaseHeldDeferredDelivery();
             releaseHeldFailedDelivery();
@@ -356,9 +378,9 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             }
             if (lostToConnectionRecovery) {
                 log.warn("Releasing a held delivery on queue \"{}\" failed with an IOException, which a dropped connection "
-                        + "throws. Unless the channel has closed by the next poll, this source stops then and closes it, "
-                        + "which puts that delivery back on the queue.", queue, e);
-                awaitConnectionDrop();
+                        + "throws. Unless the connection drops within a poll interval, this source then stops and closes the "
+                        + "channel, which puts that delivery back on the queue.", queue, e);
+                awaitConnectionDrop(dropsBeforeRelease);
                 return;
             }
             if (nackNotSent(e)) {
@@ -374,30 +396,49 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         }
     }
 
-    // Under consumeLock
-    private void awaitConnectionDrop() {
-        unexplainedFailure = true;
-        unexplainedFailureNanos = System.nanoTime();
-        recoveriesAtUnexplainedFailure = consumerRecovery.recoveries();
+    // Under consumeLock. dropsBeforeCall is read after the delivery arrived and before the call that failed, so a drop
+    // counted since then came after the delivery, and the broker requeued it. A later failure keeps the time of the
+    // first, so a stream of failures can't put the judgement off.
+    private void awaitConnectionDrop(long dropsBeforeCall) {
+        if (!unexplainedFailure) {
+            unexplainedFailure = true;
+            unexplainedFailureNanos = System.nanoTime();
+            dropsBeforeUnexplainedFailure = dropsBeforeCall;
+        }
+        dropsBeforeUnexplainedFailure = Math.max(dropsBeforeUnexplainedFailure, dropsBeforeCall);
     }
 
     // Under consumeLock. A failed socket write on a recovering connection shuts the connection down within
-    // milliseconds, and the broker requeues every unacknowledged delivery on it. A channel still open a full poll
-    // interval later, with no recovery since, means the IOException came from somewhere else, and the delivery may sit
-    // unanswered. Stopping closes the channel, which requeues it. Returns whether this source stopped.
+    // milliseconds, and the broker requeues every unacknowledged delivery on it. No drop a full poll interval after the
+    // oldest failure, counted since the newest failure's call, means an IOException came from somewhere else, and a
+    // delivery may sit unanswered. Stopping closes the channel, which requeues it. Returns whether this source stopped.
     private boolean stopUnlessConnectionDropped() {
         if (!unexplainedFailure || System.nanoTime() - unexplainedFailureNanos < pollInterval.toNanos()) {
             return false;
         }
         unexplainedFailure = false;
-        boolean dropped = consumerRecovery.recoveries() != recoveriesAtUnexplainedFailure
-                || (!consumeChannel.isOpen() && failureAction.isLostToConnectionRecovery(consumeChannel.getCloseReason()));
-        if (dropped) {
+        if (connectionDrops.get() != dropsBeforeUnexplainedFailure) {
             return false;
         }
         log.error("A negative acknowledgement or an acknowledgement on queue \"{}\" failed with an IOException, and the "
                 + "connection under its channel did not drop, so the frame may or may not have been sent. Stopping this "
                 + "source and closing its channel, which puts that delivery back on the queue.", queue);
+        stopPermanently();
+        return true;
+    }
+
+    // Under consumeLock. The broker closes a channel after a channel error, such as 406 PRECONDITION_FAILED when a
+    // delivery outlives consumer_timeout, and a connection without automatic recovery closes its channels for good.
+    // With nothing held, no release or acknowledgement would notice, and this source would stay silent and consume
+    // nothing. Returns whether this source stopped.
+    private boolean stopIfClosedForGood() {
+        ShutdownSignalException cause = closedForGood;
+        if (cause == null) {
+            return false;
+        }
+        log.error("The channel of queue \"{}\" was closed, and the connection is not going to reopen it. Stopping this "
+                + "source. Closing the channel put every delivery this source had not acknowledged back on the queue.",
+                queue, cause);
         stopPermanently();
         return true;
     }
@@ -497,6 +538,8 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     // was interrupted or close() has stopped waiting for it, and at warn otherwise, since nothing else reports it then.
     // An interrupt is passed on to the thread. Not rethrown, since rethrowing would only end the worker thread.
     private void handleDeliveryOrStop(Delivery delivery, long deliveryTag) {
+        // Before the acknowledgement, and after the delivery arrived, see awaitConnectionDrop
+        long dropsBeforeAcknowledging = connectionDrops.get();
         try {
             handleDelivery(delivery);
         } catch (Throwable e) {
@@ -524,12 +567,12 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             }
             if (failureAction.isLostToConnectionRecovery(e)) {
                 log.warn("Acknowledging or rejecting delivery tag {} on queue \"{}\" failed with an IOException, which a "
-                        + "dropped connection throws. Unless the channel has closed by a poll a full poll interval from "
-                        + "now, this source stops then and closes it, which puts that delivery back on the queue.",
+                        + "dropped connection throws. Unless the connection drops within a poll interval, this source then "
+                        + "stops and closes the channel, which puts that delivery back on the queue.",
                         deliveryTag, queue, e);
                 consumeLock.lock();
                 try {
-                    awaitConnectionDrop();
+                    awaitConnectionDrop(dropsBeforeAcknowledging);
                 } finally {
                     consumeLock.unlock();
                 }

@@ -59,9 +59,10 @@ import static java.util.Objects.requireNonNull;
  * and {@link #cancelRetired(Channel)} do nothing from the start of a recovery to its end, and a consumer the source no
  * longer wants stays retired until a cancel that no recovery overlapped has removed it.
  * <p>
- * The client calls {@code handleRecovery} on its listeners one after another and stops at the first that throws, and a
- * failed topology recovery skips it too. The source then waits for a recovery that never ends, until the next recovery
- * ends. {@link #cancelRetired(Channel)} logs that at {@code warn} once the channel has been open for a minute.
+ * The client calls {@code handleRecovery} on its listeners one after another and stops at the first that throws. A
+ * listener that throws from {@code handleTopologyRecoveryStarted} or {@code handleRecovery} stops the client before it
+ * reports the end of the recovery to this source. The source then waits for a recovery that never ends, until the next
+ * recovery ends. {@link #cancelRetired(Channel)} logs that at {@code warn} once the channel has been open for a minute.
  */
 public final class RabbitMqConsumerRecovery {
 
@@ -200,9 +201,10 @@ public final class RabbitMqConsumerRecovery {
      * Cancels every retired consumer on {@code channel}. Does nothing while a recovery runs.
      * <p>
      * A consumer is forgotten once a cancel that no recovery overlapped returns, or fails with a
-     * {@link ShutdownSignalException} or with an {@link IOException} other than a
-     * {@link ChannelContinuationTimeoutException}. In each of those the client no longer has the consumer, or the
-     * channel it was on is closing. After any other failure the consumer may still be registered, and the next call
+     * {@link ShutdownSignalException}, with an {@link IOException} caused by one, or with the {@code IOException} the
+     * client throws for a tag it has no consumer for. In each of those the client no longer has the consumer, or the
+     * channel it was on is closing. Any other failure, an {@code IOException} from a {@code TrafficListener} written in
+     * Kotlin or a {@link ChannelContinuationTimeoutException} say, may leave the consumer registered, and the next call
      * cancels it again.
      *
      * @return {@code true} when no retired consumer is left.
@@ -232,8 +234,7 @@ public final class RabbitMqConsumerRecovery {
             } catch (Throwable e) {
                 failure = e;
             }
-            boolean gone = failure == null || failure instanceof ShutdownSignalException
-                    || (failure instanceof IOException && !(failure instanceof ChannelContinuationTimeoutException));
+            boolean gone = failure == null || isGone(failure);
             boolean forgotten;
             synchronized (lock) {
                 forgotten = gone && recoveryCount == before;
@@ -256,21 +257,26 @@ public final class RabbitMqConsumerRecovery {
         }
     }
 
+    // ChannelN.basicCancel throws a plain IOException with this message, and writes nothing, for a tag it has no
+    // consumer for
+    private static final String UNKNOWN_CONSUMER_TAG = "Unknown consumerTag";
+
+    // A shutdown means the channel is closing, and the consumer with it. ChannelN.basicCancel wraps one that ends the
+    // wait for the reply in an IOException. Any other IOException, from a TrafficListener written in Kotlin or NIO's
+    // "Frame enqueuing failed", say, may come before the cancel is written.
+    private static boolean isGone(Throwable failure) {
+        if (failure instanceof ShutdownSignalException) {
+            return true;
+        }
+        return failure instanceof IOException
+                && (UNKNOWN_CONSUMER_TAG.equals(failure.getMessage()) || failure.getCause() instanceof ShutdownSignalException);
+    }
+
     // Under lock. By value, since a tag the client decodes from a frame can equal the held one without being the same
     // String
     private boolean replaceHeldTag(String expected, @Nullable String replacement) {
         String held = consumerTag.get();
         return expected.equals(held) && consumerTag.compareAndSet(held, replacement);
-    }
-
-    /**
-     * How many times a recovery has started or ended since {@link #attachTo(Connection, Channel)}. Two calls that
-     * return different values mean a recovery started or ended between them.
-     */
-    public long recoveries() {
-        synchronized (lock) {
-            return recoveryCount;
-        }
     }
 
     // Under lock
@@ -288,7 +294,7 @@ public final class RabbitMqConsumerRecovery {
         if (warn) {
             log.warn("A connection recovery under queue \"{}\" started, and the channel has been open again for a minute "
                     + "without the client reporting that the recovery ended. A RecoveryListener that throws from "
-                    + "handleRecovery, or a failed topology recovery, keeps the client from reporting it. Until the next "
+                    + "handleTopologyRecoveryStarted or handleRecovery keeps the client from reporting it. Until the next "
                     + "recovery ends, this source neither registers a consumer nor cancels one.", queue);
         }
     }

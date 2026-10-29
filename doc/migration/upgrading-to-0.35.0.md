@@ -364,12 +364,15 @@ delivery back on the queue.
   0.34.0 the next poll sent it again.
 - **A negative acknowledgement or an acknowledgement fails with an `IOException` on a connection with automatic
   recovery, and a poll interval later the connection still hasn't dropped.** A `TrafficListener` or `MetricsCollector`
-  written in Kotlin can throw one while the connection is fine. In 0.34.0 the source kept running. It sent the negative
+  written in Kotlin can throw one while the connection is fine. So can NIO, which throws `Frame enqueuing failed` on a
+  connection a memory alarm has blocked, for example one a source shares with a sink that publishes during the alarm.
+  In 0.34.0 the source kept running. It sent the negative
   acknowledgement again on the next poll, and left a delivery whose acknowledgement never went out unanswered, so at
   the default `prefetchCount` of one the broker sent the source nothing further.
-- **Releasing a held delivery fails because its channel is closed for good.** The broker closed the channel on its
-  own, for example with `406 PRECONDITION_FAILED`, or the connection has no automatic recovery. In 0.34.0 the source
-  tried again and logged a warning on every poll.
+- **Its channel is closed for good.** The broker closed the channel on its own, for example with
+  `406 PRECONDITION_FAILED` after a delivery outlived `consumer_timeout`, or a connection without automatic recovery
+  closed. In 0.34.0 a source holding a delivery tried to release it again and logged a warning on every poll, and one
+  holding none consumed nothing and logged nothing.
 
 An `IOException` because the connection dropped doesn't stop the source. It keeps running and consumes again after the
 recovery.

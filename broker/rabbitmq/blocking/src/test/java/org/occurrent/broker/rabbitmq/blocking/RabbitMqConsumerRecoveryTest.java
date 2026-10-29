@@ -24,6 +24,7 @@ import com.rabbitmq.client.ChannelContinuationTimeoutException;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.RecoveryListener;
+import com.rabbitmq.client.ShutdownSignalException;
 import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
 import com.rabbitmq.client.impl.recovery.ConsumerRecoveryListener;
 import org.junit.jupiter.api.AfterEach;
@@ -371,6 +372,41 @@ class RabbitMqConsumerRecoveryTest {
                 () -> verify(channel).basicCancel("tag-1"));
     }
 
+    /**
+     * {@code AutorecoveringChannel.basicCancel} deletes its record of the consumer before the call, so after a cancel
+     * that failed before the frame was written the consumer is still registered at the broker, and only a cancel the
+     * source makes again removes it.
+     */
+    @Test
+    void a_cancel_that_fails_with_an_io_exception_from_a_traffic_listener_keeps_the_consumer_and_throws() throws Exception {
+        recovery.retire("tag-1");
+        IOException failure = new IOException("thrown by a TrafficListener written in Kotlin");
+        doThrow(failure).doNothing().when(channel).basicCancel("tag-1");
+
+        Throwable thrown = catchThrowable(() -> recovery.cancelRetired(channel));
+        boolean noneLeft = recovery.cancelRetired(channel);
+
+        assertAll(
+                () -> assertThat(thrown).isSameAs(failure),
+                () -> assertThat(noneLeft).isTrue(),
+                () -> verify(channel, times(2)).basicCancel("tag-1"));
+    }
+
+    @Test
+    void a_cancel_whose_reply_was_ended_by_a_shutdown_forgets_the_consumer() throws Exception {
+        recovery.retire("tag-1");
+        IOException failure = new IOException(null, new ShutdownSignalException(false, false, null, channel));
+        doThrow(failure).when(channel).basicCancel("tag-1");
+
+        Throwable thrown = catchThrowable(() -> recovery.cancelRetired(channel));
+        Throwable thrownAgain = catchThrowable(() -> recovery.cancelRetired(channel));
+
+        assertAll(
+                () -> assertThat(thrown).isNull(),
+                () -> assertThat(thrownAgain).isNull(),
+                () -> verify(channel).basicCancel("tag-1"));
+    }
+
     @Test
     void a_cancel_whose_reply_timed_out_keeps_the_consumer_and_throws() throws Exception {
         recovery.retire("tag-1");
@@ -509,21 +545,6 @@ class RabbitMqConsumerRecoveryTest {
         }
 
         assertThat(warnings()).isEmpty();
-    }
-
-    @Test
-    void recoveries_changes_when_a_recovery_starts_and_when_it_ends() {
-        recovery.attachTo(connection, channel);
-        RecoveryListener recoveryListener = capturedRecoveryListener();
-        long before = recovery.recoveries();
-
-        recoveryListener.handleRecoveryStarted(connection);
-        long during = recovery.recoveries();
-        recoveryListener.handleRecovery(connection);
-
-        assertAll(
-                () -> assertThat(during).isNotEqualTo(before),
-                () -> assertThat(recovery.recoveries()).isNotEqualTo(during).isNotEqualTo(before));
     }
 
     @Test
