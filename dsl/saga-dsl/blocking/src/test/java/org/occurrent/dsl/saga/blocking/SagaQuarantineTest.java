@@ -49,6 +49,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -1282,9 +1283,9 @@ class SagaQuarantineTest {
      * are the two things {@link org.occurrent.dsl.saga.SagaStateStore} asks a store to override together, and the
      * MongoDB store does them with a projection and a {@code findAndModify}.
      */
-    private static final class RefusesToDecodeOneInstance implements SagaStateStore<OrderState>, SagaStateStoreQueries<OrderState> {
+    private static final class RefusesToDecodeOneInstance implements SagaStateStore<OrderState>, SagaStateStoreQueries<OrderState>, SagaHeldEvents<OrderState> {
 
-        private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
+        private final InMemorySagaStateStore<OrderState> delegate = new InMemorySagaStateStore<>();
         private final Set<String> undecodable = ConcurrentHashMap.newKeySet();
 
         private volatile Supplier<? extends Throwable> loadFailure = () -> new IllegalStateException("the state can no longer be decoded");
@@ -1338,6 +1339,41 @@ class SagaQuarantineTest {
         @Override
         public void delete(String sagaId) {
             delegate.delete(sagaId);
+        }
+
+        @Override
+        public boolean hold(String sagaId, HeldEvent event) {
+            return delegate.hold(sagaId, event);
+        }
+
+        @Override
+        public boolean markOutstanding(String sagaId, String key) {
+            return delegate.markOutstanding(sagaId, key);
+        }
+
+        @Override
+        public Optional<SagaEnvelope<OrderState>> markHeldEvents(String sagaId, @Nullable String selfHeldKey) {
+            return delegate.markHeldEvents(sagaId, selfHeldKey);
+        }
+
+        @Override
+        public void unmarkSelfHeld(String sagaId, String selfHeldKey) {
+            delegate.unmarkSelfHeld(sagaId, selfHeldKey);
+        }
+
+        @Override
+        public List<HeldEventRef> heldIndex(String sagaId) {
+            return delegate.heldIndex(sagaId);
+        }
+
+        @Override
+        public List<HeldEvent> held(String sagaId, Collection<String> keys) {
+            return delegate.held(sagaId, keys);
+        }
+
+        @Override
+        public void release(String sagaId, String key) {
+            delegate.release(sagaId, key);
         }
 
         private static SagaEnvelope<OrderState> withState(SagaEnvelope<OrderState> envelope, @Nullable OrderState state) {
