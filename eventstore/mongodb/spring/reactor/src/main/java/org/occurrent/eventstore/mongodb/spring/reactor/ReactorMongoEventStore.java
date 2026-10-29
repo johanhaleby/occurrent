@@ -329,7 +329,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                 return list;
                             })
                             : cloudEvents.collectList();
-                    return events.map(list -> new DcbEventStream(list, highWatermark, DcbConsistencyToken.of(token)));
+                    return events.map(list -> new DcbEventStream(list, highWatermark, DcbConsistencyToken.of(criteria, token)));
                 });
     }
 
@@ -405,7 +405,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                             if (backward) {
                                                 Collections.reverse(list);
                                             }
-                                            return new DcbEventStream(list, highWatermark, DcbConsistencyToken.of(token), markerVersions);
+                                            return new DcbEventStream(list, highWatermark, DcbConsistencyToken.of(criteria, token), markerVersions);
                                         });
                             });
                 });
@@ -580,7 +580,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // query's markers have advanced since, a matching append committed after the read, so the condition
             // fails. Immune to read-watermark overshoot because marker versions bump inside the append
             // transaction (ADR 0021).
-            conflictMono = consistencyToken(condition.criteria(), mongoTemplate).map(actual -> actual != expectedToken.get().value());
+            conflictMono = consistencyToken(condition.criteria(), mongoTemplate).map(actual -> actual != expectedToken.get().version());
         } else {
             // No token: an absolute "fail if any matching event exists" guard. The marker increments below still
             // serialize concurrent unconditional guards on the same boundary so two of them cannot both pass.
