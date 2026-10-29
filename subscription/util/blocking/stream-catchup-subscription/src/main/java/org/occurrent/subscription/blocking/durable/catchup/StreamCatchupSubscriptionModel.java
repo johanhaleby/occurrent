@@ -208,7 +208,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         } else {
             firstStartAt = requestedStartAt;
         }
-        refuseGlobalPositionWithoutPositions(firstStartAt);
+        refuseGlobalPositionWithoutPositions(subscriptionId, firstStartAt);
 
         CatchupReplay replay = replayFrom(subscriptionId, filter, startAt, action, firstStartAt);
         if (replay == null) {
@@ -220,11 +220,12 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     // A store that writes no position has no global position above 0 to replay after, and the wrapped model refuses to
     // open a change stream at one, with a message that sends the caller back here. Position 0 replays from the
     // beginning of time instead, see replayFrom.
-    private void refuseGlobalPositionWithoutPositions(StartAt firstStartAt) {
+    private void refuseGlobalPositionWithoutPositions(String subscriptionId, StartAt firstStartAt) {
         if (!streamStoreWritesPosition() && classifyStreamStart(firstStartAt, subscriptionModelContextType) == StreamStart.GLOBAL_POSITION
                 && !startsAtPositionZero(firstStartAt, subscriptionModelContextType)) {
-            throw new UnsupportedStartAtException(firstStartAt, "Cannot start a catch-up subscription after a global position, since the event store doesn't write one. "
-                    + "Start it from the beginning of time with StartAtTime.beginningOfTime(), or from a time.");
+            throw new UnsupportedStartAtException(firstStartAt, "Cannot start catch-up subscription " + subscriptionId + " after a global position, since the event store doesn't write one. "
+                    + "Start it from the beginning of time with StartAtTime.beginningOfTime(), or from a time. "
+                    + "If the position is the checkpoint stored for the subscription, delete that checkpoint first.");
         }
     }
 

@@ -50,6 +50,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
@@ -293,6 +294,82 @@ class StreamCatchupSubscriptionModelTest {
             assertThat(received).as("delivered").isEmpty();
             assertThat(saved).as("stored").isEmpty();
             assertThat(storage.read("subscription")).as("the stored checkpoint").isNull();
+            assertThat(model.liveStarts).as("handed over").isEmpty();
+            assertThat(model.isRunning("subscription")).as("subscribed in the wrapped model").isFalse();
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
+    // The two dynamic starts Spring Boot builds for StartPosition.BEGINNING, one per ResumeBehavior
+    static Stream<Arguments> dynamicStartsAtPositionZeroOnStoresThatWriteNoPosition() {
+        Function<CheckpointStorage, StartAt> resumeFromTheStoredPosition = storage ->
+                StartAt.dynamic(ctx -> storage.exists("subscription") ? StartAt.subscriptionModelDefault() : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        Function<CheckpointStorage, StartAt> replayAgainAtEveryStart = storage ->
+                StartAt.dynamic(ctx -> DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType()) ? null : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        return storesThatWriteNoPosition().flatMap(store -> Stream.of(
+                Arguments.of(store, Named.of("DEFAULT, resumes from the stored position", resumeFromTheStoredPosition)),
+                Arguments.of(store, Named.of("SAME_AS_START_AT, replays again", replayAgainAtEveryStart))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("dynamicStartsAtPositionZeroOnStoresThatWriteNoPosition")
+    void a_dynamic_start_that_resolves_to_global_position_0_replays_the_whole_history_by_time_and_then_goes_live_when_the_store_does_not_write_position(
+            Function<InMemoryEventStore, EventStoreQueries> storeAsTheModelSeesIt, Function<CheckpointStorage, StartAt> dynamicStartAt) {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        assertThat(eventStore.writesPosition()).isFalse();
+        List<DomainEvent> history = List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)));
+        StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("live start read now");
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, liveStartReadNow);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        assertThat(storage.exists("subscription")).as("nothing stored yet").isFalse();
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, storeAsTheModelSeesIt.apply(eventStore),
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        try {
+            // When
+            subscription.subscribe("subscription", dynamicStartAt.apply(storage), toDomainEvents(received)).waitUntilStarted();
+
+            // Then the whole history arrives in order
+            await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history));
+            // and the subscription is live once the wrapped model has been handed over to
+            await().untilAsserted(() -> assertThat(model.liveStarts).hasSize(1));
+            DomainEvent live = writeAt(eventStore, "live", at(100));
+            await().untilAsserted(() -> assertThat(received).containsExactly(history.get(0), history.get(1), history.get(2), live));
+            assertThat(model.liveStarts).as("the wrapped model goes live from the live start read before the replay, and is never opened at the position")
+                    .containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("storesThatWriteNoPosition")
+    void a_default_start_is_refused_by_subscribe_and_starts_nothing_when_the_stored_position_is_above_0_and_the_store_does_not_write_position(Function<InMemoryEventStore, EventStoreQueries> storeAsTheModelSeesIt) {
+        // Given a position above 0 with a live start beside it, stored under the subscription id
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        writeAt(eventStore, "event1", at(1));
+        writeAt(eventStore, "event2", at(2));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
+        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage storage = savesRecordedIn(saved);
+        Checkpoint stored = GlobalCheckpoint.of(2, new StringBasedCheckpoint("some live start"), 0, 4);
+        storage.save("subscription", stored);
+        saved.clear();
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, storeAsTheModelSeesIt.apply(eventStore),
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        try {
+            // When
+            Throwable failure = catchThrowable(() -> subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)));
+
+            // Then the call itself is refused, before a Subscription exists to wait on
+            assertThat(failure).isInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessageContaining("after a global position, since the event store doesn't write one");
+            assertThat(received).as("delivered").isEmpty();
+            assertThat(saved).as("stored").isEmpty();
+            assertThat(storage.read("subscription")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
             assertThat(model.liveStarts).as("handed over").isEmpty();
             assertThat(model.isRunning("subscription")).as("subscribed in the wrapped model").isFalse();
         } finally {
