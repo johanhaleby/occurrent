@@ -89,8 +89,9 @@ public interface RestartableSubscriptionModelFixture extends SubscriptionModelFi
      * Answering {@code true} owes {@link RestartConformance} that late event. Answering {@code false} owes a refusal,
      * since a bare position carries nothing that proves no event committed below it, and a model that cannot prove
      * that must not start. The refusal is an {@code UnsupportedStartAtException} unless the model declares
-     * {@link #refusesABareGlobalPosition()}. The test refuses instead when the model does not accept
-     * {@link StartAtVariant#CHECKPOINT} at all, see {@link #acceptedStartAtVariants()}.
+     * {@link #refusesABareGlobalPosition()} and accepts {@link StartAtVariant#CHECKPOINT}, see
+     * {@link #acceptedStartAtVariants()}. A model that answers {@code true} must accept {@code CHECKPOINT}, since the
+     * test then starts it at the position without checking the variants first.
      * <p>
      * Required, with no usable default, for the same reason as {@link #lateCommits()}. A fixture that does not override
      * it fails {@link RestartConformance} before its first assertion.

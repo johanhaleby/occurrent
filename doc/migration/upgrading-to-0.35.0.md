@@ -693,9 +693,9 @@ To rewind a read model to a point you know is good, keep the checkpoint of the e
 subscription from it.
 
 The string means something only to a catch-up subscription. A MongoDB subscription model with no catch-up wrapping it
-refuses the checkpoint of a replayed event, as
+refuses the checkpoint of a replayed event in a `StartAt` that names it, as
 [A MongoDB subscription model refuses a catch-up's checkpoint](#a-mongodb-subscription-model-refuses-a-catch-ups-checkpoint)
-describes.
+describes. From a `StartAt.dynamic(..)` it still opens the change stream at the present.
 
 The checkpoint of a live event holds a change stream resume token, so a restart from it needs the change stream
 history to still reach back to it. On MongoDB that is the oplog. Once it no longer does, the catch-up does not take the
@@ -833,12 +833,18 @@ subscription and what to do.
 To resume after an event, keep the checkpoint the subscription delivers with it, and start from that, as
 [A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from)
 describes. In Spring Boot, return it from a `SubscriptionResumePoints` bean. That checkpoint holds the live start, so a
-start from it is not refused.
+start from it is not refused while the change stream history still reaches back to that live start. Once it no longer
+does, a start from it is refused when the replay that delivered the event started at a specific time, or is a 0.34
+replay that started above position 0. A checkpoint from a replay that started at position 0 or at the beginning
+replays again from there instead.
 
 A subscription that is refused, and has no such checkpoint stored with its state, can only start from the beginning
-again: `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or `StartAt.checkpoint(GlobalCheckpoint.of(0))`. Delete
-its stored checkpoint first. From then on it delivers a checkpoint with every event. For a refused replay whose live
-start was lost, size the change stream history to reach back across the replay. On MongoDB that is the oplog.
+again: `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or `StartAt.checkpoint(GlobalCheckpoint.of(0))`. Cancel it
+first with `cancelSubscription(id)`, which deletes its stored checkpoint. A blocking catch-up holds a refused resume,
+and holds the stored checkpoint it read with it, so deleting the checkpoint and resuming is refused again. With the
+application stopped, deleting the stored checkpoint is enough. From then on it delivers a checkpoint with every event.
+For a refused replay whose live start was lost, size the change stream history to reach back across the replay. On
+MongoDB that is the oplog.
 
 `startAtGlobalPosition`, `startAtDcbPosition` and `DcbStartAt.afterPosition(long)` are deprecated for removal, since
 every value above 0 is refused. Use `StartPosition.BEGINNING` or `DcbStartAt.beginning()` instead of 0.
@@ -850,6 +856,10 @@ stream at the present when you subscribed at a `GlobalCheckpoint` or a `CatchupT
 catch-up stores, and skipped every event before it with no error. Their `subscribe(..)` now throws an
 `UnsupportedStartAtException`, and the reactor model's unnamed `subscribe(..)` fails its `Flux` with it. See
 [#1336](https://github.com/johanhaleby/occurrent/issues/1336).
+
+Only a `StartAt` that names the checkpoint is refused. A `StartAt.dynamic(..)` that answers one still opens the change
+stream at the present. A blocking `DurableSubscriptionModel` does that when it reads one from its storage for a dynamic
+start, which [#1346](https://github.com/johanhaleby/occurrent/issues/1346) tracks.
 
 ### Who is affected
 
