@@ -76,6 +76,14 @@ import static java.util.Objects.requireNonNull;
  * {@link SagaSubscription#close()} so another instance takes over within roughly one lease period. Without a strategy
  * the poller runs on every instance (still correct through compare-and-set, just not coordinated).
  *
+ * <h2>Events that arrive before their instance starts</h2>
+ * A subscription can deliver a non-start event before the event that starts its instance, for example a broker
+ * consumer with several messages in flight, or a catch-up handing over to its live feed. The saga then holds the event
+ * in the state store and applies it once the instance starts. A run therefore needs a store that implements
+ * {@link SagaHeldEvents}, which {@code SagaStateStore.inMemory()} and {@code SpringMongoSagaStateStore} both do, and
+ * {@code run} refuses any other store with an {@link IllegalStateException}. An event whose start never arrives stays
+ * held until it is removed.
+ *
  * <h2>Failure handling differs between the two input paths</h2>
  * A failed input is handled differently on the event path and the timer path, and the difference matters when a
  * reaction or a dispatch throws.
@@ -103,8 +111,8 @@ import static java.util.Objects.requireNonNull;
  *       thread, and any other delivery running then would have met the same thing.
  *       <p>
  *       An event the saga correlated is charged to that instance, and a quarantine records whichever event the
- *       instance is failing on then. The budget is the instance's rather than one event's, so an instance where two
- *       events both fail keeps the instant it started failing and the record names whichever event it stopped on.
+ *       instance is failing on then. Each failing event keeps its own clock, so an instance where two events fail in
+ *       turn measures each from its own first failure, and the record names whichever event it stopped on.
  *       The quarantined instance stops there, and 0.34.0 has no operation that brings it back, so {@code SagaStateStore.delete(sagaId)} is how you abandon it.
  *       <p>
  *       An event the saga could <em>not</em> correlate, because the converter or the id extractor threw, is never let

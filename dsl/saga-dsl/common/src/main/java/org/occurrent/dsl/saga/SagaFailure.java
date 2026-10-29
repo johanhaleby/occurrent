@@ -29,12 +29,14 @@ import static java.util.Objects.requireNonNull;
  * lasted rather than count attempts. Several ways of failing write nothing, a failing timeout among them, so an
  * instance can be failing without one. {@link SagaStatus#QUARANTINED} lists which ways those are.
  * <p>
- * {@code input} names the input the instance is failing on <em>now</em>, while {@code firstFailedAt} is when the
- * instance started failing, which is not always the same moment. An instance where two inputs fail in turn has the
- * record renamed to whichever one failed last and keeps the earlier instant, because the budget belongs to the
- * instance rather than to one of its inputs. Letting each input restart the clock meant such an instance never reached
- * its budget. So read {@code firstFailedAt} as the start of this instance's current run of failing, and not as the
- * first time {@code input} failed.
+ * {@code input} names the input the instance is failing on <em>now</em>, and {@code firstFailedAt} is when that input
+ * first failed. Each failing input keeps its own clock, on its pending entry while it is listed pending, so an instance
+ * where versions 7, 8, 7 fail in turn still measures version 7 from its first failure and reaches its budget. A record
+ * renamed to another input takes that input's instant, so an input parked a week ago does not count against an
+ * unrelated input that fails today.
+ * <p>
+ * A record written before 0.35.0 can hold the instant the instance started failing, which may be earlier than when
+ * its {@code input} first failed. The executor keeps that instant for the input the record names.
  * <p>
  * The record outliving a single attempt is the point. An input that fails once and succeeds on redelivery clears it,
  * an input that keeps failing past the runner's quarantine budget can turn the instance {@link SagaStatus#QUARANTINED},
@@ -60,10 +62,10 @@ import static java.util.Objects.requireNonNull;
  *                       string the executor compares against to tell one failing input from the next
  * @param position       the global subscription position of the failing event, or {@code null} when the event carries
  *                       none
- * @param firstFailedAt  when this instance started failing, which is when the quarantine budget started running. Not
- *                       necessarily when {@code input} first failed, see above. Strictly it is when the first failure
- *                       was recorded, and the instance may have been failing for longer, because several ways of
- *                       failing record nothing, a lost compare-and-set on that write among them.
+ * @param firstFailedAt  when {@code input} first failed, which is when its quarantine budget started running.
+ *                       Strictly it is when its first failure was recorded, on this record or on its pending entry, and
+ *                       it may have been failing for longer, because a failure whose writes all lose their
+ *                       compare-and-set records nothing.
  *                       <a href="https://github.com/johanhaleby/occurrent/issues/977">#977</a> covers the case where
  *                       those writes keep losing
  * @param failureType    the class name of the exception the saga or its dispatcher threw
