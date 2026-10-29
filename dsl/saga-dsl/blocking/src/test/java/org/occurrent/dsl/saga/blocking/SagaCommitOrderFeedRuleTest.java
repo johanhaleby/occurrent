@@ -313,6 +313,22 @@ class SagaCommitOrderFeedRuleTest {
         }
 
         @Test
+        void one_warning_names_the_nearest_declaring_model_when_two_models_in_the_chain_declare_commit_order() {
+            // Given
+            CommitOrderStubSubscriptionModel inner = CommitOrderStubSubscriptionModel.inCommitOrderForNow();
+
+            // When
+            run(new TopWrapper(new DeclaringWrapper(inner)));
+
+            // Then
+            assertThat(commitOrderWarnings()).singleElement().satisfies(warning -> assertAll(
+                    () -> assertThat(warning).contains(TopWrapper.class.getName()),
+                    () -> assertThat(warning).contains(DeclaringWrapper.class.getName()),
+                    () -> assertThat(warning).doesNotContain(CommitOrderStubSubscriptionModel.class.getName())
+            ));
+        }
+
+        @Test
         void a_wrapper_over_a_model_that_declares_nothing_is_not_warned_about() {
             // Given
             StubSubscriptionModel inner = new StubSubscriptionModel();
