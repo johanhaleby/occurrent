@@ -110,21 +110,34 @@ source believes something that stopped being true.
    delivery the client dispatches after the channel close starts no handler.
 
    A socket write that fails also throws an `IOException`. At the throw the source can't tell it from a collector that
-   threw, but a poll interval later it can. In amqp-client 5.37.0 a failed write on an `AutorecoveringConnection`
-   starts a thread that shuts the connection down, then rethrows. The channel closes within milliseconds with a reason
-   the connection recovers from, and the broker puts every unacknowledged delivery on that connection back on the
-   queue. A collector that threw leaves the channel open, and so does NIO's "Frame enqueuing failed" on a connection a
-   memory alarm has blocked.
+   threw, but a poll interval later it can. In amqp-client 5.37.0 a failed flush of the socket on an
+   `AutorecoveringConnection` starts a thread that shuts the connection down, then rethrows. The channel closes within
+   milliseconds with a reason the connection recovers from, and the broker puts every unacknowledged delivery on that
+   connection back on the queue. A write that fails before the flush, while the frame is copied into the socket's
+   buffer, starts no such thread. A collector that threw leaves the channel open, and so does NIO's "Frame enqueuing
+   failed" on a connection a memory alarm has blocked.
 
    The source counts each close of its channel that the connection recovers from, with a shutdown listener on the
    channel. The client adds that listener again to every channel a recovery opens, so the count moves once per drop
-   and never when a recovery ends. The source reads the count after a delivery arrives and before its ack or nack,
-   and before each release. After an `IOException` on a recovering connection the release doesn't put the tag back and
-   doesn't stop the source yet. The first poll at least a poll interval after the oldest such failure keeps the source
-   when the count has moved since the read before the newest failure's call, since that drop came after every one of
-   those deliveries and put them back on the queue. Otherwise it stops the source as above. A later failure doesn't
-   put that poll off, and the source never sends a second nack. A delivery waits up to about two poll intervals for
-   an answer, since the failure can come just after a poll.
+   and never when a recovery ends. The source judges which closes those are with amqp-client's default recovery
+   triggering condition, which recovers from every close the application didn't start, and from a close after a
+   missed heartbeat. A `ConnectionFactory` given a condition of its own that differs from the default isn't followed,
+   since the client doesn't expose the one a connection was built with.
+
+   The source reads the count after a delivery arrives and before its ack or nack, and before each release. The
+   release of held deliveries reads it again after the deferred ones and before the failed ones, so a drop counted
+   while it released a deferred delivery can't explain a failure releasing a failed one. After an `IOException` on a
+   recovering connection the release doesn't put the tag back and doesn't stop the source yet. The first poll at
+   least a poll interval after the oldest such failure keeps the source when the count has moved since the highest
+   read before a failure's call, since that drop came after every one of those deliveries and put them back on the
+   queue. Otherwise it stops the source as above. A later failure with the same read doesn't put that poll off, and
+   the source never sends a second nack. A later failure with a higher read starts the interval again, since the drop
+   counted in between put every earlier delivery back on the queue. A delivery waits up to about two poll intervals
+   for an answer, since the failure can come just after a poll.
+
+   A connection that closes more than a poll interval after the failed write, because the thread that shuts it down
+   starts late, say, stops the source as well, and the source doesn't consume again. Nothing is lost, since the stop
+   closes the channel and that puts the delivery back on the queue.
 
    A count of recovery starts and ends would misjudge two cases. A whole recovery can finish between the failure and a
    read taken after it, and a failure on a channel a recovery has already reopened is followed by the end of that
@@ -135,9 +148,17 @@ source believes something that stopped being true.
    and the connection stayed up, the delivery sat unanswered on a live consumer, and at the default `prefetchCount` of
    one that consumer got nothing further.
 
-   The same listener stops the source on its next poll after a close that no recovery reopens. The broker closes the
-   channel after a delivery outlived `consumer_timeout`, say, and a connection without automatic recovery closes it
-   for good. Without the stop, a source with nothing held would consume nothing and log nothing.
+   The same listener stops the source on its next poll after a close of a `Recoverable` channel that no recovery
+   reopens. The broker closes the channel after a delivery outlived `consumer_timeout`, say. Without the stop, a source
+   with nothing held would consume nothing and log nothing. The stop is logged at `warn` when the application closed
+   the channel or its connection, and at `error` otherwise.
+
+   A channel that isn't `Recoverable` gives the source no way to tell a close that a recovery reopens from one that
+   ends the channel. A connection without automatic recovery hands out such channels, and so can a `Connection` that
+   wraps an `AutorecoveringConnection` and its channels, for tracing say. Over such a wrapper, stopping on the close
+   would stop the source on every connection drop. So the source logs at `warn` when it's built on a channel that
+   isn't `Recoverable`, and a close of that channel doesn't stop it. A release or an acknowledgement that then fails
+   still stops it as above.
 6. **A failure after a permanent stop doesn't stop the source again.** It is logged at `debug` when the handler was
    interrupted or `close()` has stopped waiting for it, and at `warn` otherwise, since nothing else reports an
    `Error`, a checked exception thrown from Kotlin or a failed acknowledgement then. An interrupt is passed on to the
