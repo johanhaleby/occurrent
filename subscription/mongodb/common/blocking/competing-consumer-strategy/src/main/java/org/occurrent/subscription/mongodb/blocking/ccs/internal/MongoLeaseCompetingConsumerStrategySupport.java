@@ -36,7 +36,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -53,9 +52,10 @@ import java.util.function.Predicate;
 /**
  * Common operations for MongoDB lease-based competing consumer strategies.
  * <p>
- * Each consumer keeps a record of what its listeners were last told, next to the status of its lease. The record
- * changes only once the listeners have been told, so a throwable anywhere in a refresh round or in telling the
- * listeners, an {@link OutOfMemoryError} included, can keep the record from catching up with the status. Every refresh
+ * Each consumer keeps a record of what its listeners were last told, next to the status of its lease. A tell marks the
+ * record as owing its change before it calls the first listener, and the record takes the change only once every
+ * listener has been called. So a throwable anywhere in a refresh round or in telling the listeners, an
+ * {@link OutOfMemoryError} included, can keep the record from catching up with the status. Every refresh
  * round compares the two for each consumer and has the listeners told the difference, so a grant or a prohibition that
  * a throwable cut short is told by a later round instead of being lost.
  */
@@ -299,11 +299,14 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         });
         ConsumerState c = unregistered[0];
         if (c != null) {
-            tellOwnStep(c, own);
-            inConsumerLock(competingConsumer, () -> {
-                forgetIfNothingIsOwed(c);
-                return OWN_NOTHING;
-            });
+            try {
+                tellOwnStep(c, own);
+            } finally {
+                inConsumerLock(competingConsumer, () -> {
+                    forgetIfNothingIsOwed(c);
+                    return OWN_NOTHING;
+                });
+            }
         }
     }
 
@@ -663,7 +666,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             c.tellAgain = true;
         }
         if (failures != null) {
-            // After the second read, so the repeat is left to the next round instead of handed over at once
+            // After the second read, so that read does not hand the repeat over. The next round tells the current
+            // answer again, unless that read found another change owed, and then the tell it hands over does so.
             if (dirty != null && containsAnError(failures)) {
                 c.told = dirty;
             }
@@ -675,9 +679,6 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private void tellInBackground(ConsumerState c) {
         while (c.tellAgain && TELLING.compareAndSet(c, false, true)) {
             try {
-                if (!running) {
-                    return;
-                }
                 c.tellAgain = false;
                 tellUntilNothingIsDue(c);
             } catch (Throwable t) {
@@ -705,7 +706,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             Status status = statusOf(c);
             Told told = c.told;
             Change change = whatToTell(told, status, seenLapses, seenLosses, isFresh(status));
-            if (change == Change.NOTHING) {
+            // Checked before each change, since a listener can shut the strategy down on the change before it
+            if (change == Change.NOTHING || !running) {
                 break;
             }
             lastDirty = markTelling(c, change, status, told);
