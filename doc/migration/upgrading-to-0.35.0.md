@@ -965,10 +965,9 @@ thread that runs the code or from another thread. A subscribe of an id throws `D
 the model the catch-up wraps has completed its cancel of that id. `ReactorMongoSubscriptionModel` completes it before
 `cancelSubscription` returns.
 
-Two pieces of your code can still run while the catch-up holds a lock, so don't subscribe or cancel through the
-catch-up from either. One is a `StartAt.dynamic(..)` function that answers `null` to the catch-up. The catch-up then
-goes straight to live and hands the function to the model it wraps, and `ReactorMongoSubscriptionModel` calls it again
-on the thread of `subscribe(..)`. The other is a `CatchupListener` given to `listenForCatchup`, which is told that a
+Two pieces of your code can still run while the catch-up holds a lock, so don't call the catch-up model from either. One is a `StartAt.dynamic(..)` function that answers `null` to the catch-up. The catch-up then
+goes straight to live and hands the function to the model it wraps, and `ReactorMongoSubscriptionModel` can call it
+again on the thread of `subscribe(..)`. The other is a `CatchupListener` given to `listenForCatchup`, which is told that a
 catch-up started from inside an operation on a map the catch-up keeps.
 
 ### What happens

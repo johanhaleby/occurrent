@@ -102,9 +102,9 @@ import static java.util.Objects.requireNonNull;
  * the calling thread before those calls return.</li>
  * <li>A subscribe that goes straight to live runs the wrapped {@code subscribe(..)} under the lock of its id. A dynamic
  * {@link StartAt} that answered {@code null} here is passed on as it is, and {@code ReactorMongoSubscriptionModel}
- * evaluates it again on the calling thread, so the caller's function runs with that lock held.</li>
+ * can evaluate it again on the calling thread, so the caller's function can run with that lock held.</li>
  * <li>A {@link CatchupListener} is told that a catch-up started inside an operation on a {@link ConcurrentHashMap},
- * which holds a lock of that map.</li>
+ * which holds a lock of that map. A listener that calls this model can deadlock with another thread.</li>
  * </ul>
  */
 @NullMarked
@@ -423,7 +423,8 @@ final class NamedCatchupSupport {
     // cancel and a fresh subscribe cannot slip between the ownership check and the send. A launch that no longer owns
     // the id announces nothing, or its start would arrive after its replacement's and the recorder would adopt a
     // catch-up that is already over. The listener runs while the map operation holds a lock of the map, so a listener
-    // that subscribes or cancels through this model can deadlock with another thread that does the same.
+    // that calls this model can deadlock with another thread, since a pause, resume, stop or shutdown takes a state
+    // monitor that a handover holds while it takes that lock.
     private void announceCatchupStarted(String subscriptionId, CatchupState state, Object launched) {
         catchingUp.computeIfPresent(subscriptionId, (id, owner) -> {
             if (owner == state && state.episode.get() == launched) {
@@ -482,8 +483,8 @@ final class NamedCatchupSupport {
     }
 
     // Runs work holding the lock of subscriptionId, which is never held across anything asynchronous, and always taken
-    // before the state monitor. The one piece of the caller's code it can be held across is a dynamic start the wrapped
-    // model of a straight-to-live subscribe evaluates on this thread.
+    // before the state monitor. With ReactorMongoSubscriptionModel wrapped, the one piece of the caller's code it can be
+    // held across is a dynamic start that model evaluates on this thread for a straight-to-live subscribe.
     private <T> T underIdLock(String subscriptionId, Supplier<T> work) {
         IdLock idLock = idLocks.compute(subscriptionId, (id, current) -> {
             IdLock used = current == null ? new IdLock() : current;
