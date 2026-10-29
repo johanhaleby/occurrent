@@ -650,27 +650,26 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         // and the status read, and only counts read after the status show that the change is no longer this call's.
         long lapsesNow = c.lapses;
         long lossesNow = c.losses;
-        @Nullable Told dirty = null;
         @Nullable List<Throwable> failures = null;
         if (isOwn(change, own, lapsesNow, lossesNow)) {
-            dirty = markTelling(c, change, status, told);
+            markTelling(c, change, status, told);
             failures = new ArrayList<>();
-            tellListeners(c, change, failures);
-            c.told = change == Change.GRANT ? new Granted(tokenOf(status), seenLapses) : new NotGranted(seenLosses);
+            boolean errorSeen = tellListeners(c, change, failures);
+            told = change == Change.GRANT ? new Granted(tokenOf(status), seenLapses) : new NotGranted(seenLosses);
+            // After an Error the record keeps asking for this change, so the next round tells the current answer again.
+            // The next change is worked out from what the listeners were told, so the repeat is not handed over at once.
+            if (!errorSeen) {
+                c.told = told;
+            }
+            status = statusOf(c);
             seenLapses = c.lapses;
             seenLosses = c.losses;
-            status = statusOf(c);
-            change = whatToTell(c.told, status, seenLapses, seenLosses, isFresh(status));
+            change = whatToTell(told, status, seenLapses, seenLosses, isFresh(status));
         }
         if (change != Change.NOTHING) {
             c.tellAgain = true;
         }
         if (failures != null) {
-            // After the second read, so that read does not hand the repeat over. The next round tells the current
-            // answer again, unless that read found another change owed, and then the tell it hands over does so.
-            if (dirty != null && containsAnError(failures)) {
-                c.told = dirty;
-            }
             throwTheFirstErrorOrFailure(failures);
         }
     }
@@ -680,7 +679,11 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         while (c.tellAgain && TELLING.compareAndSet(c, false, true)) {
             try {
                 c.tellAgain = false;
-                tellUntilNothingIsDue(c);
+                if (tellUntilNothingIsDue(c)) {
+                    // A listener threw an Error, and the next round tells it the current answer again. Going on at once
+                    // would repeat it for as long as that listener registers again before it throws.
+                    return;
+                }
             } catch (Throwable t) {
                 // What was left to this tell waits for the next round, which compares again
                 tellingFailed.error(c.key.subscriptionId, t);
@@ -695,41 +698,42 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * Tells one change at a time and works out the next one from the status after it, until nothing is due. What a
      * listener throws is logged at most once, an {@link Error} at ERROR and anything else at WARN, and not rethrown,
      * since the notifier would only log it a second time. After a listener threw an {@code Error}, the record is left
-     * asking for the last change again, so the next round tells the listeners the current answer once more.
+     * asking for the last change it marked, so the next round tells the listeners the current answer once more. True
+     * when a listener threw an {@code Error}.
      */
-    private void tellUntilNothingIsDue(ConsumerState c) {
-        @Nullable Told lastDirty = null;
+    private boolean tellUntilNothingIsDue(ConsumerState c) {
+        Told told = c.told;
         boolean errorSeen = false;
         while (true) {
+            Status status = statusOf(c);
+            // After the status. A locked step changes the counts before the status, so counts read after it include
+            // every lease lost before that status, and a grant of a new lease comes after the prohibition of the old.
             long seenLapses = c.lapses;
             long seenLosses = c.losses;
-            Status status = statusOf(c);
-            Told told = c.told;
             Change change = whatToTell(told, status, seenLapses, seenLosses, isFresh(status));
             // Checked before each change, since a listener can shut the strategy down on the change before it
             if (change == Change.NOTHING || !running) {
-                break;
+                return errorSeen;
             }
-            lastDirty = markTelling(c, change, status, told);
+            markTelling(c, change, status, told);
             // Only close() is meant to interrupt this thread. An interrupt that a listener sets and does not clear
             // would make the first blocking call of the next one throw, also within this tell.
             Thread.interrupted();
             errorSeen |= tellListeners(c, change, null);
-            c.told = change == Change.GRANT ? new Granted(tokenOf(status), seenLapses) : new NotGranted(seenLosses);
-        }
-        if (errorSeen && lastDirty != null) {
-            c.told = lastDirty;
+            told = change == Change.GRANT ? new Granted(tokenOf(status), seenLapses) : new NotGranted(seenLosses);
+            // Never written after an Error, so the record never reads as owing nothing while that listener is owed
+            if (!errorSeen) {
+                c.told = told;
+            }
         }
     }
 
-    // Marks the record as owing this change until the listeners have all been told it, and returns that record
-    private static Told markTelling(ConsumerState c, Change change, @Nullable Status status, Told told) {
+    // Marks the record as owing this change until the listeners have all been told it
+    private static void markTelling(ConsumerState c, Change change, @Nullable Status status, Told told) {
         if (change == Change.PROHIBIT && told instanceof NotGranted) {
-            return told;
+            return;
         }
-        Told dirty = new Granted(change == Change.GRANT ? tokenOf(status) : ((Granted) told).token(), UNSEEN);
-        c.told = dirty;
-        return dirty;
+        c.told = new Granted(change == Change.GRANT ? tokenOf(status) : ((Granted) told).token(), UNSEEN);
     }
 
     // Collects what a listener throws into failures, or logs it when there is no list. True when one threw an Error.
@@ -761,15 +765,6 @@ public class MongoLeaseCompetingConsumerStrategySupport {
 
     private static long tokenOf(@Nullable Status acquired) {
         return Objects.requireNonNull(acquired).fencingToken().getAsLong();
-    }
-
-    private static boolean containsAnError(List<Throwable> failures) {
-        for (Throwable failure : failures) {
-            if (failure instanceof Error) {
-                return true;
-            }
-        }
-        return false;
     }
 
     // The first Error, or the first failure when none was one, with the rest attached as suppressed. Nothing when the
