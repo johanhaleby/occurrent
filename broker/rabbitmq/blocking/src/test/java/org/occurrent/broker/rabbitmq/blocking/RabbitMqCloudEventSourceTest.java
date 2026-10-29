@@ -17,7 +17,11 @@
 package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.GetResponse;
+import com.rabbitmq.client.NoOpMetricsCollector;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
@@ -29,6 +33,7 @@ import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
+import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -321,6 +326,41 @@ class RabbitMqCloudEventSourceTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * {@code ChannelN.basicNack} calls the connection's {@code MetricsCollector} after it writes the frame, and one
+     * written in Kotlin can throw a checked {@code IOException} there. A second nack for the same tag makes the broker
+     * close the channel, so the source stops instead of releasing the tag again, and the channel close puts the
+     * delivery back on the queue.
+     */
+    @Test
+    void a_release_whose_metrics_collector_throws_after_the_nack_stops_the_source_and_sends_no_second_nack() throws Exception {
+        String queue = declareAndBindQueue(OrderPlaced.class.getName());
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        model.subscribe("sub", cloudEvent -> {
+            throw new IllegalStateException("fails every time");
+        });
+        NackRecorder metricsCollector = new NackRecorder();
+        ConnectionFactory connectionFactory = new ConnectionFactory();
+        connectionFactory.setUri(amqpUrl());
+        connectionFactory.setMetricsCollector(metricsCollector);
+
+        try (Connection sourceConnection = connectionFactory.newConnection();
+             RabbitMqCloudEventSource source = RabbitMqCloudEventSource.builder(sourceConnection, model, queue)
+                     .declareTopology(false)
+                     .pollInterval(POLL_INTERVAL)
+                     .build()) {
+            publish(OrderPlaced.class.getName(), "id-1");
+
+            await().atMost(Duration.ofSeconds(5)).until(() -> !metricsCollector.nackedDeliveryTags.isEmpty());
+            long firstNacked = metricsCollector.nackedDeliveryTags.get(0);
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(1));
+            // Ten poll intervals, each of which would release the tag again had the source put it back
+            Thread.sleep(POLL_INTERVAL.multipliedBy(10).toMillis());
+
+            assertThat(metricsCollector.nackedDeliveryTags).filteredOn(tag -> tag == firstNacked).hasSize(1);
+        }
+    }
+
     private String declareAndBindQueue(String routingKey) throws Exception {
         // Not auto-delete. The default no-arg queueDeclare() is exclusive and auto-delete, so the queue itself
         // would vanish the instant the source's consumer disconnects, which is exactly what assertAcknowledged(..)
@@ -362,5 +402,27 @@ class RabbitMqCloudEventSourceTest extends RabbitMqTestSupport {
     }
 
     private static final class SomethingElse {
+    }
+
+    /**
+     * Throws a checked {@code IOException} after the first nack, the way a {@code MetricsCollector} written in Kotlin
+     * can.
+     */
+    private static final class NackRecorder extends NoOpMetricsCollector {
+
+        private final List<Long> nackedDeliveryTags = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void basicNack(Channel channel, long deliveryTag, boolean requeue) {
+            nackedDeliveryTags.add(deliveryTag);
+            if (nackedDeliveryTags.size() == 1) {
+                NackRecorder.<RuntimeException>sneakyThrow(new IOException("thrown by a metrics collector after the nack was written"));
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+            throw (T) failure;
+        }
     }
 }

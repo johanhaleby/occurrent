@@ -45,6 +45,10 @@ The compiler finds those for you. The other sections compile fine and behave dif
 
 #### RabbitMQ
 
+- [A RabbitMQ source consumes again after a recovery without topology recovery](#a-rabbitmq-source-consumes-again-after-a-recovery-without-topology-recovery).
+  A source on a connection with topology recovery turned off registers a new consumer after a recovery. A source stops
+  in three cases where it kept running in 0.34.0. Two log lines change their text. Compiles unchanged.
+
 #### Kafka
 
 ### Snapshots
@@ -339,3 +343,57 @@ feeds. Once the type has no `accept(..)`, the call resolves to nothing and the r
 `ProjectionFeedAcceptRenameTest` tests this against a feed that declares only `acceptAndWait(..)` and
 `acceptOrDefer(..)`. A recipe that runs after the upgrade has no type to match on, so `UpgradeToOccurrent_0_35` has
 nothing to add, and the four entries stay in `UpgradeToOccurrent_0_34`.
+
+## A RabbitMQ source consumes again after a recovery without topology recovery
+
+A `RabbitMqCloudEventSource` or `RabbitMqDomainEventSource` on a connection with automatic recovery and topology
+recovery turned off stopped consuming after a recovery in 0.34.0. From 0.35.0 it registers a new consumer
+once the recovery has finished and consumes again. The reason is in
+[ADR 153](../architecture/decisions/0153-a-rabbitmq-source-registers-a-new-consumer-when-a-recovery-leaves-it-without-one.md),
+and the report is [#1066](https://github.com/johanhaleby/occurrent/issues/1066).
+
+Nothing in your code changes. If you restart the source after a recovery, or turned topology recovery on only to keep
+the source consuming, you can stop doing that. With topology recovery on, the source keeps the consumer the client
+registered and starts no second one.
+
+A source now stops, with a line at `error`, in three cases where 0.34.0 kept it running. Closing its channel puts the
+delivery back on the queue.
+
+- **A `TrafficListener` or `MetricsCollector` throws while the source sends a negative acknowledgement for a held
+  delivery.** The source can't tell whether it went out, and sending it twice makes the broker close the channel. In
+  0.34.0 the next poll sent it again.
+- **A negative acknowledgement or an acknowledgement fails with an `IOException` on a connection with automatic
+  recovery, and a poll interval later the connection still hasn't dropped.** A `TrafficListener` or `MetricsCollector`
+  written in Kotlin can throw one while the connection is fine. So can NIO, which throws `Frame enqueuing failed` on a
+  connection a memory alarm has blocked, for example one a source shares with a sink that publishes during the alarm.
+  In 0.34.0 the source kept running. It sent the negative
+  acknowledgement again on the next poll, and left a delivery whose acknowledgement never went out unanswered, so at
+  the default `prefetchCount` of one the broker sent the source nothing further.
+- **Its channel is closed for good.** The broker closed the channel on its own, for example with
+  `406 PRECONDITION_FAILED` after a delivery outlived `consumer_timeout`, or a connection without automatic recovery
+  closed the client's own channel. In 0.34.0 a source holding a delivery tried to release it again and logged a warning
+  on every poll, and one holding none consumed nothing and logged nothing. A source holding none stops too, and when the
+  application closed the channel or its connection, the line is at `warn`. On a channel that wraps the client's own and
+  isn't `Recoverable`, a connection close that amqp-client's default recovery-triggering condition accepts doesn't stop
+  the source, as in 0.34.0, whether or not the connection under the wrapper recovers, since a recovery there may reopen
+  the channel. The source logs a warning when it's built on such a channel, and if no recovery reopens it, the source
+  stays up and consumes nothing.
+
+An `IOException` because the connection dropped doesn't stop the source. It keeps running and consumes again after the
+recovery.
+
+The source judges recovery by amqp-client's default recovery-triggering condition, since the client doesn't expose the
+one a connection was built with. If you give a `ConnectionFactory` a condition of your own with
+`setConnectionRecoveryTriggeringCondition`, the source stays up and consumes nothing after a close your condition
+rejects and the default accepts. [#1353](https://github.com/johanhaleby/occurrent/issues/1353) proposes letting you give
+the source your condition.
+
+Two log lines of the delivery failure policy have new text, and a search or an alert on the old one stops matching.
+
+| Before | From 0.35.0 |
+|---|---|
+| `Parked delivery tag {} to exchange "{}" routing key "{}" and acknowledged the original; nothing consumed it.` | `Parked a copy of delivery tag {} to exchange "{}" routing key "{}" and sent the acknowledgement for the original.` |
+| `Redelivered delivery tag {} with requeue; nothing consumed it.` | `Sent a negative acknowledgement with requeue for delivery tag {} after it failed.` |
+
+Both are still logged at `warn`. After a recovery the client ignores an acknowledgement for a tag from before it, so the
+old text said more than the source knew.

@@ -84,6 +84,8 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
     private volatile Channel channel;
     private final Duration acknowledgementTimeout;
     private final Lock publishLock = new ReentrantLock();
+    // Under publishLock
+    private boolean closed;
     private final Set<String> returnedTokens = Collections.synchronizedSet(Collections.newSetFromMap(
             new LinkedHashMap<String, Boolean>() {
                 @Override
@@ -152,6 +154,15 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
 
         publishLock.lock();
         try {
+            if (closed) {
+                // Replacing the closed channel would open one that nothing ever closes
+                throw new RabbitMqPublishException("Cannot publish to exchange \"" + exchange + "\" with routing key \"" +
+                        routingKey + "\", this publisher is closed");
+            }
+            // A retirement whose reopen failed leaves the closed channel in place, so this replaces it.
+            if (!channel.isOpen()) {
+                retireChannel();
+            }
             channel.basicPublish(exchange, routingKey, true, correlated, body);
             // waitForConfirms, not waitForConfirmsOrDie: the latter closes this publisher's own long-lived channel
             // on a nack or a timeout, which would fail every later publish on it too. A nack is reported through
@@ -223,8 +234,8 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
     // A failure to reopen the channel here is attached to primaryFailure as suppressed rather than thrown in its
     // place, so the caller of this publish still sees the failure it actually asked about (a timeout or an
     // interruption), not this secondary one. If reopening fails, the channel field is left pointing at the channel
-    // this call just retired, whose close is still running on its own thread, so a publish after this one either
-    // fails fast on it or waits on the same outstanding confirm it already would have without this retirement.
+    // this call just retired, whose close is still running on its own thread. The next publish finds it closed, or
+    // fails on it, and retires it again, which retries the reopen.
     private void retireChannelPreserving(Throwable primaryFailure) {
         try {
             retireChannel();
@@ -247,7 +258,8 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
     }
 
     /**
-     * Closes the {@link Channel} this publisher created. Does not close the {@link Connection} it was built from.
+     * Closes the {@link Channel} this publisher created. Does not close the {@link Connection} it was built from. A
+     * publish after this throws {@link RabbitMqPublishException}.
      */
     @Override
     public void close() throws IOException, TimeoutException {
@@ -257,6 +269,7 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
         // never see the one retireChannel() goes on to assign.
         publishLock.lock();
         try {
+            closed = true;
             channel.close();
         } finally {
             publishLock.unlock();

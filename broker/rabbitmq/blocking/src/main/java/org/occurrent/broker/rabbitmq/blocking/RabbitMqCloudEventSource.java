@@ -17,6 +17,7 @@
 package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Delivery;
@@ -45,6 +46,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongConsumer;
@@ -173,12 +175,21 @@ import static java.util.Objects.requireNonNull;
  * acknowledgement cannot be sent, since the channel it would go on is closed, and RabbitMQ has put the delivery back on
  * the queue for the dropped connection. On a connection with automatic recovery this source logs that at {@code warn}
  * and keeps its channel, and the recovered channel delivers the message again once the recovery has registered the
- * consumer on it. That takes topology recovery, which a {@code ConnectionFactory} has on by default. With it turned off
- * nothing registers the consumer again, after this or any other recovery. Stopping instead would mean closing the
+ * consumer on it. With topology recovery turned on, which a {@code ConnectionFactory} has by default, the client
+ * registers the consumer. With it turned off this source registers a new consumer on its first poll after the
+ * recovery has finished, once the worker has no delivery left from the old one. Stopping instead would mean closing the
  * channel, which takes it out of the connection's recovery, so this source would never consume again while every other
  * source on the connection did. A connection without automatic recovery never comes back, so on one of those this
  * source stops for good, as it does for an {@link Error} a handler throws, an {@link AssertionError} aside, which goes
  * through {@link DeliveryFailurePolicy} like any other handler failure.
+ * <p>
+ * This source also stops for good on its next poll, also when it holds no delivery, when its channel is closed and
+ * nothing reopens it. The broker closes the channel after a delivery outlived the broker's {@code consumer_timeout},
+ * say, and nothing reopens the client's own channel of a connection without automatic recovery. On a channel that
+ * wraps the client's own and isn't {@code Recoverable}, a connection close that amqp-client's default
+ * recovery-triggering condition accepts doesn't stop this source, whether or not anything underneath recovers, since a
+ * recovery may reopen the channel. If nothing reopens it, this source stays up and consumes nothing. This source logs
+ * a warning when it's built on such a channel.
  * <p>
  * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
  * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
@@ -186,6 +197,12 @@ import static java.util.Objects.requireNonNull;
  * queue, which is the same at-least-once delivery this source gives you everywhere else. A delivery still waiting
  * for the worker thread when the connection drops is not handled at all. It is dropped as soon as the recovery
  * starts, since RabbitMQ delivers it again on the recovered channel.
+ * <p>
+ * This source judges recovery by amqp-client's default recovery-triggering condition, since the client doesn't expose
+ * the one a connection was built with. On a connection whose {@code ConnectionFactory} was given a condition of its own
+ * with {@code setConnectionRecoveryTriggeringCondition}, this source stays up and consumes nothing after a close that
+ * condition rejects and the default accepts. <a href="https://github.com/johanhaleby/occurrent/issues/1353">#1353</a>
+ * proposes letting you give this source that condition.
  */
 public final class RabbitMqCloudEventSource implements AutoCloseable {
 
@@ -203,7 +220,8 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     private final Duration closeTimeout;
 
     private final Lock consumeLock = new ReentrantLock();
-    private @Nullable String consumerTag;
+    private final AtomicReference<@Nullable String> consumerTag = new AtomicReference<>();
+    private final RabbitMqConsumerRecovery consumerRecovery;
 
     // Appended to (never under consumeLock) by handleDelivery the instant a delivery reports DEFERRED or a
     // UNAVAILABLE, in place of nacking it there and then. With prefetchCount == 1 (the default) the
@@ -219,13 +237,27 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     private final Deque<Long> heldDeferredDeliveryTags = new ConcurrentLinkedDeque<>();
     // A REDELIVER-policy failure (a handler or filter that fails on every attempt, say) is held here instead of
     // nacked on the spot, released the same way heldDeferredDeliveryTags is: a snapshot per pollInterval under
-    // consumeLock, via the same releaseHeldDeferredDelivery(Deque, LongConsumer) helper. Without this a
+    // consumeLock, via the same releaseHeldDeferredDelivery(Deque, Runnable, LongConsumer) helper. Without this a
     // poison message under REDELIVER (the default policy) would nack-and-redeliver as fast as the broker
     // round-trips it, keeping this source's worker thread busy at prefetchCount(1) instead of being paced like DEFERRED
     // already is. PARK is never held here: parking exists to move a failed delivery out of the retry loop, not to
     // pace it, so it still applies immediately, through failureAction, from the point of failure.
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
+    // Raised by onChannelShutdown for every close of the channel that a connection recovery reopens. The client adds the
+    // listener again to every channel a recovery opens, so this counts each drop, and the end of a recovery counts
+    // nothing.
+    private final AtomicLong connectionDrops = new AtomicLong();
+    // A close of the channel that no recovery reopens, see RabbitMqDeliveryFailureAction#isClosedForGood. The next poll
+    // stops this source.
+    private volatile @Nullable ShutdownSignalException closedForGood;
+    // An IOException from a nack or an ack on a recovering connection, which a failed socket write throws and so does a
+    // TrafficListener or MetricsCollector written in Kotlin. Judged by stopUnlessConnectionDropped. The time is the
+    // oldest unresolved failure's, and the drop count is the highest one read before an unresolved failure's call. A
+    // drop after that read requeued every delivery the failures were for. Under consumeLock.
+    private boolean unexplainedFailure;
+    private long unexplainedFailureNanos;
+    private long dropsBeforeUnexplainedFailure;
     // When close() has to give up on a delivery, which is at this moment. Published before close() starts waiting and
     // read under consumeLock, so a handler that returns around the deadline either acknowledges before it or is
     // fenced by it, rather than racing a flag close() would set afterwards. A park or acknowledgement that already
@@ -250,7 +282,18 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             return thread;
         });
         this.worker = new RabbitMqDeliveryWorker("rabbitmq-cloudevent-source-worker-" + queue, queue, log);
+        this.consumerRecovery = new RabbitMqConsumerRecovery(consumerTag, queue, log);
         this.closeTimeout = closeTimeout;
+        consumeChannel.addShutdownListener(this::onChannelShutdown);
+    }
+
+    // Runs on a thread of the client, so it only records the close for the poll to act on
+    private void onChannelShutdown(ShutdownSignalException cause) {
+        if (failureAction.isLostToConnectionRecovery(cause)) {
+            connectionDrops.incrementAndGet();
+        } else if (failureAction.isClosedForGood(cause)) {
+            closedForGood = cause;
+        }
     }
 
     /**
@@ -278,6 +321,16 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             throw new RabbitMqSourceException("Failed to declare topology for queue \"" + queue + "\"", e);
         }
         worker.discardOnRecovery(consumeChannel);
+        consumerRecovery.attachTo(builder.connection, consumeChannel);
+        if (failureAction.mayHideRecovery()) {
+            log.warn("The channel of the source on queue \"{}\" is a {}, which is neither Recoverable nor the client's own "
+                    + "channel, so after a connection close that amqp-client's default recovery-triggering condition "
+                    + "accepts, the source can't tell whether a recovery is going to reopen the channel. Such a close doesn't "
+                    + "stop the source, and a dropped connection while it acknowledges or holds a delivery does. When the "
+                    + "connection isn't the AutorecoveringConnection itself either, the source stops consuming after a "
+                    + "recovery with topology recovery turned off. Build the source with the AutorecoveringConnection itself.",
+                    queue, consumeChannel.getClass().getName());
+        }
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
@@ -297,18 +350,24 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             boolean shouldConsume = !permanentlyStopped && subscriptionId != null && model.isRunning(subscriptionId) && readinessSource.test(subscriptionId);
             consumeLock.lock();
             try {
-                if (permanentlyStopped) {
+                if (permanentlyStopped || stopIfClosedForGood() || stopUnlessConnectionDropped()) {
                     return;
                 }
-                // Waits for the worker to finish what an earlier consumer sent it, see RabbitMqDeliveryWorker#isIdle.
-                if (shouldConsume && consumerTag == null && worker.isIdle()) {
-                    consumerTag = consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel);
-                } else if (!shouldConsume && consumerTag != null) {
-                    consumeChannel.basicCancel(consumerTag);
-                    consumerTag = null;
+                String tag = consumerTag.get();
+                if (!shouldConsume && tag != null) {
+                    consumerRecovery.retire(tag);
                 }
-                releaseHeldDeferredDelivery();
-                releaseHeldFailedDelivery();
+                try {
+                    // Waits for the worker to finish what an earlier consumer sent it, see RabbitMqDeliveryWorker#isIdle.
+                    if (consumerRecovery.cancelRetired(consumeChannel) && shouldConsume && consumerTag.get() == null && worker.isIdle()) {
+                        consumerRecovery.consume(() -> consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel));
+                    }
+                } catch (Throwable e) {
+                    // A cancel that keeps failing would otherwise leave a held delivery unanswered on every poll
+                    new RabbitMqTeardown(e).run(this::releaseHeldDeliveriesOrStop);
+                    throw e;
+                }
+                releaseHeldDeliveriesOrStop();
             } finally {
                 consumeLock.unlock();
             }
@@ -326,6 +385,95 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         }
     }
 
+    // Under consumeLock. A release that may have sent its nack can't be retried, since a second nack for a tag makes the
+    // broker close the channel, and can't be left either, since at the default prefetchCount of one the broker sends
+    // nothing further. Closing the channel requeues it.
+    private void releaseHeldDeliveriesOrStop() {
+        // Read after each release takes its snapshot, so every tag it finds was held before the read, and a drop counted
+        // during the first release can't explain a failure for a tag the second one finds
+        AtomicLong dropsBeforeRelease = new AtomicLong();
+        Runnable readDrops = () -> dropsBeforeRelease.set(connectionDrops.get());
+        try {
+            releaseHeldDeferredDelivery(readDrops);
+            releaseHeldFailedDelivery(readDrops);
+        } catch (Throwable e) {
+            boolean lostToConnectionRecovery = failureAction.isLostToConnectionRecovery(e);
+            if (nackNotSent(e) && lostToConnectionRecovery) {
+                throw e;
+            }
+            if (lostToConnectionRecovery) {
+                log.warn("Releasing a held delivery on queue \"{}\" failed with an IOException, which a dropped connection "
+                        + "throws. Unless the connection drops within a poll interval, this source then stops and closes the "
+                        + "channel, which puts that delivery back on the queue.", queue, e);
+                awaitConnectionDrop(dropsBeforeRelease.get());
+                return;
+            }
+            if (nackNotSent(e)) {
+                log.error("Releasing a held delivery on queue \"{}\" failed because its channel is closed, and the "
+                        + "connection is not going to recover it. Stopping this source. Closing the channel put that "
+                        + "delivery back on the queue.", queue, e);
+            } else {
+                log.error("Releasing a held delivery on queue \"{}\" failed, and the negative acknowledgement may or may "
+                        + "not have been sent. Stopping this source and closing its channel, which puts that delivery back "
+                        + "on the queue.", queue, e);
+            }
+            stopPermanently();
+        }
+    }
+
+    // Under consumeLock. dropsBeforeCall is read after the delivery arrived and before the call that failed, so a drop
+    // counted since then came after the delivery, and the broker requeued it. A later failure with the same read keeps
+    // the time of the first, so a stream of failures can't put the judgement off. A higher read means a drop since the
+    // first failure's read, which requeued that delivery, so the later failure gets a poll interval of its own.
+    private void awaitConnectionDrop(long dropsBeforeCall) {
+        if (!unexplainedFailure || dropsBeforeCall > dropsBeforeUnexplainedFailure) {
+            unexplainedFailure = true;
+            unexplainedFailureNanos = System.nanoTime();
+            dropsBeforeUnexplainedFailure = dropsBeforeCall;
+        }
+    }
+
+    // Under consumeLock. A failed flush to the socket of a recovering connection shuts the connection down within
+    // milliseconds, and the broker requeues every unacknowledged delivery on it. No drop a full poll interval after the
+    // oldest failure, counted since the highest read before a failure's call, means an IOException came from somewhere
+    // else, and a delivery may sit unanswered. Stopping closes the channel, which requeues it. Returns whether this
+    // source stopped.
+    private boolean stopUnlessConnectionDropped() {
+        if (!unexplainedFailure || System.nanoTime() - unexplainedFailureNanos < pollInterval.toNanos()) {
+            return false;
+        }
+        unexplainedFailure = false;
+        if (connectionDrops.get() != dropsBeforeUnexplainedFailure) {
+            return false;
+        }
+        log.error("A negative acknowledgement or an acknowledgement on queue \"{}\" failed with an IOException, and the "
+                + "connection under its channel did not drop, so the frame may or may not have been sent. Stopping this "
+                + "source and closing its channel, which puts that delivery back on the queue.", queue);
+        stopPermanently();
+        return true;
+    }
+
+    // Under consumeLock. The broker closes a channel after a channel error, such as 406 PRECONDITION_FAILED when a
+    // delivery outlives consumer_timeout, and nothing reopens it. With nothing held, no release or acknowledgement
+    // would notice, and this source would stay silent and consume nothing. Returns whether this source stopped.
+    private boolean stopIfClosedForGood() {
+        ShutdownSignalException cause = closedForGood;
+        if (cause == null) {
+            return false;
+        }
+        if (cause.isInitiatedByApplication()) {
+            log.warn("The channel of queue \"{}\" was closed by the application, or its connection was. Stopping this "
+                    + "source. Closing the channel put every delivery this source had not acknowledged back on the queue.",
+                    queue);
+        } else {
+            log.error("The channel of queue \"{}\" was closed, and the connection is not going to reopen it. Stopping "
+                    + "this source. Closing the channel put every delivery this source had not acknowledged back on the "
+                    + "queue.", queue, cause);
+        }
+        stopPermanently();
+        return true;
+    }
+
     // Nacks (with requeue) a snapshot of what handleDelivery left held, if anything, bypassing DeliveryFailurePolicy
     // exactly as the DEFERRED branch there always has. Always called under consumeLock, since it issues a
     // blocking Channel call per held tag. With prefetchCount == 1 (the default), the broker sends nothing further
@@ -339,30 +487,31 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     // pass, collapsing the at-most-one-per-poll-interval bound this exists to keep. A tag appended mid-loop waits
     // for the next poll instead.
     //
-    // A failed nack (an IOException surfacing as RabbitMqSourceException from basicNack) never drops the tag it
-    // was for: it goes back to the front, ahead of whatever this pass has not gotten to yet, and this pass stops
-    // rather than trying the next slot, since a channel failing to nack once is not going to succeed on a
-    // different tag straight after. The next poll retries it. A channel that has actually died requeues
-    // everything still unacked on it by itself regardless, so this is only for one that survives the failure.
-    private void releaseHeldDeferredDelivery() {
-        releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver);
+    // A nack that failed on a closed channel never drops the tag it was for. It goes back to the front, ahead of
+    // whatever this pass has not gotten to yet, and this pass stops rather than trying the next slot. The next poll
+    // retries it while the connection recovers, and stops this source otherwise. Any other failure may come before the
+    // frame is written, from an application's TrafficListener, or after it, from its MetricsCollector, an IOException
+    // that basicNack declares included. The tag is not put back, see releaseHeldDeliveriesOrStop.
+    private void releaseHeldDeferredDelivery(Runnable afterSnapshot) {
+        releaseHeldDeferredDelivery(heldDeferredDeliveryTags, afterSnapshot, failureAction::redeliver);
     }
 
     // Releases a REDELIVER-policy failure paced behind heldFailedDeliveryTags, the same mechanism and the same
-    // once-per-poll bound as releaseHeldDeferredDelivery() above, see that field's own javadoc.
+    // once-per-poll bound as releaseHeldDeferredDelivery(Runnable) above, see that field's own javadoc.
     // failureAction.redeliverFailure, not the plain redeliver() heldDeferredDeliveryTags releases through: this
     // deque holds a genuine failure, and redeliverFailure logs the one warn line that failure needs, where
     // heldDeferredDeliveryTags' own pacing releases (DEFERRED and UNAVAILABLE) are not failures
     // and stay silent.
-    private void releaseHeldFailedDelivery() {
-        releaseHeldDeferredDelivery(heldFailedDeliveryTags, failureAction::redeliverFailure);
+    private void releaseHeldFailedDelivery(Runnable afterSnapshot) {
+        releaseHeldDeferredDelivery(heldFailedDeliveryTags, afterSnapshot, failureAction::redeliverFailure);
     }
 
     // Package-private and static, parameterized on the deque and the release call, so this source's redelivery
     // bookkeeping is directly testable with a stub that throws on demand, no real Channel or broker required.
-    // Always called under consumeLock.
-    static void releaseHeldDeferredDelivery(Deque<Long> heldDeferredDeliveryTags, LongConsumer redeliver) {
+    // Always called under consumeLock. afterSnapshot runs once the snapshot is taken and before the first release.
+    static void releaseHeldDeferredDelivery(Deque<Long> heldDeferredDeliveryTags, Runnable afterSnapshot, LongConsumer redeliver) {
         int snapshotCount = heldDeferredDeliveryTags.size();
+        afterSnapshot.run();
         for (int i = 0; i < snapshotCount; i++) {
             Long heldDeliveryTag = heldDeferredDeliveryTags.pollFirst();
             if (heldDeliveryTag == null) {
@@ -370,23 +519,33 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             }
             try {
                 redeliver.accept(heldDeliveryTag);
-            } catch (Throwable e) {
-                // Throwable, so the tag goes back for anything at all that escapes the release. The poll this runs
-                // under catches an Error and comes back on the next tick, and a tag taken out of the deque by a
-                // release that failed has nothing left to nack it. At the default prefetchCount of one the broker
-                // then sends that consumer nothing further, on a source that is still consuming.
-                heldDeferredDeliveryTags.offerFirst(heldDeliveryTag);
+            } catch (RuntimeException e) {
+                if (nackNotSent(e)) {
+                    // Without it nothing would nack the tag, and at the default prefetchCount of one the broker sends
+                    // the consumer nothing further.
+                    heldDeferredDeliveryTags.offerFirst(heldDeliveryTag);
+                }
+                // Anything else may have been thrown after the nack was sent, and a second nack for the same tag
+                // makes the broker close the channel, so that tag is not put back.
                 throw e;
             }
         }
     }
 
+    // How a nack that was not sent fails. AMQChannel.transmit throws it from ensureIsOpen before it writes anything.
+    // An IOException, which failureAction wraps in RabbitMqSourceException, doesn't show that. ChannelN.basicNack
+    // calls the application's MetricsCollector after it writes the frame, and one written in Kotlin can throw a
+    // checked IOException there.
+    static boolean nackNotSent(Throwable failure) {
+        return failure instanceof ShutdownSignalException;
+    }
+
     private void handleCancel(String cancelledConsumerTag) {
         consumeLock.lock();
         try {
-            if (cancelledConsumerTag.equals(consumerTag)) {
-                consumerTag = null;
-            }
+            // The client keeps its record of a consumer the broker cancelled, and a recovery with topology recovery on
+            // would register it again, so it is retired for a cancel that removes the record
+            consumerRecovery.retire(cancelledConsumerTag);
         } finally {
             consumeLock.unlock();
         }
@@ -406,17 +565,49 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     // stop this source, since RabbitMQ puts the delivery back on the queue when the connection drops, and closing this
     // channel would take it out of the connection's recovery so the source never consumed again. Anything else stops
     // this source and closes the channel, which is what puts the delivery back on the queue. Without that the delivery
-    // would sit unacknowledged on a consumer the broker sends nothing further to. Not rethrown, since the cause is
-    // logged here, and rethrowing would only end the worker thread.
+    // would sit unacknowledged on a consumer the broker sends nothing further to.
+    // A failure after this source has already stopped does not stop it again. It is logged at debug when the handler
+    // was interrupted or close() has stopped waiting for it, and at warn otherwise, since nothing else reports it then.
+    // An interrupt is passed on to the thread. Not rethrown, since rethrowing would only end the worker thread.
     private void handleDeliveryOrStop(Delivery delivery, long deliveryTag) {
+        // Before the acknowledgement, and after the delivery arrived, see awaitConnectionDrop
+        long dropsBeforeAcknowledging = connectionDrops.get();
         try {
             handleDelivery(delivery);
         } catch (Throwable e) {
-            if (failureAction.isLostToConnectionRecovery(e)) {
+            if (permanentlyStopped) {
+                boolean interrupted = e instanceof InterruptedException || Thread.currentThread().isInterrupted();
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                if (interrupted || closeDeadlinePassed()) {
+                    log.debug("Handling delivery tag {} on queue \"{}\" failed outside this source's delivery failure "
+                            + "policy after close() stopped waiting for it.", deliveryTag, queue, e);
+                } else {
+                    log.warn("Handling delivery tag {} on queue \"{}\" failed outside this source's delivery failure "
+                            + "policy after this source had stopped. Closing its channel puts that delivery back on the "
+                            + "queue.", deliveryTag, queue, e);
+                }
+                return;
+            }
+            if (failureAction.isLostToConnectionRecovery(e) && e instanceof ShutdownSignalException) {
                 log.warn("The connection under queue \"{}\" dropped before delivery tag {} could be acknowledged or "
-                        + "rejected. RabbitMQ puts it back on the queue, and this source receives it again once the "
-                        + "connection's recovery has registered its consumer again, which needs topology recovery turned on.",
+                        + "rejected. RabbitMQ puts it back on the queue, and this source receives it again once a "
+                        + "consumer is registered on the recovered channel.",
                         queue, deliveryTag, e);
+                return;
+            }
+            if (failureAction.isLostToConnectionRecovery(e)) {
+                log.warn("Acknowledging or rejecting delivery tag {} on queue \"{}\" failed with an IOException, which a "
+                        + "dropped connection throws. Unless the connection drops within a poll interval, this source then "
+                        + "stops and closes the channel, which puts that delivery back on the queue.",
+                        deliveryTag, queue, e);
+                consumeLock.lock();
+                try {
+                    awaitConnectionDrop(dropsBeforeAcknowledging);
+                } finally {
+                    consumeLock.unlock();
+                }
                 return;
             }
             log.error("Handling delivery tag {} on queue \"{}\" failed outside this source's delivery failure policy. "
@@ -534,55 +725,70 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         }
     }
 
-    // Cancels this source's own consumer, releases every tag this source is still holding, and closes the channel,
-    // in that order, all under the same lock, then stops the coarse poll for good. Closing the channel here, rather
-    // than leaving that to close() as an earlier revision did, is what keeps a permanent stop from leaving an
-    // already-held tag stuck: the poll this method also shuts down was the only thing that would otherwise ever
-    // release it, and with prefetchCount above the default of one an earlier held delivery could sit invisible on
-    // this consumer indefinitely if nothing forced it back onto the queue. Closing an already-closing or
-    // already-closed channel is tolerated the same as close() already tolerates it, since an application may still
-    // call close() afterward.
+    // Stops the worker from starting another delivery, cancels this source's own consumer, releases every tag this
+    // source is still holding, and closes the channel, in that order, all under the same lock, then stops the coarse
+    // poll for good. Closing the channel here, rather than leaving that to close() as an earlier revision did, is what
+    // keeps a permanent stop from leaving an already-held tag stuck. The poll this method also shuts down was the only
+    // thing that would otherwise ever release it, and with prefetchCount above the default of one an earlier held
+    // delivery could sit invisible on this consumer indefinitely if nothing forced it back onto the queue. Closing an
+    // already-closing or already-closed channel is tolerated the same as close() already tolerates it, since an
+    // application may still call close() afterward.
     private void stopPermanently() {
         consumeLock.lock();
+        // Every step runs, also after one throws, since the channel close is what requeues a held delivery and the
+        // poll and the worker still need stopping. The first failure is thrown with the later ones suppressed on it.
+        new RabbitMqTeardown(null)
+                // Set under the same lock reconcileConsumption() reads it under, so whichever of the two takes the
+                // lock first decides the consumer's fate before the other reads the flag.
+                .run(() -> permanentlyStopped = true)
+                // Before the channel close requeues a delivery the client may still dispatch, like close() does
+                .run(worker::stopAcceptingWork)
+                .run(consumerRecovery::detach)
+                .run(this::cancelConsumerWhileStopping)
+                .run(this::releaseHeldIgnoringFailure)
+                .run(this::closeChannelIgnoringFailure)
+                .run(consumeLock::unlock)
+                .run(scheduler::shutdown)
+                .finish();
+    }
+
+    private void cancelConsumerWhileStopping() {
+        String tag = consumerTag.getAndSet(null);
+        if (tag != null) {
+            try {
+                consumeChannel.basicCancel(tag);
+            } catch (AlreadyClosedException e) {
+                // A closed channel has no consumer left at the broker
+                log.debug("Didn't cancel the consumer on queue \"{}\" while stopping permanently, since its channel is "
+                        + "closed.", queue, e);
+            } catch (IOException | RuntimeException e) {
+                log.warn("Failed to cancel the consumer on queue \"{}\" while stopping permanently.", queue, e);
+            }
+        }
+    }
+
+    // Best effort, the channel close that follows requeues whatever this could not release.
+    private void releaseHeldIgnoringFailure() {
         try {
-            // Set under the same lock reconcileConsumption() now reads it under, so the two can never interleave:
-            // whichever of this method and a concurrent poll acquires the lock first fully decides the consumer's
-            // fate before the other even reads the flag.
-            permanentlyStopped = true;
-            if (consumerTag != null) {
-                try {
-                    consumeChannel.basicCancel(consumerTag);
-                } catch (IOException | RuntimeException e) {
-                    log.warn("Failed to cancel the consumer on queue \"{}\" while stopping permanently.", queue, e);
-                }
-                consumerTag = null;
-            }
-            try {
-                releaseHeldDeferredDelivery();
-            } catch (RuntimeException ignored) {
-                // Best effort, the channel close in the finally below requeues whatever this could not.
-            }
-            try {
-                releaseHeldFailedDelivery();
-            } catch (RuntimeException ignored) {
-                // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
-            }
-        } finally {
-            // A finally, so an Error out of the cancel or a release still closes the channel and stops the poll and the
-            // worker. The close is what requeues a held delivery, the release only makes that happen sooner. The Error
-            // still propagates once the teardown is done, unless the teardown throws something of its own, which then
-            // replaces it.
-            try {
-                consumeChannel.close();
-            } catch (IOException | TimeoutException | RuntimeException ignored) {
-                // Best effort, mirroring close()'s own channel teardown: the channel is going away either way, and
-                // an already-failed or already-closed channel has nothing further this source can do about it.
-                // RuntimeException also catches ShutdownSignalException, which extends it.
-            } finally {
-                consumeLock.unlock();
-                scheduler.shutdown();
-                worker.stopAcceptingWork();
-            }
+            releaseHeldDeferredDelivery(() -> { });
+        } catch (RuntimeException ignored) {
+            // See above
+        }
+        try {
+            releaseHeldFailedDelivery(() -> { });
+        } catch (RuntimeException ignored) {
+            // See above
+        }
+    }
+
+    // Best effort, mirroring close()'s own channel teardown. The channel is going away either way, and an
+    // already-failed or already-closed channel has nothing further this source can do about it. RuntimeException
+    // also catches ShutdownSignalException, which extends it.
+    private void closeChannelIgnoringFailure() {
+        try {
+            consumeChannel.close();
+        } catch (IOException | TimeoutException | RuntimeException ignored) {
+            // See above.
         }
     }
 
@@ -613,67 +819,69 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
      */
     @Override
     public void close() {
-        try {
-            long deadline = System.nanoTime() + closeTimeout.toNanos();
-            bringCloseDeadlineForwardTo(deadline);
-            scheduler.shutdownNow();
-            // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
-            permanentlyStopped = true;
-            // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle worker
-            // and start a handler while this is closing.
-            worker.stopAcceptingWork();
-            // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
-            // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
-            if (lockBefore(deadline)) {
-                try {
-                    if (consumerTag != null) {
-                        try {
-                            consumeChannel.basicCancel(consumerTag);
-                        } catch (IOException ignored) {
-                            // Best effort: the channel is about to be closed either way.
-                        }
-                        consumerTag = null;
+        long deadline = System.nanoTime() + RabbitMqTeardown.timeoutNanos(closeTimeout);
+        // Stays false when the wait throws, so a handler that may still be running is fenced and interrupted
+        boolean[] workerFinished = {false};
+        // Every step runs, also after one throws, like stopPermanently()'s. The first failure is thrown with the later
+        // ones suppressed on it.
+        new RabbitMqTeardown(null)
+                .run(() -> bringCloseDeadlineForwardTo(deadline))
+                .run(scheduler::shutdownNow)
+                // Stops a poll that is already running from starting a new consumer while this waits for the worker.
+                .run(() -> permanentlyStopped = true)
+                // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle
+                // worker and start a handler while this is closing.
+                .run(worker::stopAcceptingWork)
+                .run(consumerRecovery::detach)
+                // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that
+                // lock while a park waits for its confirm. Closing the channel cancels the consumer and requeues the rest.
+                .run(() -> underLockBefore(deadline, this::cancelConsumerOnClose))
+                .run(() -> workerFinished[0] = worker.stop(remainingUntil(deadline)))
+                .run(() -> {
+                    if (!workerFinished[0] || worker.isWorkerThread()) {
+                        // The teardown goes ahead with a delivery still running, either because the wait ended early
+                        // or because a handler is closing its own source, so fence the acknowledgement from here
+                        // rather than at a deadline that may still be in the future.
+                        bringCloseDeadlineForwardTo(System.nanoTime());
                     }
-                } finally {
-                    consumeLock.unlock();
-                }
-            }
-            boolean workerFinished = worker.stop(remainingUntil(deadline));
-            if (!workerFinished || worker.isWorkerThread()) {
-                // The teardown below goes ahead with a delivery still running, either because this thread was interrupted
-                // while waiting or because a handler is closing its own source, so fence the acknowledgement from here
-                // rather than at a deadline that may still be in the future.
-                bringCloseDeadlineForwardTo(System.nanoTime());
-            }
-            if (!workerFinished) {
-                worker.interruptRunningWork(closeTimeout);
-            }
-            if (lockBefore(deadline)) {
-                try {
-                    try {
-                        releaseHeldDeferredDelivery();
-                    } catch (RuntimeException ignored) {
-                        // Best effort, the channel close in the finally below requeues whatever is left held.
+                })
+                .run(() -> {
+                    if (!workerFinished[0] && !worker.isWorkerThread()) {
+                        worker.interruptRunningWork(closeTimeout);
                     }
-                    try {
-                        releaseHeldFailedDelivery();
-                    } catch (RuntimeException ignored) {
-                        // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
-                    }
-                } finally {
-                    consumeLock.unlock();
-                }
-            }
-        } finally {
-            // A finally like stopPermanently()'s, so an exception from anything above, the deadline arithmetic included,
-            // still reaches the channel close, and the parking sink's close after it under PARK.
+                })
+                .run(() -> underLockBefore(deadline, this::releaseHeldIgnoringFailure))
+                .run(this::closeChannelIgnoringIoFailure)
+                .run(failureAction::close)
+                .finish();
+    }
+
+    private void cancelConsumerOnClose() {
+        String tag = consumerTag.getAndSet(null);
+        if (tag != null) {
             try {
-                consumeChannel.close();
-            } catch (IOException | ShutdownSignalException | TimeoutException ignored) {
-                // Best effort, mirroring RabbitMqCloudEventSink#close's own channel teardown.
-            } finally {
-                failureAction.close();
+                consumeChannel.basicCancel(tag);
+            } catch (IOException | RuntimeException ignored) {
+                // Best effort, the channel is about to be closed either way
             }
+        }
+    }
+
+    private void underLockBefore(long deadlineNanos, Runnable step) {
+        if (lockBefore(deadlineNanos)) {
+            try {
+                step.run();
+            } finally {
+                consumeLock.unlock();
+            }
+        }
+    }
+
+    private void closeChannelIgnoringIoFailure() {
+        try {
+            consumeChannel.close();
+        } catch (IOException | ShutdownSignalException | TimeoutException ignored) {
+            // Best effort, mirroring RabbitMqCloudEventSink#close's own channel teardown.
         }
     }
 
@@ -856,7 +1064,8 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         /**
          * How long {@link RabbitMqCloudEventSource#close()} waits for a delivery already being handled to finish.
          * Thirty seconds by default, the same as the Kafka sources. A handler still running after that is
-         * interrupted, and its delivery goes back on the queue when the channel closes, so it is handled again.
+         * interrupted, and its delivery goes back on the queue when the channel closes, so it is handled again. A
+         * timeout longer than about 146 years counts as that long.
          */
         public Builder closeTimeout(Duration closeTimeout) {
             requireNonNull(closeTimeout, "closeTimeout cannot be null");
@@ -926,17 +1135,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
                 source.start(this, destinations);
                 return source;
             } catch (RuntimeException e) {
-                closeQuietly(channel);
-                if (failureAction != null) {
-                    failureAction.close();
-                }
-                if (source != null) {
-                    // start() can fail after the source, and its scheduler, already exist. The scheduler has no
-                    // thread yet here, since scheduleWithFixedDelay(...) is the last thing start() does, but this
-                    // stays defensive against that ordering changing later, and symmetric with the domain source's
-                    // own build() failure path.
-                    source.scheduler.shutdownNow();
-                }
+                unwind(e, channel, failureAction, source);
                 throw e;
             }
         }
@@ -961,6 +1160,22 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
                         .orElseThrow(() -> new RabbitMqSourceException("No RabbitMQ channel number was available to create the source's channel on"));
             } catch (IOException e) {
                 throw new RabbitMqSourceException("Failed to create the source's RabbitMQ channel", e);
+            }
+        }
+
+        // A step that fails is added to the failure build() is already throwing as suppressed instead of replacing it.
+        // The scheduler has no thread yet when start() fails, since scheduleWithFixedDelay(...) is the last thing it
+        // does, but shutting it down stays defensive against that ordering changing.
+        private static void unwind(RuntimeException failure, Channel channel, @Nullable RabbitMqDeliveryFailureAction failureAction,
+                                   @Nullable RabbitMqCloudEventSource source) {
+            RabbitMqTeardown teardown = new RabbitMqTeardown(failure).run(() -> closeQuietly(channel));
+            if (failureAction != null) {
+                teardown.run(failureAction::close);
+            }
+            if (source != null) {
+                teardown.run(source.scheduler::shutdownNow);
+                teardown.run(source.worker::stopAcceptingWork);
+                teardown.run(source.consumerRecovery::detach);
             }
         }
 

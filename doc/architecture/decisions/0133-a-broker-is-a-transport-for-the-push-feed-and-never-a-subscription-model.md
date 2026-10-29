@@ -16,6 +16,10 @@ decision 9. The `@RabbitSaga` and `@KafkaSaga` sketches on
 [#417](https://github.com/johanhaleby/occurrent/issues/417) are ideas recorded for a future Spring Boot layer, not
 part of this design.
 
+Amended by [ADR 153](0153-a-rabbitmq-source-registers-a-new-consumer-when-a-recovery-leaves-it-without-one.md). A
+RabbitMQ source on a connection with topology recovery turned off registers a new consumer after a recovery, so it no
+longer stops consuming as the 2026-09-15 amendment below says.
+
 ## Context
 
 A production deployment often forwards Occurrent cloud events to RabbitMQ or Kafka and consumes them there instead of

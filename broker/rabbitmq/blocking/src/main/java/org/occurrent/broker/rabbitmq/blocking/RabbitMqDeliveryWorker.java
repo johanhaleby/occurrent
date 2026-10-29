@@ -25,6 +25,8 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -66,6 +68,7 @@ public final class RabbitMqDeliveryWorker {
     private final AtomicLong discardUpToDeliveryTag = new AtomicLong();
     private volatile @Nullable Thread thread;
     private volatile boolean stopped;
+    private final List<Runnable> recoveryListenerRemovals = new ArrayList<>();
 
     /**
      * @param threadName The name of the worker thread, so a thread dump shows which source a stuck handler belongs to.
@@ -140,10 +143,13 @@ public final class RabbitMqDeliveryWorker {
      * later is dropped too, while nothing from the replacement ever is. A channel that is not the client's own
      * {@code AutorecoveringChannel} over a {@code RecoveryAwareChannelN} gives no such guarantee about its tags, so
      * for it nothing is dropped and a blocked handler may see the same message again after a recovery.
+     * <p>
+     * The listener stays on the channel until {@link #stopAcceptingWork()} or {@link #stop(Duration)} runs, which
+     * removes it. After that this adds none.
      */
     public void discardOnRecovery(Channel channel) {
         if (channel instanceof Recoverable recoverable) {
-            recoverable.addRecoveryListener(new RecoveryListener() {
+            RecoveryListener listener = new RecoveryListener() {
                 @Override
                 public void handleRecoveryStarted(Recoverable recoverable) {
                     if (channel instanceof AutorecoveringChannel recovering && recovering.getDelegate() instanceof RecoveryAwareChannelN replacement) {
@@ -154,8 +160,29 @@ public final class RabbitMqDeliveryWorker {
                 @Override
                 public void handleRecovery(Recoverable recoverable) {
                 }
-            });
+            };
+            synchronized (recoveryListenerRemovals) {
+                if (stopped) {
+                    return;
+                }
+                recoverable.addRecoveryListener(listener);
+                recoveryListenerRemovals.add(() -> recoverable.removeRecoveryListener(listener));
+            }
         }
+    }
+
+    private void removeRecoveryListeners() {
+        List<Runnable> removals;
+        synchronized (recoveryListenerRemovals) {
+            removals = new ArrayList<>(recoveryListenerRemovals);
+            recoveryListenerRemovals.clear();
+        }
+        // Every removal runs, since the list is already cleared and a later call would not find the ones left over.
+        RabbitMqTeardown teardown = new RabbitMqTeardown(null);
+        for (Runnable removal : removals) {
+            teardown.run(removal);
+        }
+        teardown.finish();
     }
 
     private void discardUpTo(long deliveryTag) {
@@ -202,11 +229,15 @@ public final class RabbitMqDeliveryWorker {
 
     /**
      * Lets a delivery already running finish, starts no queued one, and returns without waiting. Safe to call from
-     * the worker thread itself, which is where a source that stops for good calls it from.
+     * the worker thread itself, which is where a source that stops for good calls it from. A failure removing the
+     * recovery listener is thrown only after the worker has stopped accepting work.
      */
     public void stopAcceptingWork() {
-        stopped = true;
+        synchronized (recoveryListenerRemovals) {
+            stopped = true;
+        }
         executor.shutdown();
+        removeRecoveryListeners();
     }
 
     /**
@@ -220,12 +251,18 @@ public final class RabbitMqDeliveryWorker {
      * @return {@code false} when a delivery was still running after {@code timeout}, {@code true} otherwise. Always
      * {@code true} when called from the worker thread, which returns at once since waiting there would wait for the
      * caller itself.
+     * @throws RuntimeException A failure removing the recovery listener, thrown only after the wait.
      */
     public boolean stop(Duration timeout) {
-        stopAcceptingWork();
-        if (isWorkerThread()) {
-            return true;
-        }
+        boolean[] finished = {true};
+        new RabbitMqTeardown(null)
+                .run(this::stopAcceptingWork)
+                .run(() -> finished[0] = isWorkerThread() || awaitTermination(timeout))
+                .finish();
+        return finished[0];
+    }
+
+    private boolean awaitTermination(Duration timeout) {
         try {
             return executor.awaitTermination(timeout.toNanos(), TimeUnit.NANOSECONDS);
         } catch (InterruptedException e) {

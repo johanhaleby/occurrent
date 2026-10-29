@@ -16,13 +16,20 @@
 
 package org.occurrent.broker.rabbitmq.blocking;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.ShutdownSignalException;
+import com.rabbitmq.client.impl.ChannelN;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.slf4j.Logger;
@@ -30,9 +37,12 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.params.provider.Arguments.argumentSet;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -111,12 +121,62 @@ class RabbitMqDeliveryFailureActionTest {
     }
 
     /**
-     * A {@code basicNack} failure on {@link RabbitMqDeliveryFailureAction#redeliverFailure(long)} propagates rather
-     * than being swallowed, and the "Redelivered" log line never runs, since {@code redeliver(...)} throws before
-     * reaching it.
+     * A confirmed park says what was done. A copy went to the parking destination and the acknowledgement for the
+     * original was sent. It does not claim anything about what the broker did with that acknowledgement.
      */
     @Test
-    void redeliverFailure_never_logs_the_redelivered_line_when_basicNack_itself_fails() throws Exception {
+    void apply_logs_that_a_copy_was_parked_and_the_acknowledgement_sent_without_claiming_nothing_consumed_it() {
+        // Given
+        Channel consumeChannel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey");
+        Logger log = LoggerFactory.getLogger("RabbitMqDeliveryFailureActionTest.park");
+        ListAppender<ILoggingEvent> logged = captureLogOf(log);
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, parkingDestination, log);
+
+        // When
+        action.apply(42L, new BasicProperties(), new byte[0]);
+
+        // Then
+        assertThat(logged.list).singleElement().satisfies(event -> assertAll(
+                () -> assertThat(event.getLevel()).isEqualTo(Level.WARN),
+                () -> assertThat(event.getFormattedMessage())
+                        .contains("42", "\"exchange\"", "\"routingKey\"", "sent the acknowledgement for the original")
+                        .doesNotContain("nothing consumed")));
+    }
+
+    /**
+     * A failed delivery that is put back says that a negative acknowledgement with requeue was sent for it. It does
+     * not claim the delivery was redelivered or that nothing consumed it, since the broker decides that.
+     */
+    @Test
+    void redeliverFailure_logs_that_a_negative_acknowledgement_with_requeue_was_sent_without_claiming_a_redelivery() {
+        // Given
+        Channel consumeChannel = mock(Channel.class);
+        Logger log = LoggerFactory.getLogger("RabbitMqDeliveryFailureActionTest.redeliver");
+        ListAppender<ILoggingEvent> logged = captureLogOf(log);
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.REDELIVER,
+                null, null, log);
+
+        // When
+        action.redeliverFailure(42L);
+
+        // Then
+        assertThat(logged.list).singleElement().satisfies(event -> assertAll(
+                () -> assertThat(event.getLevel()).isEqualTo(Level.WARN),
+                () -> assertThat(event.getFormattedMessage())
+                        .contains("42", "negative acknowledgement with requeue")
+                        .doesNotContain("Redelivered", "nothing consumed")));
+    }
+
+    /**
+     * A {@code basicNack} failure on {@link RabbitMqDeliveryFailureAction#redeliverFailure(long)} propagates rather
+     * than being swallowed, and the failure warning never runs, since {@code redeliver(...)} throws before reaching
+     * it.
+     */
+    @Test
+    void redeliverFailure_never_logs_the_failure_warning_when_basicNack_itself_fails() throws Exception {
         Channel consumeChannel = mock(Channel.class);
         doThrow(new IOException("nack failed")).when(consumeChannel).basicNack(42L, false, true);
         Logger log = mock(Logger.class);
@@ -226,5 +286,59 @@ class RabbitMqDeliveryFailureActionTest {
         assertThat(recovering.isLostToConnectionRecovery(new IllegalStateException("unrelated"))).isFalse();
         assertThat(recovering.isLostToConnectionRecovery(new OutOfMemoryError())).isFalse();
         assertThat(notRecovering.isLostToConnectionRecovery(new AlreadyClosedException(connectionDropped))).as("connection without automatic recovery").isFalse();
+    }
+
+    /**
+     * After a dropped connection a {@code Recoverable} channel is reopened, so that close ends nothing. On a wrapper
+     * around the client's own channel a recovery underneath may reopen it without telling the source, so that close
+     * isn't final there either. The client's own channel has no recovery underneath, so every close is final.
+     */
+    @ParameterizedTest
+    @MethodSource("closesByChannelKind")
+    void isClosedForGood_is_false_only_for_a_close_a_recovery_may_reopen_the_channel_after(Channel channel, ShutdownSignalException close, boolean closedForGood) {
+        assertThat(actionOn(channel).isClosedForGood(close)).isEqualTo(closedForGood);
+    }
+
+    @Test
+    void mayHideRecovery_is_true_only_for_a_channel_that_is_neither_recoverable_nor_the_clients_own() {
+        assertThat(actionOn(mock(Channel.class, withSettings().extraInterfaces(Recoverable.class))).mayHideRecovery()).as("Recoverable channel").isFalse();
+        assertThat(actionOn(mock(ChannelN.class)).mayHideRecovery()).as("the client's own channel").isFalse();
+        assertThat(actionOn(mock(Channel.class)).mayHideRecovery()).as("wrapper channel").isTrue();
+    }
+
+    private static Stream<Arguments> closesByChannelKind() {
+        ShutdownSignalException channelClosedByBroker = new ShutdownSignalException(false, false, null, mock(Channel.class));
+        ShutdownSignalException channelClosedByApplication = new ShutdownSignalException(false, true, null, mock(Channel.class));
+        ShutdownSignalException connectionDropped = new ShutdownSignalException(true, false, null, mock(Connection.class));
+        ShutdownSignalException connectionClosedByApplication = new ShutdownSignalException(true, true, null, mock(Connection.class));
+        return Stream.of(
+                argumentSet("Recoverable, channel closed by the broker", recoverable(), channelClosedByBroker, true),
+                argumentSet("Recoverable, channel closed by the application", recoverable(), channelClosedByApplication, true),
+                argumentSet("Recoverable, connection closed by the application", recoverable(), connectionClosedByApplication, true),
+                argumentSet("Recoverable, connection dropped", recoverable(), connectionDropped, false),
+                argumentSet("client's own, channel closed by the broker", mock(ChannelN.class), channelClosedByBroker, true),
+                argumentSet("client's own, channel closed by the application", mock(ChannelN.class), channelClosedByApplication, true),
+                argumentSet("client's own, connection closed by the application", mock(ChannelN.class), connectionClosedByApplication, true),
+                argumentSet("client's own, connection dropped", mock(ChannelN.class), connectionDropped, true),
+                argumentSet("wrapper, channel closed by the broker", mock(Channel.class), channelClosedByBroker, true),
+                argumentSet("wrapper, channel closed by the application", mock(Channel.class), channelClosedByApplication, true),
+                argumentSet("wrapper, connection closed by the application", mock(Channel.class), connectionClosedByApplication, true),
+                argumentSet("wrapper, connection dropped", mock(Channel.class), connectionDropped, false)
+        );
+    }
+
+    private static Channel recoverable() {
+        return mock(Channel.class, withSettings().extraInterfaces(Recoverable.class));
+    }
+
+    private RabbitMqDeliveryFailureAction actionOn(Channel channel) {
+        return new RabbitMqDeliveryFailureAction(channel, DeliveryFailurePolicy.REDELIVER, null, null, LoggerFactory.getLogger(getClass()));
+    }
+
+    private static ListAppender<ILoggingEvent> captureLogOf(Logger log) {
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        ((ch.qos.logback.classic.Logger) log).addAppender(logged);
+        return logged;
     }
 }

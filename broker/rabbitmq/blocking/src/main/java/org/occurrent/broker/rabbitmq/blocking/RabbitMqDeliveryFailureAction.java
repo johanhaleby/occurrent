@@ -21,6 +21,7 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.ShutdownSignalException;
+import com.rabbitmq.client.impl.AMQChannel;
 import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
@@ -146,8 +147,8 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
             return;
         }
         ack(deliveryTag);
-        log.warn("Parked delivery tag {} to exchange \"{}\" routing key \"{}\" and acknowledged the original; " +
-                "nothing consumed it.", deliveryTag, destination.exchange(), destination.routingKey());
+        log.warn("Parked a copy of delivery tag {} to exchange \"{}\" routing key \"{}\" and sent the acknowledgement " +
+                "for the original.", deliveryTag, destination.exchange(), destination.routingKey());
     }
 
     /**
@@ -177,6 +178,10 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
     /**
      * Acknowledges {@code deliveryTag} on the delivery's own channel. Used for a delivery that succeeded, and
      * internally once a park publish has been confirmed.
+     * <p>
+     * After a connection recovery the client ignores an acknowledgement for a tag issued before it, without
+     * throwing, and the broker delivers that message again. Returning normally therefore means the acknowledgement
+     * was handed to the client, not that the broker received it.
      */
     public void ack(long deliveryTag) {
         try {
@@ -188,33 +193,73 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
 
     /**
      * Whether {@code failure}, thrown by {@link #ack(long)}, {@link #redeliver(long)} or
-     * {@link #apply(long, BasicProperties, byte[])}, means the connection under the delivery's channel went away and the
-     * RabbitMQ client is going to recover it. A source does not stop for such a failure and does not acknowledge the delivery either,
-     * since RabbitMQ puts it back on the queue when the connection drops and delivers it again on the recovered
-     * channel, and closing the channel to put it back would take that channel out of recovery for good. The message
-     * only arrives again if topology recovery registers the consumer on the recovered channel, which this does not
-     * check, since the client does not expose whether a connection has it turned on.
+     * {@link #apply(long, BasicProperties, byte[])}, or reported to a shutdown listener on the delivery's channel, can
+     * mean that the connection under that channel went away and the RabbitMQ client is going to recover it. RabbitMQ
+     * puts the delivery back on the queue when the connection drops, and delivers it again once a consumer is
+     * registered on the recovered channel. The client registers it with topology recovery turned on, and the source
+     * does it on its next poll otherwise. Closing the channel to put the delivery back would take that channel out of
+     * recovery for good.
      * <p>
-     * True only for a channel from a connection with automatic recovery enabled, and then for two failures. One is a
-     * {@link ShutdownSignalException}, {@code AlreadyClosedException} included, for the whole connection rather than
-     * only the channel, that {@link AutorecoveringConnection#DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION}
-     * recovers from. A connection closed by the application is not recovered by that condition, and a channel the
+     * A source does not stop for a {@link ShutdownSignalException} this accepts. For an {@link IOException} this
+     * accepts, the source stops at its first poll a poll interval or more after the failure, unless the connection
+     * dropped after the call, because the frame may not have been sent.
+     * <p>
+     * True only for a channel that is {@link Recoverable}, as every channel of a connection with automatic recovery
+     * enabled is, and then for two failures. One is a {@link ShutdownSignalException}, {@code AlreadyClosedException}
+     * included, for the whole connection rather than only the channel, that
+     * {@link AutorecoveringConnection#DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION} recovers from. A channel the
      * broker closed on its own is never recovered at all. The other is a {@link RabbitMqSourceException} caused by an
-     * {@link IOException}, which is a failed write to the connection's socket, and a recovering connection closes
-     * and recovers itself after one. A connection without automatic recovery never comes back, so every failure on
-     * it is false here.
+     * {@link IOException}. A failed flush of the connection's socket throws one, and before the throw a recovering
+     * connection starts a thread that closes it, then recovers after that close. A write that fails before the flush,
+     * while the frame is copied into the socket's buffer, throws one without starting that thread. A
+     * {@code TrafficListener} or {@code MetricsCollector} written in Kotlin throws one too, and so does NIO's
+     * {@code Frame enqueuing failed} on a connection a memory alarm has blocked, both with the connection still up. A
+     * connection without automatic recovery never comes back, so every failure on it is false here.
      * <p>
-     * A {@code ConnectionFactory} given its own recovery triggering condition is judged by the default condition
-     * anyway, since the client does not expose the one a connection was built with.
+     * A close is judged by amqp-client's default recovery triggering condition, which recovers from every connection
+     * close the application didn't start, and from a close after a missed heartbeat. A {@code ConnectionFactory} given
+     * a condition of its own that differs from the default isn't followed, since the client doesn't expose the one a
+     * connection was built with.
      */
     public boolean isLostToConnectionRecovery(Throwable failure) {
         if (!(consumeChannel instanceof Recoverable)) {
             return false;
         }
         if (failure instanceof ShutdownSignalException shutdown) {
-            return shutdown.isHardError() && AutorecoveringConnection.DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION.test(shutdown);
+            return isRecoveredFromByDefault(shutdown);
         }
         return failure instanceof RabbitMqSourceException && failure.getCause() instanceof IOException;
+    }
+
+    /**
+     * Whether {@code close}, reported to a shutdown listener on the delivery's channel, ends that channel for good, so
+     * the source on it stops. False for a close {@link #isLostToConnectionRecovery(Throwable)} accepts.
+     * <p>
+     * Every other close of a {@link Recoverable} channel is final. So is every close of the client's own
+     * {@link AMQChannel}, which only a connection without automatic recovery hands out. On any other channel, a
+     * wrapper around the client's own say, a close of the channel alone is final, and so is a connection close that
+     * {@link AutorecoveringConnection#DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION} doesn't recover from, since
+     * the client underneath reopens neither. A connection close that the default condition recovers from isn't final
+     * there, since a recovery underneath may reopen the channel.
+     */
+    public boolean isClosedForGood(ShutdownSignalException close) {
+        if (isLostToConnectionRecovery(close)) {
+            return false;
+        }
+        return !mayHideRecovery() || !isRecoveredFromByDefault(close);
+    }
+
+    /**
+     * Whether the delivery's channel is neither {@link Recoverable} nor the client's own {@link AMQChannel}, as a
+     * channel a wrapping {@code Connection} hands out can be, so a recovery underneath may reopen it without the
+     * source being told.
+     */
+    public boolean mayHideRecovery() {
+        return !(consumeChannel instanceof Recoverable) && !(consumeChannel instanceof AMQChannel);
+    }
+
+    private static boolean isRecoveredFromByDefault(ShutdownSignalException close) {
+        return close.isHardError() && AutorecoveringConnection.DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION.test(close);
     }
 
     /**
@@ -226,6 +271,9 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * this source is configured with, since nothing here is broken or wrong, only not ready yet, and pacing a
      * source's own consumer this way happens far too often, by design, for a log line per occurrence to be useful.
      * See {@link #redeliverFailure(long)} for the equivalent used on an actual failure, which does log.
+     * <p>
+     * Like {@link #ack(long)}, a call for a tag issued before a connection recovery returns normally and sends
+     * nothing, and the broker delivers that message again.
      */
     public void redeliver(long deliveryTag) {
         try {
@@ -244,7 +292,7 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      */
     public void redeliverFailure(long deliveryTag) {
         redeliver(deliveryTag);
-        log.warn("Redelivered delivery tag {} with requeue; nothing consumed it.", deliveryTag);
+        log.warn("Sent a negative acknowledgement with requeue for delivery tag {} after it failed.", deliveryTag);
     }
 
     /**
