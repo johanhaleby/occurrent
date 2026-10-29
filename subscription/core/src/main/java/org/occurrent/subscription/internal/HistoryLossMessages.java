@@ -38,6 +38,13 @@ public final class HistoryLossMessages {
             + " Cancelling and subscribing again from now skips the events since {}.";
 
     /**
+     * What a blocking catch-up logs when a resume at a given position clears a loss it recorded, which can come after
+     * the error that loss logged. The arguments are the subscription id, the position resumed at and the lost position.
+     */
+    public static final String RESUMED_AFTER_LOSS_LOG = "Catch-up subscription {} was resumed at {}, so resuming it doesn't throw for the history it lost from {},"
+            + " even when an error logged earlier said it would.";
+
+    /**
      * The error a reactor catch-up logs when it fails an unnamed {@code Flux} after the subscription model lost its
      * history. The arguments are the lost position and the lost position again.
      */

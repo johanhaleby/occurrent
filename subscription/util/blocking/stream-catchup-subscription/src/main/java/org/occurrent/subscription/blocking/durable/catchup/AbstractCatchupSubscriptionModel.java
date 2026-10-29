@@ -334,14 +334,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
-    // The position the live delegate lost the history from, and how many times a resume at a given position cleared it.
-    // A loss reported before such a resume must not be recorded after it, which would mark a subscription it has
-    // resumed as lost.
+    // The position the live delegate lost the history from, how many times a resume at a given position cleared it, and
+    // the position the last such resume gave. A loss reported before such a resume must not be recorded after it, which
+    // would mark a subscription it has resumed as lost, unless it is a loss of the position that resume gave.
     private static final class HistoryLost {
-        private record State(int clears, @Nullable Checkpoint lostFrom) {
+        private record State(int clears, @Nullable Checkpoint lostFrom, @Nullable String resumedAt) {
         }
 
-        private final AtomicReference<State> state = new AtomicReference<>(new State(0, null));
+        private final AtomicReference<State> state = new AtomicReference<>(new State(0, null, null));
 
         @Nullable Checkpoint get() {
             return state.get().lostFrom();
@@ -351,14 +351,25 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             return state.get().clears();
         }
 
-        // False when it was cleared since clearsWhenReported
+        // False when it was cleared since clearsWhenReported by a resume at a position other than lostFrom
         boolean recordUnlessCleared(int clearsWhenReported, Checkpoint lostFrom) {
-            State seen = state.updateAndGet(it -> it.clears() == clearsWhenReported ? new State(it.clears(), lostFrom) : it);
-            return seen.clears() == clearsWhenReported;
+            State before = state.getAndUpdate(it -> records(it, clearsWhenReported, lostFrom) ? new State(it.clears(), lostFrom, it.resumedAt()) : it);
+            return records(before, clearsWhenReported, lostFrom);
         }
 
-        void clear() {
-            state.updateAndGet(seen -> new State(seen.clears() + 1, null));
+        private static boolean records(State seen, int clearsWhenReported, Checkpoint lostFrom) {
+            return seen.clears() == clearsWhenReported || isAt(lostFrom, seen.resumedAt());
+        }
+
+        // Keeps a loss of resumedAt itself. Returns the loss it cleared, or null.
+        @Nullable Checkpoint clear(@Nullable Checkpoint resumedAt) {
+            String at = resumedAt == null ? null : resumedAt.asString();
+            State before = state.getAndUpdate(seen -> new State(seen.clears() + 1, isAt(seen.lostFrom(), at) ? seen.lostFrom() : null, at));
+            return isAt(before.lostFrom(), at) ? null : before.lostFrom();
+        }
+
+        private static boolean isAt(@Nullable Checkpoint lostFrom, @Nullable String position) {
+            return lostFrom != null && lostFrom.asString().equals(position);
         }
     }
 
@@ -728,7 +739,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * A subscription paused because the live delegate lost the history it resumed from is running again once the live
      * delegate has resumed it here, so a later {@link #resumeSubscription(String)} or {@link #start(boolean)} no longer
-     * refuses it. When the live delegate throws, it stays refused.
+     * refuses it, unless the live delegate lost the history from {@code startAt} too. When the live delegate throws, it
+     * stays refused.
      * <p>
      * {@link RepositionableSubscriptions#findIn} finds this model only when the live delegate is repositionable.
      *
@@ -784,12 +796,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 }
                 // Cleared only once the live delegate has resumed. The run that lost the history was paused before
                 // that, so its listener read a generation this clear moves past. Its afterPause records nothing after
-                // this clear, and what it recorded before is cleared here, though its error may already be logged. A
-                // loss of the position given here recorded before this clear is reported again when a
-                // resumeSubscription(String) reopens at it.
+                // this clear, and what it recorded before is cleared here, though its error may already be logged, so
+                // the log says resuming doesn't throw for it. A loss of the position given here is kept, since the
+                // run this resume started reports it.
                 Subscribed made = subscribed.get(subscriptionId);
-                if (made != null) {
-                    made.historyLost().clear();
+                Checkpoint resumedAt = startAt instanceof StartAt.StartAtCheckpoint given ? given.checkpoint : null;
+                Checkpoint cleared = made == null ? null : made.historyLost().clear(resumedAt);
+                if (cleared != null) {
+                    String lost = cleared.asString();
+                    log.info(HistoryLossMessages.RESUMED_AFTER_LOSS_LOG, subscriptionId, startAt, lost);
                 }
                 inTheWay.forEach(ReplayInTheWay::end);
                 models.forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);

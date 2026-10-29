@@ -64,6 +64,8 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     };
     private volatile Runnable beforeTheNextResumeAt = () -> {
     };
+    private volatile boolean defersTheNextAfterPause;
+    private volatile @Nullable Runnable deferredAfterPause;
 
     final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
@@ -101,6 +103,21 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     HistoryLosingLiveModel beforeTheNextResumeAt(Runnable beforeTheNextResumeAt) {
         this.beforeTheNextResumeAt = beforeTheNextResumeAt;
         return this;
+    }
+
+    // Once, the next takeover pauses the subscription as usual and keeps what follows the pause until runsTheDeferredAfterPause
+    HistoryLosingLiveModel defersTheNextAfterPause() {
+        defersTheNextAfterPause = true;
+        return this;
+    }
+
+    void runsTheDeferredAfterPause() {
+        Runnable deferred = deferredAfterPause;
+        if (deferred == null) {
+            throw new IllegalStateException("No takeover has deferred what follows its pause");
+        }
+        deferredAfterPause = null;
+        deferred.run();
     }
 
     // What the listeners answer for a loss, without pausing the subscription or running what follows the pause
@@ -191,7 +208,12 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
                 betweenTheNextTakeOverPauseAndWhatFollows = () -> {
                 };
                 betweenThePauseAndWhatFollows.run();
-                takeOver.afterPause().run();
+                if (defersTheNextAfterPause) {
+                    defersTheNextAfterPause = false;
+                    deferredAfterPause = takeOver.afterPause();
+                } else {
+                    takeOver.afterPause().run();
+                }
                 return;
             }
         }

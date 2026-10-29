@@ -680,6 +680,67 @@ class StreamCatchupHistoryLossOwnershipTest {
         );
     }
 
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_a_subscription_whose_resume_at_a_gone_checkpoint_lost_it_before_the_resume_returned() {
+        // Given a subscription a loss paused, and a checkpoint the live model has no history back to
+        terminallyPausedAfterALoss();
+        liveModel.withoutHistoryBack(TOKEN);
+
+        // When it is resumed at that checkpoint, whose loss the live model reports before the resume returns, and then resumed again
+        Throwable repositioning = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(TOKEN)));
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then the second resume is refused for the loss of that checkpoint and not for the earlier one
+        assertThat(repositioning).as("thrown by the resume at the gone checkpoint").isNull();
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString()).hasMessageNotContaining(LATER_TOKEN.asString());
+        assertAll(
+                () -> assertThat(liveModel.lossesReported).as("losses the live model reported").containsExactly(LATER_TOKEN, TOKEN),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model, the one at the gone checkpoint").containsExactly(ID),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged, one for each loss").containsExactly(terminalFailureLog(ID, LATER_TOKEN), terminalFailureLog(ID, TOKEN))
+        );
+    }
+
+    @Test
+    void logs_that_resuming_no_longer_throws_for_a_loss_when_a_resume_at_a_kept_checkpoint_clears_it() {
+        // Given a subscription a loss paused
+        terminallyPausedAfterALoss();
+        StartAt keptCheckpoint = StartAt.checkpoint(TOKEN);
+
+        // When it is resumed at a checkpoint the live model has the history back to
+        catchup.resumeSubscription(ID, keptCheckpoint);
+
+        // Then the resume logs that resuming no longer throws for the loss
+        assertAll(
+                () -> assertThat(infosLogged()).as("infos logged").containsOnlyOnce(resumedAfterLossLog(ID, keptCheckpoint, LATER_TOKEN)),
+                () -> assertThat(errorsLogged()).as("errors logged, only the one for the loss").containsExactly(terminalFailureLog(ID, LATER_TOKEN))
+        );
+    }
+
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_a_subscription_whose_resume_at_a_gone_checkpoint_lost_it_and_recorded_it_after_the_resume_returned() {
+        // Given a subscription a loss paused, a checkpoint the live model has no history back to, and a takeover that keeps what follows its pause
+        terminallyPausedAfterALoss();
+        liveModel.withoutHistoryBack(TOKEN).defersTheNextAfterPause();
+
+        // When it is resumed at that checkpoint, what follows the pause for its loss runs only after the resume has returned, and it is resumed again
+        Throwable repositioning = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(TOKEN)));
+        liveModel.runsTheDeferredAfterPause();
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then the second resume is refused for the loss of that checkpoint and not for the earlier one
+        assertThat(repositioning).as("thrown by the resume at the gone checkpoint").isNull();
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString()).hasMessageNotContaining(LATER_TOKEN.asString());
+        assertAll(
+                () -> assertThat(liveModel.lossesReported).as("losses the live model reported").containsExactly(LATER_TOKEN, TOKEN),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model, the one at the gone checkpoint").containsExactly(ID),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged, one for each loss").containsExactly(terminalFailureLog(ID, LATER_TOKEN), terminalFailureLog(ID, TOKEN))
+        );
+    }
+
     private void terminallyPausedAfterALoss() {
         create();
         catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
@@ -725,6 +786,14 @@ class StreamCatchupHistoryLossOwnershipTest {
 
     private List<String> errorsLogged() {
         return logged.events.stream().filter(event -> event.getLevel().equals(Level.ERROR)).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    private List<String> infosLogged() {
+        return logged.events.stream().filter(event -> event.getLevel().equals(Level.INFO)).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    private static String resumedAfterLossLog(String subscriptionId, StartAt resumedAt, Checkpoint lostFrom) {
+        return MessageFormatter.arrayFormat(HistoryLossMessages.RESUMED_AFTER_LOSS_LOG, new Object[]{subscriptionId, resumedAt, lostFrom.asString()}).getMessage();
     }
 
     private static String terminalFailureLog(String subscriptionId, Checkpoint lostFrom) {
