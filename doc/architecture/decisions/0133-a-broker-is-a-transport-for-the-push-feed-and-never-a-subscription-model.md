@@ -20,6 +20,11 @@ Amended by [ADR 153](0153-a-rabbitmq-source-registers-a-new-consumer-when-a-reco
 RabbitMQ source on a connection with topology recovery turned off registers a new consumer after a recovery, so it no
 longer stops consuming as the 2026-09-15 amendment below says.
 
+Corrected by [ADR 159](0159-six-passages-in-released-adrs-do-not-describe-the-code.md). The default
+`destinationsFor(SubscriptionFilter)` answers every `SubscriptionFilter` other than an `AgnosticSubscriptionFilter` or
+a `StreamSubscriptionFilter` with an empty result, a `MongoFilterSpecification` included, not only the two named
+below.
+
 ## Context
 
 A production deployment often forwards Occurrent cloud events to RabbitMQ or Kafka and consumes them there instead of

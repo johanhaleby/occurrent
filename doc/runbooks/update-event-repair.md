@@ -169,7 +169,9 @@ refuses to start while such an event is left, so turn the setting off once you h
 
 **`POSITION_ALREADY_TAKEN`.** Two events claim one position and the unique index refuses the second. Nothing in
 either document says which one is entitled to it. Look at both events and decide, then set the loser's position by
-hand or accept that it stays outside position-ordered reads.
+hand or accept that it stays outside position-ordered reads. If you accept it, the loser's position stays a string,
+and a store with `requireRepairedEvents` on refuses to start while it is there, so turn the setting off once you have
+accepted the loss.
 
 **`POSITION_NOT_A_NUMBER`.** The position is not a whole number, a string that does not parse as one or a stored
 fraction, NaN, array or number above the largest `long`. No known Occurrent path produces this, so it points at
@@ -364,7 +366,9 @@ to be an int32 or an int64 at or above zero. mongosh prints an int32 and a doubl
 `db.events_position.findOne({ _id: "dcb", position: { $type: ["int", "long"] } })` is the check, and it returns
 nothing for any other type. Without
 a counter document the stores read the counter as zero, so the `find` should then return nothing. Restart the
-application and confirm the startup warning is gone.
+application and confirm the startup warning is gone, unless step 5 left an event alone on purpose. A position still
+stored as a string, which every `POSITION_ALREADY_TAKEN` event you accepted has, brings that warning back on every
+start.
 
 A store with `requireRepairedEvents` on runs these same checks when it starts and refuses while any of them finds an
 event or a counter it cannot use, so an event you left alone keeps it down. Fix the event by hand as step 5 describes, or turn the setting off

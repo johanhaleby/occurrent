@@ -54,8 +54,7 @@ import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
 /**
  * Registers {@code @Snapshot} factory methods, maintaining a per-stream (or per-DCB-boundary) resume-ready snapshot.
- * Invoked from the coordinator's {@code afterSingletonsInstantiated}, after projections, sharing the one duplicate-id
- * registry.
+ * Invoked from the coordinator's {@code afterSingletonsInstantiated}, after projections.
  */
 class SnapshotAnnotationRegistrar {
 

@@ -41,6 +41,10 @@ exception to it.
 that exist, not main alone, matching the convention ADR 124 adopted after this repository's
 prior numbering collisions. The audit ran again immediately before this file was written.
 
+Corrected by [ADR 159](0159-six-passages-in-released-adrs-do-not-describe-the-code.md). The section "#753 needs no
+code change of its own" and the Consequences paragraph saying #753 stays open describe the decision the 0.34.0
+amendment above replaced.
+
 ## Context
 
 ADR 124 fixed a saga that declares a sealed supertype and silently receives nothing, by making

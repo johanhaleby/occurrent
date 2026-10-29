@@ -99,11 +99,12 @@ public final class KafkaSharedTopicDestinationResolver implements DestinationRes
      * {@link Optional#empty()}, since with a single topic there is nothing left to narrow, the feed remains the
      * decider of which events a subscription actually receives either way.
      * <p>
-     * A {@link org.occurrent.subscription.SubscriptionFilter} with no {@link Filter} in it, a
-     * {@link org.occurrent.subscription.DcbSubscriptionFilter} or a custom one, never reaches here at all. The
-     * inherited {@link DestinationResolver#destinationsFor(org.occurrent.subscription.SubscriptionFilter)} answers
-     * those with {@link Optional#empty()}, and a caller reading that binds {@link #catchAllDestination()}, which
-     * under this resolver is the same one topic.
+     * A {@link org.occurrent.subscription.SubscriptionFilter} other than an
+     * {@link org.occurrent.subscription.AgnosticSubscriptionFilter} or a
+     * {@link org.occurrent.subscription.StreamSubscriptionFilter} never reaches here at all. The inherited
+     * {@link DestinationResolver#destinationsFor(org.occurrent.subscription.SubscriptionFilter)} answers it with
+     * {@link Optional#empty()}, and a caller reading that binds {@link #catchAllDestination()}, which under this
+     * resolver is the same one topic.
      */
     @Override
     public Optional<Set<KafkaDestination>> destinationsFor(Filter filter) {

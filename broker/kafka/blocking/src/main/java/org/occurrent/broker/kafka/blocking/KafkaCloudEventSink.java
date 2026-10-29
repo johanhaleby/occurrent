@@ -221,13 +221,12 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
      * {@link Producer} this sink created and owns, waiting up to {@value #CLOSE_TIMEOUT_SECONDS} seconds for any
      * outstanding send to finish. {@code Producer#close()} with no argument waits indefinitely instead, and an
      * outstanding send to a broker that has gone away can otherwise hold this call open far longer than a caller
-     * closing this sink down would expect. The shutdown flag this sets is only read the next time a failed
-     * attempt decides whether to retry, and that decision happens before the backoff sleep for it, not after, so
-     * a {@link #close()} landing during that sleep still waits out the full delay and then runs one more attempt
-     * against the now-closed {@link Producer} before that attempt's own failure finally reads the flag and stops
-     * the retry. With the default backoff, capped at two seconds, that is a couple of seconds. A caller-supplied
-     * {@link Builder#retryStrategy(RetryStrategy)} with a longer backoff delays this by that much instead, since
-     * nothing here interrupts a sleep already in progress.
+     * closing this sink down would expect.
+     * <p>
+     * The retry loop reads the shutdown flag this sets when a failed attempt decides whether to retry, and again
+     * about every 50 ms while it waits out a backoff. A {@link #close()} that comes in during a backoff is therefore
+     * seen within about 50 ms, however long the backoff is, and {@link #publish(CloudEvent)} then throws the last
+     * attempt's failure without attempting again.
      */
     @Override
     public void close() {

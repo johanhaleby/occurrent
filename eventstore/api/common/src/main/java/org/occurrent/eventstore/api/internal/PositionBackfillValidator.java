@@ -82,8 +82,10 @@ public final class PositionBackfillValidator {
      * existing collection while it starts.
      *
      * <p>Of the three messages here this is the one an affected store reaches first, and often the only one it
-     * reaches at all. Turning position off means the store never runs the damage warning or either of the checks
-     * above, so this line is the whole of what an operator sees, and it carries the caveat for that reason.
+     * reaches at all. Turning position off means the store never runs either of the checks above. It runs the check
+     * for events damaged by {@code updateEvent} only when {@code requireRepairedEvents(true)} is set, and a damaged
+     * event then fails startup instead of being warned about. With that setting off, this line is the whole of what
+     * an operator sees, and it includes the caveat for that reason.
      *
      * @param eventStoreCollectionName the name of the event collection that contains unpositioned events
      * @return the message to log

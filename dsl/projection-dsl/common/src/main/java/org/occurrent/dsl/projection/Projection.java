@@ -151,7 +151,8 @@ public final class Projection<S extends @Nullable Object, E, ID> {
     /**
      * Starts building a {@code Projection} whose fold begins from no state. The state stays {@code null} until a
      * handler replaces it, so the handlers and the built {@code Projection} see {@code @Nullable S}, which Kotlin reads
-     * as {@code S?}. Register a handler per event type with
+     * as {@code S?}. The Java compiler doesn't check {@code @Nullable S}, so when a handler needs a non-null state,
+     * start from {@link #builder(Object)} with an initial state instead. Register a handler per event type with
      * {@link Builder#on(Class, BiFunction)}, an {@link Builder#id(Function) id} function, and optionally an explicit
      * {@link Builder#filter(Filter) filter}, then call {@link Builder#build()}.
      */
@@ -175,8 +176,9 @@ public final class Projection<S extends @Nullable Object, E, ID> {
     /**
      * Starts building a single-instance {@code Projection} whose fold begins from no state. The state stays
      * {@code null} until a handler replaces it, so the handlers and the built {@code Projection} see
-     * {@code @Nullable S}, which Kotlin reads as {@code S?}. See {@link #singletonBuilder(Object)} for what
-     * single-instance means.
+     * {@code @Nullable S}, which Kotlin reads as {@code S?}. The Java compiler doesn't check {@code @Nullable S}, so
+     * when a handler needs a non-null state, start from {@link #singletonBuilder(Object)} with an initial state
+     * instead. See {@link #singletonBuilder(Object)} for what single-instance means.
      */
     public static <S extends @Nullable Object, E> Builder<@Nullable S, E, String> singletonBuilder() {
         return singletonBuilder(null);

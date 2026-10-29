@@ -89,9 +89,10 @@ public final class SnapshotView<S extends @Nullable Object, E> {
     /**
      * Starts building a {@code SnapshotView} whose fold begins from no state. The state stays {@code null} until a
      * handler replaces it, so the handlers and the built {@code SnapshotView} see {@code @Nullable S}, which Kotlin
-     * reads as {@code S?}. Register a handler per event type with {@link Builder#on(Class, BiFunction)}, set the
-     * {@link Builder#schemaVersion(int) schemaVersion}, and optionally an explicit {@link Builder#filter(Filter)
-     * filter}, then call {@link Builder#build()}.
+     * reads as {@code S?}. The Java compiler doesn't check {@code @Nullable S}, so when a handler needs a non-null
+     * state, start from {@link #builder(Object)} with an initial state instead. Register a handler per event type
+     * with {@link Builder#on(Class, BiFunction)}, set the {@link Builder#schemaVersion(int) schemaVersion}, and
+     * optionally an explicit {@link Builder#filter(Filter) filter}, then call {@link Builder#build()}.
      */
     public static <S extends @Nullable Object, E> Builder<@Nullable S, E> builder() {
         return builder(null);
