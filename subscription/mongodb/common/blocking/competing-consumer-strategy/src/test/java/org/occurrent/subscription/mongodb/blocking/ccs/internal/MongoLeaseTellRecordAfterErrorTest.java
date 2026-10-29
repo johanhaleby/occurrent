@@ -209,6 +209,33 @@ class MongoLeaseTellRecordAfterErrorTest {
         }
     }
 
+    @Test
+    void a_grant_is_told_with_the_interrupt_that_reached_the_tell_after_it_cleared_its_flag_and_before_it_checked_that_the_strategy_runs() {
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        ClockThatInterruptsTheFirstTell clock = new ClockThatInterruptsTheFirstTell();
+        MongoLeaseCompetingConsumerStrategySupport node = nodeWhoseRoundsTheTestRuns(round, clock);
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        List<Boolean> interruptedOnAGrant = new CopyOnWriteArrayList<>();
+        RecordingListener listener = new RecordingListener(() -> interruptedOnAGrant.add(Thread.currentThread().isInterrupted()));
+        node.addListener(listener);
+        try {
+            assertThat(rival.registerCompetingConsumer(locks, A, RIVAL)).isTrue();
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isFalse();
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+
+            round.get().run();
+
+            assertThat(clock.interrupted).as("the clock interrupted the tell as it read it").isTrue();
+            assertThat(listener.calls).as("what the listener heard").containsExactly("granted " + A);
+            // Only close() sends an interrupt to a tell, and the listener has to see it
+            assertThat(interruptedOnAGrant).as("whether the thread was interrupted when the listener heard of the grant").containsExactly(true);
+        } finally {
+            Thread.interrupted();
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
     private MongoLeaseCompetingConsumerStrategySupport nodeWhoseRoundsTheTestRuns(AtomicReference<Runnable> round, LongSupplier clock) {
         return new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(),
                 new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh())), clock)
@@ -250,6 +277,30 @@ class MongoLeaseTellRecordAfterErrorTest {
     }
 
     /**
+     * Reads {@code System.nanoTime()}, and interrupts the thread that makes the first read from inside a tell. That is
+     * an interrupt from {@code close()} that arrives after the tell has cleared its flag.
+     */
+    private static final class ClockThatInterruptsTheFirstTell implements LongSupplier {
+        private final AtomicBoolean claimed = new AtomicBoolean();
+        private volatile boolean interrupted;
+
+        @Override
+        public long getAsLong() {
+            if (!claimed.get() && isReadByATell() && claimed.compareAndSet(false, true)) {
+                Thread.currentThread().interrupt();
+                interrupted = true;
+            }
+            return System.nanoTime();
+        }
+    }
+
+    private static boolean isReadByATell() {
+        return StackWalker.getInstance().walk(frames -> frames.anyMatch(frame ->
+                frame.getClassName().equals(MongoLeaseCompetingConsumerStrategySupport.class.getName())
+                        && frame.getMethodName().equals("tellUntilNothingIsDue")));
+    }
+
+    /**
      * The consumers of a strategy, which runs {@code action} once, on the first read of a consumer made from inside
      * {@code tellUntilNothingIsDue}, before that read answers.
      */
@@ -269,12 +320,6 @@ class MongoLeaseTellRecordAfterErrorTest {
                 fired = true;
             }
             return super.get(key);
-        }
-
-        private static boolean isReadByATell() {
-            return StackWalker.getInstance().walk(frames -> frames.anyMatch(frame ->
-                    frame.getClassName().equals(MongoLeaseCompetingConsumerStrategySupport.class.getName())
-                            && frame.getMethodName().equals("tellUntilNothingIsDue")));
         }
     }
 
