@@ -343,18 +343,18 @@ class RabbitMqDomainEventSourceIoFailureTest {
     }
 
     /**
-     * Counted while the first release runs, so it came before the second tag was nacked and can't explain its failure.
+     * The failed delivery arrived after the drop, so the drop can't explain its failure.
      */
     @Test
     void a_drop_counted_while_releasing_the_deferred_delivery_does_not_explain_a_failure_releasing_the_failed_one() throws Exception {
         doAnswer(invocation -> {
             channelShutDown(droppedConnection());
+            source.route(RoutingOutcome.NOT_DELIVERABLE, FAILED_DELIVERY_TAG, new BasicProperties(), new byte[0]);
             return null;
         }).when(channel).basicNack(eq(DELIVERY_TAG), anyBoolean(), anyBoolean());
         doThrow(new IOException("Connection reset")).when(channel).basicNack(eq(FAILED_DELIVERY_TAG), anyBoolean(), anyBoolean());
         when(channel.isOpen()).thenReturn(true);
         source.route(RoutingOutcome.DEFERRED, DELIVERY_TAG, new BasicProperties(), new byte[0]);
-        source.route(RoutingOutcome.NOT_DELIVERABLE, FAILED_DELIVERY_TAG, new BasicProperties(), new byte[0]);
 
         poll();
         verify(channel, never()).close();

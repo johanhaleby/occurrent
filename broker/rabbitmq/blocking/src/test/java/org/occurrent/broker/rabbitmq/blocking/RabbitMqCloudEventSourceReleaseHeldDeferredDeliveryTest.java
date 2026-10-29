@@ -60,7 +60,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link RabbitMqCloudEventSource#releaseHeldDeferredDelivery(Deque, java.util.function.LongConsumer)} in
+ * {@link RabbitMqCloudEventSource#releaseHeldDeferredDelivery(Deque, Runnable, java.util.function.LongConsumer)} in
  * isolation, with no real {@code Channel} or broker behind it. A release whose nack was not sent, which a
  * {@code ShutdownSignalException} from a closed channel shows, must never drop the tag it was for, and must not let a
  * later tag in the same pass jump ahead of the one that just failed.
@@ -81,7 +81,7 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
         List<Long> released = new CopyOnWriteArrayList<>();
         ShutdownSignalException shutdown = new ShutdownSignalException(false, false, null, null);
 
-        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             attempts.incrementAndGet();
             if (tag == 1L) {
                 throw shutdown;
@@ -108,7 +108,7 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
         RabbitMqSourceException failure = new RabbitMqSourceException("Failed to negatively acknowledge delivery tag 1",
                 new IOException("thrown by a metrics collector after the nack was written"));
 
-        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             if (tag == 1L) {
                 throw failure;
             }
@@ -129,7 +129,7 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
         List<Long> released = new CopyOnWriteArrayList<>();
         StackOverflowError error = new StackOverflowError("a metrics collector that recursed");
 
-        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             if (tag == 1L) {
                 throw error;
             }
@@ -146,7 +146,7 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
         Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
         IllegalStateException failure = new IllegalStateException("a traffic listener or a metrics collector that threw");
 
-        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             if (tag == 1L) {
                 throw failure;
             }
@@ -241,7 +241,7 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
         AtomicInteger attempts = new AtomicInteger();
         List<Long> released = new CopyOnWriteArrayList<>();
 
-        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             if (attempts.getAndIncrement() == 0) {
                 throw new ShutdownSignalException(false, false, null, null);
             }
@@ -251,7 +251,7 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
         assertThat(held).containsExactly(1L, 2L);
 
         // The next poll's own call to this same method, once a recovery has opened the channel again.
-        RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             attempts.incrementAndGet();
             released.add(tag);
         });
@@ -265,7 +265,7 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
         Deque<Long> held = new ArrayDeque<>(List.of(1L));
         List<Long> released = new CopyOnWriteArrayList<>();
 
-        RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             released.add(tag);
             // A redelivery this release itself triggers, landing back on the same consumer and reporting
             // DEFERRED again before this pass has finished: the exact race the snapshot-count fix exists for.
@@ -276,5 +276,29 @@ class RabbitMqCloudEventSourceReleaseHeldDeferredDeliveryTest {
         // The snapshot at entry was 1 tag, so the loop already ran its one iteration and stopped, leaving the
         // tag appended mid-pass for the next poll to pick up instead of nacking it in the same pass.
         assertThat(held).containsExactly(2L);
+    }
+
+    /**
+     * The source reads its connection-drop count in that step, so every tag a pass releases was held before the read.
+     */
+    @Test
+    void a_tag_added_by_the_step_after_the_snapshot_is_not_released_in_that_pass() {
+        Deque<Long> held = new ArrayDeque<>(List.of(1L));
+        List<Long> released = new CopyOnWriteArrayList<>();
+
+        RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, () -> held.addLast(2L), released::add);
+
+        assertThat(released).containsExactly(1L);
+        assertThat(held).containsExactly(2L);
+    }
+
+    @Test
+    void the_step_after_the_snapshot_runs_once_before_the_first_release() {
+        Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
+        List<String> order = new CopyOnWriteArrayList<>();
+
+        RabbitMqCloudEventSource.releaseHeldDeferredDelivery(held, () -> order.add("after snapshot"), tag -> order.add("released " + tag));
+
+        assertThat(order).containsExactly("after snapshot", "released 1", "released 2");
     }
 }

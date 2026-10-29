@@ -63,7 +63,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link RabbitMqDomainEventSource#releaseHeldDeferredDelivery(Deque, java.util.function.LongConsumer)} in
+ * {@link RabbitMqDomainEventSource#releaseHeldDeferredDelivery(Deque, Runnable, java.util.function.LongConsumer)} in
  * isolation, with no real {@code Channel} or broker behind it. A release whose nack was not sent, which a
  * {@code ShutdownSignalException} from a closed channel shows, must never drop the tag it was for, and must not let a
  * later tag in the same pass jump ahead of the one that just failed.
@@ -84,7 +84,7 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
         List<Long> released = new CopyOnWriteArrayList<>();
         ShutdownSignalException shutdown = new ShutdownSignalException(false, false, null, null);
 
-        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             attempts.incrementAndGet();
             if (tag == 1L) {
                 throw shutdown;
@@ -111,7 +111,7 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
         RabbitMqSourceException failure = new RabbitMqSourceException("Failed to negatively acknowledge delivery tag 1",
                 new IOException("thrown by a metrics collector after the nack was written"));
 
-        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             if (tag == 1L) {
                 throw failure;
             }
@@ -132,7 +132,7 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
         List<Long> released = new CopyOnWriteArrayList<>();
         StackOverflowError error = new StackOverflowError("a metrics collector that recursed");
 
-        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             if (tag == 1L) {
                 throw error;
             }
@@ -149,7 +149,7 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
         Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
         IllegalStateException failure = new IllegalStateException("a traffic listener or a metrics collector that threw");
 
-        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             if (tag == 1L) {
                 throw failure;
             }
@@ -252,7 +252,7 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
         AtomicInteger attempts = new AtomicInteger();
         List<Long> released = new CopyOnWriteArrayList<>();
 
-        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        Throwable thrown = catchThrowable(() -> RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             if (attempts.getAndIncrement() == 0) {
                 throw new ShutdownSignalException(false, false, null, null);
             }
@@ -261,7 +261,7 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
         assertThat(thrown).isInstanceOf(ShutdownSignalException.class);
         assertThat(held).containsExactly(1L, 2L);
 
-        RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             attempts.incrementAndGet();
             released.add(tag);
         });
@@ -275,12 +275,36 @@ class RabbitMqDomainEventSourceReleaseHeldDeferredDeliveryTest {
         Deque<Long> held = new ArrayDeque<>(List.of(1L));
         List<Long> released = new CopyOnWriteArrayList<>();
 
-        RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, tag -> {
+        RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, () -> { }, tag -> {
             released.add(tag);
             held.addLast(2L);
         });
 
         assertThat(released).containsExactly(1L);
         assertThat(held).containsExactly(2L);
+    }
+
+    /**
+     * The source reads its connection-drop count in that step, so every tag a pass releases was held before the read.
+     */
+    @Test
+    void a_tag_added_by_the_step_after_the_snapshot_is_not_released_in_that_pass() {
+        Deque<Long> held = new ArrayDeque<>(List.of(1L));
+        List<Long> released = new CopyOnWriteArrayList<>();
+
+        RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, () -> held.addLast(2L), released::add);
+
+        assertThat(released).containsExactly(1L);
+        assertThat(held).containsExactly(2L);
+    }
+
+    @Test
+    void the_step_after_the_snapshot_runs_once_before_the_first_release() {
+        Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
+        List<String> order = new CopyOnWriteArrayList<>();
+
+        RabbitMqDomainEventSource.releaseHeldDeferredDelivery(held, () -> order.add("after snapshot"), tag -> order.add("released " + tag));
+
+        assertThat(order).containsExactly("after snapshot", "released 1", "released 2");
     }
 }

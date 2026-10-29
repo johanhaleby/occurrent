@@ -26,10 +26,12 @@ import com.rabbitmq.client.DeliverCallback;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.ShutdownListener;
 import com.rabbitmq.client.ShutdownSignalException;
+import com.rabbitmq.client.impl.ChannelN;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
@@ -44,6 +46,7 @@ import java.util.Optional;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.params.provider.Arguments.argumentSet;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -55,8 +58,8 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 /**
- * A source on a channel that isn't {@code Recoverable} warns when it's built, and a close of that channel doesn't stop
- * it.
+ * A source stops on its next poll when a close ends its channel for good, which depends on the kind of channel and on
+ * the close. It warns when it's built on a channel that a recovery underneath may reopen without telling it.
  */
 class RabbitMqCloudEventSourceNonRecoverableChannelTest {
 
@@ -79,12 +82,22 @@ class RabbitMqCloudEventSourceNonRecoverableChannelTest {
     }
 
     @ParameterizedTest
-    @MethodSource("closesThatStopARecoverableChannel")
-    void a_close_of_a_channel_that_is_not_recoverable_does_not_stop_an_idle_source_on_the_next_poll(ShutdownSignalException cause) throws Exception {
+    @MethodSource("closesThatEndTheChannelForGood")
+    void a_close_that_ends_the_channel_for_good_stops_an_idle_source_on_the_next_poll(Channel channel, ShutdownSignalException close) throws Exception {
+        RabbitMqCloudEventSource source = sourceOn(channel);
+
+        channelShutDown(channel, close);
+        poll(source);
+
+        verify(channel).close();
+    }
+
+    @Test
+    void a_connection_close_the_client_recovers_from_does_not_stop_an_idle_source_on_a_wrapper_channel_and_it_keeps_consuming() throws Exception {
         Channel channel = mock(Channel.class);
         RabbitMqCloudEventSource source = sourceOn(channel);
 
-        channelShutDown(channel, cause);
+        channelShutDown(channel, new ShutdownSignalException(true, false, null, mock(Connection.class)));
         poll(source);
 
         verify(channel, never()).close();
@@ -92,10 +105,10 @@ class RabbitMqCloudEventSourceNonRecoverableChannelTest {
     }
 
     @Test
-    void building_a_source_on_a_channel_that_is_not_recoverable_warns_with_the_queue() throws Exception {
+    void building_a_source_on_a_wrapper_channel_warns_with_the_queue() throws Exception {
         RabbitMqCloudEventSource source = built(mock(Channel.class));
         try {
-            assertThat(nonRecoverableWarnings()).singleElement().satisfies(event -> {
+            assertThat(wrapperWarnings()).singleElement().satisfies(event -> {
                 assertThat(event.getLevel()).isEqualTo(Level.WARN);
                 assertThat(event.getFormattedMessage()).contains("\"" + QUEUE + "\"");
             });
@@ -108,22 +121,38 @@ class RabbitMqCloudEventSourceNonRecoverableChannelTest {
     void building_a_source_on_a_recoverable_channel_does_not_warn_about_it() throws Exception {
         RabbitMqCloudEventSource source = built(mock(Channel.class, withSettings().extraInterfaces(Recoverable.class)));
         try {
-            assertThat(nonRecoverableWarnings()).isEmpty();
+            assertThat(wrapperWarnings()).isEmpty();
         } finally {
             source.close();
         }
     }
 
-    private static Stream<ShutdownSignalException> closesThatStopARecoverableChannel() {
+    @Test
+    void building_a_source_on_the_clients_own_channel_does_not_warn_about_it() throws Exception {
+        RabbitMqCloudEventSource source = built(mock(ChannelN.class));
+        try {
+            assertThat(wrapperWarnings()).isEmpty();
+        } finally {
+            source.close();
+        }
+    }
+
+    private static Stream<Arguments> closesThatEndTheChannelForGood() {
         return Stream.of(
-                new ShutdownSignalException(false, false, null, mock(Channel.class)),
-                new ShutdownSignalException(true, true, null, mock(Connection.class))
+                argumentSet("a Recoverable channel and a close of the channel alone",
+                        mock(Channel.class, withSettings().extraInterfaces(Recoverable.class)), new ShutdownSignalException(false, false, null, mock(Channel.class))),
+                argumentSet("the client's own channel and a connection close the client recovers from",
+                        mock(ChannelN.class), new ShutdownSignalException(true, false, null, mock(Connection.class))),
+                argumentSet("a wrapper channel and a close of the channel alone",
+                        mock(Channel.class), new ShutdownSignalException(false, false, null, mock(Channel.class))),
+                argumentSet("a wrapper channel and a connection close by the application",
+                        mock(Channel.class), new ShutdownSignalException(true, true, null, mock(Connection.class)))
         );
     }
 
-    private List<ILoggingEvent> nonRecoverableWarnings() {
+    private List<ILoggingEvent> wrapperWarnings() {
         return logged.list.stream()
-                .filter(event -> event.getFormattedMessage().contains("isn't Recoverable"))
+                .filter(event -> event.getFormattedMessage().contains("which is neither Recoverable nor the client's own channel"))
                 .toList();
     }
 

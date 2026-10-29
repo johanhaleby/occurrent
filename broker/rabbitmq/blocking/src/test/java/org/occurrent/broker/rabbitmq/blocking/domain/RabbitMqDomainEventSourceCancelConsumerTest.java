@@ -16,12 +16,17 @@
 
 package org.occurrent.broker.rabbitmq.blocking.domain;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.CancelCallback;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.ChannelContinuationTimeoutException;
 import com.rabbitmq.client.DeliverCallback;
 import com.rabbitmq.client.RecoveryListener;
+import com.rabbitmq.client.ShutdownSignalException;
 import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
 import com.rabbitmq.client.impl.recovery.ConsumerRecoveryListener;
 import org.junit.jupiter.api.AfterEach;
@@ -40,10 +45,12 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -61,7 +68,9 @@ import static org.mockito.Mockito.when;
  * way that says nothing about the consumer, may have left it registered, so the next poll cancels again. A cancel
  * made while a recovery runs could miss the consumer the recovery registers again, so it waits for the recovery to
  * finish and cancels that consumer under its new tag. The poll is driven directly
- * against a mocked {@link Channel}, since nothing schedules it on a source built this way.
+ * against a mocked {@link Channel}, since nothing schedules it on a source built this way. A cancel that fails while
+ * the source stops for good is logged at debug when the channel is already closed, since it has no consumer left,
+ * and as a warning otherwise.
  */
 class RabbitMqDomainEventSourceCancelConsumerTest {
 
@@ -70,6 +79,8 @@ class RabbitMqDomainEventSourceCancelConsumerTest {
 
     private final Channel channel = mock(Channel.class);
     private final AtomicBoolean ready = new AtomicBoolean(true);
+    private final ch.qos.logback.classic.Logger sourceLog = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(RabbitMqDomainEventSource.class);
+    private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
     private RabbitMqDomainEventSource<Object> source;
 
     @SuppressWarnings("unchecked")
@@ -84,6 +95,19 @@ class RabbitMqDomainEventSourceCancelConsumerTest {
         source = new RabbitMqDomainEventSource<>(feed, channel, "queue", 1, Duration.ofSeconds(1), failureAction, Duration.ofSeconds(1));
         poll();
         verify(channel).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+    }
+
+    @BeforeEach
+    void captureLog() {
+        logged.start();
+        sourceLog.addAppender(logged);
+        sourceLog.setLevel(Level.DEBUG);
+    }
+
+    @AfterEach
+    void releaseLog() {
+        sourceLog.detachAppender(logged);
+        sourceLog.setLevel(null);
     }
 
     @AfterEach
@@ -202,6 +226,36 @@ class RabbitMqDomainEventSourceCancelConsumerTest {
 
         verify(channel).basicCancel(CONSUMER_TAG);
         verify(channel).basicNack(1L, false, true);
+    }
+
+    @Test
+    void a_cancel_on_a_permanent_stop_that_fails_because_the_channel_is_already_closed_is_logged_at_debug() throws Exception {
+        doThrow(new AlreadyClosedException(new ShutdownSignalException(false, false, null, channel))).when(channel).basicCancel(CONSUMER_TAG);
+
+        source.route(RoutingOutcome.REFUSED, 1L, new BasicProperties(), new byte[0]);
+
+        assertThat(cancelLines()).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.DEBUG);
+            assertThat(event.getFormattedMessage()).contains("Didn't cancel the consumer", "\"queue\"");
+        });
+    }
+
+    @Test
+    void a_cancel_on_a_permanent_stop_that_fails_with_an_io_exception_is_logged_as_a_warning() throws Exception {
+        doThrow(new IOException("Unknown consumerTag")).when(channel).basicCancel(CONSUMER_TAG);
+
+        source.route(RoutingOutcome.REFUSED, 1L, new BasicProperties(), new byte[0]);
+
+        assertThat(cancelLines()).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains("Failed to cancel the consumer", "\"queue\"");
+        });
+    }
+
+    private List<ILoggingEvent> cancelLines() {
+        return logged.list.stream()
+                .filter(event -> event.getFormattedMessage().contains("cancel the consumer"))
+                .toList();
     }
 
     private void poll() throws ReflectiveOperationException {

@@ -25,7 +25,11 @@ import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.ShutdownSignalException;
+import com.rabbitmq.client.impl.ChannelN;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.slf4j.Logger;
@@ -33,10 +37,12 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.params.provider.Arguments.argumentSet;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -280,6 +286,53 @@ class RabbitMqDeliveryFailureActionTest {
         assertThat(recovering.isLostToConnectionRecovery(new IllegalStateException("unrelated"))).isFalse();
         assertThat(recovering.isLostToConnectionRecovery(new OutOfMemoryError())).isFalse();
         assertThat(notRecovering.isLostToConnectionRecovery(new AlreadyClosedException(connectionDropped))).as("connection without automatic recovery").isFalse();
+    }
+
+    /**
+     * A close the client recovers from on a {@code Recoverable} channel is reopened, so it ends nothing. On a wrapper
+     * around the client's own channel a recovery underneath may reopen it without telling the source, so that close
+     * isn't final there either. The client's own channel has no recovery underneath, so every close is final.
+     */
+    @ParameterizedTest
+    @MethodSource("closesByChannelKind")
+    void isClosedForGood_is_false_only_for_a_close_a_recovery_may_reopen_the_channel_after(Channel channel, ShutdownSignalException close, boolean closedForGood) {
+        assertThat(actionOn(channel).isClosedForGood(close)).isEqualTo(closedForGood);
+    }
+
+    @Test
+    void mayHideRecovery_is_true_only_for_a_channel_that_is_neither_recoverable_nor_the_clients_own() {
+        assertThat(actionOn(mock(Channel.class, withSettings().extraInterfaces(Recoverable.class))).mayHideRecovery()).as("Recoverable channel").isFalse();
+        assertThat(actionOn(mock(ChannelN.class)).mayHideRecovery()).as("the client's own channel").isFalse();
+        assertThat(actionOn(mock(Channel.class)).mayHideRecovery()).as("wrapper channel").isTrue();
+    }
+
+    private static Stream<Arguments> closesByChannelKind() {
+        ShutdownSignalException channelClosedByBroker = new ShutdownSignalException(false, false, null, mock(Channel.class));
+        ShutdownSignalException channelClosedByApplication = new ShutdownSignalException(false, true, null, mock(Channel.class));
+        ShutdownSignalException connectionDropped = new ShutdownSignalException(true, false, null, mock(Connection.class));
+        ShutdownSignalException connectionClosedByApplication = new ShutdownSignalException(true, true, null, mock(Connection.class));
+        return Stream.of(
+                argumentSet("Recoverable, channel closed by the broker", recoverable(), channelClosedByBroker, true),
+                argumentSet("Recoverable, channel closed by the application", recoverable(), channelClosedByApplication, true),
+                argumentSet("Recoverable, connection closed by the application", recoverable(), connectionClosedByApplication, true),
+                argumentSet("Recoverable, connection dropped", recoverable(), connectionDropped, false),
+                argumentSet("client's own, channel closed by the broker", mock(ChannelN.class), channelClosedByBroker, true),
+                argumentSet("client's own, channel closed by the application", mock(ChannelN.class), channelClosedByApplication, true),
+                argumentSet("client's own, connection closed by the application", mock(ChannelN.class), connectionClosedByApplication, true),
+                argumentSet("client's own, connection dropped", mock(ChannelN.class), connectionDropped, true),
+                argumentSet("wrapper, channel closed by the broker", mock(Channel.class), channelClosedByBroker, true),
+                argumentSet("wrapper, channel closed by the application", mock(Channel.class), channelClosedByApplication, true),
+                argumentSet("wrapper, connection closed by the application", mock(Channel.class), connectionClosedByApplication, true),
+                argumentSet("wrapper, connection dropped", mock(Channel.class), connectionDropped, false)
+        );
+    }
+
+    private static Channel recoverable() {
+        return mock(Channel.class, withSettings().extraInterfaces(Recoverable.class));
+    }
+
+    private RabbitMqDeliveryFailureAction actionOn(Channel channel) {
+        return new RabbitMqDeliveryFailureAction(channel, DeliveryFailurePolicy.REDELIVER, null, null, LoggerFactory.getLogger(getClass()));
     }
 
     private static ListAppender<ILoggingEvent> captureLogOf(Logger log) {
