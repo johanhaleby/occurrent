@@ -29,6 +29,8 @@ import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.Competi
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -47,15 +49,28 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 
 /**
- * Common operations for MongoDB lease-based competing consumer strategies
+ * Common operations for MongoDB lease-based competing consumer strategies.
+ * <p>
+ * Each consumer keeps a record of what its listeners were last told, next to the status of its lease. The record
+ * changes only once the listeners have been told, so a throwable anywhere in a refresh round or in telling the
+ * listeners, an {@link OutOfMemoryError} included, leaves the record behind the status. Every refresh round compares
+ * the two for each consumer and has the listeners told the difference, so a grant or a prohibition that a throwable
+ * cut short is told by a later round instead of being lost.
  */
 @NullMarked
 public class MongoLeaseCompetingConsumerStrategySupport {
     private static final Logger log = LoggerFactory.getLogger(MongoLeaseCompetingConsumerStrategySupport.class);
-    private static final FailureLogging failureLog = new FailureLogging(log);
+    private static final FailureLogging listenerThrewError = new FailureLogging(log, "Listener {} failed on {} (subscriberId={}, subscriptionId={}) due to {} - {}. The next refresh round tells it again.");
+    private static final FailureLogging listenerThrew = new FailureLogging(log, "Listener {} failed on {} (subscriberId={}, subscriptionId={}) due to {} - {}");
+    private static final FailureLogging tellingFailed = new FailureLogging(log, "Telling the listeners of subscription {} failed due to {} - {}. The next refresh round tells them again.");
+    private static final FailureLogging comparingFailed = new FailureLogging(log, "Working out what to tell the listeners of subscription {} failed due to {} - {}. The next refresh round tries again.");
+
+    // What the locked step of a register, release or unregister changed, as a long so it allocates nothing. A grant is
+    // the consumer's lapse count after the step and a prohibition is -3 less its loss count, so no two ranges meet.
+    static final long OWN_NOTHING = -1;
+    static final long OWN_STILL_HELD = -2;
 
     public static final String DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION = "competing-consumer-locks";
     public static final Duration DEFAULT_LEASE_TIME = Duration.ofSeconds(20);
@@ -113,20 +128,13 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private final long heldForNanos;
     private final LongSupplier clock;
     private final ScheduledRefresh scheduledRefresh;
-    private final ConcurrentMap<CompetingConsumer, Status> competingConsumers;
+    private final ConcurrentMap<CompetingConsumer, ConsumerState> competingConsumers;
     /**
      * The token of the last lease this instance was granted, per subscription id. Kept after the lease is lost,
      * released or unregistered, since that token is the one a handler still running from that lease has to write
      * with. See {@link #fencingToken(String)}.
      */
     private final ConcurrentMap<String, Long> lastHeldFencingTokens = new ConcurrentHashMap<>();
-    /**
-     * The consumers {@link #hasLock} said no to because their lease could have expired, while the status still said
-     * they held it. A listener may have acted on that answer, such as pausing the subscription, so the refresh that
-     * extends the lease again tells the listeners it is granted. Kept apart from the status, which a refresh replaces,
-     * so an answer given from the status a refresh is replacing is not lost with it.
-     */
-    private final Set<CompetingConsumer> answeredExpired = ConcurrentHashMap.newKeySet();
     private final Set<CompetingConsumerListener> competingConsumerListeners;
     private final RetryStrategy retryStrategy;
     /**
@@ -246,9 +254,22 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
 
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
-        Outcome outcome = inConsumerLock(competingConsumer, () -> acquireLease(collection, competingConsumer, competingConsumers.get(competingConsumer), retryStrategy));
-        notifyListeners(outcome, subscriptionId, subscriberId);
-        return outcome.acquired();
+        ConsumerState[] registered = new ConsumerState[1];
+        long own = inConsumerLock(competingConsumer, () -> {
+            ConsumerState mapped = competingConsumers.get(competingConsumer);
+            Optional<ListenerLock> lock = MongoListenerLockService.acquireOrRefreshFor(collection, retryStrategy, whileRunning, leaseTime, subscriptionId, subscriberId, clock);
+            // Reused when mapped, so a prohibition its record still owes is not lost with it. Put only once its status is
+            // set, since fencingToken reads the status of every consumer in the map.
+            ConsumerState c = mapped == null ? new ConsumerState(competingConsumer) : mapped;
+            registered[0] = c;
+            long step = recordLease(c, mapped == null ? null : mapped.status, lock);
+            if (mapped == null) {
+                competingConsumers.put(competingConsumer, c);
+            }
+            return step;
+        });
+        tellOwnStep(registered[0], own);
+        return own >= 0 || own == OWN_STILL_HELD;
     }
 
     public void unregisterCompetingConsumer(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId) {
@@ -257,21 +278,33 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         logDebug("Unregistering consumer (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
 
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
-        Outcome outcome = inConsumerLock(competingConsumer, () -> {
-            Status status = competingConsumers.get(competingConsumer);
-            if (status == null) {
-                return giveUpLease(collection, competingConsumer, null);
+        ConsumerState[] unregistered = new ConsumerState[1];
+        long own = inConsumerLock(competingConsumer, () -> {
+            ConsumerState c = competingConsumers.get(competingConsumer);
+            if (c == null) {
+                return giveUpLease(collection, competingConsumer, null, null);
             }
-            // Forgotten only once the lease is removed. A removal that fails keeps the consumer as
-            // UNREGISTERING, which hasLock answers no for and which no round extends, and the next round removes the
-            // lease again. Forgetting it first would leave the lease in place until it expired.
-            competingConsumers.put(competingConsumer, Status.UNREGISTERING);
-            answeredExpired.remove(competingConsumer);
-            Outcome givenUp = giveUpLease(collection, competingConsumer, status);
-            competingConsumers.remove(competingConsumer, Status.UNREGISTERING);
-            return givenUp;
+            unregistered[0] = c;
+            // Kept as UNREGISTERING, which hasLock answers no for and which no round extends, until the lease is
+            // removed and the listeners have been told the prohibition. Forgetting it first would leave the lease in
+            // place until it expired, or a prohibition the listeners were never told.
+            Status status = c.status;
+            if (status.isLockAcquired()) {
+                c.lose();
+            }
+            c.status = Status.UNREGISTERING;
+            long step = giveUpLease(collection, competingConsumer, c, status);
+            forgetIfNothingIsOwed(c);
+            return step;
         });
-        notifyListeners(outcome, subscriptionId, subscriberId);
+        ConsumerState c = unregistered[0];
+        if (c != null) {
+            tellOwnStep(c, own);
+            inConsumerLock(competingConsumer, () -> {
+                forgetIfNothingIsOwed(c);
+                return OWN_NOTHING;
+            });
+        }
     }
 
     /**
@@ -285,47 +318,54 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         logDebug("Releasing consumer (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
 
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
-        Outcome outcome = inConsumerLock(competingConsumer, () -> {
-            Status status = competingConsumers.get(competingConsumer);
-            if (status != null && status.isLockAcquired()) {
+        ConsumerState[] released = new ConsumerState[1];
+        long own = inConsumerLock(competingConsumer, () -> {
+            ConsumerState c = competingConsumers.get(competingConsumer);
+            released[0] = c;
+            Status status = c == null ? null : c.status;
+            if (c != null && status.isLockAcquired()) {
                 // A release keeps the consumer in the map, so it stays a candidate, but the lease below is about to go
                 // and it does not have it any more. Leaving the status alone would make hasLock answer yes for a
-                // subscriber that no longer receives events, and would make the next refresh find its commit rejected
-                // and report the loss a second time.
+                // subscriber that no longer receives events.
                 //
                 // LOCK_RELEASED rather than LOCK_NOT_ACQUIRED so that the next refresh stands this consumer down for
                 // one round instead of racing straight back for the lease it just gave up. Nothing guarantees a rival
                 // wins that race, since both refresh on their own schedule, but a consumer that gave the lease up and
                 // took it back before anybody else had a chance to look has not given it up in any useful sense.
-                competingConsumers.put(competingConsumer, Status.LOCK_RELEASED);
+                c.lose();
+                c.status = Status.LOCK_RELEASED;
             }
-            return giveUpLease(collection, competingConsumer, status);
+            return giveUpLease(collection, competingConsumer, c, status);
         });
-        notifyListeners(outcome, subscriptionId, subscriberId);
+        if (released[0] != null) {
+            tellOwnStep(released[0], own);
+        }
     }
 
     /**
-     * Take the lease, or refresh one already held, and work out what that changed. The status the consumer had comes
-     * from the caller, which has already read it under the same lock. {@code retryStrategyToUse} is
-     * {@link #retryStrategy} from {@link #registerCompetingConsumer} and {@link #cappedRetryStrategy} from a
-     * refresh round competing for a lease nobody holds yet, since the two callers keep different retry behaviour.
+     * Record what a lease call for {@code c} returned, and what that changed. {@code oldStatus} is the status {@code c}
+     * had, read under the same lock, and {@code null} for a consumer that is not in the map yet.
      */
-    private Outcome acquireLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable Status oldStatus, RetryStrategy retryStrategyToUse) {
-        String subscriptionId = competingConsumer.subscriptionId;
-        String subscriberId = competingConsumer.subscriberId;
-        Optional<ListenerLock> lock = MongoListenerLockService.acquireOrRefreshFor(collection, retryStrategyToUse, whileRunning, leaseTime, subscriptionId, subscriberId, clock);
-        boolean acquired = lock.isPresent();
-        // A lease hasLock said no to counts as not held, since a listener may have acted on that answer
-        boolean oldStatusWasAcquired = oldStatus != null && oldStatus.isLockAcquired() && !answeredExpired.remove(competingConsumer);
-        logDebug("acquireLease: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
-        competingConsumers.put(competingConsumer, acquired ? Status.lockAcquired(lock.get().version(), lock.get().sentAt()) : Status.LOCK_NOT_ACQUIRED);
-        lock.ifPresent(l -> lastHeldFencingTokens.merge(subscriptionId, l.version(), Math::max));
-        if (!oldStatusWasAcquired && acquired) {
-            return new Outcome(true, Notification.GRANTED);
-        } else if (oldStatusWasAcquired && !acquired) {
-            return new Outcome(false, Notification.PROHIBITED);
+    private long recordLease(ConsumerState c, @Nullable Status oldStatus, Optional<ListenerLock> lock) {
+        boolean oldStatusWasAcquired = oldStatus != null && oldStatus.isLockAcquired();
+        logDebug("acquireLease: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, lock.isPresent(), c.key.subscriberId, c.key.subscriptionId);
+        if (lock.isPresent()) {
+            long token = lock.get().version();
+            // Before the status, so fencingToken never answers with an older token once this lease is lost
+            lastHeldFencingTokens.merge(c.key.subscriptionId, token, Math::max);
+            if (oldStatusWasAcquired && oldStatus.fencingToken().getAsLong() != token) {
+                c.lose();
+            }
+            c.status = Status.lockAcquired(token, lock.get().sentAt());
+            return oldStatusWasAcquired ? OWN_STILL_HELD : c.lapses;
         }
-        return new Outcome(acquired, Notification.NONE);
+        if (oldStatusWasAcquired) {
+            c.lose();
+            c.status = Status.LOCK_NOT_ACQUIRED;
+            return -3 - c.losses;
+        }
+        c.status = Status.LOCK_NOT_ACQUIRED;
+        return OWN_NOTHING;
     }
 
     /**
@@ -335,20 +375,24 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * Uses {@link #cappedRetryStrategy}, so a removal that keeps failing gives up instead of holding the caller
      * open. That constant says why giving up is safe here.
      */
-    private Outcome giveUpLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable Status status) {
+    private long giveUpLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable ConsumerState c, @Nullable Status status) {
         String subscriptionId = competingConsumer.subscriptionId;
         String subscriberId = competingConsumer.subscriberId;
-        if (status == null) {
+        if (c == null || status == null) {
             logDebug("Failed to find consumer status (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            return Outcome.NOTHING;
+            return OWN_NOTHING;
         }
         MongoListenerLockService.remove(collection, cappedRetryStrategy, whileRunning, subscriptionId, subscriberId);
-        if (status.isLockAcquired()) {
-            logDebug("Lock status was {}, will invoke onConsumeProhibited for listeners (subscriberId={}, subscriptionId={})", status, subscriberId, subscriptionId);
-            return new Outcome(false, Notification.PROHIBITED);
+        logDebug("Gave up the lease, status was {} (subscriberId={}, subscriptionId={})", status, subscriberId, subscriptionId);
+        return status.isLockAcquired() ? -3 - c.losses : OWN_NOTHING;
+    }
+
+    // Under the consumer's lock. Unregistering forgets a consumer only once the listeners have nothing more to be told
+    // about it.
+    private void forgetIfNothingIsOwed(ConsumerState c) {
+        if (c.status.kind() == Status.Kind.UNREGISTERING && c.told instanceof NotGranted notGranted && notGranted.lossesSeen() == c.losses && !c.telling) {
+            competingConsumers.remove(c.key, c);
         }
-        logDebug("Lock status was {}, will NOT invoke onConsumeProhibited for listeners (subscriberId={}, subscriptionId={})", status, subscriberId, subscriptionId);
-        return Outcome.NOTHING;
     }
 
     /**
@@ -367,18 +411,25 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
-        Status status = competingConsumers.get(competingConsumer);
-        boolean hasLock = status != null && status.isLockAcquired() && cannotHaveExpired(competingConsumer, status);
+        ConsumerState c = competingConsumers.get(competingConsumer);
+        Status status = c == null ? null : c.status;
+        boolean hasLock = status != null && status.isLockAcquired() && cannotHaveExpired(c, status);
         logDebug("hasLock={} (subscriberId={}, subscriptionId={})", hasLock, subscriberId, subscriptionId);
         return hasLock;
     }
 
-    private boolean cannotHaveExpired(CompetingConsumer competingConsumer, Status acquired) {
-        if (clock.getAsLong() - acquired.sentAt() < heldForNanos) {
+    // A listener may act on a no from here, such as pausing the subscription, so counting it as a lapse makes the
+    // refresh that extends the lease again tell the listeners it is granted
+    private boolean cannotHaveExpired(ConsumerState c, Status acquired) {
+        if (isFresh(acquired)) {
             return true;
         }
-        answeredExpired.add(competingConsumer);
+        c.lapse();
         return false;
+    }
+
+    private boolean isFresh(@Nullable Status status) {
+        return status != null && status.isLockAcquired() && clock.getAsLong() - status.sentAt() < heldForNanos;
     }
 
     /**
@@ -396,13 +447,14 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Status onlyStatus = null;
         int registered = 0;
-        for (Map.Entry<CompetingConsumer, Status> entry : competingConsumers.entrySet()) {
-            if (entry.getKey().subscriptionId.equals(subscriptionId) && entry.getValue().kind() != Status.Kind.UNREGISTERING) {
+        for (ConsumerState c : competingConsumers.values()) {
+            Status status = c.status;
+            if (c.key.subscriptionId.equals(subscriptionId) && status.kind() != Status.Kind.UNREGISTERING) {
                 registered++;
                 if (registered > 1) {
                     return OptionalLong.empty();
                 }
-                onlyStatus = entry.getValue();
+                onlyStatus = status;
             }
         }
         if (registered == 1 && onlyStatus.isLockAcquired()) {
@@ -434,9 +486,13 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * being refreshed, since one lease MongoDB refuses to write must not let every other lease on this instance
      * expire. That holds for an {@link Error} too. Once every consumer has had its turn, the first Error, or the first
      * failure when none was one, is thrown with the others attached as suppressed, so the round's retry strategy gives a failing consumer the same attempts it gave the whole round
-     * before. What a round changed reaches the listeners through {@link ScheduledRefresh#notifyInBackground}, so a
-     * listener that blocks, which pausing or resuming a subscription while the database does not answer does, holds up
-     * the later notifications for that subscription, but never those for another one or the next refresh round.
+     * before.
+     * <p>
+     * After each consumer's refresh, also one that threw, the round compares what that consumer's listeners were last
+     * told with its status, and when the two differ it hands a tell over through
+     * {@link ScheduledRefresh#notifyInBackground}. A listener that blocks, which pausing or resuming a subscription
+     * while the database does not answer does, holds up the later tells for its own consumer only, never those for
+     * another one or the next refresh round.
      */
     private void refreshOrAcquireLease(MongoCollection<BsonDocument> collection, AtomicReference<@Nullable Set<CompetingConsumer>> failedInThisRound) {
         logDebug("In refreshOrAcquireLease with {} competing consumers", competingConsumers.size());
@@ -447,81 +503,61 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             if (toRefresh != null && !toRefresh.contains(cc)) {
                 continue;
             }
-            final Outcome outcome;
             try {
-                outcome = inConsumerLock(cc, () -> refreshOne(collection, cc));
+                inConsumerLock(cc, () -> {
+                    refreshOne(collection, cc);
+                    return OWN_NOTHING;
+                });
             } catch (Throwable e) {
-                logDebug("Failed to refresh the lease due to {} - {}, refreshing the other consumers before this one is tried again (subscriberId={}, subscriptionId={})",
-                        e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId);
-                failed.add(cc);
-                failures.add(e);
-                continue;
+                // Bookkeeping before logging, since logging allocates and can throw again
+                try {
+                    failed.add(cc);
+                    failures.add(e);
+                    logDebug("Failed to refresh the lease due to {} - {}, refreshing the other consumers before this one is tried again (subscriberId={}, subscriptionId={})",
+                            e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId);
+                } catch (Throwable ignored) {
+                    // The next round refreshes it
+                }
             }
-            if (outcome.notification() != Notification.NONE) {
-                scheduledRefresh.notifyInBackground(cc.subscriptionId, () -> notifyListenersIfStillTrue(outcome, cc));
-            }
+            handOverWhatIsDue(cc);
         }
         failedInThisRound.set(failed);
         throwTheFirstErrorOrFailure(failures);
     }
 
-    /**
-     * Runs later than the round that decided it, on the notifier, and by then the consumer may have moved on.
-     * A grant for a consumer that no longer holds the lock is dropped, since starting the subscription would leave it
-     * running on an instance without its lease. So is one whose lease could have expired since, and the refresh that
-     * extends that lease again grants it once more, see {@link #answeredExpired}. A prohibition is always delivered,
-     * also to a consumer that holds the lock again. The listener then pauses the subscription and gives the lease up,
-     * and a later round grants it again.
-     * Dropping it could leave this instance refreshing a lease for a subscription that has stopped delivering, which
-     * no grant would restart, since the listener finds the consumer running already, and which no other instance
-     * could take over. What a listener throws is logged at most once, an {@link Error} at ERROR and anything else at
-     * WARN, and the other listeners are told anyway, also when logging it throws. It isn't rethrown, since the notifier
-     * would only log it a second time.
-     */
-    private void notifyListenersIfStillTrue(Outcome outcome, CompetingConsumer cc) {
-        if (!running) {
-            return;
-        }
-        boolean holdsTheLockNow = hasLock(cc.subscriptionId, cc.subscriberId);
-        boolean stillTrue = switch (outcome.notification()) {
-            case GRANTED -> holdsTheLockNow;
-            case PROHIBITED -> true;
-            case NONE -> false;
-        };
-        if (!stillTrue) {
-            logDebug("Dropping {} since the lock status changed before it was delivered (subscriberId={}, subscriptionId={})", outcome.notification(), cc.subscriberId, cc.subscriptionId);
-            return;
-        }
-        for (CompetingConsumerListener listener : competingConsumerListeners) {
-            try {
-                if (outcome.notification() == Notification.GRANTED) {
-                    listener.onConsumeGranted(cc.subscriptionId, cc.subscriberId);
-                } else {
-                    listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId);
-                }
-            } catch (Throwable e) {
-                if (e instanceof Error) {
-                    failureLog.error("Listener {} failed on {} (subscriberId={}, subscriptionId={}) due to {} - {}",
-                            listener, outcome.notification(), cc.subscriberId, cc.subscriptionId, e);
-                } else {
-                    failureLog.warn("Listener {} failed on {} (subscriberId={}, subscriptionId={}) due to {} - {}",
-                            listener, outcome.notification(), cc.subscriberId, cc.subscriptionId, e);
+    private void handOverWhatIsDue(CompetingConsumer cc) {
+        try {
+            ConsumerState c = competingConsumers.get(cc);
+            if (c == null) {
+                return;
+            }
+            long lapses = c.lapses;
+            long losses = c.losses;
+            Status status = statusOf(c);
+            if (whatToTell(c.told, status, lapses, losses, isFresh(status)) != Change.NOTHING) {
+                // Set before telling is read, so a tell under way finds it once it lets go of the guard
+                c.tellAgain = true;
+                if (!c.telling) {
+                    scheduledRefresh.notifyInBackground(cc.subscriptionId, c.tellInBackground);
                 }
             }
+        } catch (Throwable e) {
+            comparingFailed.error(cc.subscriptionId, e);
         }
     }
 
-    private Outcome refreshOne(MongoCollection<BsonDocument> collection, CompetingConsumer cc) {
+    private void refreshOne(MongoCollection<BsonDocument> collection, CompetingConsumer cc) {
         // Read again rather than trust what the iteration handed over, which it read without this lock. A consumer
         // unregistered in between would otherwise be written back here, and then nothing is left to unregister it
         // and no node can take that subscription over.
-        Status status = competingConsumers.get(cc);
-        logDebug("Status {} (subscriberId={}, subscriptionId={})", status, cc.subscriberId, cc.subscriptionId);
-        if (status == null) {
+        ConsumerState c = competingConsumers.get(cc);
+        if (c == null) {
             logDebug("Consumer is no longer registered, skipping it this round (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
-            return Outcome.NOTHING;
+            return;
         }
-        return switch (status.kind()) {
+        Status status = c.status;
+        logDebug("Status {} (subscriberId={}, subscriptionId={})", status, cc.subscriberId, cc.subscriptionId);
+        switch (status.kind()) {
             case LOCK_ACQUIRED -> {
                 // Uses cappedRetryStrategy, so a commit that keeps failing gives up here instead of holding this
                 // round open until MongoDB answers again. The lock document is untouched by a call that never got
@@ -529,73 +565,209 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 // no once the lease could have expired meanwhile, see cannotHaveExpired.
                 OptionalLong extended = MongoListenerLockService.commit(collection, cappedRetryStrategy, whileRunning, leaseTime, cc.subscriptionId, cc.subscriberId, clock);
                 if (extended.isPresent()) {
-                    competingConsumers.put(cc, Status.lockAcquired(status.fencingToken().getAsLong(), extended.getAsLong()));
-                    // The document still names this consumer, so no other node took the lease while it could have
-                    // expired, and this node may deliver again. A listener told no meanwhile hears that it may.
-                    yield answeredExpired.remove(cc) ? new Outcome(true, Notification.GRANTED) : Outcome.NOTHING;
+                    c.status = Status.lockAcquired(status.fencingToken().getAsLong(), extended.getAsLong());
+                } else {
+                    logDebug("Lost lock! (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
+                    c.lose();
+                    c.status = Status.LOCK_NOT_ACQUIRED;
                 }
-                logDebug("Lost lock! (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
-                competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
-                answeredExpired.remove(cc);
-                yield new Outcome(false, Notification.PROHIBITED);
             }
-            // An unregister whose removal of the lease failed. Forgotten once the lease is removed.
+            // An unregister whose removal of the lease failed, or whose prohibition the listeners have not all heard
             case UNREGISTERING -> {
                 MongoListenerLockService.remove(collection, cappedRetryStrategy, whileRunning, cc.subscriptionId, cc.subscriberId);
-                competingConsumers.remove(cc, Status.UNREGISTERING);
-                yield Outcome.NOTHING;
+                forgetIfNothingIsOwed(c);
             }
             // The round this consumer stands down for after releasing. It is an ordinary candidate again from the
-            // next round on, and nothing is reported here. It neither holds the lease nor has just stopped holding
-            // it, and the release already told the listeners about that.
+            // next round on.
             case LOCK_RELEASED -> {
                 logDebug("Consumer stood down for this round after releasing (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
-                competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
-                yield Outcome.NOTHING;
+                c.status = Status.LOCK_NOT_ACQUIRED;
             }
-            case LOCK_NOT_ACQUIRED -> acquireLease(collection, cc, status, cappedRetryStrategy);
-        };
+            case LOCK_NOT_ACQUIRED -> recordLease(c, status,
+                    MongoListenerLockService.acquireOrRefreshFor(collection, cappedRetryStrategy, whileRunning, leaseTime, cc.subscriptionId, cc.subscriberId, clock));
+        }
     }
 
-    private Outcome inConsumerLock(CompetingConsumer competingConsumer, Supplier<Outcome> action) {
+    private long inConsumerLock(CompetingConsumer competingConsumer, LongSupplier action) {
         ReentrantLock lock = consumerLocks[Math.floorMod(competingConsumer.hashCode(), consumerLocks.length)];
         lock.lock();
         try {
-            return action.get();
+            return action.getAsLong();
         } finally {
             lock.unlock();
         }
     }
 
+    // The status of c, or null once c is no longer the consumer mapped for its key
+    private @Nullable Status statusOf(ConsumerState c) {
+        return competingConsumers.get(c.key) == c ? c.status : null;
+    }
+
     /**
-     * Tell the listeners what the last step changed, and never while holding that consumer's lock. A listener runs
-     * straight into the subscription model, which is synchronized on itself and calls back into this class from those
-     * callbacks, while an application thread pausing or registering holds that same monitor before it arrives here.
-     * Notifying under the lock closes that cycle, and the refresh thread and the application thread deadlock.
+     * Tell the listeners what the locked step of a register, release or unregister changed, and never while holding
+     * that consumer's lock. A listener runs straight into the subscription model, which is synchronized on itself and
+     * calls back into this class from those callbacks, while an application thread pausing or registering holds that
+     * same monitor before it arrives here. Notifying under the lock closes that cycle, and the refresh thread and the
+     * application thread deadlock.
+     * <p>
+     * Tells the listeners only the change {@code own} describes, and only while no other tell for the consumer is
+     * under way. Anything else they have to be told, that change too when another tell is under way, goes to the
+     * tell that is under way or to a tell on the notifier. Never waits for a tell under way, since that one may be
+     * inside a listener that waits for the subscription model's monitor, which the caller may hold.
      * <p>
      * Every listener is told, also when one before it throws, an {@link Error} included. Once they all have been, the
      * first {@code Error} is thrown, or the first failure when none was an {@code Error}, with every other failure
      * attached as suppressed.
      */
-    private void notifyListeners(Outcome outcome, String subscriptionId, String subscriberId) {
-        if (outcome.notification() == Notification.NONE) {
-            return;
+    private void tellOwnStep(ConsumerState c, long own) {
+        if (!TELLING.compareAndSet(c, false, true)) {
+            c.tellAgain = true;
+            if (c.telling || !TELLING.compareAndSet(c, false, true)) {
+                return;
+            }
         }
-        logDebug("Consumption {} (subscriberId={}, subscriptionId={})", outcome.notification(), subscriberId, subscriptionId);
-        List<Throwable> failures = new ArrayList<>();
+        try {
+            c.tellAgain = false;
+            tellAtMostOwnStep(c, own);
+        } finally {
+            c.telling = false;
+            if (c.tellAgain) {
+                scheduledRefresh.notifyInBackground(c.key.subscriptionId, c.tellInBackground);
+            }
+        }
+    }
+
+    private void tellAtMostOwnStep(ConsumerState c, long own) {
+        long seenLapses = c.lapses;
+        long seenLosses = c.losses;
+        Status status = statusOf(c);
+        Told told = c.told;
+        Change change = whatToTell(told, status, seenLapses, seenLosses, isFresh(status));
+        // Read again after the status. A lost lease and a new one can both land between the first read of the counts
+        // and the status read, and only counts read after the status show that the change is no longer this call's.
+        long lapsesNow = c.lapses;
+        long lossesNow = c.losses;
+        @Nullable Told dirty = null;
+        @Nullable List<Throwable> failures = null;
+        if (isOwn(change, own, lapsesNow, lossesNow)) {
+            dirty = markTelling(c, change, status, told);
+            failures = new ArrayList<>();
+            tellListeners(c, change, failures);
+            c.told = change == Change.GRANT ? new Granted(tokenOf(status), seenLapses) : new NotGranted(seenLosses);
+            seenLapses = c.lapses;
+            seenLosses = c.losses;
+            status = statusOf(c);
+            change = whatToTell(c.told, status, seenLapses, seenLosses, isFresh(status));
+        }
+        if (change != Change.NOTHING) {
+            c.tellAgain = true;
+        }
+        if (failures != null) {
+            // After the second read, so the repeat is left to the next round instead of handed over at once
+            if (dirty != null && containsAnError(failures)) {
+                c.told = dirty;
+            }
+            throwTheFirstErrorOrFailure(failures);
+        }
+    }
+
+    // The tell a round, or a register, release or unregister that could not tell everything, hands to the notifier
+    private void tellInBackground(ConsumerState c) {
+        while (c.tellAgain && TELLING.compareAndSet(c, false, true)) {
+            try {
+                // Only close() is meant to interrupt this thread. An interrupt that a listener sets and does not clear
+                // would make the first blocking call of the next one throw.
+                Thread.interrupted();
+                if (!running) {
+                    return;
+                }
+                c.tellAgain = false;
+                tellUntilNothingIsDue(c);
+            } catch (Throwable t) {
+                // What was left to this tell waits for the next round, which compares again
+                tellingFailed.error(c.key.subscriptionId, t);
+                return;
+            } finally {
+                c.telling = false;
+            }
+        }
+    }
+
+    /**
+     * Tells one change at a time and works out the next one from the status after it, until nothing is due. What a
+     * listener throws is logged at most once, an {@link Error} at ERROR and anything else at WARN, and not rethrown,
+     * since the notifier would only log it a second time. After a listener threw an {@code Error}, the record is left
+     * asking for the last change again, so the next round tells the listeners the current answer once more.
+     */
+    private void tellUntilNothingIsDue(ConsumerState c) {
+        @Nullable Told lastDirty = null;
+        boolean errorSeen = false;
+        while (true) {
+            long seenLapses = c.lapses;
+            long seenLosses = c.losses;
+            Status status = statusOf(c);
+            Told told = c.told;
+            Change change = whatToTell(told, status, seenLapses, seenLosses, isFresh(status));
+            if (change == Change.NOTHING) {
+                break;
+            }
+            lastDirty = markTelling(c, change, status, told);
+            errorSeen |= tellListeners(c, change, null);
+            c.told = change == Change.GRANT ? new Granted(tokenOf(status), seenLapses) : new NotGranted(seenLosses);
+        }
+        if (errorSeen && lastDirty != null) {
+            c.told = lastDirty;
+        }
+    }
+
+    // Leaves the record asking for this change until the listeners have all been told it, and returns that record
+    private static Told markTelling(ConsumerState c, Change change, @Nullable Status status, Told told) {
+        if (change == Change.PROHIBIT && told instanceof NotGranted) {
+            return told;
+        }
+        Told dirty = new Granted(change == Change.GRANT ? tokenOf(status) : ((Granted) told).token(), UNSEEN);
+        c.told = dirty;
+        return dirty;
+    }
+
+    // Collects what a listener throws into failures, or logs it when there is no list. True when one threw an Error.
+    private boolean tellListeners(ConsumerState c, Change change, @Nullable List<Throwable> failures) {
+        String subscriptionId = c.key.subscriptionId;
+        String subscriberId = c.key.subscriberId;
+        logDebug("Consumption {} (subscriberId={}, subscriptionId={})", change, subscriberId, subscriptionId);
+        boolean errorSeen = false;
         for (CompetingConsumerListener listener : competingConsumerListeners) {
             try {
-                if (outcome.notification() == Notification.GRANTED) {
+                if (change == Change.GRANT) {
                     listener.onConsumeGranted(subscriptionId, subscriberId);
                 } else {
                     listener.onConsumeProhibited(subscriptionId, subscriberId);
                 }
             } catch (Throwable e) {
-                failures.add(e);
+                errorSeen |= e instanceof Error;
+                if (failures != null) {
+                    failures.add(e);
+                } else if (e instanceof Error) {
+                    listenerThrewError.error(listener, change, subscriberId, subscriptionId, e);
+                } else {
+                    listenerThrew.warn(listener, change, subscriberId, subscriptionId, e);
+                }
             }
         }
-        logDebug("Completed telling every listener of {} (subscriberId={}, subscriptionId={})", outcome.notification(), subscriberId, subscriptionId);
-        throwTheFirstErrorOrFailure(failures);
+        return errorSeen;
+    }
+
+    private static long tokenOf(@Nullable Status acquired) {
+        return Objects.requireNonNull(acquired).fencingToken().getAsLong();
+    }
+
+    private static boolean containsAnError(List<Throwable> failures) {
+        for (Throwable failure : failures) {
+            if (failure instanceof Error) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // The first Error, or the first failure when none was one, with the rest attached as suppressed. Nothing when the
@@ -618,20 +790,115 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         throw (T) thrown;
     }
 
+    /**
+     * What the listeners have to be told about a consumer whose listeners were last told {@code told}, given its
+     * {@code status}, which is {@code null} once it is no longer registered, and its two counts. {@code fresh} is
+     * whether the lease cannot have expired yet. A lease lost since the listeners were told it was not granted is
+     * prohibited even when its grant was never told, since a caller may have learned of it from
+     * {@link #registerCompetingConsumer} or {@link #hasLock}.
+     */
+    static Change whatToTell(Told told, @Nullable Status status, long lapses, long losses, boolean fresh) {
+        boolean acquired = status != null && status.isLockAcquired();
+        if (told instanceof NotGranted notGranted) {
+            if (notGranted.lossesSeen() != losses) {
+                return Change.PROHIBIT;
+            }
+            return acquired && fresh ? Change.GRANT : Change.NOTHING;
+        }
+        Granted granted = (Granted) told;
+        if (!acquired || status.fencingToken().getAsLong() != granted.token()) {
+            return Change.PROHIBIT;
+        }
+        return granted.lapsesSeen() != lapses && fresh ? Change.GRANT : Change.NOTHING;
+    }
+
+    /**
+     * Whether {@code change} is the one the locked step that returned {@code own} made, given the two counts read
+     * after the status that {@code change} was worked out from. A grant is the step's while no lapse has happened
+     * since it, and a prohibition while no lease has been lost since it.
+     */
+    static boolean isOwn(Change change, long own, long lapsesNow, long lossesNow) {
+        return change == Change.GRANT && lapsesNow == own || change == Change.PROHIBIT && lossesNow == -3 - own;
+    }
+
     private record CompetingConsumer(String subscriptionId, String subscriberId) {
     }
 
     /**
-     * What a step did to the lease, and what the listeners have to be told about it once the consumer's lock is out
-     * of the way. Only registering has a use for {@code acquired}, and it has to come from inside the lock, since
-     * reading the status again afterwards is the very thing the lock is here to stop.
+     * What the listeners of a consumer were last told. {@link Granted} with a lapse count of {@code UNSEEN} is written before the
+     * first listener is told a change, so a tell that a throwable cuts short leaves a record that asks for that change
+     * again.
      */
-    private record Outcome(boolean acquired, Notification notification) {
-        private static final Outcome NOTHING = new Outcome(false, Notification.NONE);
+    sealed interface Told permits NotGranted, Granted {
     }
 
-    private enum Notification {
-        GRANTED, PROHIBITED, NONE
+    /**
+     * Told that the consumer may not consume, or never told anything, when its loss count was {@code lossesSeen}.
+     */
+    record NotGranted(long lossesSeen) implements Told {
+    }
+
+    /**
+     * Told that the consumer may consume under the lease with this {@code token}, when its lapse count was
+     * {@code lapsesSeen}.
+     */
+    record Granted(long token, long lapsesSeen) implements Told {
+    }
+
+    // A lapse count no consumer reaches, for a tell under way
+    static final long UNSEEN = -1;
+
+    enum Change {
+        NOTHING, GRANT, PROHIBIT
+    }
+
+    private static final VarHandle LAPSES;
+    private static final VarHandle TELLING;
+
+    static {
+        try {
+            MethodHandles.Lookup lookup = MethodHandles.lookup();
+            LAPSES = lookup.findVarHandle(ConsumerState.class, "lapses", long.class);
+            TELLING = lookup.findVarHandle(ConsumerState.class, "telling", boolean.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    /**
+     * A registered consumer. {@link #status} is written only under the consumer's lock, and {@link #told} only by the
+     * one tell that holds {@link #telling}.
+     */
+    private final class ConsumerState {
+        private final CompetingConsumer key;
+        private volatile Status status = Status.LOCK_NOT_ACQUIRED;
+        private volatile Told told = new NotGranted(0);
+        /**
+         * Moves each time {@link #hasLock} answers no for an acquired status and each time this consumer loses a
+         * lease, so a grant is told again after either.
+         */
+        private volatile long lapses;
+        /**
+         * Moves each time this consumer loses a lease, in the same locked step that replaces its acquired status.
+         */
+        private volatile long losses;
+        private volatile boolean telling;
+        private volatile boolean tellAgain;
+        private final Runnable tellInBackground = () -> MongoLeaseCompetingConsumerStrategySupport.this.tellInBackground(this);
+
+        private ConsumerState(CompetingConsumer key) {
+            this.key = key;
+        }
+
+        // Under the consumer's lock, before the status that replaces the acquired one is written
+        private void lose() {
+            lapse();
+            losses = losses + 1;
+        }
+
+        private void lapse() {
+            LAPSES.getAndAdd(this, 1L);
+        }
     }
 
     /**
@@ -642,20 +909,20 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * {@link #lastHeldFencingTokens}, and that stale token is what a fence built on {@link #fencingToken(String)}
      * refuses once the next holder has written.
      */
-    private record Status(Kind kind, OptionalLong fencingToken, long sentAt) {
-        private static final Status LOCK_NOT_ACQUIRED = new Status(Kind.LOCK_NOT_ACQUIRED, OptionalLong.empty(), 0);
-        private static final Status LOCK_RELEASED = new Status(Kind.LOCK_RELEASED, OptionalLong.empty(), 0);
-        private static final Status UNREGISTERING = new Status(Kind.UNREGISTERING, OptionalLong.empty(), 0);
+    record Status(Kind kind, OptionalLong fencingToken, long sentAt) {
+        static final Status LOCK_NOT_ACQUIRED = new Status(Kind.LOCK_NOT_ACQUIRED, OptionalLong.empty(), 0);
+        static final Status LOCK_RELEASED = new Status(Kind.LOCK_RELEASED, OptionalLong.empty(), 0);
+        static final Status UNREGISTERING = new Status(Kind.UNREGISTERING, OptionalLong.empty(), 0);
 
-        private static Status lockAcquired(long fencingToken, long sentAt) {
+        static Status lockAcquired(long fencingToken, long sentAt) {
             return new Status(Kind.LOCK_ACQUIRED, OptionalLong.of(fencingToken), sentAt);
         }
 
-        private boolean isLockAcquired() {
+        boolean isLockAcquired() {
             return kind == Kind.LOCK_ACQUIRED;
         }
 
-        private enum Kind {
+        enum Kind {
             LOCK_ACQUIRED, LOCK_NOT_ACQUIRED, LOCK_RELEASED, UNREGISTERING
         }
     }

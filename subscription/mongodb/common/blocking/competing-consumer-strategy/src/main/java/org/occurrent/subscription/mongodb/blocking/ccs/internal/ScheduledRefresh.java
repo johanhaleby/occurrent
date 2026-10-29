@@ -25,13 +25,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
@@ -43,11 +38,11 @@ import static java.util.concurrent.TimeUnit.SECONDS;
  * <p>
  * A listener runs straight into the subscription model, and pausing or resuming a subscription there can block for as
  * long as the database takes to answer. On the refresh thread that would hold up every other lease on the instance
- * until each one expired, so {@link #auto()} and {@link #every(Duration)} hand notifications to a notifier instead.
- * Each subscription id gets its notifications one at a time, in the order the refresh decided them, and a
- * notification that blocks holds up later ones for its own subscription id only. Each id whose notification blocks
- * takes a thread of the notifier's, a virtual one from Java 24 and a platform one before that, since a virtual thread
- * blocked inside {@code synchronized} keeps the platform thread it runs on before Java 24.
+ * until each one expired, so {@link #auto()} and {@link #every(Duration)} hand each tell to a notifier instead. The
+ * strategy makes sure a consumer has one tell running at a time, so a tell that blocks holds up later ones for its own
+ * consumer only. Each consumer whose tell blocks takes a thread of the notifier's, a virtual one from Java 24 and a
+ * platform one before that, since a virtual thread blocked inside {@code synchronized} keeps the platform thread it
+ * runs on before Java 24.
  * <p>
  * A refresh that throws is logged at ERROR and the next one runs as scheduled. That includes an {@link Error}, a
  * {@link VirtualMachineError} too, since the executor would otherwise cancel every later refresh.
@@ -57,21 +52,21 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 @NullMarked
 class ScheduledRefresh {
     private static final Logger log = LoggerFactory.getLogger(ScheduledRefresh.class);
-    private static final FailureLogging failureLog = new FailureLogging(log);
+    private static final FailureLogging refreshFailed = new FailureLogging(log, "Lease refresh failed due to {} - {}. The next scheduled refresh will run as usual.");
+    private static final FailureLogging notifierTookNothing = new FailureLogging(log, "The notifier did not take the tell for subscription {} due to {} - {}. The next scheduled refresh hands it over again.");
 
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
     private final BiConsumer<Duration, Scheduler> scheduleIt;
     // Its threads are daemon threads, since close() does not wait for them, and a listener that ignores the interrupt
     // close() sends can go on running after it. close() is what ends the refresh thread.
     private final @Nullable ExecutorService notifier;
-    // The notifications not yet delivered per subscription id. An id is here while a task on the notifier delivers its
-    // notifications, or while they wait for a refresh to hand them over again, so a new notification for it is queued
-    // behind them and one for an id not here starts a task of its own. Read and written under its own monitor only.
-    private final Map<String, Undelivered> undelivered = new HashMap<>();
+    // Set once the notifier throws, and cleared when the next refresh starts, so a notifier that cannot start threads
+    // costs one ERROR line per refresh rather than one per tell
+    private volatile boolean notifierFailedThisRound;
 
     /**
-     * Runs every notification on the thread that runs the refresh, so a test that holds the refresh and runs it
-     * itself sees what the round changed by the time the round returns.
+     * Runs every tell on the thread that hands it over, so a test that holds the refresh and runs it itself sees what
+     * the round changed by the time the round returns.
      *
      * @param scheduleIt A function which configures the schedule. Accepts two arguments. One is a
      *                   {@link Scheduler} which is what must be configured with the desired schedule.
@@ -83,7 +78,7 @@ class ScheduledRefresh {
     }
 
     /**
-     * Runs every notification on {@code notifier}, or on the thread that runs the refresh when it is {@code null}.
+     * Runs every tell on {@code notifier}, or on the thread that hands it over when it is {@code null}.
      */
     ScheduledRefresh(BiConsumer<Duration, Scheduler> scheduleIt, @Nullable ExecutorService notifier) {
         this.scheduleIt = scheduleIt;
@@ -112,11 +107,10 @@ class ScheduledRefresh {
         }, newNotifier());
     }
 
-    // A thread for each subscription id whose notification blocks, so none of them holds up another. A listener can
-    // block inside synchronized, and before Java 24 a virtual thread blocked there keeps the platform thread it runs on,
-    // so as many such listeners as there are processors would hold up every other notification. Before 24 each
-    // therefore gets a platform thread, and from 24 a virtual one, so the number of platform threads no longer grows
-    // with the ids that block.
+    // A thread for each consumer whose tell blocks, so none of them holds up another. A listener can block inside
+    // synchronized, and before Java 24 a virtual thread blocked there keeps the platform thread it runs on, so as many
+    // such listeners as there are processors would hold up every other tell. Before 24 each therefore gets a platform
+    // thread, and from 24 a virtual one, so the number of platform threads no longer grows with the consumers that block.
     private static ExecutorService newNotifier() {
         if (Runtime.version().feature() >= 24) {
             return Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("occurrent-lease-notifier-", 0).factory());
@@ -126,129 +120,37 @@ class ScheduledRefresh {
 
     void scheduleInBackground(Runnable refresh, Duration leaseTime) {
         scheduleIt.accept(leaseTime, new Scheduler(executor, () -> {
-            handOverWhatTheNotifierDidNotTake();
+            notifierFailedThisRound = false;
             refresh.run();
         }));
     }
 
     /**
-     * Hands {@code notification} to the notifier, or runs it right here when there is none. It runs once every
-     * notification handed over before it for the same {@code subscriptionId} has run or thrown, and never waits for one
-     * for another subscription id, as long as the notifier has a thread free, which the one {@link #auto()} and
-     * {@link #every(Duration)} make always has. A notification handed over after {@link #close()} is dropped, since
-     * nothing is left to act on it.
+     * Hands {@code tell} to the notifier, or runs it right here when there is none. Keeps nothing, so a tell the
+     * notifier does not take is gone, and the strategy's next refresh round compares again and hands over what is
+     * still due. A tell handed over after {@link #close()} is dropped, since nothing is left to act on it.
      * <p>
      * When the notifier throws while it isn't shut down, such as an {@link OutOfMemoryError} when it can't start a
-     * thread, this method logs it at ERROR and returns without throwing, also when logging it throws. That includes a
-     * {@link RejectedExecutionException}, since the contract of {@code execute} lets a notifier reject a task for
-     * other reasons than {@link #close()}. A later scheduled refresh hands the notifications for {@code subscriptionId}
-     * over again, in the same order. Each refresh hands the waiting subscription ids over one at a time and stops at the
-     * first one the notifier throws on, so the ones after it wait for the next refresh.
+     * thread or a {@link java.util.concurrent.RejectedExecutionException}, this method logs it at ERROR and returns
+     * without throwing, also when logging it throws. Every later tell handed over before the next refresh starts is
+     * then dropped without asking the notifier again.
      */
-    void notifyInBackground(String subscriptionId, Runnable notification) {
+    void notifyInBackground(String subscriptionId, Runnable tell) {
         if (notifier == null) {
-            notification.run();
+            tell.run();
             return;
         }
-        Undelivered queued;
-        synchronized (undelivered) {
-            queued = undelivered.get(subscriptionId);
-            if (queued != null) {
-                queued.notifications.add(notification);
-                return;
-            }
-            queued = new Undelivered();
-            queued.notifications.add(notification);
-            undelivered.put(subscriptionId, queued);
-        }
-        handOver(notifier, subscriptionId, queued);
-    }
-
-    // One subscription id at a time, so the ids already waiting add one ERROR line per refresh, not one each. A
-    // notification a refresh decides is handed over on its own and logs its own line when the notifier throws. Throws
-    // nothing, so the refresh after it always runs.
-    private void handOverWhatTheNotifierDidNotTake() {
-        if (notifier == null) {
+        if (notifierFailedThisRound) {
             return;
         }
         try {
-            while (true) {
-                String subscriptionId = null;
-                Undelivered queued = null;
-                synchronized (undelivered) {
-                    for (Map.Entry<String, Undelivered> entry : undelivered.entrySet()) {
-                        if (entry.getValue().waitingForARefresh) {
-                            subscriptionId = entry.getKey();
-                            queued = entry.getValue();
-                            queued.waitingForARefresh = false;
-                            break;
-                        }
-                    }
-                }
-                if (queued == null || !handOver(notifier, subscriptionId, queued)) {
-                    return;
-                }
-            }
+            notifier.execute(tell);
         } catch (Throwable t) {
-            failureLog.error("Handing the waiting notifications over to the notifier failed due to {} - {}. The refresh runs as usual.", t);
-        }
-    }
-
-    // False when the notifier threw, and then the notifications wait for a refresh to hand them over again
-    private boolean handOver(ExecutorService notifier, String subscriptionId, Undelivered queued) {
-        try {
-            notifier.execute(() -> deliverUntilNoneIsLeft(notifier, subscriptionId, queued));
-            return true;
-        } catch (Throwable t) {
-            if (notifier.isShutdown()) {
-                // close() ran, and the listeners are shutting down with this instance
-                synchronized (undelivered) {
-                    undelivered.remove(subscriptionId, queued);
-                }
-                return true;
-            }
-            // Kept, also for a RejectedExecutionException, since a refresh decides each notification only once. Setting
-            // a flag allocates nothing, so a second OutOfMemoryError can't throw here.
-            synchronized (undelivered) {
-                queued.waitingForARefresh = true;
-            }
-            failureLog.error("The notifier did not take the notifications for subscription {} due to {} - {}. A later scheduled refresh hands them over again.",
-                    subscriptionId, t);
-            return false;
-        }
-    }
-
-    // One task delivers every notification for the id, also those queued while it runs, so only handing over the
-    // first one can find the notifier unable to start a thread
-    private void deliverUntilNoneIsLeft(ExecutorService notifier, String subscriptionId, Undelivered queued) {
-        while (true) {
-            Runnable next;
-            synchronized (undelivered) {
-                // Only close() is meant to interrupt this thread. An interrupt that a notification sets and doesn't
-                // clear would make the first blocking call of the next one throw. Cleared before the isShutdown()
-                // check, so an interrupt close() sends after that check stays set.
-                Thread.interrupted();
-                // Dropped after close(), the same as a notification handed over after it
-                next = notifier.isShutdown() ? null : queued.notifications.poll();
-                if (next == null) {
-                    undelivered.remove(subscriptionId, queued);
-                    return;
-                }
-            }
-            try {
-                next.run();
-            } catch (Throwable t) {
-                // Not rethrown, since that would leave the notifications after it to nobody
-                failureLog.error("A notification for subscription {} failed due to {} - {}. The notifications after it are delivered as usual.",
-                        subscriptionId, t);
+            if (!notifier.isShutdown()) {
+                notifierFailedThisRound = true;
+                notifierTookNothing.error(subscriptionId, t);
             }
         }
-    }
-
-    private static final class Undelivered {
-        private final Deque<Runnable> notifications = new ArrayDeque<>();
-        // Set when the notifier threw on taking them, so no task delivers them until a refresh hands them over again
-        private boolean waitingForARefresh;
     }
 
     /**
@@ -286,7 +188,7 @@ class ScheduledRefresh {
                 try {
                     refresh.run();
                 } catch (Throwable t) {
-                    failureLog.error("Lease refresh failed due to {} - {}. The next scheduled refresh will run as usual.", t);
+                    refreshFailed.error(t);
                 }
             };
         }
