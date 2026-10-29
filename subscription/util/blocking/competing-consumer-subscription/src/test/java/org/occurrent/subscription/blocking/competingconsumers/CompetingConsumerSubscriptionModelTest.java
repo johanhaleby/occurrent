@@ -713,39 +713,95 @@ class CompetingConsumerSubscriptionModelTest {
 
     @Test
     void consumption_is_resumed_after_prohibited_when_lease_time_is_low() {
+        consumptionIsResumedAfterProhibited(false);
+    }
+
+    @Test
+    void consumption_is_resumed_after_prohibited_while_the_node_that_held_the_leases_is_stalled() {
+        consumptionIsResumedAfterProhibited(true);
+    }
+
+    // With a 2 second lease hasLock answers false once a refresh round runs 500 ms late, where a 500 ms lease did at
+    // 125 ms late. The event is written once one node holds each lease and runs it, so it doesn't race the handover.
+    private void consumptionIsResumedAfterProhibited(boolean stallTheNodeThatHeldTheLeases) {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription1 = new CopyOnWriteArrayList<>();
         CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription2 = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate, Duration.ofMillis(500)));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate, Duration.ofMillis(500)));
+        Duration leaseTime = Duration.ofSeconds(2);
+        StallableCompetingConsumerStrategy strategy1 = new StallableCompetingConsumerStrategy(loggingStrategy("1", mongoTemplate, leaseTime));
+        StallableCompetingConsumerStrategy strategy2 = new StallableCompetingConsumerStrategy(loggingStrategy("2", mongoTemplate, leaseTime));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, strategy1);
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, strategy2);
 
         String subscriberId1 = "SubscriberId1";
         String subscriberId2 = "SubscriberId2";
         String subscriptionId1 = "SubscriptionId1";
         String subscriptionId2 = "SubscriptionId2";
+        // Node 2 joins last, so a slow setup cannot hand it a lease that node 1 never gets back
         competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription1::add).waitUntilStarted();
-        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription1::add).waitUntilStarted();
-
         competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId2, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription2::add).waitUntilStarted();
+        await("node 1 to hold both leases").until(() -> strategy1.hasLock(subscriptionId1, subscriberId1) && strategy1.hasLock(subscriptionId2, subscriberId1));
+
+        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription1::add).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId2, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription2::add).waitUntilStarted();
-
-        // We prohibit all
-        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId1, subscriberId1);
-        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId1, subscriberId2);
-        competingConsumerSubscriptionModel2.onConsumeProhibited(subscriptionId2, subscriberId1);
-        competingConsumerSubscriptionModel2.onConsumeProhibited(subscriptionId2, subscriberId2);
-
-        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        if (stallTheNodeThatHeldTheLeases) {
+            strategy1.stall();
+        }
 
         // When
+        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId1, subscriberId1);
+        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId2, subscriberId1);
+        for (String subscriptionId : List.of(subscriptionId1, subscriptionId2)) {
+            await("one node to hold the lease for " + subscriptionId + " and run it").until(() ->
+                    (strategy1.hasLock(subscriptionId, subscriberId1) && competingConsumerSubscriptionModel1.isRunning(subscriptionId)) !=
+                    (strategy2.hasLock(subscriptionId, subscriberId2) && competingConsumerSubscriptionModel2.isRunning(subscriptionId)));
+        }
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
         eventStore.write("streamId", serialize(nameDefined));
 
         // Then
-        await().failFast("cloudEventsSubscription1 should never have more than 1 event", () -> cloudEventsSubscription1.size() > 1)
+        await("the event for " + subscriptionId1).failFast("the event for " + subscriptionId1 + " was delivered more than once", () -> cloudEventsSubscription1.size() > 1)
                .untilAsserted(() -> assertThat(cloudEventsSubscription1).hasSize(1));
-        await().failFast("cloudEventsSubscription2 should never have more than 1 event", () -> cloudEventsSubscription2.size() > 1)
+        await("the event for " + subscriptionId2).failFast("the event for " + subscriptionId2 + " was delivered more than once", () -> cloudEventsSubscription2.size() > 1)
                .untilAsserted(() -> assertThat(cloudEventsSubscription2).hasSize(1));
+    }
+
+    @Test
+    void an_event_written_as_soon_as_a_prohibited_node_gives_up_its_lease_is_delivered_once() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        Duration leaseTime = Duration.ofSeconds(2);
+        StallableCompetingConsumerStrategy strategy1 = new StallableCompetingConsumerStrategy(loggingStrategy("1", mongoTemplate, leaseTime));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, strategy1);
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate, leaseTime));
+
+        String subscriberId1 = "SubscriberId1";
+        String subscriberId2 = "SubscriberId2";
+        String subscriptionId = "SubscriptionId";
+        competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+        await("node 1 to hold the lease").until(() -> strategy1.hasLock(subscriptionId, subscriberId1));
+        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+
+        // Stalled so that node 1 can't take the lease back and node 2 is the one that takes it over
+        strategy1.stall();
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        // Runs once the strategy of node 1 has given the lease up and before node 1 hears of it. Writes the event and
+        // waits until node 2 has delivered it.
+        strategy1.beforeTellingOfTheNextLostLease(() -> {
+            eventStore.write("streamId", serialize(nameDefined));
+            await("node 2 to take the lease over and deliver the event").until(() -> !cloudEvents.isEmpty());
+        });
+
+        // When
+        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId, subscriberId1);
+
+        // Then
+        await("the event").during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10))
+                .failFast("the event was delivered more than once", () -> cloudEvents.size() > 1)
+                .untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
     }
 
     @Test

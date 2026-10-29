@@ -55,6 +55,7 @@ import java.util.function.Supplier;
 @NullMarked
 public class MongoLeaseCompetingConsumerStrategySupport {
     private static final Logger log = LoggerFactory.getLogger(MongoLeaseCompetingConsumerStrategySupport.class);
+    private static final FailureLogging failureLog = new FailureLogging(log);
 
     public static final String DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION = "competing-consumer-locks";
     public static final Duration DEFAULT_LEASE_TIME = Duration.ofSeconds(20);
@@ -473,8 +474,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * and a later round grants it again.
      * Dropping it could leave this instance refreshing a lease for a subscription that has stopped delivering, which
      * no grant would restart, since the listener finds the consumer running already, and which no other instance
-     * could take over. A listener that throws is logged, and the other listeners are told anyway. Once they all have
-     * been, the first {@link Error} is thrown, with any later one attached as suppressed.
+     * could take over. What a listener throws is logged at most once, an {@link Error} at ERROR and anything else at
+     * WARN, and the other listeners are told anyway, also when logging it throws. It isn't rethrown, since the notifier
+     * would only log it a second time.
      */
     private void notifyListenersIfStillTrue(Outcome outcome, CompetingConsumer cc) {
         if (!running) {
@@ -490,7 +492,6 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             logDebug("Dropping {} since the lock status changed before it was delivered (subscriberId={}, subscriptionId={})", outcome.notification(), cc.subscriberId, cc.subscriptionId);
             return;
         }
-        List<Throwable> errors = new ArrayList<>();
         for (CompetingConsumerListener listener : competingConsumerListeners) {
             try {
                 if (outcome.notification() == Notification.GRANTED) {
@@ -499,14 +500,15 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                     listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId);
                 }
             } catch (Throwable e) {
-                log.warn("Listener {} failed on {} due to {} - {} (subscriberId={}, subscriptionId={})",
-                        listener, outcome.notification(), e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
                 if (e instanceof Error) {
-                    errors.add(e);
+                    failureLog.error("Listener {} failed on {} (subscriberId={}, subscriptionId={}) due to {} - {}",
+                            listener, outcome.notification(), cc.subscriberId, cc.subscriptionId, e);
+                } else {
+                    failureLog.warn("Listener {} failed on {} (subscriberId={}, subscriptionId={}) due to {} - {}",
+                            listener, outcome.notification(), cc.subscriberId, cc.subscriptionId, e);
                 }
             }
         }
-        throwTheFirstErrorOrFailure(errors);
     }
 
     private Outcome refreshOne(MongoCollection<BsonDocument> collection, CompetingConsumer cc) {
