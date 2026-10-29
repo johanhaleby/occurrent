@@ -84,6 +84,12 @@ public final class SagaExecutionSupport {
      * deliver version 7 before version 6. 256 covers a prefetch far beyond what such a feed is configured with.
      */
     public static final int DEFAULT_REORDER_WINDOW = 256;
+    /**
+     * How many failed versions one instance lists as pending, over all its streams, before it lists no more. A limit on
+     * the size of the stored instance, about 360 KB at this count, and not a setting. A version that fails past it is
+     * kept another way, see {@link #isAtPendingCap}.
+     */
+    public static final int PENDING_CAP = 10_000;
 
     /** What the executor makes of a stream event, given the versions the instance has already applied. */
     public enum Delivery {
@@ -180,6 +186,9 @@ public final class SagaExecutionSupport {
                                                                            EventMeta meta,
                                                                            Instant now,
                                                                            int reorderWindow) {
+        if (current != null) {
+            current = withoutSelfHeldKeysProvenApplied(current);
+        }
         // Whether a start transition was saved, which is neither "onStart was called" nor "a document exists". An
         // instance whose very first event failed has an envelope holding nothing but that failure. Keying on the
         // document would leave such an instance permanently "already started", so a later redelivery of its start event
@@ -273,8 +282,10 @@ public final class SagaExecutionSupport {
                 // A save that starts the instance marks a drain as due and records where the start sits, so the drain can
                 // tell a held event that came before the start from one that came after.
                 !starting && current.heldEventsChecked(),
-                isNew ? Set.of() : current.drainedHeldKeys(),
-                isNew ? Set.of() : current.selfHeldKeys(),
+                drainedHeldKeysAfter(current, meta),
+                // Completion empties them. A key with no copy that completion overtakes belongs to an event its source
+                // still has, which then skips on the completed instance.
+                terminal ? Set.of() : selfHeldKeysAfter(current, meta),
                 starting ? startMark(meta) : current.startMark());
         return Outcome.processed(next, commands, expectedVersion);
     }
@@ -369,9 +380,10 @@ public final class SagaExecutionSupport {
             return null;
         }
         if (current != null && classify(current, meta, reorderWindow) != Delivery.NEW) {
-            // The save committed and its response was lost on the way back, so the reloaded instance already counts
-            // this input as handled. A record written here is never cleared, because the redelivery that would clear it
-            // is skipped as one, so keep the committed outcome instead.
+            // A REDELIVERY means the save committed and its response was lost on the way back, so the reloaded instance
+            // already counts this input as handled. A record written here is never cleared, because the redelivery that
+            // would clear it is skipped as one, so keep the committed outcome instead. A BEHIND_WINDOW is no such proof,
+            // and the executor tells the two apart on the same read before it gets here.
             return null;
         }
         SagaFailure existing = currentFailure(current);
@@ -482,6 +494,45 @@ public final class SagaExecutionSupport {
                 current.heldEventsChecked(), current.drainedHeldKeys(), current.selfHeldKeys(), current.startMark());
     }
 
+    // A save that applies a self-held version takes its key out of the self-held keys and into the drained ones in the
+    // same write, so the key stays proof that the version applied even once the marks have forgotten it.
+    private static <S extends @Nullable Object> Set<String> selfHeldKeysAfter(@Nullable SagaEnvelope<S> current, EventMeta meta) {
+        if (current == null) {
+            return Set.of();
+        }
+        Set<String> selfHeld = new LinkedHashSet<>(current.selfHeldKeys());
+        selfHeld.remove(meta.redeliveryKey());
+        return selfHeld;
+    }
+
+    private static <S extends @Nullable Object> Set<String> drainedHeldKeysAfter(@Nullable SagaEnvelope<S> current, EventMeta meta) {
+        if (current == null) {
+            return Set.of();
+        }
+        if (!isSelfHeld(current, meta)) {
+            return current.drainedHeldKeys();
+        }
+        Set<String> drained = new LinkedHashSet<>(current.drainedHeldKeys());
+        drained.add(Objects.requireNonNull(meta.redeliveryKey()));
+        return drained;
+    }
+
+    private static <S extends @Nullable Object> SagaEnvelope<S> withoutSelfHeldKeysProvenApplied(SagaEnvelope<S> current) {
+        if (current.selfHeldKeys().isEmpty()) {
+            return current;
+        }
+        Set<String> kept = selfHeldKeysNotProvenApplied(current);
+        return kept.size() == current.selfHeldKeys().size() ? current : withSelfHeldKeys(current, kept);
+    }
+
+    /** {@code current} with {@code selfHeldKeys} in place of its own, at the same version. */
+    public static <S extends @Nullable Object> SagaEnvelope<S> withSelfHeldKeys(SagaEnvelope<S> current, Set<String> selfHeldKeys) {
+        return new SagaEnvelope<>(current.sagaId(), current.state(), current.status(), current.version(), current.timers(),
+                current.streamWatermarks(), current.positionWatermark(), current.createdAt(), current.updatedAt(), current.completedAt(),
+                current.currentStep(), current.started(), current.failure(), current.streamMarks(), current.heldEventsChecked(),
+                current.drainedHeldKeys(), selfHeldKeys, current.startMark());
+    }
+
     private static SagaEnvelope.@Nullable StartMark startMark(EventMeta meta) {
         return meta.streamId() == null || meta.streamVersion() == null ? null : new SagaEnvelope.StartMark(meta.streamId(), meta.streamVersion(), meta.position());
     }
@@ -494,6 +545,11 @@ public final class SagaExecutionSupport {
         String streamId = Objects.requireNonNull(meta.streamId());
         StreamMarks marks = streamMarks.get(streamId);
         String type = typeKey(meta);
+        if (!isOutstanding(marks, meta) && pendingCount(streamMarks) >= PENDING_CAP) {
+            // The executor keeps such a version another way before it gets here. Listing it anyway would grow the
+            // instance without bound.
+            return streamMarks;
+        }
         TreeSet<Long> versions = new TreeSet<>(marks == null ? List.of() : marks.pending().getOrDefault(type, List.of()));
         if (versions.add(Objects.requireNonNull(meta.streamVersion())) && versions.size() == reorderWindow + 1) {
             log.warn("Stream {} has more than {} failed versions of type '{}' outstanding, the reorder window. Each one is kept until it applies, "
@@ -605,9 +661,10 @@ public final class SagaExecutionSupport {
         Long watermark = current.streamWatermarks().get(meta.streamId());
         long floor = floorOf(marks, watermark);
         if (version <= floor) {
-            // A pending version or a failure record naming this input says it was never applied, whatever the floor says.
-            // Later deliveries keep an unrelated failure record and only the save that applies the input clears it.
-            return isOutstanding(marks, meta) || namesFailureOf(current, meta) ? Delivery.NEW : Delivery.REDELIVERY;
+            // A pending version, a self-held one or a failure record naming this input says it was never applied, whatever
+            // the floor says. Later deliveries keep an unrelated failure record and only the save that applies the input
+            // clears it.
+            return isOutstanding(marks, meta) || isSelfHeld(current, meta) || namesFailureOf(current, meta) ? Delivery.NEW : Delivery.REDELIVERY;
         }
         TypeMark typeMark = marks == null ? null : marks.byType().get(typeKey(meta));
         if (typeMark == null || version > typeMark.mark()) {
@@ -616,8 +673,8 @@ public final class SagaExecutionSupport {
         if (version == typeMark.mark() || typeMark.applied().contains(version)) {
             return Delivery.REDELIVERY;
         }
-        // A pending version failed in the saga and was not applied, however far behind the mark it is by now.
-        if (isOutstanding(marks, meta)) {
+        // A pending or self-held version failed in the saga and was not applied, however far behind the mark it is by now.
+        if (isOutstanding(marks, meta) || isSelfHeld(current, meta)) {
             return Delivery.NEW;
         }
         // The horizon outlasts a window that is raised later, because the versions it forgot are not in applied any more.
@@ -663,6 +720,81 @@ public final class SagaExecutionSupport {
 
     private static boolean isPending(@Nullable StreamMarks marks, EventMeta meta) {
         return marks != null && meta.streamVersion() != null && marks.pending().getOrDefault(typeKey(meta), List.of()).contains(meta.streamVersion());
+    }
+
+    private static <S extends @Nullable Object> boolean isSelfHeld(SagaEnvelope<S> current, EventMeta meta) {
+        String key = meta.redeliveryKey();
+        return key != null && current.selfHeldKeys().contains(key);
+    }
+
+    /**
+     * Whether {@code current} proves that the stream event {@code meta} describes was applied. Positive evidence only:
+     * the version is the mark or among the applied versions of a type of its stream, since a stream version names one
+     * event, or its key is among the held events a drain applied. A version below the floor or behind the reorder
+     * window is no proof, because the instance has forgotten it either way.
+     */
+    public static <S extends @Nullable Object> boolean provesApplied(SagaEnvelope<S> current, EventMeta meta) {
+        String key = meta.redeliveryKey();
+        return key != null && provesApplied(current, Objects.requireNonNull(meta.streamId()), Objects.requireNonNull(meta.streamVersion()), key);
+    }
+
+    private static <S extends @Nullable Object> boolean provesApplied(SagaEnvelope<S> current, String streamId, long version, String key) {
+        if (current.drainedHeldKeys().contains(key)) {
+            return true;
+        }
+        StreamMarks marks = current.streamMarks().get(streamId);
+        return marks != null && marks.byType().values().stream().anyMatch(typeMark -> typeMark.mark() == version || typeMark.applied().contains(version));
+    }
+
+    /** Whether {@code current} lists the stream event {@code meta} describes as pending, under its type or as a failure of unknown type. */
+    public static <S extends @Nullable Object> boolean listsPending(SagaEnvelope<S> current, EventMeta meta) {
+        return meta.streamId() != null && isOutstanding(current.streamMarks().get(meta.streamId()), meta);
+    }
+
+    /**
+     * Whether this delivery may count the input {@code meta} describes as one it saw new, which is what lets a later
+     * read that finds it behind the reorder window be taken as overtaken while in flight rather than as a late
+     * arrival. Only when the instance answers NEW from the version's position alone. A pending entry, a failure record
+     * naming the input or a self-held key also make it NEW, and each of those is removed only by the save that applies
+     * the input, so a later read finding it behind the window without one found it applied.
+     */
+    public static <S extends @Nullable Object> boolean isNewByPositionAlone(@Nullable SagaEnvelope<S> current, EventMeta meta, int reorderWindow) {
+        if (!meta.carriesRedeliveryKey()) {
+            return false;
+        }
+        if (current == null) {
+            return true;
+        }
+        StreamMarks marks = current.streamMarks().get(meta.streamId());
+        return !isOutstanding(marks, meta) && !isSelfHeld(current, meta) && !namesFailureOf(current, meta)
+               && classify(current, meta, reorderWindow) == Delivery.NEW;
+    }
+
+    /**
+     * Whether {@code current} lists as many pending versions as it may, {@link #PENDING_CAP}, so a failing version it
+     * does not list already cannot be listed.
+     */
+    public static <S extends @Nullable Object> boolean isAtPendingCap(SagaEnvelope<S> current) {
+        return pendingCount(current.streamMarks()) >= PENDING_CAP;
+    }
+
+    private static long pendingCount(Map<String, StreamMarks> streamMarks) {
+        return streamMarks.values().stream()
+                .mapToLong(marks -> marks.legacyFailed().size() + marks.pending().values().stream().mapToLong(List::size).sum())
+                .sum();
+    }
+
+    // The self-held keys the envelope as read proves applied, dropped before anything is classified. The next save
+    // persists the removal, and an input that saves nothing keeps them stored, which is harmless.
+    private static <S extends @Nullable Object> Set<String> selfHeldKeysNotProvenApplied(SagaEnvelope<S> current) {
+        Set<String> kept = new LinkedHashSet<>();
+        for (String key : current.selfHeldKeys()) {
+            int at = key.lastIndexOf('@');
+            if (at < 0 || !provesApplied(current, key.substring(0, at), Long.parseLong(key.substring(at + 1)), key)) {
+                kept.add(key);
+            }
+        }
+        return kept;
     }
 
     private static <S extends @Nullable Object> SagaStatus currentStatus(@Nullable SagaEnvelope<S> current) {

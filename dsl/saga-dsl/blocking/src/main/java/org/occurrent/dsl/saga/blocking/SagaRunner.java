@@ -37,6 +37,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -253,7 +254,9 @@ public final class SagaRunner<E, C> {
         requireNonNull(timersEnabled, "timersEnabled cannot be null");
 
         SagaRunnerConfig effectiveConfig = quarantineOnlyIfTheEventCanBeAskedForAgain(subscriptionId, config);
-        SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig, retentionCheckFor(subscriptionId, effectiveConfig));
+        HoldRule holdRule = holdRuleFor(subscriptionId);
+        SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig,
+                retentionCheckFor(subscriptionId, effectiveConfig), Instant::now, holdRule.holds());
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
         Consumer<CloudEvent> action = execution::onCloudEvent;
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
@@ -344,6 +347,20 @@ public final class SagaRunner<E, C> {
      * should always be yes, and the MongoDB models give it without a read because their answer is a constant rather
      * than because the question is skipped.
      */
+    // Whether this saga's feed can deliver an event before its instance's start, and whether the delivery in progress
+    // may, in which case the saga holds early events and keeps a failed one it cannot list. The only place that
+    // answers either, so nothing downstream asks the subscription model.
+    // TODO CO1: answer from CommitOrderedSubscriptions once CO1 adds it, canHold from deliversEveryEventInCommitOrder()
+    //  and holds from deliversInCommitOrder(subscriptionId), as plan 2.1 of #1317 has them. Until then no model declares
+    //  commit order, so both are true, which is what a model without the declaration answers.
+    private HoldRule holdRuleFor(String subscriptionId) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return new HoldRule(true, () -> true);
+    }
+
+    private record HoldRule(boolean canHold, BooleanSupplier holds) {
+    }
+
     private Predicate<CloudEvent> retentionCheckFor(String subscriptionId, SagaRunnerConfig config) {
         if (config.quarantineAfter().isEmpty()) {
             return event -> false;
