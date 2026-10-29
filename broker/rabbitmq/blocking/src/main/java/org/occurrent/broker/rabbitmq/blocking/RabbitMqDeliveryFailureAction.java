@@ -21,6 +21,7 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.ShutdownSignalException;
+import com.rabbitmq.client.impl.AMQChannel;
 import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
@@ -215,9 +216,9 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * {@code Frame enqueuing failed} on a connection a memory alarm has blocked, both with the connection still up. A
      * connection without automatic recovery never comes back, so every failure on it is false here.
      * <p>
-     * A close is judged by amqp-client's default recovery triggering condition, which recovers from every close the
-     * application didn't start, and from a close after a missed heartbeat. A {@code ConnectionFactory} given a
-     * condition of its own that differs from the default isn't followed, since the client doesn't expose the one a
+     * A close is judged by amqp-client's default recovery triggering condition, which recovers from every connection
+     * close the application didn't start, and from a close after a missed heartbeat. A {@code ConnectionFactory} given
+     * a condition of its own that differs from the default isn't followed, since the client doesn't expose the one a
      * connection was built with.
      */
     public boolean isLostToConnectionRecovery(Throwable failure) {
@@ -225,9 +226,40 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
             return false;
         }
         if (failure instanceof ShutdownSignalException shutdown) {
-            return shutdown.isHardError() && AutorecoveringConnection.DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION.test(shutdown);
+            return isRecoveredFromByDefault(shutdown);
         }
         return failure instanceof RabbitMqSourceException && failure.getCause() instanceof IOException;
+    }
+
+    /**
+     * Whether {@code close}, reported to a shutdown listener on the delivery's channel, ends that channel for good, so
+     * the source on it stops. False for a close {@link #isLostToConnectionRecovery(Throwable)} accepts.
+     * <p>
+     * Every other close of a {@link Recoverable} channel is final. So is every close of the client's own
+     * {@link AMQChannel}, which only a connection without automatic recovery hands out. On any other channel, a
+     * wrapper around the client's own say, a close of the channel alone is final, and so is a connection close that
+     * {@link AutorecoveringConnection#DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION} doesn't recover from, since
+     * the client underneath reopens neither. A connection close that the default condition recovers from isn't final
+     * there, since a recovery underneath may reopen the channel.
+     */
+    public boolean isClosedForGood(ShutdownSignalException close) {
+        if (isLostToConnectionRecovery(close)) {
+            return false;
+        }
+        return !mayHideRecovery() || !isRecoveredFromByDefault(close);
+    }
+
+    /**
+     * Whether the delivery's channel is neither {@link Recoverable} nor the client's own {@link AMQChannel}, as a
+     * channel from a {@code Connection} that wraps the client's own is, so a recovery underneath may reopen it
+     * without the source being told.
+     */
+    public boolean mayHideRecovery() {
+        return !(consumeChannel instanceof Recoverable) && !(consumeChannel instanceof AMQChannel);
+    }
+
+    private static boolean isRecoveredFromByDefault(ShutdownSignalException close) {
+        return close.isHardError() && AutorecoveringConnection.DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION.test(close);
     }
 
     /**

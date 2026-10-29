@@ -21,7 +21,6 @@ import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Delivery;
-import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.ShutdownSignalException;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
@@ -201,11 +200,11 @@ import static java.util.Objects.requireNonNull;
  * source stops for good, as it does for an {@link Error} a projection throws, an {@link AssertionError} aside, which
  * goes through {@link DeliveryFailurePolicy} like any other projection failure.
  * <p>
- * On a channel from an {@code AutorecoveringConnection}, this source also stops for good when the broker closes the
- * channel, after a delivery outlived the broker's {@code consumer_timeout} say, since nothing reopens it. A channel that
- * isn't {@code Recoverable}, from a connection without automatic recovery or a wrapper around the client's own, gives
- * this source no way to tell such a close from one a connection recovery reopens. This source logs a warning when it's
- * built on one, and a close of that channel doesn't stop it.
+ * This source also stops for good on its next poll, also when it holds no delivery, when its channel is closed and
+ * nothing reopens it. The broker closes the channel after a delivery outlived the broker's {@code consumer_timeout},
+ * say, and nothing reopens a channel of a connection without automatic recovery. On a channel that wraps the client's
+ * own and isn't {@code Recoverable}, a recovery underneath may reopen the channel after a connection close the client
+ * recovers from, so that close doesn't stop this source. This source logs a warning when it's built on such a channel.
  * <p>
  * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
  * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
@@ -254,7 +253,8 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // listener again to every channel a recovery opens, so this counts each drop, and the end of a recovery counts
     // nothing.
     private final AtomicLong connectionDrops = new AtomicLong();
-    // A close of a Recoverable channel that no recovery reopens. The next poll stops this source.
+    // A close of the channel that no recovery reopens, see RabbitMqDeliveryFailureAction#isClosedForGood. The next poll
+    // stops this source.
     private volatile @Nullable ShutdownSignalException closedForGood;
     // An IOException from a nack or an ack on a recovering connection, which a failed socket write throws and so does a
     // TrafficListener or MetricsCollector written in Kotlin. Judged by stopUnlessConnectionDropped. The time is the
@@ -298,12 +298,11 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         consumeChannel.addShutdownListener(this::onChannelShutdown);
     }
 
-    // Runs on a thread of the client, so it only records the close for the poll to act on. A channel that isn't
-    // Recoverable can be a wrapper over one that recovers, so its close never counts as one for good.
+    // Runs on a thread of the client, so it only records the close for the poll to act on
     private void onChannelShutdown(ShutdownSignalException cause) {
         if (failureAction.isLostToConnectionRecovery(cause)) {
             connectionDrops.incrementAndGet();
-        } else if (consumeChannel instanceof Recoverable) {
+        } else if (failureAction.isClosedForGood(cause)) {
             closedForGood = cause;
         }
     }
@@ -333,11 +332,13 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         }
         worker.discardOnRecovery(consumeChannel);
         consumerRecovery.attachTo(builder.connection, consumeChannel);
-        if (!(consumeChannel instanceof Recoverable)) {
-            log.warn("The channel of the source on queue \"{}\" is a {}, which isn't Recoverable, so the source can't tell a "
-                    + "close that a connection recovery reopens from a close that ends the channel for good. A close of the "
-                    + "channel doesn't stop the source. Build the source with an AutorecoveringConnection for it to stop "
-                    + "when its channel is closed for good.", queue, consumeChannel.getClass().getName());
+        if (failureAction.mayHideRecovery()) {
+            log.warn("The channel of the source on queue \"{}\" is a {}, which is neither Recoverable nor the client's own "
+                    + "channel, so after a connection close that the client recovers from, the source can't tell whether a "
+                    + "recovery is going to reopen the channel. Such a close doesn't stop the source, and a dropped connection "
+                    + "while it acknowledges or holds a delivery does. When the connection isn't the AutorecoveringConnection "
+                    + "itself either, the source stops consuming after a recovery with topology recovery turned off. Build the "
+                    + "source with the AutorecoveringConnection itself.", queue, consumeChannel.getClass().getName());
         }
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
@@ -405,13 +406,13 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // broker close the channel, and can't be left either, since at the default prefetchCount of one the broker sends
     // nothing further. Closing the channel requeues it.
     private void releaseHeldDeliveriesOrStop() {
-        // Read before each release, since a drop counted during the first one can't explain a failure for a tag the
-        // second one finds
-        long dropsBeforeRelease = connectionDrops.get();
+        // Read after each release takes its snapshot, so every tag it finds was held before the read, and a drop counted
+        // during the first release can't explain a failure for a tag the second one finds
+        AtomicLong dropsBeforeRelease = new AtomicLong();
+        Runnable readDrops = () -> dropsBeforeRelease.set(connectionDrops.get());
         try {
-            releaseHeldDeferredDelivery();
-            dropsBeforeRelease = connectionDrops.get();
-            releaseHeldFailedDelivery();
+            releaseHeldDeferredDelivery(readDrops);
+            releaseHeldFailedDelivery(readDrops);
         } catch (Throwable e) {
             boolean lostToConnectionRecovery = failureAction.isLostToConnectionRecovery(e);
             if (nackNotSent(e) && lostToConnectionRecovery) {
@@ -421,7 +422,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
                 log.warn("Releasing a held delivery on queue \"{}\" failed with an IOException, which a dropped connection "
                         + "throws. Unless the connection drops within a poll interval, this source then stops and closes the "
                         + "channel, which puts that delivery back on the queue.", queue, e);
-                awaitConnectionDrop(dropsBeforeRelease);
+                awaitConnectionDrop(dropsBeforeRelease.get());
                 return;
             }
             if (nackNotSent(e)) {
@@ -507,24 +508,25 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // retries it while the connection recovers, and stops this source otherwise. Any other failure may come before the
     // frame is written, from an application's TrafficListener, or after it, from its MetricsCollector, an IOException
     // that basicNack declares included. The tag is not put back, see releaseHeldDeliveriesOrStop.
-    private void releaseHeldDeferredDelivery() {
-        releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver);
+    private void releaseHeldDeferredDelivery(Runnable afterSnapshot) {
+        releaseHeldDeferredDelivery(heldDeferredDeliveryTags, afterSnapshot, failureAction::redeliver);
     }
 
     // Releases a REDELIVER-policy failure paced behind heldFailedDeliveryTags, the same mechanism and the same
-    // once-per-poll bound as releaseHeldDeferredDelivery() above, see that field's own javadoc.
+    // once-per-poll bound as releaseHeldDeferredDelivery(Runnable) above, see that field's own javadoc.
     // failureAction.redeliverFailure, not the plain redeliver() heldDeferredDeliveryTags releases through: this
     // deque holds a genuine failure, and redeliverFailure logs the one warn line that failure needs, where
     // heldDeferredDeliveryTags' own pacing release (DEFERRED) is not a failure and stays silent.
-    private void releaseHeldFailedDelivery() {
-        releaseHeldDeferredDelivery(heldFailedDeliveryTags, failureAction::redeliverFailure);
+    private void releaseHeldFailedDelivery(Runnable afterSnapshot) {
+        releaseHeldDeferredDelivery(heldFailedDeliveryTags, afterSnapshot, failureAction::redeliverFailure);
     }
 
     // Package-private and static, parameterized on the deque and the release call, so this source's redelivery
     // bookkeeping is directly testable with a stub that throws on demand, no real Channel or broker required.
-    // Always called under consumeLock.
-    static void releaseHeldDeferredDelivery(Deque<Long> heldDeferredDeliveryTags, LongConsumer redeliver) {
+    // Always called under consumeLock. afterSnapshot runs once the snapshot is taken and before the first release.
+    static void releaseHeldDeferredDelivery(Deque<Long> heldDeferredDeliveryTags, Runnable afterSnapshot, LongConsumer redeliver) {
         int snapshotCount = heldDeferredDeliveryTags.size();
+        afterSnapshot.run();
         for (int i = 0; i < snapshotCount; i++) {
             Long heldDeliveryTag = heldDeferredDeliveryTags.pollFirst();
             if (heldDeliveryTag == null) {
@@ -809,12 +811,12 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // Best effort, the channel close that follows requeues whatever this could not release.
     private void releaseHeldIgnoringFailure() {
         try {
-            releaseHeldDeferredDelivery();
+            releaseHeldDeferredDelivery(() -> { });
         } catch (RuntimeException ignored) {
             // See above
         }
         try {
-            releaseHeldFailedDelivery();
+            releaseHeldFailedDelivery(() -> { });
         } catch (RuntimeException ignored) {
             // See above
         }
