@@ -17,13 +17,16 @@
 
 package org.occurrent.springboot.mongo.reactor;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -33,13 +36,13 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.system.CapturedOutput;
-import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
@@ -83,7 +86,6 @@ import static org.awaitility.Awaitility.await;
 @Import(ReactiveDcbSubscriptionStartPositionAnnotationMongoTest.MongoDbContainerConfiguration.class)
 @Testcontainers
 @Timeout(60)
-@ExtendWith(OutputCaptureExtension.class)
 class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
 
     static final String TAG = "test:reactive-start-position";
@@ -106,6 +108,9 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
 
     @Autowired
     private RefusedPositionSubscriber refusedPositionSubscriber;
+
+    @Autowired
+    private CatchupSupportLog catchupSupportLog;
 
     @Test
     void default_and_now_never_replay_history_older_than_a_second_while_an_explicit_position_0_replays_all_of_it() {
@@ -132,11 +137,14 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
     }
 
     @Test
-    void an_explicit_position_above_0_is_refused_and_delivers_nothing(CapturedOutput output) {
+    void an_explicit_position_above_0_is_refused_and_delivers_nothing() {
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                assertThat(output.getAll())
-                        .contains("CatchupCannotResumeException")
-                        .contains("Cannot start catch-up subscription reactive-dcb-sp-refused-position after position 1"));
+                assertThat(catchupSupportLog.events()).anySatisfy(event -> {
+                    assertThat(event.getThrowableProxy()).isNotNull();
+                    assertThat(event.getThrowableProxy().getClassName()).isEqualTo(CatchupCannotResumeException.class.getName());
+                    assertThat(event.getThrowableProxy().getMessage())
+                            .contains("Cannot start catch-up subscription reactive-dcb-sp-refused-position after position 1");
+                }));
 
         assertThat(refusedPositionSubscriber.received()).isEmpty();
     }
@@ -164,6 +172,11 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
     @SpringBootApplication
     @EnableOccurrentReactive
     static class DcbOnlyApplication {
+
+        @Bean
+        CatchupSupportLog catchupSupportLog() {
+            return new CatchupSupportLog();
+        }
 
         @Bean
         CloudEventTypeMapper<TestEvent> testEventCloudEventTypeMapper() {
@@ -232,6 +245,30 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
                     .toList();
             dcbEventStore.append(cloudEvents).block();
             Thread.sleep(1500);
+        }
+    }
+
+    // Attached as the context starts, before any subscription does, so it holds the refusal however soon after startup a
+    // catch-up thread logs it. A CapturedOutput misses a line printed while an earlier test method ran.
+    static class CatchupSupportLog {
+        private final Logger logger = (Logger) LoggerFactory.getLogger("org.occurrent.subscription.reactor.durable.catchup.NamedCatchupSupport");
+        private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+
+        CatchupSupportLog() {
+            appender.start();
+            logger.addAppender(appender);
+        }
+
+        List<ILoggingEvent> events() {
+            synchronized (appender) {
+                return List.copyOf(appender.list);
+            }
+        }
+
+        @PreDestroy
+        void detach() {
+            logger.detachAppender(appender);
+            appender.stop();
         }
     }
 
