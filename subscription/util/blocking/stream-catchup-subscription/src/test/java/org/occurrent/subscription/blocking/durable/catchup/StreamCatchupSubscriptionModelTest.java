@@ -365,7 +365,7 @@ class StreamCatchupSubscriptionModelTest {
             assertThat(model.liveStarts).as("the wrapped model goes live from the live start read before the replay, and is never opened at the position")
                     .containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
             assertThat(saved).as("stored during the catch-up").isNotEmpty();
-            assertThat(storage.exists("subscription")).as("the stored checkpoint exists").isFalse();
+            assertThat(storage.exists("subscription")).as("no checkpoint left stored after going live").isFalse();
         } finally {
             subscription.shutdown();
         }

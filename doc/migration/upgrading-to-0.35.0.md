@@ -829,8 +829,8 @@ describes.
 
 On an event store that writes no positions, a blocking stream catch-up throws `UnsupportedStartAtException` instead for
 `StartAt.checkpoint(GlobalCheckpoint.of(n))`, `startAtGlobalPosition` or a stored `position:<n>`, with `n` above 0, and
-for a stored one also when it holds a live start. Over such a store none of them replayed in 0.34. They went live at the
-present, as
+for a stored one also when it holds a live start. Over such a store none of them replayed from 0.30.0 to 0.34.0. They
+went live at the present, as
 [A stream catch-up over an event store without positions replays from position 0](#a-stream-catch-up-over-an-event-store-without-positions-replays-from-position-0)
 describes.
 
@@ -852,9 +852,9 @@ A subscription that is refused, and has no such checkpoint stored with its state
 again: `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or `StartAt.checkpoint(GlobalCheckpoint.of(0))`. Cancel it
 first with `cancelSubscription(id)`, which deletes its stored checkpoint. A blocking catch-up holds a refused resume,
 and holds the stored checkpoint it read with it, so deleting the checkpoint and resuming is refused again. With every
-instance of the application stopped, deleting the stored checkpoint is enough. From then on it delivers a checkpoint with every event.
-For a refused replay whose live start was lost, size the change stream history to reach back across the replay. On
-MongoDB that is the oplog.
+instance of the application stopped, deleting the stored checkpoint is enough. From then on it delivers a checkpoint
+with every event. For a refused replay whose live start was lost, size the change stream history to reach back across
+the replay. On MongoDB that is the oplog.
 
 `startAtGlobalPosition`, `startAtDcbPosition` and `DcbStartAt.afterPosition(long)` are deprecated for removal, since
 every value above 0 is refused. Use `StartPosition.BEGINNING` or `DcbStartAt.beginning()` instead of 0.
@@ -876,8 +876,9 @@ position 0, over an event store that writes no stream positions. A store writes 
 `occurrent.event-store.stream.position` is `false`. It also writes none when stream position is on only by default and
 the store started against a collection that already held events without a `position`, since it then turns stream
 position off for itself and logs how to turn it on. On any release from 0.30.0 to 0.34.0 such a subscription got none
-of the history, only the events written after it started. An application that upgrades straight from 0.30, 0.31, 0.32
-or 0.33 is affected in the same way.
+of the history, only the events written after it started. On 0.30.0 that is `@Subscription` alone, since `@Projection`,
+`@Saga` and `@Snapshot` arrived in 0.31.0. An application that upgrades straight from 0.30, 0.31, 0.32 or 0.33 is
+affected in the same way.
 
 The same goes for code that starts a blocking stream catch-up at `StartAt.checkpoint(GlobalCheckpoint.of(n))` over such
 a store. A DCB event store always writes positions.
