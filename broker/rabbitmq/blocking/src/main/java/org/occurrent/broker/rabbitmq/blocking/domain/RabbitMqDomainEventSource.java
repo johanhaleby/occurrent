@@ -17,9 +17,11 @@
 package org.occurrent.broker.rabbitmq.blocking.domain;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Delivery;
+import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.ShutdownSignalException;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
@@ -199,8 +201,11 @@ import static java.util.Objects.requireNonNull;
  * source stops for good, as it does for an {@link Error} a projection throws, an {@link AssertionError} aside, which
  * goes through {@link DeliveryFailurePolicy} like any other projection failure.
  * <p>
- * This source also stops for good when the broker closes its channel, after a delivery outlived the broker's
- * {@code consumer_timeout} say, since nothing reopens that channel.
+ * On a channel from an {@code AutorecoveringConnection}, this source also stops for good when the broker closes the
+ * channel, after a delivery outlived the broker's {@code consumer_timeout} say, since nothing reopens it. A channel that
+ * isn't {@code Recoverable}, from a connection without automatic recovery or a wrapper around the client's own, gives
+ * this source no way to tell such a close from one a connection recovery reopens. This source logs a warning when it's
+ * built on one, and a close of that channel doesn't stop it.
  * <p>
  * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
  * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
@@ -249,11 +254,11 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // listener again to every channel a recovery opens, so this counts each drop, and the end of a recovery counts
     // nothing.
     private final AtomicLong connectionDrops = new AtomicLong();
-    // A close of the channel that no recovery reopens. The next poll stops this source.
+    // A close of a Recoverable channel that no recovery reopens. The next poll stops this source.
     private volatile @Nullable ShutdownSignalException closedForGood;
     // An IOException from a nack or an ack on a recovering connection, which a failed socket write throws and so does a
     // TrafficListener or MetricsCollector written in Kotlin. Judged by stopUnlessConnectionDropped. The time is the
-    // oldest unresolved failure's, and the drop count is the one read before the newest unresolved failure's call. A
+    // oldest unresolved failure's, and the drop count is the highest one read before an unresolved failure's call. A
     // drop after that read requeued every delivery the failures were for. Under consumeLock.
     private boolean unexplainedFailure;
     private long unexplainedFailureNanos;
@@ -293,11 +298,12 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         consumeChannel.addShutdownListener(this::onChannelShutdown);
     }
 
-    // Runs on a thread of the client, so it only records the close for the poll to act on.
+    // Runs on a thread of the client, so it only records the close for the poll to act on. A channel that isn't
+    // Recoverable can be a wrapper over one that recovers, so its close never counts as one for good.
     private void onChannelShutdown(ShutdownSignalException cause) {
         if (failureAction.isLostToConnectionRecovery(cause)) {
             connectionDrops.incrementAndGet();
-        } else {
+        } else if (consumeChannel instanceof Recoverable) {
             closedForGood = cause;
         }
     }
@@ -327,6 +333,12 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         }
         worker.discardOnRecovery(consumeChannel);
         consumerRecovery.attachTo(builder.connection, consumeChannel);
+        if (!(consumeChannel instanceof Recoverable)) {
+            log.warn("The channel of the source on queue \"{}\" is a {}, which isn't Recoverable, so the source can't tell a "
+                    + "close that a connection recovery reopens from a close that ends the channel for good. A close of the "
+                    + "channel doesn't stop the source. Build the source with an AutorecoveringConnection for it to stop "
+                    + "when its channel is closed for good.", queue, consumeChannel.getClass().getName());
+        }
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
@@ -393,9 +405,12 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // broker close the channel, and can't be left either, since at the default prefetchCount of one the broker sends
     // nothing further. Closing the channel requeues it.
     private void releaseHeldDeliveriesOrStop() {
+        // Read before each release, since a drop counted during the first one can't explain a failure for a tag the
+        // second one finds
         long dropsBeforeRelease = connectionDrops.get();
         try {
             releaseHeldDeferredDelivery();
+            dropsBeforeRelease = connectionDrops.get();
             releaseHeldFailedDelivery();
         } catch (Throwable e) {
             boolean lostToConnectionRecovery = failureAction.isLostToConnectionRecovery(e);
@@ -423,21 +438,22 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     }
 
     // Under consumeLock. dropsBeforeCall is read after the delivery arrived and before the call that failed, so a drop
-    // counted since then came after the delivery, and the broker requeued it. A later failure keeps the time of the
-    // first, so a stream of failures can't put the judgement off.
+    // counted since then came after the delivery, and the broker requeued it. A later failure with the same read keeps
+    // the time of the first, so a stream of failures can't put the judgement off. A higher read means a drop since the
+    // first failure's read, which requeued that delivery, so the later failure gets a poll interval of its own.
     private void awaitConnectionDrop(long dropsBeforeCall) {
-        if (!unexplainedFailure) {
+        if (!unexplainedFailure || dropsBeforeCall > dropsBeforeUnexplainedFailure) {
             unexplainedFailure = true;
             unexplainedFailureNanos = System.nanoTime();
             dropsBeforeUnexplainedFailure = dropsBeforeCall;
         }
-        dropsBeforeUnexplainedFailure = Math.max(dropsBeforeUnexplainedFailure, dropsBeforeCall);
     }
 
-    // Under consumeLock. A failed socket write on a recovering connection shuts the connection down within
+    // Under consumeLock. A failed flush to the socket of a recovering connection shuts the connection down within
     // milliseconds, and the broker requeues every unacknowledged delivery on it. No drop a full poll interval after the
-    // oldest failure, counted since the newest failure's call, means an IOException came from somewhere else, and a
-    // delivery may sit unanswered. Stopping closes the channel, which requeues it. Returns whether this source stopped.
+    // oldest failure, counted since the highest read before a failure's call, means an IOException came from somewhere
+    // else, and a delivery may sit unanswered. Stopping closes the channel, which requeues it. Returns whether this
+    // source stopped.
     private boolean stopUnlessConnectionDropped() {
         if (!unexplainedFailure || System.nanoTime() - unexplainedFailureNanos < pollInterval.toNanos()) {
             return false;
@@ -454,17 +470,22 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     }
 
     // Under consumeLock. The broker closes a channel after a channel error, such as 406 PRECONDITION_FAILED when a
-    // delivery outlives consumer_timeout, and a connection without automatic recovery closes its channels for good.
-    // With nothing held, no release or acknowledgement would notice, and this source would stay silent and consume
-    // nothing. Returns whether this source stopped.
+    // delivery outlives consumer_timeout, and nothing reopens it. With nothing held, no release or acknowledgement
+    // would notice, and this source would stay silent and consume nothing. Returns whether this source stopped.
     private boolean stopIfClosedForGood() {
         ShutdownSignalException cause = closedForGood;
         if (cause == null) {
             return false;
         }
-        log.error("The channel of queue \"{}\" was closed, and the connection is not going to reopen it. Stopping this "
-                + "source. Closing the channel put every delivery this source had not acknowledged back on the queue.",
-                queue, cause);
+        if (cause.isInitiatedByApplication()) {
+            log.warn("The channel of queue \"{}\" was closed by the application, or its connection was. Stopping this "
+                    + "source. Closing the channel put every delivery this source had not acknowledged back on the queue.",
+                    queue);
+        } else {
+            log.error("The channel of queue \"{}\" was closed, and the connection is not going to reopen it. Stopping "
+                    + "this source. Closing the channel put every delivery this source had not acknowledged back on the "
+                    + "queue.", queue, cause);
+        }
         stopPermanently();
         return true;
     }
@@ -775,8 +796,11 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         if (tag != null) {
             try {
                 consumeChannel.basicCancel(tag);
+            } catch (AlreadyClosedException e) {
+                // A closed channel has no consumer left at the broker
+                log.debug("Didn't cancel the consumer on queue \"{}\" while stopping permanently, since its channel is "
+                        + "closed.", queue, e);
             } catch (IOException | RuntimeException e) {
-                // RuntimeException too, since an already closed channel throws AlreadyClosedException
                 log.warn("Failed to cancel the consumer on queue \"{}\" while stopping permanently.", queue, e);
             }
         }
@@ -878,7 +902,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         if (tag != null) {
             try {
                 consumeChannel.basicCancel(tag);
-            } catch (IOException ignored) {
+            } catch (IOException | RuntimeException ignored) {
                 // Best effort, the channel is about to be closed either way
             }
         }

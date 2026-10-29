@@ -203,19 +203,22 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * accepts, the source stops at its first poll a poll interval or more after the failure, unless the connection
      * dropped after the call, because the frame may not have been sent.
      * <p>
-     * True only for a channel from a connection with automatic recovery enabled, and then for two failures. One is a
-     * {@link ShutdownSignalException}, {@code AlreadyClosedException} included, for the whole connection rather than
-     * only the channel, that {@link AutorecoveringConnection#DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION}
-     * recovers from. A connection closed by the application is not recovered by that condition, and a channel the
+     * True only for a channel that is {@link Recoverable}, as every channel of a connection with automatic recovery
+     * enabled is, and then for two failures. One is a {@link ShutdownSignalException}, {@code AlreadyClosedException}
+     * included, for the whole connection rather than only the channel, that
+     * {@link AutorecoveringConnection#DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION} recovers from. A channel the
      * broker closed on its own is never recovered at all. The other is a {@link RabbitMqSourceException} caused by an
-     * {@link IOException}. A failed write to the connection's socket throws one, and a recovering connection closes
-     * and recovers itself after it. A {@code TrafficListener} or {@code MetricsCollector} written in Kotlin throws one
-     * too, and so does NIO's {@code Frame enqueuing failed} on a connection a memory alarm has blocked, both with the
-     * connection still up. A connection without automatic recovery never comes back, so every failure on it is false
-     * here.
+     * {@link IOException}. A failed flush of the connection's socket throws one, and before the throw a recovering
+     * connection starts a thread that closes it, then recovers after that close. A write that fails before the flush,
+     * while the frame is copied into the socket's buffer, throws one without starting that thread. A
+     * {@code TrafficListener} or {@code MetricsCollector} written in Kotlin throws one too, and so does NIO's
+     * {@code Frame enqueuing failed} on a connection a memory alarm has blocked, both with the connection still up. A
+     * connection without automatic recovery never comes back, so every failure on it is false here.
      * <p>
-     * A {@code ConnectionFactory} given its own recovery triggering condition is judged by the default condition
-     * anyway, since the client does not expose the one a connection was built with.
+     * A close is judged by amqp-client's default recovery triggering condition, which recovers from every close the
+     * application didn't start, and from a close after a missed heartbeat. A {@code ConnectionFactory} given a
+     * condition of its own that differs from the default isn't followed, since the client doesn't expose the one a
+     * connection was built with.
      */
     public boolean isLostToConnectionRecovery(Throwable failure) {
         if (!(consumeChannel instanceof Recoverable)) {
