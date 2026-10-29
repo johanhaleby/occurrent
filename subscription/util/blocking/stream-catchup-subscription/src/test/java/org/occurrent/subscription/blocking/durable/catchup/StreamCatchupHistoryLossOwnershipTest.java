@@ -428,6 +428,65 @@ class StreamCatchupHistoryLossOwnershipTest {
     }
 
     @Test
+    void a_pause_and_resume_does_not_throw_the_terminal_failure_once_the_subscription_is_resumed_at_a_kept_checkpoint() {
+        // Given
+        terminallyPausedAfterALoss();
+        catchup.resumeSubscription(ID, StartAt.checkpoint(TOKEN));
+        catchup.pauseSubscription(ID);
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged, only the one for the loss").hasSize(1)
+        );
+    }
+
+    @Test
+    void a_stop_and_start_does_not_throw_the_terminal_failure_once_the_subscription_is_resumed_at_a_kept_checkpoint() {
+        // Given
+        terminallyPausedAfterALoss();
+        catchup.resumeSubscription(ID, StartAt.checkpoint(TOKEN));
+        catchup.stop();
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.start(true));
+
+        // Then
+        assertThat(thrown).as("thrown by the start").isNull();
+        assertAll(
+                () -> assertThat(liveModel.isRunning(ID)).as("running on the live model").isTrue(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged, only the one for the loss").hasSize(1)
+        );
+    }
+
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_after_the_live_model_threw_from_a_resume_at_a_kept_checkpoint() {
+        // Given
+        terminallyPausedAfterALoss();
+        liveModel.failingTheNextRepositioningResumeWith(new IllegalStateException("live model refuses the resume"));
+        assertThatThrownBy(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(TOKEN))).isInstanceOf(IllegalStateException.class);
+        int resumesBefore = liveModel.resumeCalls.size();
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(LATER_TOKEN.asString());
+        assertAll(
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").hasSize(resumesBefore),
+                () -> assertThat(liveModel.isPaused(ID)).as("paused on the live model").isTrue(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty()
+        );
+    }
+
+    @Test
     void start_resumes_the_healthy_paused_subscription_and_leaves_the_terminally_failed_one_paused() {
         // Given
         terminallyFailedAndHealthyPausedSubscriptions();
@@ -456,6 +515,13 @@ class StreamCatchupHistoryLossOwnershipTest {
         // Then
         assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(LATER_TOKEN.asString());
         assertThat(liveModel.isRunning(OTHER_ID)).as("healthy subscription running").isTrue();
+    }
+
+    private void terminallyPausedAfterALoss() {
+        create();
+        catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
+        liveModel.losesTheHistoryOf(ID, LATER_TOKEN);
+        assertThat(catchup.isPaused(ID)).as("paused by the loss").isTrue();
     }
 
     private void terminallyFailedAndHealthyPausedSubscriptions() {

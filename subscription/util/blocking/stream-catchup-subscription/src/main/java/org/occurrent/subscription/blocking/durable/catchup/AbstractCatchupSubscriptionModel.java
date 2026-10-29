@@ -696,6 +696,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Once the live delegate returns from the resume, this model is started again if a start whose live delegate threw
      * stopped it, so a subscription made afterwards replays at once. After {@link #stop()} it stays stopped.
      * <p>
+     * A subscription paused because the live delegate lost the history it resumed from is running again once the live
+     * delegate has resumed it here, so a later {@link #resumeSubscription(String)} or {@link #start(boolean)} no longer
+     * refuses it. When the live delegate throws, it stays refused.
+     * <p>
      * {@link RepositionableSubscriptions#findIn} finds this model only when the live delegate is repositionable.
      *
      * @throws UnsupportedOperationException if the live delegate is not itself repositionable.
@@ -736,12 +740,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // The position given here wins over the live start the last replay handed over, and over a takeover
                 // the live delegate's loss of it asked for, which is asked for again when the live delegate throws
                 HandedOver dropped = handedOver.remove(subscriptionId);
+                // Cleared before the live delegate resumes, so a loss of the position given here is recorded afresh
+                Subscribed made = subscribed.get(subscriptionId);
+                Checkpoint lost = made == null ? null : made.historyLost().getAndSet(null);
                 // A held replay delivers nothing, and only a call holding the claim runs it again, so it ends only once
                 // the live delegate has resumed and is put back when that throws
                 Subscription resumed;
                 try {
                     resumed = repositionable.resumeSubscription(subscriptionId, startAt);
                 } catch (RuntimeException | Error e) {
+                    if (made != null && lost != null) {
+                        made.historyLost().compareAndSet(null, lost);
+                    }
                     if (dropped != null) {
                         handedOver.putIfAbsent(subscriptionId, dropped);
                     }

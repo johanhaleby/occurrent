@@ -59,6 +59,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     private volatile boolean running_ = true;
     private volatile @Nullable Checkpoint lossReportedInsideSubscribe;
     private volatile @Nullable RuntimeException nextSubscribeThrows;
+    private volatile @Nullable RuntimeException nextRepositioningResumeThrows;
 
     final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
@@ -78,6 +79,11 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
 
     HistoryLosingLiveModel failingTheNextSubscribeWith(RuntimeException failure) {
         nextSubscribeThrows = failure;
+        return this;
+    }
+
+    HistoryLosingLiveModel failingTheNextRepositioningResumeWith(RuntimeException failure) {
+        nextRepositioningResumeThrows = failure;
         return this;
     }
 
@@ -122,6 +128,11 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
 
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+        RuntimeException failure = nextRepositioningResumeThrows;
+        if (failure != null) {
+            nextRepositioningResumeThrows = null;
+            throw failure;
+        }
         Open held = paused.remove(subscriptionId);
         if (held == null) {
             throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");
