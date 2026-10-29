@@ -108,6 +108,8 @@ public final class DeciderApplicationService<E> {
 
     /**
      * Execute a single command against {@code streamId} and return the folded state after the decision.
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(String streamId, C command, Decider<C, S, E> decider) {
         return executeAndReturnDecision(streamId, command, decider).state();
@@ -115,6 +117,8 @@ public final class DeciderApplicationService<E> {
 
     /**
      * Execute a single command against {@code streamId} and return the folded state after the decision.
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(UUID streamId, C command, Decider<C, S, E> decider) {
         return executeAndReturnDecision(streamId, command, decider).state();
@@ -122,6 +126,8 @@ public final class DeciderApplicationService<E> {
 
     /**
      * Execute {@code commands} in order against {@code streamId} and return the folded state after the decision.
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(String streamId, List<C> commands, Decider<C, S, E> decider) {
         return executeAndReturnDecision(streamId, commands, decider).state();
@@ -129,6 +135,8 @@ public final class DeciderApplicationService<E> {
 
     /**
      * Execute {@code commands} in order against {@code streamId} and return the folded state after the decision.
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
         return executeAndReturnDecision(streamId, commands, decider).state();

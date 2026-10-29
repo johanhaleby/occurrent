@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.snapshot.reactor;
 
+import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.service.reactor.ApplicationService;
@@ -124,11 +125,13 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
     }
 
     /**
-     * Execute a single command and emit the folded state after the decision. A {@link Mono} cannot carry a null value, so
-     * the snapshot state {@code S} must be non-null here. A decider that folds to null is refused before anything is
-     * written. Use {@link #executeAndReturnDecision} for a nullable state.
+     * Execute a single command and emit the folded state after the decision. The state type {@code S} may be nullable,
+     * but a {@link Mono} cannot carry a null value, so a decider that folds to null is refused with a
+     * {@link NullPointerException} before anything is written. The blocking
+     * {@link org.occurrent.dsl.snapshot.blocking.SnapshotDeciderApplicationService} returns a null state instead. Use
+     * {@link #executeAndReturnDecision} for a nullable state.
      */
-    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(String streamId, C command, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
+    public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(String streamId, C command, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
         return doExecuteAndReturnState(streamId, List.of(command), snapshotDecider);
     }
 
@@ -136,7 +139,7 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
      * Execute a single command and emit the folded state after the decision. The decider is refused before anything is
      * written if it folds to a null state. See {@link #executeAndReturnState(String, Object, ReactiveSnapshotDecider)}.
      */
-    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(UUID streamId, C command, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
+    public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(UUID streamId, C command, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
         return doExecuteAndReturnState(streamId.toString(), List.of(command), snapshotDecider);
     }
 
@@ -145,7 +148,7 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
      * appended once, so only the state after the last command is checked. If that state is null, nothing is written, not
      * even the events the earlier commands decided. See {@link #executeAndReturnState(String, Object, ReactiveSnapshotDecider)}.
      */
-    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(String streamId, List<C> commands, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
+    public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(String streamId, List<C> commands, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
         return doExecuteAndReturnState(streamId, commands, snapshotDecider);
     }
 
@@ -154,17 +157,17 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
      * appended once, so only the state after the last command is checked. If that state is null, nothing is written, not
      * even the events the earlier commands decided. See {@link #executeAndReturnState(String, List, ReactiveSnapshotDecider)}.
      */
-    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(UUID streamId, List<C> commands, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
+    public <C, S extends @Nullable Object> Mono<@NonNull S> executeAndReturnState(UUID streamId, List<C> commands, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
         return doExecuteAndReturnState(streamId.toString(), commands, snapshotDecider);
     }
 
-    private <C, S extends @Nullable Object> Mono<S> doExecuteAndReturnState(String streamId, List<C> commands, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
+    private <C, S extends @Nullable Object> Mono<@NonNull S> doExecuteAndReturnState(String streamId, List<C> commands, ReactiveSnapshotDecider<C, S, E> snapshotDecider) {
         return doExecute(streamId, commands, snapshotDecider, true).map(executed -> executed.decision().state());
     }
 
     // A Mono cannot carry null, so a null folded state fails fast with guidance instead of a bare NPE from Reactor.
-    private static <S, E> S requireNonNullState(Decider.Decision<S, E> decision) {
-        return Objects.requireNonNull(decision.state(), "The decider produced a null state, but a Mono cannot carry null. Use executeAndReturnDecision for a nullable state.");
+    private static NullPointerException nullStateRefusal() {
+        return new NullPointerException("The decider produced a null state, but a Mono cannot carry null. Use executeAndReturnDecision for a nullable state.");
     }
 
     /**
@@ -215,23 +218,22 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
             return applicationService.execute(streamId, ExecuteOptions.<E>empty().fromStreamVersion(base.version()), tail -> {
                 S current = decider.evolve(base.state(), tail);
                 Decider.Decision<S, E> decision = decider.decideOnState(current, commands);
-                // The decision is known before functionThatCallsDomainModel returns, which is before the application
-                // service writes anything, so refusing a null state here (rather than after the write) keeps a rejected
-                // command from ever being committed.
-                if (refuseNullState) {
-                    requireNonNullState(decision);
-                }
                 decisionRef.set(decision);
-                return decision.events();
+                // The decision is known before functionThatCallsDomainModel returns, which is before the application
+                // service writes anything. A refused null state writes no events, so the rejected command is never
+                // committed, and the empty write still reports the stream's head for the self-heal below.
+                return refuseNullState && decision.state() == null ? List.of() : decision.events();
             }).flatMap(writeResult -> {
                 Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
+                boolean refused = refuseNullState && decision.state() == null;
+                Mono<Executed<S, E>> outcome = refused ? Mono.error(nullStateRefusal()) : Mono.just(new Executed<>(writeResult, decision));
                 if (base.version() > writeResult.oldStreamVersion()) {
                     // Self-heal: the snapshot's version is ahead of the stream's true head before this write, so the
                     // stream was reset (truncated) below the snapshot after it was written. There is nothing valid to
                     // persist, and the stale snapshot must go, otherwise the next command resumes from state the reset
-                    // stream no longer holds. Deleting it makes the next resolveBase fold fresh. This is misuse-only (a
-                    // reset that did not pair with SnapshotStore.delete); the delete is best-effort because the command
-                    // already committed.
+                    // stream no longer holds. Deleting it makes the next resolveBase fold fresh. This is misuse-only, a
+                    // reset that did not pair with SnapshotStore.delete. The delete is best-effort because its failure
+                    // must not change the outcome, a committed command or a refused one that wrote nothing.
                     log.warn("Snapshot for stream '{}' is at version {} but the stream's head was {} before this write, so the stream was reset below the snapshot. Deleting the stale snapshot; the next command folds fresh from the stream. Pair a stream reset with SnapshotStore.delete to avoid this.",
                             streamId, base.version(), writeResult.oldStreamVersion());
                     // Deferred so a store that throws before returning its Mono reaches onErrorResume too
@@ -240,7 +242,11 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
                                 log.warn("Failed to delete the stale snapshot for stream '{}' after detecting a reset. It will be discarded again by the head guard on the next command.", streamId, e);
                                 return Mono.empty();
                             })
-                            .thenReturn(new Executed<>(writeResult, decision));
+                            .then(outcome);
+                }
+                if (refused) {
+                    // Nothing was written, so there is no new state to snapshot
+                    return outcome;
                 }
                 // Build the decision (including the eventsSinceSnapshot narrowing) inside the best-effort boundary so
                 // nothing after the commit can surface the committed command as a failure.

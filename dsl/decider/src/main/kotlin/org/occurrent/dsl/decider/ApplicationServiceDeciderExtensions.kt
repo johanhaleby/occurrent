@@ -53,9 +53,13 @@ inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.execute
 }
 
 // ExecuteAndReturnState
+/** Execute and return the folded state after the decision. A null state is returned as it is. */
 inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnState(streamId: String, command: C, decider: Decider<C, S, SubE>): S = executeAndReturnDecision(streamId, command, decider).state
+/** Execute and return the folded state after the decision. A null state is returned as it is. */
 inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnState(streamId: UUID, command: C, decider: Decider<C, S, SubE>): S = executeAndReturnDecision(streamId, command, decider).state
+/** Execute and return the folded state after the decision. A null state is returned as it is. */
 inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnState(streamId: String, commands: List<C>, decider: Decider<C, S, SubE>): S = executeAndReturnDecision(streamId, commands, decider).state
+/** Execute and return the folded state after the decision. A null state is returned as it is. */
 inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnState(streamId: UUID, commands: List<C>, decider: Decider<C, S, SubE>): S = executeAndReturnDecision(streamId, commands, decider).state
 
 // ExecuteAndReturnEvents

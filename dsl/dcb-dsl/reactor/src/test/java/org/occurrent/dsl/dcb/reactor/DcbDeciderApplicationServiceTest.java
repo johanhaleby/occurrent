@@ -51,6 +51,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Signal;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
@@ -63,6 +64,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -291,6 +293,18 @@ class DcbDeciderApplicationServiceTest {
             // Then
             assertThat(readNullFoldEvents()).as("nothing appended, not even Materialize's event").isEmpty();
             assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("Mono cannot carry null");
+        }
+
+        @Test
+        void with_a_command_list_checks_only_the_state_after_the_last_command() {
+            // When: Vanish folds to null in the middle of the list, Materialize brings the state back before it ends
+            Signal<String> signal = deciderApplicationService.executeAndReturnState(List.of(new Vanish(), new Materialize()), nullFoldDcbDecider()).materialize().block();
+
+            // Then
+            assertAll(
+                    () -> assertThat(requireNonNull(signal).get()).as("state emitted by %s", signal).isEqualTo("materialized"),
+                    () -> assertThat(readNullFoldEvents()).as("both events appended, including the one decided while the state was null").hasSize(2)
+            );
         }
     }
 

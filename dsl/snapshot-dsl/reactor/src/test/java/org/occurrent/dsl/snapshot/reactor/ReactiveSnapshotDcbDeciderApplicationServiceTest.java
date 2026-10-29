@@ -54,6 +54,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Signal;
 
 import java.io.IOException;
 import java.net.URI;
@@ -281,6 +282,19 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     }
 
     @Test
+    void executeAndReturnState_with_several_commands_checks_only_the_state_after_the_last_command() {
+        var account = ReactiveSnapshotDcbDecider.from(foldsToNullOnTheFirstOfSeveralCommandsDcbDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        // FoldToNull makes the state null in the middle of the list, Keep makes it non-null again before the list ends
+        Signal<String> signal = service.executeAndReturnState(List.of(new FoldToNull(), new Keep("Z")), account).materialize().block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(requireNonNull(signal).get()).as("state emitted by %s", signal).isEqualTo("Z"),
+                () -> assertThat(eventStore.count(criteria()).block(TIMEOUT)).as("both events appended, including the one decided while the state was null").isEqualTo(2L)
+        );
+    }
+
+    @Test
     void executeAndReturnDecision_still_allows_a_null_state_and_the_append_is_committed() {
         var account = ReactiveSnapshotDcbDecider.from(foldsToNullDcbDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
 
@@ -315,6 +329,39 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     }
 
     private record Delete() {
+    }
+
+    private static DcbDecider<MultiFoldCmd, @Nullable String, DomainEvent> foldsToNullOnTheFirstOfSeveralCommandsDcbDecider(LocalDateTime time) {
+        Decider<MultiFoldCmd, @Nullable String, DomainEvent> decider = new Decider<>() {
+            @Override
+            public @Nullable String initialState() {
+                return "";
+            }
+
+            @NonNull
+            @Override
+            public List<DomainEvent> decide(@NonNull MultiFoldCmd command, @Nullable String state) {
+                return switch (command) {
+                    case Keep k -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", k.name()));
+                    case FoldToNull ignored -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "DELETED"));
+                };
+            }
+
+            @Override
+            public @Nullable String evolve(@Nullable String state, @NonNull DomainEvent event) {
+                return event instanceof NameWasChanged ? null : event.name();
+            }
+        };
+        return DcbDecider.from(decider, command -> criteria(), event -> Set.of(tag()));
+    }
+
+    private sealed interface MultiFoldCmd {
+    }
+
+    private record Keep(String name) implements MultiFoldCmd {
+    }
+
+    private record FoldToNull() implements MultiFoldCmd {
     }
 
     private void appendOutOfBand(DomainEvent event) {

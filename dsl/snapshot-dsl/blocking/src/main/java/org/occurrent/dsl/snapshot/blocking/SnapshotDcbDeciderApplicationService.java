@@ -98,6 +98,8 @@ public final class SnapshotDcbDeciderApplicationService<E> {
 
     /**
      * Execute a single command and return the folded state after the decision (even when nothing was appended).
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(C command, SnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
         return executeAndReturnDecision(command, snapshotDcbDecider).state();
@@ -105,6 +107,8 @@ public final class SnapshotDcbDeciderApplicationService<E> {
 
     /**
      * Execute {@code commands} and return the folded state after the decision (even when nothing was appended).
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(List<C> commands, SnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
         return executeAndReturnDecision(commands, snapshotDcbDecider).state();

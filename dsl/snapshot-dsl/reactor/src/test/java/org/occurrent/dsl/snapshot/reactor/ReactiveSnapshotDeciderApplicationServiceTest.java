@@ -49,6 +49,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Signal;
 import reactor.test.StepVerifier;
 
 import java.io.IOException;
@@ -415,6 +416,53 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
         assertAll(
                 () -> assertThat(requireNonNull(eventStore.read(streamId).block(TIMEOUT)).version()).as("nothing written, including the events the first command decided").isZero(),
                 () -> assertThat(store.findLatest(streamId).blockOptional()).as("no snapshot for a refused write").isEmpty()
+        );
+    }
+
+    @Test
+    void executeAndReturnState_with_several_commands_checks_only_the_state_after_the_last_command() {
+        String streamId = UUID.randomUUID().toString();
+        var account = ReactiveSnapshotDecider.from(foldsToNullOnTheLastOfSeveralCommandsDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        // FoldToNull makes the state null in the middle of the list, Keep makes it non-null again before the list ends
+        Signal<String> signal = service.executeAndReturnState(streamId, List.of(new FoldToNull(), new Keep("Z")), account).materialize().block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(requireNonNull(signal).get()).as("state emitted by %s", signal).isEqualTo("Z"),
+                () -> assertThat(requireNonNull(eventStore.read(streamId).block(TIMEOUT)).version()).as("both events written, including the one decided while the state was null").isEqualTo(2L)
+        );
+    }
+
+    @Test
+    void executeAndReturnState_that_refuses_a_null_state_deletes_a_snapshot_that_is_ahead_of_a_reset_stream() {
+        String streamId = UUID.randomUUID().toString();
+        var account = ReactiveSnapshotDecider.from(foldsToNullOnTheLastOfSeveralCommandsDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        service.execute(streamId, new Keep("A"), account).block(TIMEOUT);
+        service.execute(streamId, new Keep("B"), account).block(TIMEOUT);
+        assertThat(store.findLatest(streamId).blockOptional().orElseThrow().version()).as("snapshot ahead of the reset stream").isEqualTo(2L);
+
+        // Reset the stream below the surviving snapshot without deleting the snapshot, as in the reset test above
+        eventStore.deleteEventStream(streamId).block(TIMEOUT);
+
+        Throwable thrown = catchThrowable(() -> service.executeAndReturnState(streamId, new FoldToNull(), account).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(requireNonNull(eventStore.read(streamId).block(TIMEOUT)).version()).as("nothing written for a refused null state").isZero(),
+                () -> assertThat(store.findLatest(streamId).blockOptional()).as("stale snapshot deleted").isEmpty(),
+                () -> assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("Mono cannot carry null")
+        );
+    }
+
+    @Test
+    void executeAndReturnState_that_refuses_a_null_state_saves_no_snapshot_even_when_the_policy_fires_on_every_write() {
+        String streamId = UUID.randomUUID().toString();
+        var account = ReactiveSnapshotDecider.from(foldsToNullOnTheLastOfSeveralCommandsDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        Throwable thrown = catchThrowable(() -> service.executeAndReturnState(streamId, new FoldToNull(), account).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(store.findLatest(streamId).blockOptional()).as("no snapshot for a refused write").isEmpty(),
+                () -> assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("Mono cannot carry null")
         );
     }
 

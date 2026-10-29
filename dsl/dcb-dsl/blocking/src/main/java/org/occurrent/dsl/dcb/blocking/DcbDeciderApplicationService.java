@@ -116,6 +116,8 @@ public final class DcbDeciderApplicationService<E> {
 
     /**
      * Execute a single command and return the folded state after the decision.
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider) {
         return executeAndReturnDecision(command, dcbDecider).state();
@@ -123,6 +125,8 @@ public final class DcbDeciderApplicationService<E> {
 
     /**
      * Execute {@code commands} and return the folded state after the decision.
+     * A null state is returned as it is, unlike the reactive services, which refuse it because a {@code Mono} cannot
+     * hold null.
      */
     public <C, S extends @Nullable Object> S executeAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
         return executeAndReturnDecision(commands, dcbDecider).state();

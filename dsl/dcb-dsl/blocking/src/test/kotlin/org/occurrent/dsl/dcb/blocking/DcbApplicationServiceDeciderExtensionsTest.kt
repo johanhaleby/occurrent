@@ -19,10 +19,12 @@ package org.occurrent.dsl.dcb.blocking
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
+import org.assertj.core.api.Assertions.catchThrowable
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertAll
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
@@ -41,6 +43,7 @@ import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.net.URI
 import java.time.LocalDateTime
+import java.util.UUID
 
 @DisplayNameGeneration(ReplaceUnderscores::class)
 class DcbApplicationServiceDeciderExtensionsTest {
@@ -193,6 +196,39 @@ class DcbApplicationServiceDeciderExtensionsTest {
         assertThat(readNameEvents("name")).containsExactly(NameDefined("event-1", time, "name", "Jane Doe"))
     }
 
+    @Test
+    fun executeAndReturnState_with_a_single_command_refuses_a_null_state_before_anything_is_appended() {
+        val thrown = catchThrowable { applicationService.executeAndReturnState(Vanish, nullFoldDcbDecider()) }
+
+        assertAll(
+            { assertThat(readNullFoldEvents()).`as`("nothing appended for a refused null state").isEmpty() },
+            { assertThat(thrown).isInstanceOf(NullPointerException::class.java).hasMessageContaining("executeAndReturnState cannot return null") }
+        )
+    }
+
+    @Test
+    fun executeAndReturnState_with_a_command_list_refuses_a_null_state_before_anything_is_appended_even_when_an_earlier_command_folds_non_null() {
+        val thrown = catchThrowable { applicationService.executeAndReturnState(listOf(Materialize, Vanish), nullFoldDcbDecider()) }
+
+        assertAll(
+            { assertThat(readNullFoldEvents()).`as`("nothing appended, not even Materialize's event").isEmpty() },
+            { assertThat(thrown).isInstanceOf(NullPointerException::class.java).hasMessageContaining("executeAndReturnState cannot return null") }
+        )
+    }
+
+    @Test
+    fun executeAndReturnState_with_a_command_list_checks_only_the_state_after_the_last_command() {
+        var state: String? = null
+
+        val thrown = catchThrowable { state = applicationService.executeAndReturnState(listOf(Vanish, Materialize), nullFoldDcbDecider()) }
+
+        assertAll(
+            { assertThat(thrown).`as`("what the call threw").isNull() },
+            { assertThat(state).isEqualTo("materialized") },
+            { assertThat(readNullFoldEvents()).`as`("both events appended, including the one decided while the state was null").hasSize(2) }
+        )
+    }
+
     // executeAndReturnState returns the state directly and cannot carry null, so this decider uses a non-null String, with an empty string for "no name yet".
     private fun nameDecider(): Decider<NameCommand, String, DomainEvent> =
         decider(
@@ -212,6 +248,29 @@ class DcbApplicationServiceDeciderExtensionsTest {
         tags = { event -> setOf(tagFor(event)) }
     )
 
+    // Folds to null although its state type is String, as a decider written in Java does. executeAndReturnState binds the
+    // state to a non-null type, so the erased cast is how a Kotlin test gets a null into it.
+    @Suppress("UNCHECKED_CAST")
+    private fun nullFoldDcbDecider(): DcbDecider<NullFoldCommand, String, DomainEvent> {
+        val nullFoldDecider: Decider<NullFoldCommand, String?, DomainEvent> = decider(
+            initialState = null,
+            decide = { command, _ ->
+                val marker = if (command is Materialize) "materialized" else "vanished"
+                listOf(NameWasChanged("event-${UUID.randomUUID()}", time, "nullfold", marker))
+            },
+            evolve = { _, event -> if (event is NameWasChanged && event.name() == "materialized") "materialized" else null }
+        )
+        return (nullFoldDecider as Decider<NullFoldCommand, String, DomainEvent>).toDcb(
+            criteria = { nullFoldQuery() },
+            tags = { setOf(Tag.of("nullfold", "nullfold")) }
+        )
+    }
+
+    private fun readNullFoldEvents(): List<DomainEvent> =
+        cloudEventConverter.toDomainEvents(eventStore.read(nullFoldQuery()).stream()).toList()
+
+    private fun nullFoldQuery(): DcbCriteria = DcbCriteria.tags(Tag.of("nullfold", "nullfold"))
+
     private fun append(vararg events: DomainEvent) {
         val cloudEvents = cloudEventConverter.toCloudEvents(listOf(*events))
             .map { event -> DcbCloudEvents.withTags(event, setOf(Tag.of("name", "name"))) }
@@ -229,4 +288,8 @@ class DcbApplicationServiceDeciderExtensionsTest {
     private data class DefineName(val name: String) : NameCommand
     private data class ChangeName(val name: String) : NameCommand
     private data object NoOp : NameCommand
+
+    private sealed interface NullFoldCommand
+    private data object Materialize : NullFoldCommand
+    private data object Vanish : NullFoldCommand
 }
