@@ -122,9 +122,11 @@ deliberate. Holding the copy forever would keep its bytes and never run its reac
 A held copy is applied through `process`, with its own meta and its own failure handling. When it fails, the driving
 input is refused as any failing input is, the failed version is listed pending or self-held as below, and REDELIVER
 retries the driving input, which drains first. When the held copy's failure quarantines the instance instead, the
-driving input is acknowledged without being applied, as every later input of a quarantined instance is, and quarantine
-engages only on a subscription that retains its history. A held copy whose conversion or `evolve` throws while the drain
-checks whether it ends the instance is applied at once, so that failure is its own as well.
+driving input is acknowledged without being applied, as every later input of a quarantined instance is. The retention
+check asks about the driving input, since that is the event the subscription moves past, and the held copy stays in the
+store. A held copy that fails in a drain a timer ran is kept and measured the same way, and the timer stays due until the
+held copy applies. A held copy whose conversion or `evolve` throws while the drain checks whether it ends the instance
+is applied at once, so that failure is its own as well.
 
 **The lookup on every keyed delivery.** Where the delivery holds, every keyed delivery to a started instance reads the
 held copy with its own key once, after the drain and before classifying the delivery. A self-held copy not marked

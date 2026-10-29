@@ -245,12 +245,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         if (failure instanceof HeldCopyFailed held) {
             // The held event's own failure, measured on its own clock and kept under its own key. The delivery that drove
             // the drain is refused as any failing input is, and its retry drains first.
-            return keepFailed(sagaId, held.cloudEvent, held.meta, held.getCause(), keysSeenNew, true);
+            return keepFailed(sagaId, held.cloudEvent, held.meta, held.getCause(), keysSeenNew, true, cloudEvent);
         }
-        return keepFailed(sagaId, cloudEvent, meta, failure, keysSeenNew, false);
+        return keepFailed(sagaId, cloudEvent, meta, failure, keysSeenNew, false, cloudEvent);
     }
 
-    private boolean keepFailed(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Set<String> keysSeenNew, boolean heldCopy) {
+    // The acknowledged event is the one a quarantine lets the subscription past, which for a held event that failed in a
+    // drain is the delivery that drove it and not the held event, kept in the store either way.
+    private boolean keepFailed(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Set<String> keysSeenNew, boolean heldCopy,
+                               CloudEvent acknowledged) {
         if (!meta.carriesRedeliveryKey() || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
             return false;
         }
@@ -261,7 +264,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             recordPending(sagaId, cloudEvent, meta, failure, keysSeenNew, heldCopy);
             return false;
         }
-        return quarantine(sagaId, cloudEvent, meta, failure, quarantineAfter.get(), keysSeenNew, heldCopy);
+        return quarantine(sagaId, cloudEvent, meta, failure, quarantineAfter.get(), keysSeenNew, heldCopy, acknowledged);
     }
 
     /**
@@ -548,7 +551,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * Earlier versions of this javadoc said it was, on an accounting that was true of one instance and false of the
      * batch they share.
      */
-    private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Duration quarantineAfter, Set<String> keysSeenNew, boolean heldCopy) {
+    private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Duration quarantineAfter, Set<String> keysSeenNew, boolean heldCopy,
+                               CloudEvent acknowledged) {
         try {
             Instant now = clock.get();
             // Read without the state, because nothing on this path applies it and an instance whose state no longer
@@ -564,7 +568,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (record == null) {
                 return false;
             }
-            if (record.quarantined() && !confirmedStillObtainable(cloudEvent, failure)) {
+            if (record.quarantined() && !confirmedStillObtainable(acknowledged, failure)) {
                 boolean firstRefusalForThisInstance = refusalAnnounced.add(sagaId);
                 // The measured time rather than the budget. A redelivery can arrive well after the budget elapsed, so
                 // reporting the budget as the elapsed time understates how long the event has been failing.
@@ -680,6 +684,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 for (String timerName : dueTimerNames) {
                     try {
                         process(envelope.sagaId(), SagaInput.timeout(envelope.sagaId(), TimerName.parse(timerName)), EventMeta.NONE, timerName, new HashSet<>(), null);
+                    } catch (HeldCopyFailed held) {
+                        // A held event that failed in the drain this timer's attempt ran, kept and measured as its own
+                        // failure the way a delivery's drain keeps it. The timer stays due and fires once the held event
+                        // applies.
+                        keepFailed(envelope.sagaId(), held.cloudEvent, held.meta, held.getCause(), new HashSet<>(), true, held.cloudEvent);
+                        log.warn("Failed to fire saga timer '{}' for instance '{}', because a held event failed while the instance drained its held events first", timerName, envelope.sagaId(), held);
                     } catch (Throwable t) {
                         // Throwable rather than RuntimeException, because a StackOverflowError out of a recursive
                         // evolve or a NoClassDefFoundError out of a reaction used to unwind the loop into the catch
