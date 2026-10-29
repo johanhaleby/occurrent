@@ -59,8 +59,8 @@ public interface SagaHeldEvents<S extends @Nullable Object> {
      * is at. It unsets the envelope's {@code heldEventsChecked}, raises its version and, when {@code selfHeldKey} is
      * given, adds the key to its {@code selfHeldKeys}.
      *
-     * @return the envelope as it was before the write, without its state, or empty when no active started envelope
-     * matched
+     * @return the envelope as it was before the write, or empty when no active started envelope matched. A store may
+     * leave the state out, as {@link SagaStateStore#findWithoutState(String)} may, and the caller never reads it
      */
     Optional<SagaEnvelope<S>> markHeldEvents(String sagaId, @Nullable String selfHeldKey);
 
