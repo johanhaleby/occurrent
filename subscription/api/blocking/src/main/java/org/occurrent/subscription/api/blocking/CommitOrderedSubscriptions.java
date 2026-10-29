@@ -26,9 +26,10 @@ import java.util.Optional;
  * That order matters to a caller that builds up state from the events one by one, such as a saga, where an event applied before an
  * earlier one gives a different result. A model answers per subscription, and its answer can change over time.
  * <p>
- * A model answers {@code true} for a subscription only when no event is delivered to it before every event matching
- * it that committed earlier has been delivered and its listener call returned normally. A delivery whose listener
- * throws is retried in place before anything after it is delivered.
+ * A model answers {@code true} for a subscription only when no event is delivered to it before every earlier event
+ * matching it has been delivered and its listener call returned normally. An event is earlier when it committed
+ * earlier, or when it was written earlier in the same commit, so the events of one commit are delivered in the order
+ * they were written. A delivery whose listener throws is retried in place before anything after it is delivered.
  * <p>
  * A caller that finds no implementation, which is an empty result from {@link #findIn(SubscriptionModelCapability)},
  * treats the model as not delivering in commit order.
@@ -46,20 +47,22 @@ public interface CommitOrderedSubscriptions extends SubscriptionModelCapability 
      * delivery that is already over.
      *
      * @param subscriptionId The id of the subscription.
-     * @return {@code true} when no event is delivered before every earlier committed event matching the subscription
-     * has been delivered and its listener call returned normally, {@code false} otherwise, and for an id this model
-     * does not know.
+     * @return {@code true} when no event is delivered before every earlier event matching the subscription has been
+     * delivered and its listener call returned normally, where an event is earlier when it committed earlier or was
+     * written earlier in the same commit. {@code false} otherwise, and for an id this model does not know.
      */
     boolean deliversInCommitOrder(String subscriptionId);
 
     /**
-     * Whether {@link #deliversInCommitOrder(String)} answers {@code true} for every subscription id at every moment.
+     * Whether every subscription this model delivers to is delivered in commit order, at every moment. When it is
+     * {@code true}, {@link #deliversInCommitOrder(String)} answers {@code true} for every subscription id the model
+     * knows.
      * <p>
      * Declared by the model rather than worked out by the caller, because a caller cannot conclude it from the
      * {@code true} answers it happened to get. The default is {@code false}, which is the right answer for a model that
      * says nothing.
      *
-     * @return {@code true} when this model delivers every subscription in commit order, always.
+     * @return {@code true} when this model delivers every one of its subscriptions in commit order, always.
      */
     default boolean deliversEveryEventInCommitOrder() {
         return false;
