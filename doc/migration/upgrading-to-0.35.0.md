@@ -959,11 +959,17 @@ A catch-up subscription you build yourself is affected too, also when the MongoD
 restart, which is how that model is built by default. There the subscription used to end with an error in the log,
 and the `Flux` of an unnamed reactor subscription failed with MongoDB's own error, code 286. It now stops as below.
 
-On the reactor stack, code that a catch-up subscription model runs can subscribe, cancel, stop or shut down through
-that model, from the thread that runs the code or from another thread. That code is an action, a `doOnCancel` on the
-`Mono` an action returns, or a handler on `waitUntilStarted()`. A subscribe of an id throws
-`DuplicateSubscriptionIdException` until the model the catch-up wraps has completed its cancel of that id.
-`ReactorMongoSubscriptionModel` completes it before `cancelSubscription` returns.
+On the reactor stack, an action that a catch-up subscription model runs, a `doOnCancel` on the `Mono` an action
+returns and a handler on `waitUntilStarted()` can subscribe, cancel, stop or shut down through that model, from the
+thread that runs the code or from another thread. A subscribe of an id throws `DuplicateSubscriptionIdException` until
+the model the catch-up wraps has completed its cancel of that id. `ReactorMongoSubscriptionModel` completes it before
+`cancelSubscription` returns.
+
+Two pieces of your code can still run while the catch-up holds a lock, so don't subscribe or cancel through the
+catch-up from either. One is a `StartAt.dynamic(..)` function that answers `null` to the catch-up. The catch-up then
+goes straight to live and hands the function to the model it wraps, and `ReactorMongoSubscriptionModel` calls it again
+on the thread of `subscribe(..)`. The other is a `CatchupListener` given to `listenForCatchup`, which is told that a
+catch-up started from inside an operation on a map the catch-up keeps.
 
 ### What happens
 

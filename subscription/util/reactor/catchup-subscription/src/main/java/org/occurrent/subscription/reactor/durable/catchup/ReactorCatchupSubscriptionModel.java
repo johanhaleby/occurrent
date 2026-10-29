@@ -375,6 +375,13 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         ownerOf(subscriptionId).pauseSubscription(subscriptionId);
     }
 
+    /**
+     * Passes the cancel to the inner catch-up model that holds the subscription, see
+     * {@link ReactorStreamCatchupSubscriptionModel#cancelSubscription(String)}. Until this method returns, a subscribe of
+     * {@code subscriptionId} through this model throws {@link DuplicateSubscriptionIdException}. After that, only a
+     * subscribe that this model routes to that same inner model throws it, while the cancel that inner model sent the
+     * wrapped model has not ended.
+     */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
         SubscriptionModel owner = ownerOf(subscriptionId);

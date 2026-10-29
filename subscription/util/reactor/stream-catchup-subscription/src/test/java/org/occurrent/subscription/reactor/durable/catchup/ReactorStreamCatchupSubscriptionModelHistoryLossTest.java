@@ -42,6 +42,7 @@ import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.RepositionableSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -362,6 +363,40 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         }
     }
 
+    // The handover that the takeover replaced returns while the takeover replay still runs, and a start(true) of the
+    // wrapped model has resumed the subscription where it lost the history
+    @Test
+    void a_takeover_that_replaces_a_handover_still_under_way_holds_the_live_events_after_that_handover_returns() {
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        wrapped.loses = LosingLiveStartModel.Loses.ON_ANOTHER_THREAD_WHILE_SUBSCRIBE_WAITS;
+        AtomicReference<Sinks.Empty<Void>> takeoverReplayBlocked = new AtomicReference<>();
+        wrapped.beforeTheTakeoverRuns = () -> {
+            reader.head = 4;
+            takeoverReplayBlocked.set(reader.blockReads());
+            wrapped.resumeSubscription(ID);
+        };
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            Subscription subscription = catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                    cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+            subscription.waitUntilStarted().block(Duration.ofSeconds(5));
+            assertThat(catchup.isCatchingUp(ID)).as("the takeover replay is in flight").isTrue();
+
+            Disposable delivery = wrapped.actionOf(ID).apply(liveEvent("lost", 5)).subscribe();
+            assertThat(received).as("events the caller's action was given while the takeover replays").containsExactly("e1", "e2", "e3");
+
+            // As the pause in the takeover's handover does
+            delivery.dispose();
+            takeoverReplayBlocked.get().tryEmitEmpty();
+
+            assertThat(received).as("the history again, now with the event written in the gap").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4");
+            assertThat(catchup.isRunning(ID)).isTrue();
+            assertThat(catchup.isCatchingUp(ID)).as("the takeover replay is over").isFalse();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
     @Test
     void a_resume_after_the_wrapped_model_paused_the_subscription_for_the_takeover_and_before_it_ran_the_takeover_replays_instead_of_resuming_the_wrapped_model_where_it_lost_the_history() {
         LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
@@ -619,6 +654,11 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
         Checkpoint positionOf(String subscriptionId) {
             return held.get(subscriptionId).position();
+        }
+
+        // The action the subscription runs, for a test that gives it an event without blocking
+        Function<CloudEvent, Mono<Void>> actionOf(String subscriptionId) {
+            return held.get(subscriptionId).action();
         }
 
         void losesTheNextOpen() {

@@ -46,6 +46,8 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -92,11 +94,18 @@ import static java.util.Objects.requireNonNull;
  * {@code false} for the same cases. Model-wide calls forward to the wrapped model, so give each composition its own
  * wrapped model rather than sharing one.
  * <p>
- * This class holds none of its locks while the caller's code runs, so an action, a cancel hook or a
- * {@code waitUntilStarted()} handler can subscribe, cancel, stop or shut down any subscription. The handover is the one
- * place that calls the wrapped model with a lock held. It runs the wrapped {@code subscribe(..)}, or
- * {@code resumeSubscription(id, startAt)} for a takeover, under the monitor of the subscription's state. So the wrapped
- * model must run no action and report no history loss before those calls return.
+ * This class runs an action, a cancel hook and a {@code waitUntilStarted()} handler with none of its locks held, so that
+ * code can subscribe, cancel, stop or shut down any subscription. Three calls still run with a lock held.
+ * <ul>
+ * <li>The handover runs the wrapped {@code subscribe(..)}, or {@code resumeSubscription(id, startAt)} for a takeover,
+ * under the monitor of the subscription's state. So the wrapped model must run no action and report no history loss on
+ * the calling thread before those calls return.</li>
+ * <li>A subscribe that goes straight to live runs the wrapped {@code subscribe(..)} under the lock of its id. A dynamic
+ * {@link StartAt} that answered {@code null} here is passed on as it is, and {@code ReactorMongoSubscriptionModel}
+ * evaluates it again on the calling thread, so the caller's function runs with that lock held.</li>
+ * <li>A {@link CatchupListener} is told that a catch-up started inside an operation on a {@link ConcurrentHashMap},
+ * which holds a lock of that map.</li>
+ * </ul>
  */
 @NullMarked
 final class NamedCatchupSupport {
@@ -316,7 +325,7 @@ final class NamedCatchupSupport {
                             // So a resume replays again, counting its replays again from 0
                             handedOver.computeIfPresent(subscriptionId, (id, made) -> made == takenOver ? made.withTheReplaysAgainOf(0) : made);
                             takenOver.takingOver().set(false);
-                            replay.live().open();
+                            replay.live().open(state);
                         }
                         if (state.handedOver.get()) {
                             // Only the pause asked for during the replay can fail once the wrapped model has the subscription
@@ -413,8 +422,8 @@ final class NamedCatchupSupport {
     // Announced inside the map operation that holds this id, which cancelSubscription's own remove also takes, so a
     // cancel and a fresh subscribe cannot slip between the ownership check and the send. A launch that no longer owns
     // the id announces nothing, or its start would arrive after its replacement's and the recorder would adopt a
-    // catch-up that is already over. The listener only writes its own state here, so running it inside the map
-    // operation reenters nothing.
+    // catch-up that is already over. The listener runs while the map operation holds a lock of the map, so a listener
+    // that subscribes or cancels through this model can deadlock with another thread that does the same.
     private void announceCatchupStarted(String subscriptionId, CatchupState state, Object launched) {
         catchingUp.computeIfPresent(subscriptionId, (id, owner) -> {
             if (owner == state && state.episode.get() == launched) {
@@ -472,8 +481,9 @@ final class NamedCatchupSupport {
         return gone && owned.replace(subscriptionId, existing, record);
     }
 
-    // Runs work holding the lock of subscriptionId, which is never held across anything asynchronous or the caller's
-    // code, and always taken before the state monitor
+    // Runs work holding the lock of subscriptionId, which is never held across anything asynchronous, and always taken
+    // before the state monitor. The one piece of the caller's code it can be held across is a dynamic start the wrapped
+    // model of a straight-to-live subscribe evaluates on this thread.
     private <T> T underIdLock(String subscriptionId, Supplier<T> work) {
         IdLock idLock = idLocks.compute(subscriptionId, (id, current) -> {
             IdLock used = current == null ? new IdLock() : current;
@@ -531,10 +541,11 @@ final class NamedCatchupSupport {
                 }
                 // A pause of the wrapped model cancels the Mono of the action it runs, so the live action holds every
                 // event until the pause below has returned, and the pause cancels none of the caller's code. A
-                // takeover held them from when it started.
+                // takeover closed the gate for its own state when it started, and one that replaces this state
+                // meanwhile keeps it closed until its own handover.
                 handing = true;
                 if (state.pendingPause.get()) {
-                    replay.live().close();
+                    replay.live().close(state);
                 }
                 try {
                     delegated = takenOver == null ? delegate.subscribe(subscriptionId, replay.liveSubscriptionFilter(), liveStartAt, replay.liveAction()) : resumeAt(subscriptionId, delegate, liveStartAt);
@@ -559,7 +570,7 @@ final class NamedCatchupSupport {
         } finally {
             // Outside the monitor, since an event the live action held runs the caller's action now
             if (handing) {
-                replay.live().open();
+                replay.live().open(state);
             }
         }
         delegated.waitUntilStarted().subscribe(unused -> {
@@ -673,7 +684,7 @@ final class NamedCatchupSupport {
         }
         // Until this takeover hands over or fails. A start(true) can resume the subscription in the wrapped model
         // meanwhile, and the handover pauses it again before it resumes it at the new live start.
-        replay.live().close();
+        replay.live().close(state);
         launchOrPark(state);
         return state;
     }
@@ -1004,23 +1015,38 @@ final class NamedCatchupSupport {
 
     // Holds the events the live action is given while closed, and runs them once opened. A held event's
     // Mono runs none of the caller's code until then, so a pause of the wrapped model that cancels it cancels nothing
-    // the caller wrote.
+    // the caller wrote. Closed while any state that closed it holds it, so a handover can't open the gate a takeover
+    // of its subscription closed.
     private static final class LiveGate {
-        private final AtomicReference<Sinks.@Nullable Empty<Void>> closed = new AtomicReference<>();
+        private final Set<CatchupState> holders = new HashSet<>();
+        private volatile Sinks.@Nullable Empty<Void> closed;
 
-        void close() {
-            closed.compareAndSet(null, Sinks.empty());
+        void close(CatchupState holder) {
+            synchronized (holders) {
+                holders.add(holder);
+                if (closed == null) {
+                    closed = Sinks.empty();
+                }
+            }
         }
 
-        void open() {
-            Sinks.Empty<Void> opened = closed.getAndSet(null);
+        // Emits once the monitor is released, since an opened gate runs the caller's action for each event it held
+        void open(CatchupState holder) {
+            Sinks.Empty<Void> opened;
+            synchronized (holders) {
+                if (!holders.remove(holder) || !holders.isEmpty()) {
+                    return;
+                }
+                opened = closed;
+                closed = null;
+            }
             if (opened != null) {
                 opened.tryEmitEmpty();
             }
         }
 
         Mono<Void> apply(Supplier<Mono<Void>> action) {
-            Sinks.Empty<Void> gate = closed.get();
+            Sinks.Empty<Void> gate = closed;
             return gate == null ? Mono.defer(action) : gate.asMono().then(Mono.defer(action));
         }
     }
