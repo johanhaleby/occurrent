@@ -815,9 +815,9 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
     }
 
     /**
-     * The consistency token is the one record in these three signatures that sits in a last position of the old arity,
-     * so a pattern that destructures it is the one shape where the old last element is itself a nested record
-     * pattern and not a plain binding. It is skipped, known and accepted, rather than guessed at.
+     * A DcbEventStream pattern of the old arity whose last element is a nested record pattern, as in
+     * DcbConsistencyToken(var value), has no plain binding for the recipe to copy. The recipe skips it instead of
+     * guessing.
      */
     @Test
     void leavesADcbEventStreamPatternWhoseLastElementIsANestedRecordPatternAlone() {

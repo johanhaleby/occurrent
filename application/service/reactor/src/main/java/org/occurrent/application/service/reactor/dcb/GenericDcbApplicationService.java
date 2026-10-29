@@ -145,7 +145,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             }
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
             List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
-            DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(criteria, eventStream.consistencyToken());
+            DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(eventStream.consistencyToken());
             return eventStore.append(dcbEvents, appendCondition).flatMap(appendResult -> {
                 Result<E> result = new Result<>(appendResult, newDomainEvents);
                 if (!dispatchSynchronously) {

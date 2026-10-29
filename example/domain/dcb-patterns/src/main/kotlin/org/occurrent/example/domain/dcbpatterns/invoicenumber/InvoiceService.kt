@@ -60,7 +60,7 @@ class InvoiceService(
         val domainEvent = InvoiceCreated(UUID.randomUUID(), occurredAt, nextNumber)
         val cloudEvent = DcbCloudEvents.withTags(converter.toCloudEvent(domainEvent), setOf(Tag.of("invoice", nextNumber.toString())))
 
-        eventStore.append(listOf(cloudEvent), DcbAppendCondition.failIfEventsMatch(DcbCriteria.type(INVOICE_CREATED_TYPE), stream.consistencyToken()))
+        eventStore.append(listOf(cloudEvent), DcbAppendCondition.failIfEventsMatch(stream.consistencyToken()))
         return nextNumber
     }
 }

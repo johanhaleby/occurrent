@@ -103,7 +103,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             DcbEventStream decidedOn = dcbEventStore().read(criteria);
 
             DcbAppendResult result = dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)),
-                    failIfEventsMatch(criteria, decidedOn.consistencyToken()));
+                    failIfEventsMatch(decidedOn.consistencyToken()));
 
             assertThat(result.markerVersions())
                     .as("A conditional append with a consistency token must report the versions its criteria ended at")
@@ -119,7 +119,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             DcbEventStream decidedOn = dcbEventStore().read(criteria);
 
             DcbAppendResult result = dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A, REGION)),
-                    failIfEventsMatch(criteria, decidedOn.consistencyToken()));
+                    failIfEventsMatch(decidedOn.consistencyToken()));
 
             assertThat(result.markerVersions().orElseThrow().keys())
                     .as("The events carry a region tag and a type, but the criteria names only the account tag")
@@ -130,9 +130,9 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
         void reports_a_higher_version_of_the_same_epoch_after_each_conditional_append() {
             DcbCriteria criteria = DcbCriteria.tags(tag(ACCOUNT_A));
             DcbAppendResult first = dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)),
-                    failIfEventsMatch(criteria, dcbEventStore().read(criteria).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(criteria).consistencyToken()));
             DcbAppendResult second = dcbEventStore().append(List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)),
-                    failIfEventsMatch(criteria, dcbEventStore().read(criteria).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(criteria).consistencyToken()));
 
             MarkerVersion afterFirst = first.markerVersions().orElseThrow().get(KEY_A).orElseThrow();
             MarkerVersion afterSecond = second.markerVersions().orElseThrow().get(KEY_A).orElseThrow();
@@ -294,7 +294,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             dcbEventStore().append(List.of(taggedEventWithId("after-1", DEPOSITED, ACCOUNT_A)));
             dcbEventStore().append(List.of(taggedEventWithId("after-other", DEPOSITED, ACCOUNT_B)));
             dcbEventStore().append(List.of(taggedEventWithId("after-2", WITHDRAWN, ACCOUNT_A, REGION)),
-                    failIfEventsMatch(boundary, dcbEventStore().read(boundary).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(boundary).consistencyToken()));
 
             DcbEventStream resumed = dcbEventStore().read(boundary, DcbReadOptions.afterVersions(saved));
 
@@ -425,7 +425,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
         void does_not_return_the_events_of_the_append_that_reported_the_versions_but_returns_a_later_one() {
             DcbCriteria boundary = DcbCriteria.tags(tag(ACCOUNT_A));
             DcbAppendResult decided = dcbEventStore().append(List.of(taggedEventWithId("decided", WITHDRAWN, ACCOUNT_A)),
-                    failIfEventsMatch(boundary, dcbEventStore().read(boundary).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(boundary).consistencyToken()));
             DcbMarkerVersions saved = decided.markerVersions().orElseThrow(() -> new AssertionError(
                     "A conditional append with a consistency token over a tag boundary must report its marker versions"));
             dcbEventStore().append(List.of(taggedEventWithId("later", DEPOSITED, ACCOUNT_A)));
@@ -439,7 +439,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
         void returns_an_event_of_the_boundary_that_an_unconditional_append_added() {
             DcbCriteria boundary = DcbCriteria.tags(tag(ACCOUNT_A));
             DcbAppendResult decided = dcbEventStore().append(List.of(taggedEventWithId("decided", WITHDRAWN, ACCOUNT_A)),
-                    failIfEventsMatch(boundary, dcbEventStore().read(boundary).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(boundary).consistencyToken()));
             DcbMarkerVersions saved = decided.markerVersions().orElseThrow();
 
             dcbEventStore().append(List.of(taggedEventWithId("unconditional", DEPOSITED, ACCOUNT_A)));
@@ -633,7 +633,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             dcbEventStore().append(List.of(taggedEventWithId("before", DEPOSITED, ACCOUNT_A)));
             DcbMarkerVersions saved = versionsOf(dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions()));
             dcbEventStore().append(List.of(taggedEventWithId("after", DEPOSITED, ACCOUNT_A)),
-                    failIfEventsMatch(boundary, dcbEventStore().read(boundary).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(boundary).consistencyToken()));
 
             List<CloudEvent> events = new ArrayList<>();
             events.addAll(dcbEventStore().read(boundary).events());

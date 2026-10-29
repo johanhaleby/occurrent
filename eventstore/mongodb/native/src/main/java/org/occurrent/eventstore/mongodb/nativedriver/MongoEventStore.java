@@ -425,7 +425,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             events = new ArrayList<>(events);
             Collections.reverse(events);
         }
-        return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(consistencyTokenValue));
+        return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(criteria, consistencyTokenValue));
     }
 
     // Markers, counter and events come from one point in time, so the reported versions cover exactly the events read
@@ -517,7 +517,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             Collections.reverse(events);
         }
         Optional<DcbMarkerVersions> markerVersions = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(markerKeys, observed) : Optional.empty();
-        return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(consistencyTokenValue), markerVersions);
+        return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(criteria, consistencyTokenValue), markerVersions);
     }
 
     private DcbEventStream markerVersionsReadFailed(DcbCriteria criteria, DcbReadOptions options, String phase, RuntimeException cause) {
@@ -704,7 +704,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             // committed after the read, so the condition fails. This is immune to read-watermark overshoot,
             // unlike a position-based check, because marker versions bump inside the append transaction at
             // commit, not when positions are reserved (ADR 0021).
-            conflict = consistencyToken(clientSession, condition.criteria()) != expectedToken.get().value();
+            conflict = consistencyToken(clientSession, condition.criteria()) != expectedToken.get().version();
         } else {
             // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than
             // marker versions, so it means "currently exists" (surviving deletes and marker pruning) rather than
