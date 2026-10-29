@@ -107,6 +107,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String MARKS_PENDING = "pending";
     private static final String MARKS_VERSIONS = "versions";
     private static final String MARKS_LEGACY_FAILED = "legacyFailed";
+    private static final String MARKS_PENDING_SINCE = "pendingSince";
+    private static final String MARKS_VERSION = "version";
+    private static final String MARKS_SINCE = "since";
     private static final String CREATED_AT = "createdAt";
     private static final String UPDATED_AT = "updatedAt";
     private static final String COMPLETED_AT = "completedAt";
@@ -600,8 +603,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     .append(MARKS_HORIZON, typeMark.horizon())));
             List<Document> pending = new ArrayList<>();
             marks.pending().forEach((type, versions) -> pending.add(new Document(MARKS_TYPE, type).append(MARKS_VERSIONS, versions)));
+            List<Document> pendingSince = new ArrayList<>();
+            marks.pendingSince().forEach((version, since) -> pendingSince.add(new Document(MARKS_VERSION, version).append(MARKS_SINCE, Date.from(since))));
             streams.add(new Document(MARKS_STREAM_ID, streamId).append(MARKS_FLOOR, marks.floor()).append(MARKS_TYPES, types)
-                    .append(MARKS_PENDING, pending).append(MARKS_LEGACY_FAILED, marks.legacyFailed()));
+                    .append(MARKS_PENDING, pending).append(MARKS_LEGACY_FAILED, marks.legacyFailed()).append(MARKS_PENDING_SINCE, pendingSince));
         });
         return streams;
     }
@@ -635,7 +640,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             for (Object version : stream.getList(MARKS_LEGACY_FAILED, Object.class, List.of())) {
                 legacyFailed.add(((Number) version).longValue());
             }
-            streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType, pending, legacyFailed));
+            // A stream stored before the instant was kept reads as no instant, and the budget then falls back to the
+            // failure record.
+            Map<Long, Instant> pendingSince = new LinkedHashMap<>();
+            for (Document entry : stream.getList(MARKS_PENDING_SINCE, Document.class, List.of())) {
+                pendingSince.put(((Number) entry.get(MARKS_VERSION)).longValue(), entry.getDate(MARKS_SINCE).toInstant());
+            }
+            streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType, pending, legacyFailed, pendingSince));
         }
         return streamMarks;
     }
