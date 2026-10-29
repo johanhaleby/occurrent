@@ -321,6 +321,56 @@ class ReactorStreamCatchupSubscriptionModelTest {
         }
     }
 
+    @Test
+    void a_named_start_after_a_bare_position_above_0_is_refused_with_the_advice_to_cancel_first_and_hands_nothing_over() {
+        // Given
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedPositionOrderedReader());
+        try {
+            // When
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(1)), cloudEvent -> Mono.empty());
+
+            // Then
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable)
+                            .isInstanceOf(CatchupCannotResumeException.class)
+                            .hasMessageContaining("catch-up subscription sub after position 1")
+                            .hasMessageContaining("cancel it first, which deletes that checkpoint")
+                            .hasMessageContaining("EventMetadata.getCheckpoint()"))
+                    .verify(Duration.ofSeconds(10));
+            assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_named_start_from_a_stored_live_start_the_model_no_longer_has_above_the_beginning_is_refused_with_the_advice_to_cancel_first() {
+        // Given a stored checkpoint whose replay began above the beginning, and a model that has lost its live start
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.losesEveryToken = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        Checkpoint stored = GlobalCheckpoint.of(3, new StringBasedCheckpoint("aged out live start"), 1, 3);
+        try {
+            // When
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(stored), cloudEvent -> Mono.empty());
+
+            // Then
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable)
+                            .isInstanceOf(CatchupCannotResumeException.class)
+                            .hasMessageContaining("catch-up subscription sub again from position 1")
+                            .hasMessageContaining("cancel it first, which deletes that checkpoint")
+                            .hasMessageContaining("from the beginning again"))
+                    .verify(Duration.ofSeconds(10));
+            assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
     // Three events at positions 1 to 3, and a head that stays at 3
     private static final class ThreeEventReader implements UnscopedPositionOrderedReader {
         @Override

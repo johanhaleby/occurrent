@@ -434,7 +434,8 @@ class PositionCatchupPipelineTest {
                 .expectErrorSatisfies(throwable -> assertThat(throwable)
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("position 1")
-                        .hasMessageContaining("from the beginning again"))
+                        .hasMessageContaining("from the beginning again")
+                        .hasMessageNotContaining("cancel it first"))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.resumeProbes).containsExactly(agedOut);
         assertThat(live.liveStarts).as("nothing handed over").isEmpty();
@@ -455,7 +456,8 @@ class PositionCatchupPipelineTest {
                 .expectErrorSatisfies(throwable -> assertThat(throwable)
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("position 1")
-                        .hasMessageContaining("from the beginning again"))
+                        .hasMessageContaining("from the beginning again")
+                        .hasMessageNotContaining("cancel it first"))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.liveStarts).as("nothing handed over").isEmpty();
     }
@@ -472,7 +474,8 @@ class PositionCatchupPipelineTest {
                 .expectErrorSatisfies(throwable -> assertThat(throwable)
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("position 1")
-                        .hasMessageContaining("from the beginning again"))
+                        .hasMessageContaining("from the beginning again")
+                        .hasMessageNotContaining("cancel it first"))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.opensAt).as("opened once at the stored live start, not again after a second replay").containsExactly(storedLiveStart);
     }
@@ -523,7 +526,8 @@ class PositionCatchupPipelineTest {
                 .expectErrorSatisfies(throwable -> assertThat(throwable)
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("after position 1")
-                        .hasMessageContaining("EventMetadata.getCheckpoint()"))
+                        .hasMessageContaining("EventMetadata.getCheckpoint()")
+                        .hasMessageNotContaining("cancel it first"))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.resumeProbes).as("asked").isEmpty();
         assertThat(live.liveStarts).as("handed over").isEmpty();
