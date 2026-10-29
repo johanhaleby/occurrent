@@ -845,8 +845,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return incrementConflictMarkers(markerKeys, lastPosition);
     }
 
-    // Increment a conflict marker per key. Two appends that can match a common event share at least one marker
-    // (ADR 0021), so the in-transaction increment forces a MongoDB write-write conflict and they serialize. The
+    // Increment a conflict marker per key. An event that matches a condition has at least one of the condition's
+    // query keys among its own keys (ADR 0021), so appending that event and the conditional append increment a
+    // common marker. The in-transaction increment forces a MongoDB write-write conflict and they serialize. The
     // monotonically increasing version is also the optimistic-concurrency token (see consistencyToken): a reader
     // snapshots a query's marker versions, and an append fails if any changed since. The stored lastPosition is
     // informational.
