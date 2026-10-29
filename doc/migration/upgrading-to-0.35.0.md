@@ -792,8 +792,11 @@ Pass a `StreamSubscriptionFilter` for stream events, a `DcbSubscriptionFilter` f
 On MongoDB an append takes its position before its transaction commits, so an event can commit below a position a
 reader has already read past. A catch-up that went live from a live start read before that position still delivers
 such an event, from the change stream. A catch-up started after a position with no such live start never delivers it.
-A catch-up now refuses every start and every replay that could skip an event that way, before it delivers or stores
-anything, and fails with `CatchupCannotResumeException`. See [#1230](https://github.com/johanhaleby/occurrent/issues/1230).
+A catch-up now refuses every start that could skip an event that way, before it delivers or stores anything, and fails
+with `CatchupCannotResumeException`. A replay that loses its live start fails with the same exception, but only after
+its handler has received the events the replay delivered, in this run or before a restart, and after any checkpoint
+storage it uses has kept the progress. So the exception doesn't mean that nothing reached the handler. See
+[#1230](https://github.com/johanhaleby/occurrent/issues/1230).
 
 ### Who is affected
 
