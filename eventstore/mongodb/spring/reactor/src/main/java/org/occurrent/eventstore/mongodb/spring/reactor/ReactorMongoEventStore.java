@@ -708,9 +708,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // collection already holds events without a position, so upgrading an existing store does not build the position
     // index over the whole collection at startup. The constructor already blocks, so the probe blocks too.
     //
-    // Turning position off here means writesPosition() is false, so neither the damage warning nor the un-backfilled
-    // checks run and this warning is the only one the operator sees. An event whose position updateEvent dropped is
-    // enough to reach it, so the shared message carries the repair caveat rather than naming the backfill alone.
+    // Turning position off here means writesPosition() is false, so the un-backfilled checks never run, and the damage
+    // check runs only under requireRepairedEvents, where a damaged event fails startup instead of being warned about.
+    // Without that setting this warning is the only one the operator sees. An event whose position updateEvent dropped
+    // is enough to reach it, so the shared message includes the repair caveat rather than naming the backfill alone.
     private static boolean resolveStreamPositionEnabled(EventStoreConfig config, String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         if (!config.streamPositionEnabled) {
             return false;

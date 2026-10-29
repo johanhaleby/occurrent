@@ -13,6 +13,10 @@ Where the reactive durable model drives the subscription itself, it now reads wh
 for a registration from `StartAt.now()`, so the sentence below saying such a registration is not read for is no longer
 true there.
 
+Corrected by [ADR 159](0159-six-passages-in-released-adrs-do-not-describe-the-code.md). `DurableSubscriptionModel`
+writes a first position with `ifAbsent()` since 0.34.0, on a storage that evaluates write conditions, so the sentence
+below saying it still records one with `any()` is no longer true.
+
 ## Context
 
 ADR 86 shipped `occurrent.subscription.mode` for the blocking stack and said the reactive stack "already

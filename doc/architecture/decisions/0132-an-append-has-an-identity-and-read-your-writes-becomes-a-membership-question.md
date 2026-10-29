@@ -16,6 +16,11 @@ having applied every event up to a global position, which is the mechanism ADR 1
 answers whether a projection has applied a named append, and decision 10 states where that is weaker. The goal
 #361 describes is met and the mechanism it names is not built.
 
+Corrected by [ADR 159](0159-six-passages-in-released-adrs-do-not-describe-the-code.md). The Consequences sentence
+saying the blocking stacks filled no cache from history is true of the three blocking position catch-up stacks and not
+of `BlockingHandover`, and decision 5 does not mention that the reactive Mongo store refuses a wait on a non-blocking
+thread before its first read.
+
 ## Context
 
 A caller that has just written wants to know when an asynchronous projection has applied that write.

@@ -67,7 +67,7 @@ import java.util.function.BooleanSupplier;
 /**
  * Registers {@code @Saga} factory methods: subscribes the saga to its events, materializes per-instance state, dispatches
  * issued commands, and polls the store to fire timeouts. Invoked from the coordinator's
- * {@code afterSingletonsInstantiated}, after snapshots, sharing the one duplicate-id registry. Each created
+ * {@code afterSingletonsInstantiated}, after snapshots. Each created
  * {@link SagaSubscription} owns a timer poller, and a push saga that catches up owns a replay thread, both of which
  * {@link #close()} stops when the context is destroyed. Blocking-stack only.
  */

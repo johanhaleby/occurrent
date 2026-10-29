@@ -12,6 +12,11 @@ It decides [#725](https://github.com/johanhaleby/occurrent/issues/725) and answe
 each asks for a change to the code that this ADR only designs, and closing them on an ADR would leave the work
 untracked until the implementation epic is registered.
 
+Corrected by [ADR 159](0159-six-passages-in-released-adrs-do-not-describe-the-code.md). A handler method a bean's
+Spring proxy cannot invoke fails at startup only on a bean created during startup. A bean built later fails when it is
+created, or on the first delivery when a later `BeanPostProcessor` wraps it in such a proxy, so the amendment below
+saying it fails fast at startup holds only for a bean created during startup.
+
 ## Context
 
 ### A subscription is the only concept that never became data

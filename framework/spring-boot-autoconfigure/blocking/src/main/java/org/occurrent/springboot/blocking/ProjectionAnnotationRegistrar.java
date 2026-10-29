@@ -83,8 +83,8 @@ import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 /**
  * Registers {@code @Projection} factory methods: resolves the read-model store, routes push/domain-push feeds, and
  * subscribes the materialized view. Invoked from the coordinator's {@code afterSingletonsInstantiated}, after all
- * subscription ids are collected, sharing the one duplicate-id registry. Domain-push feeds registered here are caught
- * up once through {@link #catchUpCollectedFeeds()} after all projections are registered.
+ * subscription ids are collected. Domain-push feeds registered here are caught up once through
+ * {@link #catchUpCollectedFeeds()} after all projections are registered.
  */
 class ProjectionAnnotationRegistrar {
 

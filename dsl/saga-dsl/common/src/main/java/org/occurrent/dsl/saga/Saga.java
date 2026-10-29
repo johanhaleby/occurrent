@@ -326,8 +326,9 @@ public interface Saga<E, S extends @Nullable Object, C> {
     /**
      * Starts building a saga whose fold begins from no state. The state stays {@code null} until an {@code evolve}
      * handler replaces it, so the handlers and the built {@code Saga} see {@code @Nullable S}, which Kotlin reads as
-     * {@code S?}. Register correlation, start types, and the per-event-type and per-timer folds and reactions on the
-     * returned {@link Builder}.
+     * {@code S?}. The Java compiler doesn't check {@code @Nullable S}, so when a handler needs a non-null state, start
+     * from {@link #builder(Object)} with an initial state instead. Register correlation, start types, and the
+     * per-event-type and per-timer folds and reactions on the returned {@link Builder}.
      */
     static <E, S extends @Nullable Object, C> Builder<E, @Nullable S, C> builder() {
         return builder(null);

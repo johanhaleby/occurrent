@@ -44,10 +44,10 @@ differently, so read them first.
   The old keys still work, and a recipe rewrites them.
 - [Section 5](#5-a-descriptor-factorys-class-level-advice-no-longer-runs-at-startup). Class-level advice such as
   `@Transactional` no longer runs when Spring calls a `@Projection`, `@Saga` or `@Snapshot` factory method.
-- [Section 11](#11-a-subscription-handler-spring-cannot-invoke-now-fails-startup-and-a-live-subscription-can-miss-a-startup-write).
-  A subscription handler that Spring's proxy can't call now stops startup. A `StartPosition.NOW` or
-  `@SynchronousSubscription` handler no longer sees an event that a bean writes while it is being created, from
-  `@PostConstruct` for example.
+- [Section 11](#11-a-subscription-handler-spring-cannot-invoke-is-now-refused-and-a-live-subscription-can-miss-a-startup-write).
+  A subscription handler that Spring's proxy can't call now stops startup, or fails later for a bean built after
+  startup. A `StartPosition.NOW` or `@SynchronousSubscription` handler no longer sees an event that a bean writes
+  while it is being created, from `@PostConstruct` for example.
 
 ### Projection feeds and push subscriptions
 
@@ -577,11 +577,6 @@ Two cases, both of which it steps around on purpose rather than guessing:
   both the old and the new key is tolerated while they agree.
 - **A file that already sets both the old and the new key.** The recipe drops the old one and keeps the
   `mongodb`-qualified key, on the assumption that the key you migrated to is the one you meant.
-- **A multi-document `.yaml` file where one profile sets the old key and a different profile sets the new one.**
-  The drop-the-old-key guard evaluates across the whole file, not the one profile that set the new key, so it
-  can also drop the old key from a profile that never set the new key at all, and remove that profile's document
-  entirely if the dropped key was its only content. Review the diff before you commit it, and see
-  [#828](https://github.com/johanhaleby/occurrent/issues/828) for the fix.
 
 ## 5. A descriptor factory's class-level advice no longer runs at startup
 
@@ -1026,11 +1021,13 @@ already warns about events without a position, but that warning names the positi
 remedy here and will not fix it. If you see it and you have also called `updateEvent`, run the second query in the
 [repair runbook](../runbooks/update-event-repair.md) before assuming your history predates position.
 
-There is a third message worth knowing about. If stream position is on only by default, and the oldest event in the
-collection has no `position`, the store turns position off for itself and warns instead of checking anything further.
-That one event is enough, so a single event whose position `updateEvent` dropped puts an otherwise healthy store on
-that path, where it is the only warning you get. Every one of these messages names the repair runbook for that
-reason.
+The third message comes from a store that has stream position on only by default and whose oldest event has no
+`position`. That store turns position off for itself, warns, and never checks for events without a position. It
+checks for damaged events only when `requireRepairedEvents(true)` is set, and then refuses to start over one.
+
+The oldest event alone decides this, so a single event whose position `updateEvent` dropped puts an otherwise healthy
+store on that path. Without `requireRepairedEvents(true)` that warning is the only one you get. Every one of these
+messages names the repair runbook for that reason.
 
 ### What to do about it
 
@@ -1072,13 +1069,14 @@ ordinary stream event. If the extension was replaced rather than dropped, the re
 the replacement tags, since that is all the document has left. If you know you ran an update function that built
 replacement events from scratch over DCB events, you need an external record of what those events should be.
 
-## 11. A subscription handler Spring cannot invoke now fails startup, and a live subscription can miss a startup write
+<a name="11-a-subscription-handler-spring-cannot-invoke-now-fails-startup-and-a-live-subscription-can-miss-a-startup-write"></a>
+## 11. A subscription handler Spring cannot invoke is now refused, and a live subscription can miss a startup write
 
 Two behavior changes ship together with the transactional-advice fix for [#837](https://github.com/johanhaleby/occurrent/issues/837)
 and [#965](https://github.com/johanhaleby/occurrent/issues/965).
 
 A `@Subscription`, `@StreamSubscription`, `@DcbSubscription` or `@SynchronousSubscription` handler method Spring's
-proxy cannot invoke now fails Spring Boot startup with `SubscriptionHandlerNotInvocableException`. Before this release
+proxy cannot invoke is now refused with `SubscriptionHandlerNotInvocableException`. Before this release
 it ran on the raw bean instead, with no advice applied, silently skipping `@Transactional` or any other aspect on
 every delivery, which is the bug #837 and #965 report. A method declared only on the concrete class while the bean
 is a JDK interface proxy, a private method a CGLIB proxy cannot override, and a final method a CGLIB proxy cannot
@@ -1089,6 +1087,15 @@ dispatches a static method on its declaring class alone, regardless of the targe
 one never goes through a proxy at all, whether or not the bean has one. Make the method non-private, expose it on an interface the
 proxy implements, drop `final` or `static`, or set `spring.aop.proxy-target-class=true` so a CGLIB proxy is used
 instead of a JDK interface proxy.
+
+When the refusal happens depends on when the bean is built. A handler on a bean that exists once every singleton is
+instantiated, the usual case, fails Spring Boot startup. A handler on a bean the container builds after startup, a
+`@Lazy` bean for example, is checked when that bean is built, so the exception fails the creation of that bean
+instead.
+
+A `BeanPostProcessor` that runs after Occurrent's can still wrap such a bean in a proxy that can't reach the handler
+method. That proxy doesn't exist yet when the bean is checked, so the exception comes from the first delivery to the
+handler, after startup has succeeded. A test that only starts the application catches neither of these two cases.
 
 Registration for all four annotations also moves to the phase `@Projection`, `@Snapshot` and `@Saga` already use,
 once every singleton in the application is instantiated. Before this release each handler registered during its own

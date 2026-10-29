@@ -57,11 +57,10 @@ public interface DestinationResolver<D extends EventDestination> {
     /**
      * The destinations a consumer should bind for a {@link SubscriptionFilter}, by handing the {@link Filter} an
      * {@link AgnosticSubscriptionFilter} or a {@link StreamSubscriptionFilter} wraps to
-     * {@link #destinationsFor(Filter)} and answering every other shape with {@link Optional#empty()}. A
-     * {@link org.occurrent.subscription.DcbSubscriptionFilter} holds DCB criteria rather than a {@link Filter},
-     * so it holds nothing a destination mapping can read, and a custom {@link SubscriptionFilter} is a type this
-     * interface knows nothing about. Both answers mean what the empty result on {@link #destinationsFor(Filter)}
-     * means, so the caller binds {@link #catchAllDestination()}.
+     * {@link #destinationsFor(Filter)}. Every other {@link SubscriptionFilter}, whether it ships with Occurrent or
+     * is your own, gets {@link Optional#empty()}, because this method unwraps a {@link Filter} from those two types
+     * only. That empty result means what the empty result on {@link #destinationsFor(Filter)} means, so the caller
+     * binds {@link #catchAllDestination()}.
      */
     default Optional<Set<D>> destinationsFor(SubscriptionFilter subscriptionFilter) {
         requireNonNull(subscriptionFilter, "subscriptionFilter cannot be null");
