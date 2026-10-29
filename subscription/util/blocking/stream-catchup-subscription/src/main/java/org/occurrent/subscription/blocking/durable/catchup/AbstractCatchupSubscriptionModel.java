@@ -737,10 +737,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Once the live delegate returns from the resume, this model is started again if a start whose live delegate threw
      * stopped it, so a subscription made afterwards replays at once. After {@link #stop()} it stays stopped.
      * <p>
-     * A subscription paused because the live delegate lost the history it resumed from is running again once the live
-     * delegate has resumed it here, so a later {@link #resumeSubscription(String)} or {@link #start(boolean)} no longer
-     * refuses it, unless the live delegate lost the history from {@code startAt} too. When the live delegate throws, it
-     * stays refused.
+     * A subscription paused because the live delegate lost the history it resumed from is resumed by the live delegate
+     * here too. Once that returns, a later {@link #resumeSubscription(String)} or {@link #start(boolean)} may no longer
+     * refuse it, even when the history from {@code startAt} is gone as well. A resume that opens the subscription where
+     * the history is gone pauses it again when the live delegate reports the loss again, so nothing is skipped. When the
+     * live delegate throws, it stays refused.
      * <p>
      * {@link RepositionableSubscriptions#findIn} finds this model only when the live delegate is repositionable.
      *
@@ -797,8 +798,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // Cleared only once the live delegate has resumed. The run that lost the history was paused before
                 // that, so its listener read a generation this clear moves past. Its afterPause records nothing after
                 // this clear, and what it recorded before is cleared here, though its error may already be logged, so
-                // the log says resuming doesn't throw for it. A loss of the position given here is kept, since the
-                // run this resume started reports it.
+                // the log says that error no longer applies. A loss of the position given here is kept, since the
+                // run this resume started can report it, unless a late report of the old run replaced it first.
                 Subscribed made = subscribed.get(subscriptionId);
                 Checkpoint resumedAt = startAt instanceof StartAt.StartAtCheckpoint given ? given.checkpoint : null;
                 Checkpoint cleared = made == null ? null : made.historyLost().clear(resumedAt);

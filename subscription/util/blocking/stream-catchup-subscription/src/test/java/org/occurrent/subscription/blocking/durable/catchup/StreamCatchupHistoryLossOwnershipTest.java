@@ -703,7 +703,7 @@ class StreamCatchupHistoryLossOwnershipTest {
     }
 
     @Test
-    void logs_that_resuming_no_longer_throws_for_a_loss_when_a_resume_at_a_kept_checkpoint_clears_it() {
+    void logs_that_the_error_for_a_loss_no_longer_applies_when_a_resume_at_a_kept_checkpoint_clears_it() {
         // Given a subscription a loss paused
         terminallyPausedAfterALoss();
         StartAt keptCheckpoint = StartAt.checkpoint(TOKEN);
@@ -711,7 +711,7 @@ class StreamCatchupHistoryLossOwnershipTest {
         // When it is resumed at a checkpoint the live model has the history back to
         catchup.resumeSubscription(ID, keptCheckpoint);
 
-        // Then the resume logs that resuming no longer throws for the loss
+        // Then the resume logs that the error for the loss no longer applies
         assertAll(
                 () -> assertThat(infosLogged()).as("infos logged").containsOnlyOnce(resumedAfterLossLog(ID, keptCheckpoint, LATER_TOKEN)),
                 () -> assertThat(errorsLogged()).as("errors logged, only the one for the loss").containsExactly(terminalFailureLog(ID, LATER_TOKEN))
