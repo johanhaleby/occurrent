@@ -983,15 +983,18 @@ any position other than the beginning could skip that event.
 - One error in the log, naming the subscription and the resume token that is gone. For a subscription with an id, the
   MongoDB subscription model logs a warning next to it, that it paused the subscription and a listener took it over,
   as it has since 0.34.0. When you paused or resumed the subscription just before MongoDB reported the loss, neither
-  is logged, but `resumeSubscription(id)` still throws as below.
+  is logged and `resumeSubscription(id)` isn't refused. The resumed subscription opens at the lost token again,
+  MongoDB reports the loss again, and the subscription stops as described here, without skipping an event.
 - On the reactor stack `waitUntilStarted()` of a subscription with an id completes before the MongoDB subscription
   model finds the token gone, so it doesn't tell you the subscription stopped. Check `isPaused(id)` instead.
 - The subscription is paused, `isPaused(id)` answers `true`, and it delivers nothing.
-- `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription, or, on a blocking
-  catch-up subscription model you call directly, until a `resumeSubscription(id, startAt)` at a resume token the
-  oplog still has runs it again, see [How to recover](#how-to-recover). On the blocking stack `start(true)` throws it
-  too. On the reactor stack `start(true)` resumes the subscription in the MongoDB subscription model, which finds the
-  token gone again and pauses it again with one more error.
+- From the moment the error is logged, `resumeSubscription(id)` throws `CatchupCannotResumeException` until you
+  cancel the subscription, or, on a blocking catch-up subscription model you call directly, until a
+  `resumeSubscription(id, startAt)` at a resume token the oplog still has runs it again, see
+  [How to recover](#how-to-recover). A `resumeSubscription(id)` after the pause but before the error isn't refused
+  yet, and the subscription opens at the lost token again and is paused again. On the blocking stack `start(true)`
+  throws `CatchupCannotResumeException` too. On the reactor stack `start(true)` resumes the subscription in the
+  MongoDB subscription model, which finds the token gone again and pauses it again with one more error.
 - On the blocking stack, a subscription you start from a resume token that is already gone throws
   `CatchupCannotResumeException` from `subscribe`, and nothing is stored. Under competing consumers the start runs
   when a node acquires the lease, so it fails there. On the reactor stack such a subscription with an id is paused as
@@ -1005,9 +1008,10 @@ any position other than the beginning could skip that event.
   - `startAt = BEGINNING_OF_TIME`, `startAtISO8601` and `startAtTimeEpochMillis` on `@StreamSubscription`, under the
     default `resumeBehavior`.
   - `startAt = DEFAULT` on `@DcbSubscription`, on a `@Projection` that returns a `DcbProjection` and on a `@Snapshot`
-    that returns a `DcbSnapshotView`, whatever the `resumeBehavior`. So a `@DcbSubscription` with no start attribute
-    is one of them. Under the default `resumeBehavior` their `startAt = BEGINNING` reads it too, and so do
-    `startAtDcbPosition` on `@DcbSubscription` and `startAtGlobalPosition` on the other two.
+    that returns a `DcbSnapshotView`, whatever the `resumeBehavior`. So a `@DcbSubscription` or a `@Projection` that
+    returns a `DcbProjection` is one of them when it has no start attribute. Under the default `resumeBehavior`
+    their `startAt = BEGINNING` reads it too, and so do `startAtDcbPosition` on `@DcbSubscription` and
+    `startAtGlobalPosition` on the other two.
   - Every start, `NOW` and `DEFAULT` included, when a `SubscriptionResumePoints` bean answers a resume token for the
     subscription.
 
