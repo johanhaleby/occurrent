@@ -40,6 +40,7 @@ import org.occurrent.subscription.reactor.durable.catchup.ReactorStreamCatchupSu
 import org.occurrent.subscription.reactor.durable.catchup.ReactorStreamCatchupSubscriptionModelHistoryLossTest.ScriptedReader;
 import org.slf4j.helpers.MessageFormatter;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.time.Duration;
 import java.util.List;
@@ -256,6 +257,62 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
                 () -> assertThat(wrapped.cancelled).as("cancels that reached the wrapped model").containsExactly(ID),
                 () -> assertThat(catchup.isRunning(ID)).isFalse()
         );
+    }
+
+    @Test
+    void a_loss_the_wrapped_model_reports_while_its_cancel_is_under_way_pauses_the_subscription_and_the_id_subscribes_again_once_the_cancel_completes() {
+        catchup.subscribe(ID, FILTER, StartAt.checkpoint(LIVE_TOKEN), action());
+        Sinks.Empty<Void> wrappedCancel = Sinks.empty();
+        wrapped.cancelCompletesWhen = wrappedCancel.asMono();
+        AtomicBoolean cancelCompleted = new AtomicBoolean();
+        catchup.cancelSubscription(ID).subscribe(__ -> {
+        }, failure -> {
+        }, () -> cancelCompleted.set(true));
+
+        wrapped.losesTheHistoryFrom(ID, LIVE_TOKEN);
+
+        assertThat(cancelCompleted).as("the cancel completed").isFalse();
+        assertPausedForGoodFrom(LIVE_TOKEN);
+        assertThat(wrapped.takeOversRun).as("takeovers the wrapped model ran").hasValue(1);
+        assertThat(catchThrowable(() -> catchup.subscribe(ID, FILTER, StartAt.checkpoint(OTHER_LIVE_TOKEN), action())))
+                .as("a subscribe of the id while the wrapped model still holds it").isInstanceOf(DuplicateSubscriptionIdException.class);
+
+        wrappedCancel.tryEmitEmpty();
+        Subscription again = catchup.subscribe(ID, FILTER, StartAt.checkpoint(OTHER_LIVE_TOKEN), action());
+
+        assertAll(
+                () -> assertThat(cancelCompleted).as("the cancel completed").isTrue(),
+                () -> assertThat(wrapped.cancelled).as("cancels that reached the wrapped model").containsExactly(ID),
+                () -> assertThat(again.id()).isEqualTo(ID),
+                () -> assertThat(catchup.isRunning(ID)).as("the subscription made after the cancel runs").isTrue(),
+                () -> assertThat(wrapped.restartedFromThePresent).as("restarts from the present").isEmpty()
+        );
+    }
+
+    @Test
+    void a_subscribe_made_as_the_cancel_completes_keeps_its_own_ownership_so_a_loss_reported_for_it_pauses_it() {
+        catchup.subscribe(ID, FILTER, StartAt.checkpoint(LIVE_TOKEN), action());
+        Sinks.Empty<Void> wrappedCancel = Sinks.empty();
+        wrapped.cancelCompletesWhen = wrappedCancel.asMono();
+        AtomicReference<Subscription> again = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        // Runs before the cancel forgets the record it read, since a Mono hands its completion on before its finally
+        catchup.cancelSubscription(ID).subscribe(__ -> {
+        }, failure::set, () -> {
+            try {
+                again.set(catchup.subscribe(ID, FILTER, StartAt.checkpoint(OTHER_LIVE_TOKEN), action()));
+            } catch (Throwable t) {
+                failure.set(t);
+            }
+        });
+
+        wrappedCancel.tryEmitEmpty();
+        assertThat(failure.get()).as("what the subscribe made as the cancel completed threw").isNull();
+        assertThat(again.get()).as("the subscription made as the cancel completed").isNotNull();
+        wrapped.losesTheHistoryFrom(ID, OTHER_LIVE_TOKEN);
+
+        assertPausedForGoodFrom(OTHER_LIVE_TOKEN);
+        assertThat(wrapped.takeOversRun).as("takeovers the wrapped model ran").hasValue(1);
     }
 
     @Test

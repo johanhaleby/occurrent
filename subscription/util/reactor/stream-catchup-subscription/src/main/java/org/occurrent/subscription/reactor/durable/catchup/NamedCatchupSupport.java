@@ -269,6 +269,8 @@ final class NamedCatchupSupport {
 
     // Called with the state monitor held. A replay whose start, reader and action complete on this thread runs the
     // action here, so the mark refuses a subscribe or cancel from it that would wait for the per-id lock under the monitor.
+    // Every id is refused, not only the replaying one. A cancel of another id takes that id's state monitor, so two replays whose
+    // actions cancel each other's subscription would each hold the monitor the other waits for
     private static void launch(CatchupState state) {
         boolean launchingAlready = LAUNCHING_REPLAY.get();
         LAUNCHING_REPLAY.set(true);
@@ -806,7 +808,9 @@ final class NamedCatchupSupport {
     private Mono<Void> cancelHoldingIdLock(String subscriptionId) {
         // Before the replay in flight is read below, which takeOver depends on
         handedOver.remove(subscriptionId);
-        owned.remove(subscriptionId);
+        // Forgotten only once the wrapped model has cancelled, so a loss it reports meanwhile still pauses the
+        // subscription rather than letting the wrapped model restart it from now
+        Owned record = owned.get(subscriptionId);
         CatchupState state = catchingUp.remove(subscriptionId);
         if (state != null) {
             synchronized (state) {
@@ -828,9 +832,17 @@ final class NamedCatchupSupport {
         handedOver.remove(subscriptionId);
         // A cold-only composition runs nothing by name and stores nothing by id, so there is nothing to stop or delete
         if (!managesNamedSubscriptions()) {
+            forget(subscriptionId, record);
             return Mono.empty();
         }
-        return named.cancelSubscription(subscriptionId);
+        return named.cancelSubscription(subscriptionId).doFinally(__ -> forget(subscriptionId, record));
+    }
+
+    // Removes only the record the cancel read, so a subscribe of the id after the cancel keeps its own
+    private void forget(String subscriptionId, @Nullable Owned record) {
+        if (record != null) {
+            owned.remove(subscriptionId, record);
+        }
     }
 
     void shutdown() {

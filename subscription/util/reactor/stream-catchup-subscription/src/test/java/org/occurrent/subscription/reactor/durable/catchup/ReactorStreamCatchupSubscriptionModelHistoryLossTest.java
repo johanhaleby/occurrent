@@ -600,6 +600,8 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         };
         volatile Runnable beforeTheNextResumeAtAPosition = () -> {
         };
+        // A cancel subscribed to removes the subscription only once this completes, so a test holds a cancel under way
+        volatile Mono<Void> cancelCompletesWhen = Mono.empty();
         // Runs on the thread of every subscribe(id, ..) before the model registers the subscription
         volatile Runnable beforeSubscribeRegisters = () -> {
         };
@@ -823,10 +825,10 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
         @Override
         public Mono<Void> cancelSubscription(String subscriptionId) {
-            return Mono.fromRunnable(() -> {
+            return Mono.defer(() -> cancelCompletesWhen).then(Mono.fromRunnable(() -> {
                 cancelled.add(subscriptionId);
                 held.remove(subscriptionId);
-            });
+            }));
         }
 
         @Override
