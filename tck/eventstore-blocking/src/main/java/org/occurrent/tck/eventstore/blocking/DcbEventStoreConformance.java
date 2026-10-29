@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
@@ -975,6 +976,72 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
                     () -> assertThat(after.lastSequencePosition())
                             .as("The refused condition must not have reserved a position")
                             .isEqualTo(before.lastSequencePosition()));
+        }
+
+        @Test
+        void a_condition_on_a_type_and_a_tag_ignores_an_event_of_that_type_with_another_tag_committed_after_the_read() {
+            String type = "TypeAndTagAccepted";
+            String tagA = "type-and-tag-accepted:a";
+            String tagB = "type-and-tag-accepted:b";
+            DcbCriteria criteria = DcbCriteria.type(type).tags(tag(tagA));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(type, tagB)));
+
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(type, tagA)), failIfEventsMatch(token)))
+                    .as("The event of the same type tagged only with b does not match type and tag a, so it must not "
+                            + "reject an append conditioned on them. Sharing a type with the criteria is not "
+                            + "sharing the boundary")
+                    .doesNotThrowAnyException();
+
+            assertThat(dcbEventStore().read(criteria).events().size())
+                    .as("The accepted append must have written its event, and the event tagged b is not selected")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void a_condition_on_a_type_and_a_tag_conflicts_on_a_match_committed_after_the_read() {
+            String type = "TypeAndTagControl";
+            String tagA = "type-and-tag-control:a";
+            DcbCriteria criteria = DcbCriteria.type(type).tags(tag(tagA));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(type, tagA)));
+
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(type, tagA)), failIfEventsMatch(token)))
+                    .as("The control of the accepted case: the same type and the tag the criteria hold do match, "
+                            + "so a store that checks no marker for the tag would accept this append")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
+        void a_condition_on_a_type_and_a_tag_conflicts_on_a_match_committed_after_another_event_of_that_type_and_nothing_is_appended() {
+            String type = "TypeAndTagGuard";
+            String tagA = "type-and-tag-guard:a";
+            String tagB = "type-and-tag-guard:b";
+            DcbCriteria criteria = DcbCriteria.type(type).tags(tag(tagA));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(type, tagB)));
+            dcbEventStore().append(List.of(taggedEvent(type, tagA)));
+            DcbEventStream before = dcbEventStore().read(criteria);
+
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(type, tagA)), failIfEventsMatch(token)))
+                    .as("An event matching the criteria was committed after the read, so the event of the same type "
+                            + "that came before it and does not match must not hide it")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+
+            DcbEventStream after = dcbEventStore().read(criteria);
+            assertAll(
+                    () -> assertThat(after.events().size())
+                            .as("The refused append must not have written its event")
+                            .isEqualTo(before.events().size()),
+                    () -> assertThat(positionsOf(after.events()))
+                            .as("The refused append must not have added an event at a position the criteria select")
+                            .isEqualTo(positionsOf(before.events())));
         }
 
         @Test
