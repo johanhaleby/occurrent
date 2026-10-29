@@ -368,7 +368,9 @@ nothing for any other type. Without
 a counter document the stores read the counter as zero, so the `find` should then return nothing. Restart the
 application and confirm the startup warning is gone, unless step 5 left an event alone on purpose. A position still
 stored as a string, which every `POSITION_ALREADY_TAKEN` event you accepted has, brings that warning back on every
-start.
+start of a store that writes position. A store that writes no position, one built with `withoutStreamPosition()` or
+one that turned position off over unpositioned history, runs the damage check only while `requireRepairedEvents` is
+on. With the setting off it logs no warning, so a quiet start there does not show that the damage is gone.
 
 A store with `requireRepairedEvents` on runs these same checks when it starts and refuses while any of them finds an
 event or a counter it cannot use, so an event you left alone keeps it down. Fix the event by hand as step 5 describes, or turn the setting off
