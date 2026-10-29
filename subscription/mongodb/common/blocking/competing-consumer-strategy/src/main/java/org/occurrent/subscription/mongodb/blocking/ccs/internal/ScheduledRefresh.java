@@ -23,7 +23,6 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.event.Level;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -38,7 +37,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static org.occurrent.subscription.mongodb.blocking.ccs.internal.FailureLogging.logIgnoringWhatLoggingThrows;
 
 /**
  * Schedules a periodic refresh, and tells the listeners what a refresh changed on a thread of its own.
@@ -59,6 +57,7 @@ import static org.occurrent.subscription.mongodb.blocking.ccs.internal.FailureLo
 @NullMarked
 class ScheduledRefresh {
     private static final Logger log = LoggerFactory.getLogger(ScheduledRefresh.class);
+    private static final FailureLogging failureLog = new FailureLogging(log);
 
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
     private final BiConsumer<Duration, Scheduler> scheduleIt;
@@ -191,7 +190,7 @@ class ScheduledRefresh {
                 }
             }
         } catch (Throwable t) {
-            logIgnoringWhatLoggingThrows(log, Level.ERROR, "Handing the waiting notifications over to the notifier failed due to {} - {}. The refresh runs as usual.", t);
+            failureLog.error("Handing the waiting notifications over to the notifier failed due to {} - {}. The refresh runs as usual.", t);
         }
     }
 
@@ -213,7 +212,7 @@ class ScheduledRefresh {
             synchronized (undelivered) {
                 queued.waitingForARefresh = true;
             }
-            logIgnoringWhatLoggingThrows(log, Level.ERROR, "The notifier did not take the notifications for subscription {} due to {} - {}. A later scheduled refresh hands them over again.",
+            failureLog.error("The notifier did not take the notifications for subscription {} due to {} - {}. A later scheduled refresh hands them over again.",
                     subscriptionId, t);
             return false;
         }
@@ -240,7 +239,7 @@ class ScheduledRefresh {
                 next.run();
             } catch (Throwable t) {
                 // Not rethrown, since that would leave the notifications after it to nobody
-                logIgnoringWhatLoggingThrows(log, Level.ERROR, "A notification for subscription {} failed due to {} - {}. The notifications after it are delivered as usual.",
+                failureLog.error("A notification for subscription {} failed due to {} - {}. The notifications after it are delivered as usual.",
                         subscriptionId, t);
             }
         }
@@ -287,7 +286,7 @@ class ScheduledRefresh {
                 try {
                     refresh.run();
                 } catch (Throwable t) {
-                    logIgnoringWhatLoggingThrows(log, Level.ERROR, "Lease refresh failed due to {} - {}. The next scheduled refresh will run as usual.", t);
+                    failureLog.error("Lease refresh failed due to {} - {}. The next scheduled refresh will run as usual.", t);
                 }
             };
         }

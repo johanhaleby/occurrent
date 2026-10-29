@@ -28,7 +28,6 @@ import org.occurrent.retry.internal.RetryImpl;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.event.Level;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -50,14 +49,13 @@ import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
-import static org.occurrent.subscription.mongodb.blocking.ccs.internal.FailureLogging.logIgnoringWhatLoggingThrows;
-
 /**
  * Common operations for MongoDB lease-based competing consumer strategies
  */
 @NullMarked
 public class MongoLeaseCompetingConsumerStrategySupport {
     private static final Logger log = LoggerFactory.getLogger(MongoLeaseCompetingConsumerStrategySupport.class);
+    private static final FailureLogging failureLog = new FailureLogging(log);
 
     public static final String DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION = "competing-consumer-locks";
     public static final Duration DEFAULT_LEASE_TIME = Duration.ofSeconds(20);
@@ -502,8 +500,13 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                     listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId);
                 }
             } catch (Throwable e) {
-                logIgnoringWhatLoggingThrows(log, e instanceof Error ? Level.ERROR : Level.WARN, "Listener {} failed on {} (subscriberId={}, subscriptionId={}) due to {} - {}",
-                        listener, outcome.notification(), cc.subscriberId, cc.subscriptionId, e);
+                if (e instanceof Error) {
+                    failureLog.error("Listener {} failed on {} (subscriberId={}, subscriptionId={}) due to {} - {}",
+                            listener, outcome.notification(), cc.subscriberId, cc.subscriptionId, e);
+                } else {
+                    failureLog.warn("Listener {} failed on {} (subscriberId={}, subscriptionId={}) due to {} - {}",
+                            listener, outcome.notification(), cc.subscriberId, cc.subscriptionId, e);
+                }
             }
         }
     }
