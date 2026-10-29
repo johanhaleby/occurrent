@@ -24,7 +24,7 @@ import java.util.Optional;
  * A subscription model that can say whether it delivers the events of a subscription in the order they committed.
  * <p>
  * That order matters to a caller that builds up state from the events one by one, such as a saga, where an event applied before an
- * earlier one gives a different result. A model that cannot promise the order does not implement this.
+ * earlier one gives a different result. A model answers per subscription, and its answer can change over time.
  * <p>
  * A model answers {@code true} for a subscription only when no event is delivered to it before every event matching
  * it that committed earlier has been delivered and its listener call returned normally. A delivery whose listener
