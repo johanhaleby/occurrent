@@ -65,7 +65,8 @@ tell for that consumer is running, and then at most the change its own locked st
 it hands to the notifier. When another tell is running, the call doesn't wait for it, since that tell may be inside a
 listener that waits for a lock the caller holds, the deadlock in ADR 113. It
 returns, and the running tell tells the change after its own, or hands it to the notifier. When a tell on a notifier
-thread throws from the strategy's own code instead, the next round tells that change.
+thread throws from the strategy's own code instead, or one of its listeners throws an `Error`, the next round tells
+that change.
 
 That replaces the promise in the last Decision paragraph of ADR 140, that registering, unregistering and releasing
 call the listeners on the caller's thread before they return, with the following sentence:
@@ -96,8 +97,8 @@ prohibition by pausing the subscription and releasing its lease.
 
 A listener can be told the same thing twice. That happens after an `OutOfMemoryError` cut a tell short, and after an
 `Error`, once per round for as long as a listener keeps throwing it. It also happens when a lease is lost between a
-tell's read of the counts and its read of the status. The tell then records the prohibition against the older loss
-count, and tells it again. A listener can also be told a prohibition with no
+tell's read of the status and its read of the counts. The tell then tells the grant once more, and the prohibition
+after it. A listener can also be told a prohibition with no
 grant before it. The `CompetingConsumerListener` javadoc says both, and `CompetingConsumerSubscriptionModel` handles
 both. ADR 113's "one change of status is reported once" now holds except in those three cases.
 
