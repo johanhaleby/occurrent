@@ -21,6 +21,7 @@ import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
 import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope;
 import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -30,21 +31,36 @@ import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
+import org.occurrent.subscription.api.reactor.RepositionableSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
+import java.net.URI;
+import java.time.Duration;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Pins what {@link ReactorCatchupSubscriptionModel} does with a subscription id it did not create.
@@ -112,6 +128,35 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         catchup.isRunning("routed-subscription");
 
         assertThat(wrapped.calls).containsExactly("isRunning:routed-subscription");
+    }
+
+    @Test
+    void a_cancel_refused_inside_the_replay_leaves_the_subscription_routed_to_the_model_that_replayed_it() {
+        HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
+        ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
+        AtomicReference<Throwable> refused = new AtomicReference<>();
+
+        Subscription replayed = catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), __ -> {
+            try {
+                catchup.cancelSubscription("replayed");
+            } catch (IllegalStateException e) {
+                refused.set(e);
+            }
+            return Mono.empty();
+        });
+        StepVerifier.create(replayed.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(10));
+        assertThat(refused.get()).as("the cancel of the subscription from the thread that replays it").isInstanceOf(IllegalStateException.class);
+        // Routed to the agnostic model, which is not the stream model the dispatcher falls back to, and with the replay
+        // over there is nothing for it to find by asking.
+        assertThat(catchup.isCatchingUp("replayed")).isFalse();
+
+        wrapped.losesTheHistoryFrom("replayed", new StringBasedCheckpoint("elsewhere"));
+
+        // Refused only by the model that holds the record of the loss. Any other inner model forwards the resume to the
+        // wrapped model, which resumes it.
+        assertThatThrownBy(() -> catchup.resumeSubscription("replayed"))
+                .isInstanceOf(CatchupCannotResumeException.class)
+                .hasMessageContaining("elsewhere");
     }
 
     private static ReactorCatchupSubscriptionModel dualModeOver(RecordingSubscriptionModel wrapped) {
@@ -187,6 +232,137 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         public Mono<Void> cancelSubscription(String subscriptionId) {
             calls.add("cancelSubscription:" + subscriptionId);
             return Mono.empty();
+        }
+    }
+
+    // Reports a lost history to its listeners as a model that loses it does, and pauses the subscription when one takes it over
+    private static final class HistoryLosingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
+        private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
+        private final Set<String> paused = ConcurrentHashMap.newKeySet();
+        private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
+
+        void losesTheHistoryFrom(String subscriptionId, Checkpoint lostFrom) {
+            for (HistoryLossListener listener : listeners) {
+                if (listener.handleHistoryLoss(subscriptionId, lostFrom) instanceof HistoryLossHandling.TakeOver takeOver) {
+                    paused.add(subscriptionId);
+                    takeOver.afterPause().run();
+                    return;
+                }
+            }
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpoint() {
+            return Mono.just(new StringBasedCheckpoint("token"));
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return globalCheckpoint();
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.error(new AssertionError("The cold primitive must not be used by the named catch-up path"));
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribeFailingIfStartLost(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.error(new AssertionError("The cold primitive must not be used by the named catch-up path"));
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribeFailingOnHistoryLoss(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.error(new AssertionError("The cold primitive must not be used by the named catch-up path"));
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            subscribed.add(subscriptionId);
+            return new StartedSubscription(subscriptionId);
+        }
+
+        @Override
+        public void addHistoryLossListener(HistoryLossListener listener) {
+            listeners.add(listener);
+        }
+
+        @Override
+        public void removeHistoryLossListener(HistoryLossListener listener) {
+            listeners.remove(listener);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            throw new AssertionError("No takeover replay is expected, so nothing is resumed at a position");
+        }
+
+        @Override
+        public void stop() {
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+        }
+
+        @Override
+        public boolean isRunning() {
+            return true;
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return subscribed.contains(subscriptionId) && !paused.contains(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return paused.contains(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            if (!subscribed.contains(subscriptionId)) {
+                throw new UnknownSubscriptionException(subscriptionId);
+            }
+            paused.remove(subscriptionId);
+            return new StartedSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            paused.add(subscriptionId);
+        }
+
+        @Override
+        public Mono<Void> cancelSubscription(String subscriptionId) {
+            subscribed.remove(subscriptionId);
+            paused.remove(subscriptionId);
+            return Mono.empty();
+        }
+    }
+
+    private static final class OneEventReader implements PositionOrderedReader, CatchupReads {
+        @Override
+        public Mono<CatchupReadScope> openCatchupReadScope(@Nullable String notBefore) {
+            return CatchupReads.unscoped(this).openCatchupReadScope(notBefore);
+        }
+
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            long from = range.afterPosition().orElse(0L) + 1;
+            long to = Math.min(range.upToPosition().orElse(1L), 1L);
+            return from > to ? Flux.empty() : Flux.just(CloudEventBuilder.v1().withId("e1").withSource(URI.create("urn:test")).withType("type").build());
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return Mono.just(1L);
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
         }
     }
 
