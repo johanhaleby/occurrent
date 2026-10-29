@@ -163,6 +163,44 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
 
     @Test
     @Timeout(120)
+    void a_type_and_tag_scoped_condition_and_a_type_scoped_condition_over_the_same_event_cannot_both_win() {
+        for (int iteration = 0; iteration < ITERATIONS; iteration++) {
+            String type = RESERVED + iteration;
+            String show = "show:" + iteration;
+
+            // Both conditions match the event either writer is about to append, so exactly one may win.
+            DcbCriteria byTypeAndTag = DcbCriteria.type(type).tags(tag(show));
+            DcbCriteria byType = DcbCriteria.types(type);
+            DcbAppendCondition onTypeAndTag = failIfEventsMatch(byTypeAndTag, dcbEventStore().read(byTypeAndTag).consistencyToken());
+            DcbAppendCondition onType = failIfEventsMatch(byType, dcbEventStore().read(byType).consistencyToken());
+
+            assertExactlyOneWinnerOfTwo(iteration, "a type-and-tag-scoped and a type-scoped condition", byTypeAndTag,
+                    taggedEventWithId("by-type-and-tag-" + iteration, type, show), onTypeAndTag,
+                    taggedEventWithId("by-type-" + iteration, type, show), onType);
+        }
+    }
+
+    @Test
+    @Timeout(120)
+    void a_type_and_tag_scoped_condition_and_a_tag_scoped_condition_over_the_same_event_cannot_both_win() {
+        for (int iteration = 0; iteration < ITERATIONS; iteration++) {
+            String type = RESERVED + iteration;
+            String show = "show:" + iteration;
+
+            // Both conditions match the event either writer is about to append, so exactly one may win.
+            DcbCriteria byTypeAndTag = DcbCriteria.type(type).tags(tag(show));
+            DcbCriteria byTag = DcbCriteria.tags(tag(show));
+            DcbAppendCondition onTypeAndTag = failIfEventsMatch(byTypeAndTag, dcbEventStore().read(byTypeAndTag).consistencyToken());
+            DcbAppendCondition onTag = failIfEventsMatch(byTag, dcbEventStore().read(byTag).consistencyToken());
+
+            assertExactlyOneWinnerOfTwo(iteration, "a type-and-tag-scoped and a tag-scoped condition", byTypeAndTag,
+                    taggedEventWithId("by-type-and-tag-" + iteration, type, show), onTypeAndTag,
+                    taggedEventWithId("by-tag-" + iteration, type, show), onTag);
+        }
+    }
+
+    @Test
+    @Timeout(120)
     void two_overlapping_type_scoped_conditions_cannot_both_win() {
         for (int iteration = 0; iteration < ITERATIONS; iteration++) {
             String reserved = RESERVED + iteration;
