@@ -22,6 +22,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
   `DcbStartAt` without a `default`.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
+- [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
+  `DcbConsistencyToken` becomes a class, and `DcbEventStream(List, long)` and `DcbDomainEventStream(List, long)` are
+  removed. **Breaks the build** if you create a token or a stream, or implement a `DcbEventStore`.
 
 ### Sagas
 
@@ -37,6 +40,10 @@ The compiler finds those for you. The other sections compile fine and behave dif
 
 - [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). **Breaks the build** if you
   use a record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`.
+- [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
+  A `DcbAppendCondition` with a token read with other criteria throws `IllegalArgumentException`, on every store. A
+  token value saved under 0.34.0 isn't valid. **Breaks the build** if you create a token or a stream, or implement a
+  `DcbEventStore`.
 
 ### Subscriptions and catch-up
 
@@ -126,6 +133,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - `org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35` adds the new bindings to a record pattern over
   `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`. See
   [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions).
+- No recipe rewrites a `DcbConsistencyToken` or the streams that create one. See
+  [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
 ## A global position is no longer a saga redelivery key
 
@@ -572,14 +581,93 @@ rollback to 0.34 followed by a new upgrade, and from a tool that shares the even
 `mv` and is no longer returned by `afterVersions(..)`. A full read still returns it. A store built on
 `MongoTemplate.withSession(..)` or `ReactiveMongoTemplate.withSession(..)` doesn't support reading versions.
 
-Two things break, and only one of them is a compile error:
+Three things break, and two of them are compile errors.
 
 - A record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions` with the old number of components stops
   compiling. `UpgradeToOccurrent_0_35` adds `var markerVersions` to the first two, and `var versionsRequested` and
   `var afterVersions` to the third.
+- `DcbEventStream(List, long)` is removed, so a store or a test double that builds a stream with it stops compiling.
+  [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
+  says what to call instead.
 - An `isEqualTo(...)` on a whole `DcbAppendResult` or `DcbEventStream` that a store returned still compiles, and fails
-  when the store reported versions. Compare the components you mean instead. Every existing constructor stays, and sets
-  the new components to empty.
+  when the store reported versions. Compare the components you mean instead. Every other existing constructor stays,
+  and sets the new components to empty.
+
+## A consistency token holds the criteria it was read with
+
+A `DcbConsistencyToken` holds the criteria of the read that returned it, and a `DcbAppendCondition` throws
+`IllegalArgumentException` when it's created with a token read with other criteria. In 0.34.0 the token was a bare
+number that a condition could pair with any criteria. On MongoDB that number was a sum of marker versions, so a
+condition with other criteria than the read compared sums over other markers, and could let an append through after an
+event matching its criteria had committed. The in-memory store refused the same code. The change is
+[#1228](https://github.com/johanhaleby/occurrent/issues/1228), and
+[ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
+describes it.
+
+### What changes
+
+- `DcbConsistencyToken` is a final class instead of a record. A store creates one with
+  `DcbConsistencyToken.of(criteria, version)`, and `criteria()` and `version()` read it back. The public constructor,
+  `DcbConsistencyToken.of(long)` and `value()` are removed.
+- `DcbEventStream(List, long)` and `DcbDomainEventStream(List, long)` are removed, since they create a token without
+  criteria.
+- `DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken)` takes its criteria from the token.
+- `failIfEventsMatch(DcbCriteria, DcbConsistencyToken)` is deprecated. It still works, and throws
+  `IllegalArgumentException` when the criteria aren't the same as the token's.
+- `wholeStoreLock(DcbConsistencyToken)` throws `IllegalArgumentException` for a token not read with `DcbCriteria.all()`.
+
+Two criteria are the same when they hold the same set of alternatives. `anyOf(a, b)` is the same as `anyOf(b, a)`, and
+a `DcbCriterion` is the same as an `anyOf(..)` with only that criterion in it. Criteria that select the same events but
+are built differently aren't the same, so `types("A", "B")` isn't the same as `anyOf(type("A"), type("B"))`.
+
+The check runs in the condition's constructor, before any store is called, so it works the same on every store, a
+`DcbEventStore` of your own included. `GenericDcbApplicationService` reads and appends with the same criteria on both
+stacks, so it isn't affected.
+
+### Who is affected
+
+- **A `DcbEventStore` of your own.** It stops compiling where it calls `new DcbConsistencyToken(..)`,
+  `DcbConsistencyToken.of(long)`, `value()` or `new DcbEventStream(events, head)`.
+- **Code that creates tokens or streams**, such as a test double that returns a `DcbEventStream` or a
+  `DcbDomainEventStream`. It stops compiling the same way. A record pattern over `DcbConsistencyToken` stops compiling
+  too, since the token is no longer a record.
+- **Code that reads with one criteria and appends with another**, passing the token the read returned. It compiles with
+  a deprecation warning, and the append throws `IllegalArgumentException` on every store.
+- **Code that saved a token value**, in an ETag or a queued command for example. A token value saved under 0.34.0 isn't
+  valid on 0.35.0.
+
+### What to do
+
+In a store, pass the read's criteria when you create the token, and read `version()` where you read `value()`:
+
+```java
+return new DcbEventStream(events, head, DcbConsistencyToken.of(criteria, version));
+```
+
+Compute the version the same way you computed the value for `DcbConsistencyToken.of(long)`. `DcbEventStream(List, long)`
+used the head as the token, so `new DcbEventStream(events, head, DcbConsistencyToken.of(criteria, head))` does what it
+did. For a `DcbDomainEventStream`, pass the token of the `DcbEventStream` it was built from.
+
+Build a conditional append from the token alone:
+
+```java
+DcbEventStream stream = eventStore.read(criteria);
+// decide on stream.events()
+eventStore.append(newEvents, DcbAppendCondition.failIfEventsMatch(stream.consistencyToken()));
+```
+
+Where you passed the criteria and the token separately, drop the criteria. If the append really needs other criteria
+than the read, read again with those criteria and use that token.
+
+Don't save a token value to use later. Read again when the command runs.
+
+### Why there is no recipe
+
+The only part a recipe could rewrite is `value()` to `version()`. That rename would compile, and it would keep a token
+value saved under 0.34.0 in use, although such a value isn't valid on 0.35.0. `DcbConsistencyToken.of(criteria, version)`
+needs the criteria the read was given, and a recipe can't tell from the call site which criteria those were. Rewriting
+`failIfEventsMatch(criteria, token)` to `failIfEventsMatch(token)` would compile too, but a condition that used other
+criteria than its read would then append on the read's criteria instead of throwing.
 
 ## A catch-up needs the event store itself
 

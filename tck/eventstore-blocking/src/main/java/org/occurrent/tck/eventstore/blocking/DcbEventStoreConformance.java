@@ -33,6 +33,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.wholeStoreLock;
 import static org.occurrent.tck.ConformanceEvents.extension;
@@ -883,6 +884,97 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             assertThat(typesOf(dcbEventStore().read(criteria).events()))
                     .as("A rejected append must be all or nothing, so neither of its events may be visible")
                     .containsExactly(DEFINED);
+        }
+
+        @Test
+        void a_condition_with_other_criteria_than_the_token_was_read_with_is_refused_and_nothing_is_appended() {
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
+            DcbConsistencyToken tokenReadWithName1 = dcbEventStore().read(DcbCriteria.tags(tag(NAME_1))).consistencyToken();
+            DcbEventStream before = dcbEventStore().read(DcbCriteria.all());
+
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(CHANGED, NAME_2)),
+                    failIfEventsMatch(DcbCriteria.tags(tag(NAME_2)), tokenReadWithName1)))
+                    .as("A token belongs to the criteria it was read with, so a condition on other criteria must be "
+                            + "refused on every store and not compared against a token from another boundary")
+                    .isExactlyInstanceOf(IllegalArgumentException.class);
+
+            DcbEventStream after = dcbEventStore().read(DcbCriteria.all());
+            assertAll(
+                    () -> assertThat(after.events().size())
+                            .as("The refused condition must not have appended its event")
+                            .isEqualTo(before.events().size()),
+                    () -> assertThat(after.lastSequencePosition())
+                            .as("The refused condition must not have reserved a position")
+                            .isEqualTo(before.lastSequencePosition()));
+        }
+
+        @Test
+        void a_whole_store_lock_with_a_token_read_with_other_criteria_than_all_is_refused_and_nothing_is_appended() {
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
+            DcbConsistencyToken tokenReadWithName1 = dcbEventStore().read(DcbCriteria.tags(tag(NAME_1))).consistencyToken();
+            DcbEventStream before = dcbEventStore().read(DcbCriteria.all());
+
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(CHANGED, NAME_2)), wholeStoreLock(tokenReadWithName1)))
+                    .as("A whole-store lock needs a token read with all(), because a token read with a tag says "
+                            + "nothing about the rest of the store")
+                    .isExactlyInstanceOf(IllegalArgumentException.class);
+
+            DcbEventStream after = dcbEventStore().read(DcbCriteria.all());
+            assertAll(
+                    () -> assertThat(after.events().size())
+                            .as("The refused whole-store lock must not have appended its event")
+                            .isEqualTo(before.events().size()),
+                    () -> assertThat(after.lastSequencePosition())
+                            .as("The refused whole-store lock must not have reserved a position")
+                            .isEqualTo(before.lastSequencePosition()));
+        }
+
+        @Test
+        void a_condition_taking_its_criteria_from_the_token_succeeds_when_nothing_matched_since_the_read() {
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
+            DcbConsistencyToken token = dcbEventStore().read(DcbCriteria.tags(tag(NAME_1))).consistencyToken();
+
+            DcbAppendResult result = dcbEventStore().append(
+                    List.of(taggedEvent(CHANGED, NAME_1)), failIfEventsMatch(token));
+
+            assertThat(result.eventCount())
+                    .as("The one-argument form uses the criteria the token was read with, so the control for the "
+                            + "refusals above must be accepted when nothing matching was committed after the read")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void a_condition_on_other_criteria_is_refused_even_when_a_marker_sum_would_collide() {
+            String tagA = "collision:a";
+            String tagB = "collision:b";
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, tagA)));
+            dcbEventStore().append(List.of(taggedEvent(CHANGED, tagA)));
+            dcbEventStore().append(List.of(taggedEvent(IMPORTED, tagA)));
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, tagB)));
+            dcbEventStore().append(List.of(taggedEvent(CHANGED, tagB)));
+            DcbConsistencyToken tokenReadWithA = dcbEventStore().read(DcbCriteria.tags(tag(tagA))).consistencyToken();
+            dcbEventStore().append(List.of(taggedEvent(IMPORTED, tagB)));
+            DcbEventStream before = dcbEventStore().read(DcbCriteria.tags(tag(tagB)));
+
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(SNAPSHOT, tagB)),
+                    failIfEventsMatch(DcbCriteria.tags(tag(tagB)), tokenReadWithA)))
+                    .as("An event tagged b was committed after the read of a. A store that adds up the versions of "
+                            + "the markers it reads can see the same number for b as the token holds for a, and "
+                            + "accept this condition, so the condition must be refused because its criteria are not "
+                            + "the token's")
+                    .isExactlyInstanceOf(IllegalArgumentException.class);
+
+            DcbEventStream after = dcbEventStore().read(DcbCriteria.tags(tag(tagB)));
+            assertAll(
+                    () -> assertThat(after.events().size())
+                            .as("The refused condition must not have appended its event")
+                            .isEqualTo(before.events().size()),
+                    () -> assertThat(after.lastSequencePosition())
+                            .as("The refused condition must not have reserved a position")
+                            .isEqualTo(before.lastSequencePosition()));
         }
 
         @Test
