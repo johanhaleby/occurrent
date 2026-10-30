@@ -71,7 +71,7 @@ public abstract class DcbAppendConfirmationConformance extends EventStoreConform
     void confirms_the_result_of_a_conditional_append_that_is_committed() {
         DcbCriteria boundary = DcbCriteria.tags(tag(ACCOUNT));
         DcbAppendResult result = dcbEventStore().append(List.of(taggedEventWithId("a", DEPOSITED, ACCOUNT)),
-                failIfEventsMatch(boundary, dcbEventStore().read(boundary).consistencyToken()));
+                failIfEventsMatch(dcbEventStore().read(boundary).consistencyToken()));
 
         assertThat(confirmation().isConfirmed(result)).isTrue();
     }

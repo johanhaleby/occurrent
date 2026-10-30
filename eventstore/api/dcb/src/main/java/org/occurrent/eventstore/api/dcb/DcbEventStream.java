@@ -38,13 +38,18 @@ import static java.util.Objects.requireNonNull;
  *                             catch-up, but it is NOT a safe optimistic-concurrency boundary on its own: a store that
  *                             assigns positions before the events commit can report a head that is ahead of the data a
  *                             reader can actually see. Use {@code consistencyToken} for optimistic concurrency.
- * @param consistencyToken     an opaque, store-defined token capturing the consistency boundary observed by this read
- *                             for the supplied query. Pass it unchanged to
- *                             {@link DcbAppendCondition#failIfEventsMatch(DcbCriteria, DcbConsistencyToken)} so a later
- *                             append is rejected if any event matching the query was committed after this read. Unlike
- *                             {@code lastSequencePosition}, it is sound under concurrent in-flight appends because the
- *                             store derives it from data that is only observable once committed. Round-trip it within
- *                             the same store; do not interpret or compare it across stores.
+ * @param consistencyToken     the token a conditional append is checked against. It holds the criteria the read was
+ *                             given, so pass it unchanged to
+ *                             {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)} and the append is
+ *                             refused if an event matching those criteria was committed after this read. For a token read with
+ *                             {@link DcbCriteria#all()}, the MongoDB stores don't refuse the append for an event
+ *                             committed after the read by an append with no condition on {@code all()}, which
+ *                             {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} describes. A store can
+ *                             also refuse the append when no matching event was committed, which
+ *                             {@link DcbAppendCondition} describes. Unlike
+ *                             {@code lastSequencePosition}, it protects an append while other appends are still
+ *                             committing, because the store derives it from data a reader can only see once it's
+ *                             committed. Use it only with the store that returned it.
  * @param markerVersions       the versions of the conflict markers of the read's criteria, in the same point-in-time
  *                             view the events came from. Present only when the read asked for them with
  *                             {@link DcbReadOptions#withVersions()} or {@link DcbReadOptions#afterVersions(DcbMarkerVersions)},
@@ -73,15 +78,6 @@ public record DcbEventStream(List<CloudEvent> events, long lastSequencePosition,
      */
     public DcbEventStream(List<CloudEvent> events, long lastSequencePosition, DcbConsistencyToken consistencyToken) {
         this(events, lastSequencePosition, consistencyToken, Optional.empty());
-    }
-
-    /**
-     * Convenience for stores whose read head is itself a sound optimistic-concurrency boundary (for example the
-     * in-memory store, whose appends assign positions and commit atomically). Such stores use the position as the
-     * {@code consistencyToken}.
-     */
-    public DcbEventStream(List<CloudEvent> events, long lastSequencePosition) {
-        this(events, lastSequencePosition, DcbConsistencyToken.of(lastSequencePosition));
     }
 
     /**

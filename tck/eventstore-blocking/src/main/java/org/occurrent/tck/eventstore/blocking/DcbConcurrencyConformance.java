@@ -51,9 +51,10 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
  * <p>
  * Write skew is the case worth having tests for. Two writers read boundaries that are not obviously the same, decide
  * independently, and each appends an event the other's boundary would have matched. Both writers are individually
- * correct and the result is wrong, so a store has to reject one of them. The interesting part is that the two
- * boundaries are described differently, one by type and one by tag, or as two overlapping type sets. This suite
- * drives each of those into a real race rather than reasoning about it.
+ * correct and the result is wrong, so a store has to reject one of them. What makes it hard is that the two boundaries
+ * are described differently. They differ by type and by tag, by type and tag together against either one alone, or as
+ * two overlapping type sets or two overlapping tag sets. This suite runs each of those as concurrent appends instead of
+ * reasoning about it.
  * <p>
  * Nothing here is fixture-declared, {@link EventStoreFixture#appendConditionModel()} included. Both models exist to
  * be sound, and soundness is exactly what safety under a race means, so a store failing anything below has a real
@@ -99,7 +100,7 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
                 String eventId = "seat-" + currentIteration + "-" + index;
                 CloudEvent event = taggedEventWithId(eventId, RESERVED, show);
                 return () -> {
-                    dcbEventStore().append(List.of(event), failIfEventsMatch(boundary, token));
+                    dcbEventStore().append(List.of(event), failIfEventsMatch(token));
                     return eventId;
                 };
             });
@@ -128,7 +129,7 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
                 String eventId = "seat-" + currentIteration + "-" + index;
                 CloudEvent event = taggedEventWithId(eventId, RESERVED, show);
                 return () -> {
-                    dcbEventStore().append(List.of(event), failIfEventsMatch(boundary, token));
+                    dcbEventStore().append(List.of(event), failIfEventsMatch(token));
                     return eventId;
                 };
             });
@@ -152,8 +153,8 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             // writer checked something true when it read, and both committing makes both of them wrong.
             DcbCriteria byType = DcbCriteria.types(type);
             DcbCriteria byTag = DcbCriteria.tags(tag(show));
-            DcbAppendCondition onType = failIfEventsMatch(byType, dcbEventStore().read(byType).consistencyToken());
-            DcbAppendCondition onTag = failIfEventsMatch(byTag, dcbEventStore().read(byTag).consistencyToken());
+            DcbAppendCondition onType = failIfEventsMatch(dcbEventStore().read(byType).consistencyToken());
+            DcbAppendCondition onTag = failIfEventsMatch(dcbEventStore().read(byTag).consistencyToken());
 
             assertExactlyOneWinnerOfTwo(iteration, "a type-scoped and a tag-scoped condition", byTag,
                     taggedEventWithId("by-type-" + iteration, type, show), onType,
@@ -168,11 +169,12 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             String type = RESERVED + iteration;
             String show = "show:" + iteration;
 
-            // Both conditions match the event either writer is about to append, so exactly one may win.
+            // Both conditions match the event either writer is about to append. A store that keys the type-and-tag
+            // item on its tag alone must still conflict with the type-scoped writer, whose event has that tag.
             DcbCriteria byTypeAndTag = DcbCriteria.type(type).tags(tag(show));
             DcbCriteria byType = DcbCriteria.types(type);
-            DcbAppendCondition onTypeAndTag = failIfEventsMatch(byTypeAndTag, dcbEventStore().read(byTypeAndTag).consistencyToken());
-            DcbAppendCondition onType = failIfEventsMatch(byType, dcbEventStore().read(byType).consistencyToken());
+            DcbAppendCondition onTypeAndTag = failIfEventsMatch(dcbEventStore().read(byTypeAndTag).consistencyToken());
+            DcbAppendCondition onType = failIfEventsMatch(dcbEventStore().read(byType).consistencyToken());
 
             assertExactlyOneWinnerOfTwo(iteration, "a type-and-tag-scoped and a type-scoped condition", byTypeAndTag,
                     taggedEventWithId("by-type-and-tag-" + iteration, type, show), onTypeAndTag,
@@ -187,11 +189,12 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             String type = RESERVED + iteration;
             String show = "show:" + iteration;
 
-            // Both conditions match the event either writer is about to append, so exactly one may win.
+            // Both conditions match the event either writer is about to append. A store that keys the type-and-tag
+            // item on its type alone must still conflict with the tag-scoped writer, whose event has that type.
             DcbCriteria byTypeAndTag = DcbCriteria.type(type).tags(tag(show));
             DcbCriteria byTag = DcbCriteria.tags(tag(show));
-            DcbAppendCondition onTypeAndTag = failIfEventsMatch(byTypeAndTag, dcbEventStore().read(byTypeAndTag).consistencyToken());
-            DcbAppendCondition onTag = failIfEventsMatch(byTag, dcbEventStore().read(byTag).consistencyToken());
+            DcbAppendCondition onTypeAndTag = failIfEventsMatch(dcbEventStore().read(byTypeAndTag).consistencyToken());
+            DcbAppendCondition onTag = failIfEventsMatch(dcbEventStore().read(byTag).consistencyToken());
 
             assertExactlyOneWinnerOfTwo(iteration, "a type-and-tag-scoped and a tag-scoped condition", byTypeAndTag,
                     taggedEventWithId("by-type-and-tag-" + iteration, type, show), onTypeAndTag,
@@ -211,8 +214,8 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             // that compared boundaries for equality rather than for overlap would let both of these through.
             DcbCriteria narrow = DcbCriteria.types(reserved);
             DcbCriteria wide = DcbCriteria.types(reserved, released);
-            DcbAppendCondition onNarrow = failIfEventsMatch(narrow, dcbEventStore().read(narrow).consistencyToken());
-            DcbAppendCondition onWide = failIfEventsMatch(wide, dcbEventStore().read(wide).consistencyToken());
+            DcbAppendCondition onNarrow = failIfEventsMatch(dcbEventStore().read(narrow).consistencyToken());
+            DcbAppendCondition onWide = failIfEventsMatch(dcbEventStore().read(wide).consistencyToken());
 
             assertExactlyOneWinnerOfTwo(iteration, "a narrow and a wider type-scoped condition",
                     DcbCriteria.tags(tag(show)),
@@ -234,8 +237,8 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             // the wrong reason.
             DcbCriteria wide = DcbCriteria.tags(tag(show));
             DcbCriteria narrow = DcbCriteria.tags(tag(show), tag(row));
-            DcbAppendCondition onWide = failIfEventsMatch(wide, dcbEventStore().read(wide).consistencyToken());
-            DcbAppendCondition onNarrow = failIfEventsMatch(narrow, dcbEventStore().read(narrow).consistencyToken());
+            DcbAppendCondition onWide = failIfEventsMatch(dcbEventStore().read(wide).consistencyToken());
+            DcbAppendCondition onNarrow = failIfEventsMatch(dcbEventStore().read(narrow).consistencyToken());
 
             assertExactlyOneWinnerOfTwo(iteration, "a one-tag and a two-tag condition", wide,
                     taggedEventWithId("wide-" + iteration, RESERVED, show, row), onWide,
@@ -261,7 +264,7 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
                 String eventId = "spanning-" + currentIteration + "-" + index;
                 CloudEvent event = taggedEventWithId(eventId, RESERVED, show, row);
                 return () -> {
-                    dcbEventStore().append(List.of(event), failIfEventsMatch(boundary, token));
+                    dcbEventStore().append(List.of(event), failIfEventsMatch(token));
                     return eventId;
                 };
             });

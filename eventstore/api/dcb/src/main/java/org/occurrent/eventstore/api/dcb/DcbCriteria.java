@@ -64,14 +64,17 @@ public sealed interface DcbCriteria permits DcbCriteria.MatchAll, DcbCriteria.It
     /**
      * Creates a criteria that matches every DCB event.
      * <p>
-     * As a read criteria this simply matches everything. Take care using it as a {@link DcbAppendCondition} boundary: it
-     * is a whole-store optimistic lock that is skew-safe only against other whole-store conditions, not against a
-     * concurrent tag-scoped or type-scoped append, so on a store taking concurrent scoped writes it can under-protect
-     * (see ADR 30). It is correct for single-writer operations and for an empty-store or bootstrap guard. When building
-     * an append condition, prefer {@link DcbAppendCondition#wholeStoreLock()} /
-     * {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} over passing {@code all()} to
-     * {@code failIfEventsMatch}, so the whole-store lock is spelled out explicitly and not confused with a
-     * read-everything query.
+     * As a read criteria it matches everything. Take care using it as a {@link DcbAppendCondition} boundary. It's a
+     * whole-store optimistic lock that conflicts with other whole-store conditions. On the MongoDB stores it doesn't
+     * conflict with a concurrent tag-scoped or type-scoped append, so a MongoDB store taking concurrent scoped writes can
+     * let through an append it should have refused (see ADR 30). It's correct for single-writer operations, and for a
+     * bootstrap append that races only with other bootstrap appends.
+     * <p>
+     * When building an append condition, use {@link DcbAppendCondition#wholeStoreLock()} or
+     * {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} instead of passing {@code all()} to
+     * {@code failIfEventsMatch}, so the call site says it's a whole-store lock and doesn't read like a read-everything
+     * query. {@code wholeStoreLock(DcbConsistencyToken)} needs a token from a read with {@code all()}, and a token read
+     * with other criteria throws {@link IllegalArgumentException}.
      */
     static DcbCriteria all() {
         return new MatchAll();
