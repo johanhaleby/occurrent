@@ -738,6 +738,10 @@ describes it.
   that should have been refused. Read again instead, as
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
   says.
+- **Code or an operator that prunes markers.** For an item with both types and tags, a token no longer counts the type
+  markers, so a prune between the read and the append can let through a conflicting append that 0.34.0 refused, until
+  [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. Prune only when no command holds a token it
+  can still append with.
 
 ## A catch-up needs the event store itself
 

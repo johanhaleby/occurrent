@@ -173,7 +173,7 @@ catch that.
 - For a criteria item with both types and tags, the token no longer includes the versions of its type markers, so a
   prune between the read and the append can let through a conflicting append that 0.34 refused, until
   [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. After a prune of only the tag marker, no type
-  marker is left in the sum to refuse the append. After a prune of both, one matching append can bring the tag marker
+  marker is left in the sum to refuse the append. After a prune of both, matching appends can bring the tag marker
   back to the version the token holds.
 - `DcbConsistencyToken` becomes a class and the two stream constructors are removed, which breaks store
   implementations and code that creates tokens or streams. The refusal breaks code that appends with other criteria
