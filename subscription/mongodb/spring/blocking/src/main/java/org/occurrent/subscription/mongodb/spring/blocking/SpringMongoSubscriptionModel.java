@@ -33,6 +33,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
@@ -75,7 +76,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, CommitOrderedSubscriptions, SmartLifecycle {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -93,6 +94,17 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         return true;
     }
 
+    /**
+     * {@code true} unless {@code restartSubscriptionsOnChangeStreamHistoryLost} is turned on. The change stream returns
+     * events in the order they committed, and a delivery whose action throws is retried before the subscription reads
+     * further. A restart after the change stream's history was lost opens at the present, which skips the events written
+     * in between.
+     */
+    @Override
+    public boolean deliversEveryEventInCommitOrder() {
+        return deliversEveryEventInCommitOrder;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
     private final String eventCollection;
@@ -103,6 +115,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private final boolean ownsExecutor;
     private final boolean autoStartup;
     private final ChangeStreamSubscriptions subscriptions;
+    private final boolean deliversEveryEventInCommitOrder;
 
     /**
      * Create a blocking subscription using Spring. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively
@@ -145,6 +158,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         this.executor = config.executor == null ? newTaskExecutor(config.virtualThreads) : config.executor;
         // Left stopped when autoStartup is false, so subscribe(..) holds every subscription paused and no change
         // stream is opened until the caller starts one
+        this.deliversEveryEventInCommitOrder = !config.restartSubscriptionsOnChangeStreamHistoryLost;
         this.subscriptions = new ChangeStreamSubscriptions(this, new ChangeStreams(), SpringMongoSubscriptionModel.class, log, config.timeRepresentation, config.retryStrategy,
                 config.restartSubscriptionsOnChangeStreamHistoryLost, null, config.maxAwaitTime, config.autoStartup);
     }

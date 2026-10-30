@@ -49,11 +49,13 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
@@ -67,7 +69,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 /**
- * What {@link SpringMongoSubscriptionModel} does for an action that keeps failing, for a pause or a cancel that comes
+ * What {@link SpringMongoSubscriptionModel} does for an action that keeps failing, including the order of the calls it makes, for a pause or a cancel that comes
  * before the change stream has opened, and for the executor it makes itself.
  */
 @Testcontainers
@@ -137,6 +139,57 @@ class SpringMongoSubscriptionModelCursorLoopTest {
         // Then
         await().atMost(15, SECONDS).untilAsserted(() -> assertThat(handled).as("the events the action completed for").contains(last.eventId()));
         assertThat(handled).as("the events the action completed for").containsExactly(first.eventId(), failing.eventId(), last.eventId());
+    }
+
+    @Test
+    void an_event_whose_action_throws_is_retried_in_place_and_no_later_event_is_called_until_its_call_returned_normally() {
+        // Given an action that throws twice for the second of three events, and a retry strategy that does not give up
+        subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventCollectionName, TimeRepresentation.RFC_3339_STRING)
+                .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(20))));
+        NameDefined first = nameDefined();
+        NameDefined failing = nameDefined();
+        NameDefined last = nameDefined();
+        CopyOnWriteArrayList<String> calls = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), recordingActionThatThrowsFor(failing, 2, calls, Map.of(first.eventId(), "first", failing.eventId(), "failing", last.eventId(), "last")))
+                .waitUntilStarted(Duration.ofSeconds(10));
+
+        // When
+        mongoEventStore.write("1", serialize(first));
+        mongoEventStore.write("2", serialize(failing));
+        mongoEventStore.write("3", serialize(last));
+
+        // Then
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(calls).contains("returned last"));
+        assertThat(calls).containsExactly(
+                "called first", "returned first",
+                "called failing", "threw failing", "called failing", "threw failing", "called failing", "returned failing",
+                "called last", "returned last");
+    }
+
+    @Test
+    void a_restart_after_the_retry_strategy_gave_up_calls_the_failing_event_again_before_the_next_one_and_not_the_one_before_it() {
+        // Given an action that throws three times for the second of three events, and a retry strategy that gives up after two attempts
+        subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventCollectionName, TimeRepresentation.RFC_3339_STRING)
+                .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(20)).maxAttempts(2)));
+        NameDefined first = nameDefined();
+        NameDefined failing = nameDefined();
+        NameDefined last = nameDefined();
+        CopyOnWriteArrayList<String> calls = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), recordingActionThatThrowsFor(failing, 3, calls, Map.of(first.eventId(), "first", failing.eventId(), "failing", last.eventId(), "last")))
+                .waitUntilStarted(Duration.ofSeconds(10));
+
+        // When
+        mongoEventStore.write("1", serialize(first));
+        mongoEventStore.write("2", serialize(failing));
+        mongoEventStore.write("3", serialize(last));
+
+        // Then the two attempts of the first run and the first attempt of the restart threw, and the second attempt of the restart returned
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(calls).contains("returned last"));
+        assertThat(calls).containsExactly(
+                "called first", "returned first",
+                "called failing", "threw failing", "called failing", "threw failing",
+                "called failing", "threw failing", "called failing", "returned failing",
+                "called last", "returned last");
     }
 
     @Test
@@ -216,6 +269,20 @@ class SpringMongoSubscriptionModelCursorLoopTest {
             return invocation.callRealMethod();
         }).when(waiting).getDb();
         return waiting;
+    }
+
+    // Records "called", then "threw" or "returned" for every call, under the label the event has in labels
+    private static Consumer<CloudEvent> recordingActionThatThrowsFor(NameDefined failing, int times, List<String> calls, Map<String, String> labels) {
+        AtomicInteger failures = new AtomicInteger();
+        return cloudEvent -> {
+            String label = labels.get(cloudEvent.getId());
+            calls.add("called " + label);
+            if (cloudEvent.getId().equals(failing.eventId()) && failures.getAndIncrement() < times) {
+                calls.add("threw " + label);
+                throw new IllegalStateException("expected");
+            }
+            calls.add("returned " + label);
+        };
     }
 
     private static NameDefined nameDefined() {

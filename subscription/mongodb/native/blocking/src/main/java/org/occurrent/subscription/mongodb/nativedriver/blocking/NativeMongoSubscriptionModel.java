@@ -35,6 +35,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
@@ -71,7 +72,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, CommitOrderedSubscriptions {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -89,6 +90,17 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         return true;
     }
 
+    /**
+     * {@code true} unless {@code restartSubscriptionsOnChangeStreamHistoryLost} is turned on. The change stream returns
+     * events in the order they committed, and a delivery whose action throws is retried before the subscription reads
+     * further. A restart after the change stream's history was lost opens at the present, which skips the events written
+     * in between.
+     */
+    @Override
+    public boolean deliversEveryEventInCommitOrder() {
+        return deliversEveryEventInCommitOrder;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
 
     private final MongoCollection<Document> eventCollection;
@@ -96,6 +108,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     private final ExecutorService cloudEventDispatcher;
     private final MongoDatabase database;
     private final ChangeStreamSubscriptions subscriptions;
+    private final boolean deliversEveryEventInCommitOrder;
 
     /**
      * Create a subscription using the native MongoDB sync driver. It will by default use a {@link RetryStrategy} for retries,
@@ -218,6 +231,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         this.cloudEventDispatcher = subscriptionExecutor;
         this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
+        this.deliversEveryEventInCommitOrder = !config.restartSubscriptionsOnChangeStreamHistoryLost;
         this.subscriptions = new ChangeStreamSubscriptions(this, new ChangeStreams(), NativeMongoSubscriptionModel.class, log, timeRepresentation, config.retryStrategy,
                 config.restartSubscriptionsOnChangeStreamHistoryLost, config.batchSize, config.maxAwaitTime, true);
     }
