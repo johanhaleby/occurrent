@@ -31,8 +31,8 @@ import static java.util.Objects.requireNonNull;
  * event matching the read's criteria was committed after the read. For a token read with
  * {@link DcbCriteria#all()}, the MongoDB stores don't refuse the append for an event committed after the read by an
  * append with no condition on {@code all()}, which {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)}
- * describes. A store can also refuse the append when no matching event was committed, which {@link DcbAppendCondition}
- * describes.
+ * describes. A store can also refuse the append when no matching event was committed, and accept it when a matching
+ * event was deleted or changed before the append, which {@link DcbAppendCondition} describes.
  * <p>
  * The token holds the {@link #criteria() criteria} it was read with. An append condition with other criteria throws
  * {@link IllegalArgumentException} when it's created, on every store, so code that reads with one criteria and appends

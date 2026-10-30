@@ -38,6 +38,10 @@ import static java.util.Objects.requireNonNull;
  * snapshot on a sharded cluster, and not while a 0.34 node can still append, since 0.34 recreates a deleted marker with
  * no epoch and restarts its version at 1.
  * <p>
+ * A store can answer from the events as they are when the append runs. A matching event committed after the read that
+ * was deleted by then, or changed so that it no longer matches, may not make the append fail. The in-memory store
+ * answers that way, and so do the MongoDB stores on a replica set when the markers don't refuse first.
+ * <p>
  * A token belongs to the criteria it was read with, so the constructor throws {@link IllegalArgumentException} when the
  * token's criteria aren't the same as {@code criteria}. Every factory goes through the constructor, so this happens
  * before any store is called. Use {@link #failIfEventsMatch(DcbConsistencyToken)}, which takes the criteria from the

@@ -705,8 +705,9 @@ criteria than its read would then append on the read's criteria instead of throw
 
 On MongoDB, a token also holds what the read saw of each marker. On a replica set, an event a 0.35.0 node appended that
 doesn't match a condition's criteria no longer fails it, so you'll see fewer `DcbAppendConditionNotFulfilledException`s
-on a busy tag. A marker deleted after the read and an increment from a 0.34.0 node still fail it. On anything else, such
-as a sharded cluster, only an event with some of a criteria item's tags stops failing it.
+on a busy tag. A condition can still fail with no matching event, for example after a marker was deleted, when a
+0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written. On anything else, such as a
+sharded cluster, only an event with some of a criteria item's tags stops failing it.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
@@ -734,7 +735,8 @@ describes it.
 ### What stays the same
 
 - A conditional append on criteria with tags is still refused when an event that matches them committed after the
-  read.
+  read. On a replica set the check reads the events as they are when the append runs, so an event deleted by then, or
+  changed so that it no longer matches, may not fail it.
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
 - This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the

@@ -89,9 +89,9 @@ public final class DcbAppendConditionCheck {
     /**
      * Compares {@code current}, the markers read inside the append's transaction, with what {@code token} saw.
      *
-     * @param token    the token of the condition
-     * @param criteria the criteria of the condition
-     * @param current  the marker observation of every marker key of {@code criteria}
+     * @param token        the token of the condition
+     * @param criteria     the criteria of the condition
+     * @param current      the marker observation of every marker key of {@code criteria}
      * @param queryAllowed whether the store may query the events, see {@link #queryAllowed(Function)}
      * @throws IllegalArgumentException if the token doesn't hold exactly the marker keys of {@code criteria}, which means
      *                                  this store's read didn't create it
@@ -143,7 +143,7 @@ public final class DcbAppendConditionCheck {
      * anything else that doesn't answer like a replica set. Every failure except a server that doesn't know {@code hello}
      * propagates.
      *
-     * @param runCommand runs a command against the store's database, outside any transaction
+     * @param runCommand runs a command against the store's database
      */
     public static boolean queryAllowed(Function<Document, Document> runCommand) {
         Document answer = Objects.requireNonNull(helloOrIsMaster(runCommand), "The server sent no answer to hello or isMaster");
@@ -155,7 +155,8 @@ public final class DcbAppendConditionCheck {
         try {
             return runCommand.apply(new Document("hello", 1));
         } catch (RuntimeException e) {
-            for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            Throwable cause = e;
+            for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
                 if (cause instanceof MongoCommandException commandException && commandException.getErrorCode() == COMMAND_NOT_FOUND) {
                     return runCommand.apply(new Document("isMaster", 1));
                 }
