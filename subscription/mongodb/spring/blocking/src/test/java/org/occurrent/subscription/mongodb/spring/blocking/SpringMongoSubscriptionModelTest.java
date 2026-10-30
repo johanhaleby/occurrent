@@ -1772,6 +1772,32 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void a_refusal_arriving_after_a_stream_opened_still_stops_the_subscription() {
+            // Given a dynamic position that answers a live checkpoint, then throws the refusal of a catch-up's position, as the
+            // check does, which stands in for a replaced run's late start landing between the check and the catch
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint live = liveStart();
+            AtomicInteger answers = new AtomicInteger();
+            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
+                if (answers.incrementAndGet() == 2) {
+                    throw new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown as the check does");
+                }
+                return StartAt.checkpoint(live);
+            }), __ -> {
+            });
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+
+            // When it is paused and resumed, so the position is asked again
+            subscriptionModel.pauseSubscription(subscriptionId);
+            subscriptionModel.resumeSubscription(subscriptionId);
+
+            // Then the run is gone, and the position isn't asked a third time
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
+            assertThat(answers).hasValue(2);
+        }
+
+        @Test
         void a_refused_run_stays_known_until_its_failure_is_recorded() throws Exception {
             // Given a run whose position waits to answer a global checkpoint, and a started latch whose first read, made
             // while the failure of the run is recorded, holds the thread until released

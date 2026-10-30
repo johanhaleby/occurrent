@@ -78,7 +78,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiPredicate;
-import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -268,7 +267,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             AtomicReference<StartAt> currentStartAt = new AtomicReference<>(MongoCommons.refusingCatchupPositionUntilOpened(startAt, null, opened::get));
             AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
             AtomicReference<@Nullable OpenedAt> openedAt = new AtomicReference<>();
-            return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, openedAt::set, currentStartAt::set, () -> opened.set(true)).retryWhen(unboundedBackoff().filter(throwable -> !isChangeStreamHistoryLost(throwable) && shouldRestart(null, throwable, opened::get, () -> {
+            return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, openedAt::set, currentStartAt::set, () -> opened.set(true)).retryWhen(unboundedBackoff().filter(throwable -> !isChangeStreamHistoryLost(throwable) && shouldRestart(null, throwable, () -> {
             }))).onErrorMap(ReactorMongoSubscriptionModel::isChangeStreamHistoryLost, throwable -> {
                 // Null only for a stream that never opened at a position, which has none to name
                 Checkpoint lostFrom = MongoCommons.lostFrom(currentStartAt.get(), openedAt.get());
@@ -294,7 +293,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             // Only while the Flux hasn't moved off startAt, so a loss after it has read on is handled as subscribe handles it
             Predicate<Throwable> startLost = throwable -> start != null && isChangeStreamHistoryLost(throwable) && currentStartAt.get() == subscribedAt;
             return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, __ -> {
-            }, currentStartAt::set, () -> opened.set(true)).retryWhen(unboundedBackoff().filter(throwable -> !startLost.test(throwable) && shouldRestart(null, throwable, opened::get, () -> {
+            }, currentStartAt::set, () -> opened.set(true)).retryWhen(unboundedBackoff().filter(throwable -> !startLost.test(throwable) && shouldRestart(null, throwable, () -> {
                 // Set before currentStartAt, so an opening that reads StartAt.now() also reads this moment
                 presentAt.set(presentNow());
                 currentStartAt.set(StartAt.now());
@@ -393,7 +392,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
         return Flux.defer(() -> readsQuietPositions.get() ? readsWithQuietPositions(internalSubscription, run) : readsAhead(internalSubscription, run))
                 // A run a listener took over is closed by then, so the retry the filter asks for never reads again
-                .retryWhen(unboundedBackoff().filter(throwable -> takenOverAfterHistoryLoss(internalSubscription, run, throwable) || shouldRestart(internalSubscription.subscriptionId, throwable, internalSubscription.opened::get, () -> {
+                .retryWhen(unboundedBackoff().filter(throwable -> takenOverAfterHistoryLoss(internalSubscription, run, throwable) || shouldRestart(internalSubscription.subscriptionId, throwable, () -> {
                     // Set before currentStartAt, so an opening that reads StartAt.now() also reads this moment
                     internalSubscription.presentAt.set(presentNow());
                     run.move(currentStartAt, StartAt.now());
@@ -677,13 +676,13 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     // ChangeStreamHistoryLost (286) restarts from StartAt.now() only when configured to. Everything else
     // (failover, transient network error, anything the driver itself couldn't resume) restarts from the
     // tracked position. Mirrors NativeMongoSubscriptionModel and SpringMongoSubscriptionModel.
-    private boolean shouldRestart(@Nullable String subscriptionId, Throwable throwable, BooleanSupplier opened, Runnable restartAtThePresent) {
+    private boolean shouldRestart(@Nullable String subscriptionId, Throwable throwable, Runnable restartAtThePresent) {
         String subscription = subscriptionId == null ? "the subscription" : "subscription " + subscriptionId;
         if (throwable instanceof NoServerClockException) {
             log.error("Cannot work out where to start {}, will not restart subscription!", subscription, throwable);
             return false;
         }
-        if (throwable instanceof UnsupportedStartAtException && !opened.getAsBoolean()) {
+        if (throwable instanceof UnsupportedStartAtException unsupported && MongoCommons.isCatchupPosition(unsupported.startAt())) {
             log.error("Cannot open the change stream of {} at its start position, will not restart subscription!", subscription, throwable);
             return false;
         }

@@ -578,6 +578,13 @@ public class MongoCommons {
     private static final String NOT_A_CHANGE_STREAM_POSITION = "which is a position a catch-up subscription model stores and not a change stream position. "
             + "Opening it at the present instead would skip every event written before it. ";
 
+    /**
+     * Whether {@code startAt} is a position a catch-up subscription model stores, which a change stream can't open at.
+     */
+    public static boolean isCatchupPosition(@Nullable StartAt startAt) {
+        return catchupPositionIn(startAt) != null;
+    }
+
     private static @Nullable Checkpoint catchupPositionIn(@Nullable StartAt startAt) {
         return startAt instanceof StartAtCheckpoint position
                 && (GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(position.checkpoint))

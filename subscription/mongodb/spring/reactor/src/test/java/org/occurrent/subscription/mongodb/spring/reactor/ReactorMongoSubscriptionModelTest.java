@@ -647,6 +647,31 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
+        void a_refusal_arriving_after_a_stream_opened_still_stops_the_subscription() {
+            // Given a dynamic position that answers a live checkpoint, then fails with the refusal of a catch-up's position, as the
+            // check does, which stands in for a replaced run's late start landing between the check and the catch
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint live = liveStart();
+            AtomicInteger answers = new AtomicInteger();
+            Subscription started = subscription.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
+                if (answers.incrementAndGet() == 2) {
+                    throw new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown as the check does");
+                }
+                return StartAt.checkpoint(live);
+            }), cloudEvent -> Mono.empty());
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+
+            // When it is paused and resumed, so the position is asked again
+            subscription.pauseSubscription(subscriptionId);
+            subscription.resumeSubscription(subscriptionId);
+
+            // Then the run is gone, and the position isn't asked a third time
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(subscription.isRunning(subscriptionId)).isFalse());
+            assertThat(answers).hasValue(2);
+        }
+
+        @Test
         void an_action_that_fails_with_the_refusal_type_on_a_delivering_subscription_is_delivered_the_event_again() {
             assertTheEventIsDeliveredAgainAfterTheActionFailsWith(new UnsupportedStartAtException(StartAt.now(), "failed by the action"));
         }

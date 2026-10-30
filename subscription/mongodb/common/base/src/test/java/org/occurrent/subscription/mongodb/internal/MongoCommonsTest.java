@@ -44,9 +44,27 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class MongoCommonsTest {
+
+    @Test
+    void is_catchup_position_is_true_for_the_positions_a_catchup_subscription_model_stores() {
+        assertAll(
+                () -> assertThat(MongoCommons.isCatchupPosition(StartAt.checkpoint(GlobalCheckpoint.of(7)))).isTrue(),
+                () -> assertThat(MongoCommons.isCatchupPosition(StartAt.checkpoint(CatchupTimeCheckpoint.of("2026-01-01T00:00:00Z", GlobalCheckpoint.of(7), "2026-01-01T00:00:00Z")))).isTrue()
+        );
+    }
+
+    @Test
+    void is_catchup_position_is_false_for_the_present_a_resume_token_and_null() {
+        assertAll(
+                () -> assertThat(MongoCommons.isCatchupPosition(StartAt.now())).isFalse(),
+                () -> assertThat(MongoCommons.isCatchupPosition(StartAt.checkpoint(new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("token")))))).isFalse(),
+                () -> assertThat(MongoCommons.isCatchupPosition(null)).isFalse()
+        );
+    }
 
     @Test
     void extract_write_version_returns_empty_when_document_is_null() {

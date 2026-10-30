@@ -473,10 +473,10 @@ public final class ChangeStreamSubscriptions {
                 // nothing else would say why the node went quiet.
                 log.error("Checkpoint write for subscription {} was refused: {}. A node with a newer lease has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it. The refused write was for an event, or for a position reached while no event matched.", subscriptionId, e.getMessage(), e);
                 throw e;
-            } else if (!internalSubscription.firstStart.hasStarted() && e instanceof UnsupportedStartAtException unsupportedStartAt) {
+            } else if (cursor == null && e instanceof UnsupportedStartAtException unsupportedStartAt && MongoCommons.isCatchupPosition(unsupportedStartAt.startAt())) {
                 // Refused rather than retried, since a retry runs without end by default and the start never ends. Only
-                // until a cursor of the subscription has opened, as the position's own check does, since an action or a
-                // later answer of the function can throw this type too and restarts like any other failure
+                // a catch-up's position before the cursor exists, since an action or the function can throw this type too
+                // and restarts like any other failure
                 log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, e);
                 // Whoever takes the run out of the map first decides. A pause or a cancel that got there first owns what
                 // happens next, and a resume asks the start again. Recorded inside the map's atomic update, so whoever reads
