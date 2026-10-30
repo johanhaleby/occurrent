@@ -764,8 +764,8 @@ starts the subscription from the annotation's start, as it starts without the be
 a subscription model reads the start, also when a node of a competing consumer takes over, and can ask more than once
 for one start, so return the same answer each time.
 
-With `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING` or an explicit position, the answer only
-moves where the replay starts. The subscription keeps no checkpoint in `CheckpointStorage` once it is live, and the
+With `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING` or an explicit position, or on `NOW`, the
+answer only moves where the subscription starts. The subscription keeps no checkpoint in `CheckpointStorage` once it is live, and the
 competing consumer model does not compete for it. A catch-up that stores checkpoints during its replay still does, and
 deletes the last one when the replay goes live.
 
@@ -1143,7 +1143,9 @@ checkpoint is deleted. If the position of that checkpoint is no longer in the op
 [a subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
 
 On the blocking starter, `NOW` with `SAME_AS_START_AT` starts at the present on every restart and stores no
-checkpoint, so the events written while the application was down are not delivered. Before, it delivered them. It also
+checkpoint, so the events written while the application was down are not delivered. Before, it delivered them. As for
+any `NOW` start, an event written up to about a second before the subscription starts can still be delivered, and a
+`SubscriptionResumePoints` bean that answers for the subscription id still decides where it starts. It also
 no longer competes with the other instances of the application, so every instance handles every event, as the
 documentation says for `SAME_AS_START_AT`. A checkpoint it stored before the upgrade stays in storage and is not used.
 `NOW` with `DEFAULT` is unchanged.
