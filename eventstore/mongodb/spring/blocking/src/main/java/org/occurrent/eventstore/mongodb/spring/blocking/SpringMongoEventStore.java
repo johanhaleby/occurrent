@@ -148,6 +148,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
     private final boolean streamPositionEnabled;
     private final boolean resumeFromMarkerVersions;
+    private final boolean appendCheckMayQueryEvents;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
@@ -177,6 +178,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
+        this.appendCheckMayQueryEvents = dcbEnabled && DcbAppendConditionCheck.queryAllowed(mongoTemplate::executeCommand);
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, streamPositionEnabled, mongoTemplate);
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -441,7 +443,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private static Criteria afterVersionsCriteria(DcbCriterion item, Map<String, Document> markers, DcbMarkerVersions saved) {
-        List<Criteria> elements = DcbMarkerVersionsDocuments.selections(item, markers, saved).stream()
+        return markerVersionsCriteria(DcbMarkerVersionsDocuments.selections(item, markers, saved));
+    }
+
+    private static Criteria markerVersionsCriteria(List<DcbMarkerVersionsDocuments.Selection> selections) {
+        List<Criteria> elements = selections.stream()
                 .map(selection -> where(DcbMarkerModel.EVENT_MARKER_VERSIONS).elemMatch(
                         where(DcbMarkerModel.EVENT_MARKER_VERSIONS_KEY).is(selection.key())
                                 .and(DcbMarkerModel.EVENT_MARKER_VERSIONS_EPOCH).is(selection.epoch())
@@ -822,11 +828,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (expectedToken.isPresent()) {
             // The condition carries the consistency token the command observed when it read the query
             // (DcbEventStream.consistencyToken()). The check compares each of the query's markers with what the read
-            // saw of it (ADR 0149). This is immune to read-watermark overshoot, unlike a position-based check, because
-            // marker versions bump inside the append transaction at commit, not when positions are reserved. The check
-            // can't yet ask the events, so an item the markers don't settle refuses the append.
-            Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), queryMarkers(condition.criteria(), mongoTemplate));
-            conflict = !(DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current) instanceof DcbAppendConditionCheck.Pass);
+            // saw of it, and then queries the events above those versions for an item that needs it (ADR 0149). This is
+            // immune to read-watermark overshoot, unlike a position-based check, because marker versions bump inside the
+            // append transaction at commit, not when positions are reserved.
+            Map<String, Document> markers = queryMarkers(condition.criteria(), mongoTemplate);
+            Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
+            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, appendCheckMayQueryEvents)) {
+                case DcbAppendConditionCheck.Pass ignored -> false;
+                case DcbAppendConditionCheck.Refuse ignored -> true;
+                case DcbAppendConditionCheck.QueryEvents query -> mongoTemplate.exists(new Query(new Criteria().orOperator(query.items().stream()
+                        .map(item -> new Criteria().andOperator(toCriteria(item.item()), markerVersionsCriteria(DcbMarkerVersionsDocuments.selections(item, markers))))
+                        .toList())), eventStoreCollectionName);
+            };
         } else {
             // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than
             // marker versions, so it means "currently exists" (surviving deletes and marker pruning) rather than

@@ -208,6 +208,16 @@ public final class DcbMarkerVersionsDocuments {
     }
 
     /**
+     * The elements of {@code mv} that select the events the check has to look for. Call it only for an item the check
+     * returned, so every selection key has a marker with an epoch in {@code markersByKey}.
+     */
+    public static List<Selection> selections(DcbAppendConditionCheck.ItemQuery item, Map<String, Document> markersByKey) {
+        return item.selections().stream()
+                .map(selection -> new Selection(selection.key(), Objects.requireNonNull(markersByKey.get(selection.key()), () -> "No marker for " + selection.key()).get(CHECKPOINT_EPOCH), selection.version()))
+                .toList();
+    }
+
+    /**
      * The filter on the marker documents of {@code keys}.
      */
     public static Bson markersFilter(Set<String> keys) {
@@ -219,7 +229,15 @@ public final class DcbMarkerVersionsDocuments {
      * Call it only after {@link DcbMarkerVersionsSupport#requireResumable} accepted {@code saved}.
      */
     public static Bson afterVersionsFilter(DcbCriterion item, Map<String, Document> markersByKey, DcbMarkerVersions saved) {
-        List<Bson> elements = selections(item, markersByKey, saved).stream()
+        return selectionFilter(selections(item, markersByKey, saved));
+    }
+
+    /**
+     * The filter on an event with an element of {@code mv} that one of {@code selections} selects. {@code $elemMatch}
+     * keeps the key, the epoch and the version on one element.
+     */
+    public static Bson selectionFilter(List<Selection> selections) {
+        List<Bson> elements = selections.stream()
                 .map(selection -> Filters.elemMatch(EVENT_MARKER_VERSIONS, Filters.and(
                         Filters.eq(EVENT_MARKER_VERSIONS_KEY, selection.key()),
                         Filters.eq(EVENT_MARKER_VERSIONS_EPOCH, selection.epoch()),
