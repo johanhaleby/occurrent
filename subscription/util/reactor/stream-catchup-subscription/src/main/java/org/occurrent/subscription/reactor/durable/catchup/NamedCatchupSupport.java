@@ -95,22 +95,25 @@ import static java.util.Objects.requireNonNull;
  * wrapped model rather than sharing one.
  * <p>
  * This class runs an action, a cancel hook and a {@code waitUntilStarted()} handler with none of its locks held, so that
- * code can subscribe, cancel, stop or shut down any subscription. Two calls still run with a lock held.
+ * code can subscribe, cancel, stop or shut down any subscription. These calls still run with a lock held.
  * <ul>
  * <li>The handover runs the wrapped {@code subscribe(..)}, or {@code resumeSubscription(id, startAt)} for a takeover,
  * under the monitor of the subscription's state. So the wrapped model must run no action and report no history loss on
  * the calling thread before those calls return.</li>
  * <li>A {@link CatchupListener} is told that a catch-up started inside an operation on a {@link ConcurrentHashMap},
  * which holds a lock of that map. A listener that calls this model can deadlock with another thread.</li>
+ * <li>A subscribe asks the wrapped model {@code isRunning(id)} and {@code isPaused(id)} under the lock of the id. So a
+ * wrapped model that runs a dynamic {@link StartAt} under a lock those two calls take can deadlock with another thread.</li>
  * </ul>
  * A subscribe that goes straight to live runs the wrapped {@code subscribe(..)} with none of these locks held, and
  * {@code ReactorMongoSubscriptionModel} can run the caller's dynamic {@link StartAt} inside that call. Code running on
  * the thread of that call can cancel the id, and that cancel goes to the wrapped model at once. On any other thread, a
  * subscribe of the id throws {@link DuplicateSubscriptionIdException} while that call runs. A cancel of the id there
  * returns without waiting for that call, and its {@code Mono} completes once that call has returned and the wrapped model
- * has cancelled what it made. So when the dynamic start of id A, inside the wrapped {@code subscribe(..)}, blocks on a
- * cancel of B while the dynamic start of B does the same on a cancel of A on another thread, neither subscribe returns
- * until one of them stops blocking, by a timeout for example.
+ * has cancelled what it made. The wrapped cancel can run on the thread of that call, before the subscribe that made it
+ * returns, so what follows the {@code Mono} can run there too. So when the dynamic start of id A, inside the wrapped
+ * {@code subscribe(..)}, blocks on a cancel of B while the dynamic start of B does the same on a cancel of A on another
+ * thread, neither subscribe returns until one of them stops blocking, by a timeout for example.
  */
 @NullMarked
 final class NamedCatchupSupport {
@@ -150,7 +153,8 @@ final class NamedCatchupSupport {
     private final ConcurrentMap<String, Integer> cancelsUnderWay = new ConcurrentHashMap<>();
     // Each straight-to-live subscribe whose wrapped subscribe(..) has not returned yet, which runs with the per-id lock
     // released. From another thread, a subscribe of such an id is refused and a cancel of it waits for that call to return.
-    // On the thread of that call it would wait for itself, so both go on as if nothing were under way.
+    // On the thread of that call a cancel would wait for itself, so it goes to the wrapped model at once, and a subscribe
+    // gets the other checks.
     private final ConcurrentMap<String, SubscribeUnderWay> subscribesUnderWay = new ConcurrentHashMap<>();
 
     NamedCatchupSupport(CheckpointAwareSubscriptionModel wrapped, Class<?> modelClass) {

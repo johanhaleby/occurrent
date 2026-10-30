@@ -52,9 +52,11 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -135,6 +137,9 @@ class ReactorStreamCatchupDynamicStartCancelMongoTest {
     void a_dynamic_start_that_blocks_on_a_cancel_of_its_own_id_returns_and_the_mongo_model_no_longer_runs_the_id() {
         ReactorMongoSubscriptionModel subscriptions = connect();
         loadClassesOfASubscribeAndACancel();
+        CountDownLatch controlGotTheEvent = new CountDownLatch(1);
+        List<String> xGot = new CopyOnWriteArrayList<>();
+        catchup.subscribe("control", FILTER, StartAt.now(), cloudEvent -> Mono.fromRunnable(controlGotTheEvent::countDown)).waitUntilStarted().block(STARTUP);
         AtomicBoolean cancelled = new AtomicBoolean();
         AtomicReference<Throwable> blockFailure = new AtomicReference<>();
         AtomicBoolean mongoRunsXWhenTheBlockReturned = new AtomicBoolean(true);
@@ -154,12 +159,17 @@ class ReactorStreamCatchupDynamicStartCancelMongoTest {
                 }
             }
             return StartAt.now();
-        }), cloudEvent -> Mono.empty())).start();
+        }), cloudEvent -> Mono.fromRunnable(() -> xGot.add(cloudEvent.getId())))).start();
 
         await(subscribeOfX, "The subscribe of x did not return");
         assertThat(blockFailure.get()).as("what the block on a cancel of x inside the start of x threw").isNull();
         assertThat(mongoRunsXWhenTheBlockReturned.get()).as("whether the Mongo model runs x when the block returned").isFalse();
         assertThat(catchupRunsXWhenTheBlockReturned.get()).as("whether the catch-up model runs x when the block returned").isFalse();
+
+        // The control was started first, so the event it gets is one a surviving x would have got too
+        writeAnEvent();
+        awaitLatch(controlGotTheEvent, DEADLINE, "The control subscription did not get the event");
+        assertThat(xGot).as("events the cancelled x got").isEmpty();
     }
 
     @Test

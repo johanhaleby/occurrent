@@ -495,8 +495,9 @@ class ReactorCatchupSubscribeUnderWayTest {
         }
     }
 
-    // A named subscription model that, like ReactorMongoSubscriptionModel, evaluates the start on the calling thread
-    // inside subscribe(..), against its own class, and holds the subscription once that returned
+    // A named subscription model that evaluates the start on the calling thread inside subscribe(..), against the class of
+    // ReactorMongoSubscriptionModel, and holds the subscription once that returned. Only registersBeforeTheStart holds
+    // it from before the evaluation, which is the order of ReactorMongoSubscriptionModel
     private static final class WrappedModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
         static final Checkpoint TOKEN = new StringBasedCheckpoint("token");
         final List<String> events = new CopyOnWriteArrayList<>();
