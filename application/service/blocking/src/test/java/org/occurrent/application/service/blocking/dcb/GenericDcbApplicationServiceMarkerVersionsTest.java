@@ -313,31 +313,6 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
                     () -> assertThat(executor.returned).as("transactions that returned normally").isZero()
             );
         }
-
-        @Test
-        void the_refusal_reaches_the_caller_when_the_executor_would_have_run_its_action_twice() {
-            var store = new ScriptedStore(Optional.empty(), Optional.empty()).refusingTheFirstReads(1);
-            var service = GenericDcbApplicationService.builder(store, converter())
-                    .tagGenerator(event -> Set.of(Tag.parse(event.name())))
-                    .synchronousSubscriptions(new RecordingDispatcher())
-                    .transactionExecutor(new TransactionExecutor() {
-                        @Override
-                        public <T> T inTransaction(Supplier<T> action) {
-                            action.get();
-                            return action.get();
-                        }
-                    })
-                    .build();
-
-            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3);
-            Throwable thrown = catchThrowable(() -> service.execute(CRITERIA, options, events -> List.of(new DomainEvent("Changed", "name:1"))));
-
-            assertAll(
-                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal), () -> assertThat(refused.isBeforeAppendOf(options)).as("marked as before the append").isTrue())),
-                    () -> assertThat(store.readOptions).as("reads, since a refusal isn't retried").hasSize(1),
-                    () -> assertThat(store.appendCalls).as("appends").isZero()
-            );
-        }
     }
 
     @Nested

@@ -806,7 +806,9 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   domain function. A handler can run again on such a retry, as it could before. When the condition then fails, the
   service's retry strategy reads and decides again. By default the service allows 5 attempts and the Spring executors
   about 15, so a command on a contended boundary can fail sooner, with the same budget a service without synchronous
-  subscriptions has.
+  subscriptions has. An executor on `PROPAGATION_REQUIRES_NEW` under a transaction of yours reads in your transaction and
+  appends in its own, so a read that has gone stale stays stale on every attempt and can use up the retries. This comes
+  from reading the code, and no test runs it.
 
 ### Stored snapshots
 

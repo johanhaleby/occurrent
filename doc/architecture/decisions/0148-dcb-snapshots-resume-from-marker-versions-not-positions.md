@@ -480,7 +480,7 @@ The read path:
    store's default read concern, joining a caller's transaction when there is one. That includes every plain
    `read(criteria)` a command or a query does, the DCB catch-up's head and window reads
    (`DcbCatchupSubscriptionModel.java:185`, `:190`, `ReactorDcbCatchupSubscriptionModel.java:324`, `:332`) and the
-   re-read `GenericDcbApplicationService` does of its own block (`GenericDcbApplicationService.java:173-174`). So this
+   re-read `GenericDcbApplicationService` does of its own block. So this
    design changes neither the catch-up's read concern nor what a synchronous handler sees, and the seventh review's
    third blocker and its caller-transaction findings can't be reached through it.
 3. A read that asks for versions takes the marker documents, the consistency token, the position counter and the events
@@ -626,8 +626,9 @@ is the order the service has without synchronous subscriptions, and these are th
   command that would have seen another append's events fails its condition and starts over.
 - The executor's own conflict retry from [ADR 74](0074-retry-only-where-the-transaction-is-owned.md) re-runs the
   append, the re-read and the dispatch, with that same token, and not the read or the decision. A handler can run again
-  on such a retry, as it could before. When the conflicting append matched the boundary the condition now fails, and the
-  service's retry strategy reads and decides again. Otherwise the append goes through on the decision it already made.
+  on such a retry, as it could before. When the conflicting append moved a marker of the read's criteria the condition now
+  fails, and the service's retry strategy reads and decides again. Otherwise the append goes through on the decision it
+  already made.
   So the decision still runs against the current events of its boundary, and a conflict that only the condition can see
   spends an attempt of the service's retry strategy instead of one of the executor's. By default the service allows 5
   attempts and the Spring executors about 15, so a command on a contended boundary can fail sooner, with the same budget
@@ -643,7 +644,9 @@ is the order the service has without synchronous subscriptions, and these are th
 needs no marker versions.
 
 A transaction the caller owns stays the limitation described below, because the read still joins it and reports no
-versions.
+versions. An executor on `PROPAGATION_REQUIRES_NEW` under such a transaction reads in the caller's transaction and appends
+in its own, so a read that has gone stale stays stale on every attempt and can use up the retries. This comes from
+reading the code, and no test runs it.
 
 ### The decider confirms its append before it saves
 
