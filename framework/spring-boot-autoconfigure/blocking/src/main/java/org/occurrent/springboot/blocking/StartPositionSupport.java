@@ -102,6 +102,13 @@ class StartPositionSupport {
         };
     }
 
+    // Competing consumer and durable layers store a position and let the instances compete, which a subscription that
+    // starts at the same place on every boot must not do, so they are told to delegate to the parent model.
+    private static boolean keepsNoPosition(SubscriptionModelContext ctx) {
+        Class<?> type = ctx.subscriptionModelType();
+        return CompetingConsumerSubscriptionModel.class.isAssignableFrom(type) || DurableSubscriptionModel.class.isAssignableFrom(type);
+    }
+
     // Replay from replayStart, then on later restarts either resume from the stored position (DEFAULT) or replay again
     // (SAME_AS_START_AT). SAME_AS_START_AT also disables the competing consumer and durable position storage by
     // delegating to the parent subscription model for those layers, so an in-memory read model rebuilt on every boot
@@ -109,9 +116,7 @@ class StartPositionSupport {
     private StartAt replayThenResumeAgnostic(String subscriptionId, StartAt replayStart, ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                return isCompetingConsumerSubscription || isDurableSubscription ? null : replayStart;
+                return keepsNoPosition(ctx) ? null : replayStart;
             });
             case DEFAULT -> StartAt.dynamic(ctx -> {
                 CheckpointStorage checkpointStorage = applicationContext.getBean(CheckpointStorage.class);
@@ -127,9 +132,7 @@ class StartPositionSupport {
         return switch (resumeBehavior) {
             case DEFAULT -> StartAt.now();
             case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                return isCompetingConsumerSubscription || isDurableSubscription ? null : StartAt.now();
+                return keepsNoPosition(ctx) ? null : StartAt.now();
             });
         };
     }
@@ -138,9 +141,7 @@ class StartPositionSupport {
         return switch (resumeBehavior) {
             case DEFAULT -> DcbStartAt.now();
             case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> {
-                boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                return isCompetingConsumerSubscription || isDurableSubscription ? null : DcbStartAt.now();
+                return keepsNoPosition(ctx) ? null : DcbStartAt.now();
             });
         };
     }
@@ -180,9 +181,7 @@ class StartPositionSupport {
     private DcbStartAt replayThenResume(String subscriptionId, DcbStartAt replayStart, ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> {
-                boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                return isCompetingConsumerSubscription || isDurableSubscription ? null : replayStart;
+                return keepsNoPosition(ctx) ? null : replayStart;
             });
             case DEFAULT -> DcbStartAt.dynamic(ctx -> {
                 CheckpointStorage checkpointStorage = applicationContext.getBean(CheckpointStorage.class);
