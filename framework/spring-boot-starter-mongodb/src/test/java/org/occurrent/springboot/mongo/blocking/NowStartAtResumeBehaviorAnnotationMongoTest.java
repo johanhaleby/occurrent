@@ -146,7 +146,9 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
             // is where checkpoints land and that the same event has been checkpointed for the subscription beside it.
             await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                     assertThat(checkpointStorage.exists(annotated.defaultId)).as("checkpoint of %s", annotated.defaultId).isTrue());
-            assertThat(checkpointStorage.exists(annotated.sameAsStartAtId)).as("checkpoint of %s", annotated.sameAsStartAtId).isFalse();
+            // A wrong write for the SAME_AS_START_AT subscription could arrive after the DEFAULT one, so the absence must hold over a second.
+            await().during(ofSeconds(1)).atMost(ofSeconds(5)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(checkpointStorage.exists(annotated.sameAsStartAtId)).as("checkpoint of %s", annotated.sameAsStartAtId).isFalse());
         }
     }
 
