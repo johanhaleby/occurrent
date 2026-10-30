@@ -844,6 +844,38 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
+        void a_token_holds_the_criteria_of_its_read_whichever_read_options_the_read_was_given() {
+            DcbCriteria criteria = DcbCriteria.anyOf(DcbCriteria.tags(tag(NAME_1)), DcbCriteria.tags(tag(NAME_2)));
+            DcbAppendResult first = dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
+            dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_2)));
+            dcbEventStore().append(List.of(taggedEvent(IMPORTED, NAME_1)));
+
+            assertAll(
+                    () -> assertThat(dcbEventStore()
+                            .read(criteria, DcbReadOptions.afterPosition(first.lastSequencePosition()))
+                            .consistencyToken().criteria())
+                            .as("A position-bound read must hold the criteria it was given, both alternatives, "
+                                    + "because a caller that read after a position builds its condition from the "
+                                    + "token alone")
+                            .isEqualTo(criteria),
+                    () -> assertThat(dcbEventStore()
+                            .read(criteria, DcbReadOptions.fromBeginning().limit(1))
+                            .consistencyToken().criteria())
+                            .as("A limited read must hold the criteria it was given, both alternatives")
+                            .isEqualTo(criteria),
+                    () -> assertThat(dcbEventStore()
+                            .read(criteria, DcbReadOptions.fromBeginning().skip(1))
+                            .consistencyToken().criteria())
+                            .as("A read that skips matches must hold the criteria it was given, both alternatives")
+                            .isEqualTo(criteria),
+                    () -> assertThat(dcbEventStore()
+                            .read(criteria, DcbReadOptions.fromBeginning().backwards())
+                            .consistencyToken().criteria())
+                            .as("A backwards read must hold the criteria it was given, both alternatives")
+                            .isEqualTo(criteria));
+        }
+
+        @Test
         void a_token_qualified_condition_conflicts_on_a_non_excluded_type_committed_after_the_read() {
             DcbCriterion criteria = DcbCriteria.tags(tag(NAME_1)).excludingTypes(SNAPSHOT);
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
