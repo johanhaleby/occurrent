@@ -101,9 +101,10 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   `restart-on-change-stream-history-lost` no longer affects a subscription the starter runs through a catch-up
   subscription, which is every subscription by default. Compiles unchanged.
-- [A reactive `@StreamSubscription` follows `resumeBehavior`](#a-reactive-streamsubscription-follows-resumebehavior).
-  A restart no longer replays the history of a `BEGINNING_OF_TIME` subscription, and a `NOW` subscription no longer
-  misses the events written while the application was down. Compiles unchanged.
+- [A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`](#a-restart-follows-resumebehavior-for-startat--beginning_of_time-and-startat--now).
+  On the reactive stack a restart no longer replays the history of a `BEGINNING_OF_TIME` `@StreamSubscription`, and a
+  `NOW` one no longer misses the events written while the application was down. On the blocking stack `NOW` with
+  `SAME_AS_START_AT` starts at the present on every restart. Compiles unchanged.
 
 ### Brokers
 
@@ -1098,22 +1099,26 @@ while it matches no events only while the MongoDB subscription model reads quiet
 warning saying that a subscription that matches no event keeps the position of the last event it handled. An unnamed
 reactor `Flux` saves no position, and its position moves only when it reads an event.
 
-## A reactive `@StreamSubscription` follows `resumeBehavior`
+## A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`
 
-The reactive Spring Boot starter ignored `resumeBehavior` on `@StreamSubscription`. A subscription with
-`startAt = BEGINNING_OF_TIME` started at position 0 on every restart, and one with `startAt = NOW` started at the
-present on every restart. The javadoc and the documentation say that, under the default `resumeBehavior`, a restart
-continues from the last event the subscription received. The reactive starter now does that, as the blocking starter
-already does for `BEGINNING_OF_TIME`.
+Two subscriptions did not start where `resumeBehavior` says on a restart. On the reactive Spring Boot starter, a
+`@StreamSubscription` ignored `resumeBehavior`. With `startAt = BEGINNING_OF_TIME` it started at position 0 on every
+restart, and with `startAt = NOW` it started at the present on every restart. On the blocking starter, `startAt = NOW`
+with `resumeBehavior = SAME_AS_START_AT` continued from the checkpoint the subscription had stored, where the
+documentation says it starts at the present again. Both starters now do what the javadoc and the documentation say.
 
 ### Who is affected
 
-Every application on the reactive starter with a `@StreamSubscription` that sets `startAt` to `BEGINNING_OF_TIME` or
-`NOW`. That includes one that sets `resumeBehavior = DEFAULT` explicitly. A `@StreamSubscription` that does not set
-`startAt` is not affected, and neither is one that sets `resumeBehavior = SAME_AS_START_AT`, except that
-`BEGINNING_OF_TIME` no longer stores a checkpoint.
+- Every application on the reactive starter with a `@StreamSubscription` that sets `startAt` to `BEGINNING_OF_TIME` or
+  `NOW`. That includes one that sets `resumeBehavior = DEFAULT` explicitly. A `@StreamSubscription` that does not set
+  `startAt` is not affected, and neither is one that sets `resumeBehavior = SAME_AS_START_AT`, except that
+  `BEGINNING_OF_TIME` no longer stores a checkpoint.
+- Every application on the blocking starter with `startAt = NOW` and `resumeBehavior = SAME_AS_START_AT` on a
+  `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection`, `@Saga` or `@Snapshot`.
 
 ### What changes
+
+On the reactive starter:
 
 - `BEGINNING_OF_TIME` with `DEFAULT` replays the history the first time. After a restart it continues from the
   checkpoint it stored, so the handler no longer receives every event again.
@@ -1137,15 +1142,25 @@ again for that subscription id. So changing `startAt` on an existing id has no e
 checkpoint is deleted. If the position of that checkpoint is no longer in the oplog, the subscription stops, see
 [a subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
 
+On the blocking starter, `NOW` with `SAME_AS_START_AT` starts at the present on every restart and stores no
+checkpoint, so the events written while the application was down are not delivered. Before, it delivered them. It also
+no longer competes with the other instances of the application, so every instance handles every event, as the
+documentation says for `SAME_AS_START_AT`. A checkpoint it stored before the upgrade stays in storage and is not used.
+`NOW` with `DEFAULT` is unchanged.
+
 ### What to do
 
-Nothing, if the subscription is meant to continue where it stopped.
+Nothing, if the subscription is meant to behave as the documentation describes.
 
-If the subscription feeds an in-memory read model that has to be rebuilt on every boot, set
-`resumeBehavior = SAME_AS_START_AT` on it. Without it the read model now starts empty and receives only the events
-after the last checkpoint.
+On the reactive starter, set `resumeBehavior = SAME_AS_START_AT` on a subscription that feeds an in-memory read model
+that has to be rebuilt on every boot. Without it the read model now starts empty and receives only the events after the
+last checkpoint. A `NOW` subscription that has to skip the events written during downtime also needs
+`SAME_AS_START_AT`.
 
-A `NOW` subscription that has to skip the events written during downtime also needs `SAME_AS_START_AT`.
+On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription that relied on resuming from its
+checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
+written while the application was down, and runs on every instance. Delete the old checkpoint of a subscription you
+later switch to `DEFAULT`, or it resumes from that position.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
