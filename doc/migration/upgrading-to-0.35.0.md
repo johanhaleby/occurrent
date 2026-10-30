@@ -1142,12 +1142,12 @@ The checkpoint is the one the starter's durable subscription model stores. An ap
 with `DEFAULT` starts where its default start does, and whether `BEGINNING_OF_TIME` with `DEFAULT` continues or replays
 again depends on whether it stores a checkpoint.
 
-With that durable model, `NOW` with `DEFAULT` also records where the feed is when the subscription registers, the way
-any start from the model default does. If the model cannot read that position, it refuses the registration. A `NOW`
-subscription waits for its start by default, so the application does not start, where `NOW` used to start anyway. With
-`startupMode = BACKGROUND`, or on a lazy bean built after startup, the refusal does not hold up startup, and the
-subscription is not running. Setting `occurrent.subscription.start-when-no-start-position-can-be-recorded=true` starts
-it regardless, see
+With the starter's durable model, `NOW` with `DEFAULT` also records where the feed is when a subscription with no stored
+checkpoint registers, the way any start from the model default does. If the model cannot read that position, it refuses
+the registration. Such a subscription waits for its start by default when `occurrent.subscription.mode` is `auto`, so
+the application does not start, where `NOW` used to start anyway. With `startupMode = BACKGROUND`, with mode `manual`,
+or on a bean built after startup, the refusal does not hold up startup, and the subscription is not running. Setting
+`occurrent.subscription.start-when-no-start-position-can-be-recorded=true` starts it regardless, see
 [section 7 of the 0.34.0 guide](upgrading-to-0.34.0.md#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
 
 A subscription that handled an event before the upgrade normally has a checkpoint stored already, because the old start
@@ -1172,6 +1172,10 @@ On the reactive starter, set `resumeBehavior = SAME_AS_START_AT` on a subscripti
 that has to be rebuilt on every boot. Without it the read model now starts empty and receives only the events after the
 last checkpoint. A `NOW` subscription that has to skip the events written during downtime also needs
 `SAME_AS_START_AT`.
+
+Set `occurrent.subscription.start-when-no-start-position-can-be-recorded=true` if a reactive application whose
+storage cannot report the feed position, such as a shared MongoDB Atlas tier, no longer starts with a `NOW`
+subscription.
 
 On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription that relied on resuming from its
 checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
