@@ -198,23 +198,12 @@ class StartPositionSupport {
         return switch (startPositionToUse) {
             case StartPositionToUse.StartAtISO8601 iso8601 -> switch (resumeBehavior) {
                 case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                    boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                    if (isCompetingConsumerSubscription) {
-                        // Since we now know that we always start AND resume from the beginning of time for this subscription,
-                        // we don't want the competing consumer to kick in. This is because the subscription will be in-memory only.
+                    if (keepsNoPosition(ctx)) {
+                        // The subscription always starts and resumes at the same place, so it is in-memory only. The competing
+                        // consumer must not kick in and the durable model has no position to store, so both delegate to the parent.
                         return null;
                     }
-
-                    boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                    if (isDurableSubscription) {
-                        // Since we now know that we always start AND resume from the specified iso8601 for this subscription,
-                        // we don't need to store the position in a durable storage, because we will always stream all events
-                        // each time the subscription restarts anyway. Thus, we return null to instruct the DurableSubscriptionModel
-                        // to simply delegate to the parent subscription.
-                        return null;
-                    } else {
-                        return StartAt.checkpoint(TimeBasedCheckpoint.from(iso8601.offsetDateTime()));
-                    }
+                    return StartAt.checkpoint(TimeBasedCheckpoint.from(iso8601.offsetDateTime()));
                 });
                 case DEFAULT -> StartAt.dynamic(() -> {
                     // Here we want to start the given IS8601 date/time the first time the subscription is started,
@@ -239,23 +228,12 @@ class StartPositionSupport {
             case StartPositionToUse.StartAtStartPosition startAtStartPosition -> switch (startAtStartPosition.startPosition) {
                 case BEGINNING_OF_TIME -> switch (resumeBehavior) {
                     case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                        boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                        if (isCompetingConsumerSubscription) {
-                            // Since we now know that we always start AND resume from the beginning of time for this subscription,
-                            // we don't want the competing consumer to kick in. This is because the subscription will be in-memory only.
+                        if (keepsNoPosition(ctx)) {
+                            // The subscription always starts and resumes at the same place, so it is in-memory only. The competing
+                            // consumer must not kick in and the durable model has no position to store, so both delegate to the parent.
                             return null;
                         }
-
-                        boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                        if (isDurableSubscription) {
-                            // Since we now know that we always start AND resume from the beginning of time for this subscription,
-                            // we don't need to store the position in a durable storage, because we will always stream all events
-                            // each time the subscription restarts anyway. Thus, we return null to instruct the DurableSubscriptionModel
-                            // to simply delegate to the parent subscription.
-                            return null;
-                        } else {
-                            return StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime());
-                        }
+                        return StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime());
                     });
                     case DEFAULT -> {
                         // Here we want to start the beginning of time the first time the subscription is started,

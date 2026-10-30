@@ -38,6 +38,7 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
@@ -89,19 +90,23 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
     static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     enum Annotated {
-        SUBSCRIPTION(SubscriptionNowDefault.class, SubscriptionNowSameAsStartAt.class, false),
-        PROJECTION(ProjectionNowDefault.class, ProjectionNowSameAsStartAt.class, false),
-        SAGA(SagaNowDefault.class, SagaNowSameAsStartAt.class, false),
+        SUBSCRIPTION(SubscriptionNowDefault.class, "now-sub-default", SubscriptionNowSameAsStartAt.class, "now-sub-same", false),
+        PROJECTION(ProjectionNowDefault.class, "now-projection-default", ProjectionNowSameAsStartAt.class, "now-projection-same", false),
+        SAGA(SagaNowDefault.class, "now-saga-default", SagaNowSameAsStartAt.class, "now-saga-same", false),
         // A snapshot is stored in MongoDB, so what the first boot handled is still there on the second.
-        SNAPSHOT(SnapshotNowDefault.class, SnapshotNowSameAsStartAt.class, true);
+        SNAPSHOT(SnapshotNowDefault.class, "now-snapshot-default", SnapshotNowSameAsStartAt.class, "now-snapshot-same", true);
 
         final Class<? extends Handled> withDefault;
+        final String defaultId;
         final Class<? extends Handled> withSameAsStartAt;
+        final String sameAsStartAtId;
         final boolean survivesRestart;
 
-        Annotated(Class<? extends Handled> withDefault, Class<? extends Handled> withSameAsStartAt, boolean survivesRestart) {
+        Annotated(Class<? extends Handled> withDefault, String defaultId, Class<? extends Handled> withSameAsStartAt, String sameAsStartAtId, boolean survivesRestart) {
             this.withDefault = withDefault;
+            this.defaultId = defaultId;
             this.withSameAsStartAt = withSameAsStartAt;
+            this.sameAsStartAtId = sameAsStartAtId;
             this.survivesRestart = survivesRestart;
         }
 
@@ -124,6 +129,72 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
         restart("now-same-as-start-at-" + annotated.name().toLowerCase(), annotated.withSameAsStartAt,
                 List.of("live-1"),
                 annotated.afterRestart(List.of("live-2")));
+    }
+
+    @ParameterizedTest
+    @EnumSource(Annotated.class)
+    void now_with_same_as_start_at_stores_no_checkpoint_where_default_stores_one(Annotated annotated) {
+        try (ConfigurableApplicationContext context = SpringApplication.run(RestartApplication.class,
+                bootArgs("now-checkpoint-" + annotated.name().toLowerCase(), "historic-1", "live-1"))) {
+            Handled withDefault = context.getBean(annotated.withDefault);
+            Handled withSameAsStartAt = context.getBean(annotated.withSameAsStartAt);
+            awaitHandled(withDefault, "live-1");
+            awaitHandled(withSameAsStartAt, "live-1");
+            CheckpointStorage checkpointStorage = context.getBean(CheckpointStorage.class);
+
+            // A checkpoint is stored after the handler returned, so the DEFAULT one appearing shows that the storage
+            // is where checkpoints land and that the same event has been checkpointed for the subscription beside it.
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(checkpointStorage.exists(annotated.defaultId)).as("checkpoint of %s", annotated.defaultId).isTrue());
+            assertThat(checkpointStorage.exists(annotated.sameAsStartAtId)).as("checkpoint of %s", annotated.sameAsStartAtId).isFalse();
+        }
+    }
+
+    // A saga and a snapshot keep their state in MongoDB, shared by the instances, so what an instance handled is not
+    // what its subscription was delivered: a saga skips an event another instance already advanced it past, and a
+    // snapshot is read from the shared store. Only the subscription and the projection record what they were delivered.
+    @ParameterizedTest
+    @EnumSource(value = Annotated.class, names = {"SAGA", "SNAPSHOT"}, mode = EnumSource.Mode.EXCLUDE)
+    void now_with_same_as_start_at_runs_on_every_instance_instead_of_competing(Annotated annotated) {
+        String databaseName = "now-every-instance-" + annotated.name().toLowerCase();
+        try (ConfigurableApplicationContext first = SpringApplication.run(RestartApplication.class, bootArgs(databaseName, "instance-a", "", ""));
+             ConfigurableApplicationContext second = SpringApplication.run(RestartApplication.class, bootArgs(databaseName, "instance-b", "", ""))) {
+            Handled onFirst = first.getBean(annotated.withSameAsStartAt);
+            Handled onSecond = second.getBean(annotated.withSameAsStartAt);
+
+            write(first, "live-1");
+
+            awaitHandled(onFirst, "live-1");
+            awaitHandled(onSecond, "live-1");
+            assertThat(onFirst.names()).containsExactly("live-1");
+            assertThat(onSecond.names()).containsExactly("live-1");
+        }
+    }
+
+    // The control for the test above: the same two instances and the same events, but a DEFAULT subscription competes,
+    // so one instance handles every event and the other none. Without it, "both instances received the event" could
+    // be true of any setup in which the two contexts happen to see the same stream.
+    @ParameterizedTest
+    @EnumSource(value = Annotated.class, names = {"SAGA", "SNAPSHOT"}, mode = EnumSource.Mode.EXCLUDE)
+    void now_with_default_competes_so_one_instance_handles_each_event_and_the_other_none(Annotated annotated) {
+        String databaseName = "now-competing-" + annotated.name().toLowerCase();
+        try (ConfigurableApplicationContext first = SpringApplication.run(RestartApplication.class, bootArgs(databaseName, "instance-a", "", ""));
+             ConfigurableApplicationContext second = SpringApplication.run(RestartApplication.class, bootArgs(databaseName, "instance-b", "", ""))) {
+            Handled competingOnFirst = first.getBean(annotated.withDefault);
+            Handled competingOnSecond = second.getBean(annotated.withDefault);
+
+            write(first, "live-1");
+            write(first, "live-2");
+
+            // The SAME_AS_START_AT subscription beside it is delivered to both instances, so once both have the last
+            // event, both instances are live and the competing one has had every chance to be delivered on both.
+            awaitHandled(first.getBean(annotated.withSameAsStartAt), "live-2");
+            awaitHandled(second.getBean(annotated.withSameAsStartAt), "live-2");
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(Stream.concat(competingOnFirst.names().stream(), competingOnSecond.names().stream())).contains("live-2"));
+            List<List<String>> receivers = Stream.of(competingOnFirst.names(), competingOnSecond.names()).filter(names -> !names.isEmpty()).toList();
+            assertThat(receivers).containsExactly(List.of("live-1", "live-2"));
+        }
     }
 
     private static void restart(String databaseName, Class<? extends Handled> handlerType,
@@ -149,6 +220,12 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private static void write(ConfigurableApplicationContext context, String name) {
+        ApplicationService<TestEvent> applicationService = context.getBean(ApplicationService.class);
+        applicationService.execute(name, __ -> List.of(new TestEvent(name)));
+    }
+
     private static void awaitHandled(Handled handler, String marker) {
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(handler.names()).contains(marker));
@@ -157,7 +234,12 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
     // Booted with SpringApplication.run rather than @SpringBootTest, so there is no @ServiceConnection and the url is
     // passed as an argument.
     private static String[] bootArgs(String databaseName, String beforeSubscribe, String afterStart) {
+        return bootArgs(databaseName, "restart", beforeSubscribe, afterStart);
+    }
+
+    private static String[] bootArgs(String databaseName, String applicationName, String beforeSubscribe, String afterStart) {
         return new String[]{
+                "--spring.application.name=" + applicationName,
                 "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=stream",
@@ -245,8 +327,12 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
 
         EventWriter(ApplicationService<TestEvent> applicationService, String beforeSubscribe, String afterStart) {
             this.applicationService = applicationService;
-            this.beforeSubscribe = List.of(beforeSubscribe.split(","));
-            this.afterStart = List.of(afterStart.split(","));
+            this.beforeSubscribe = names(beforeSubscribe);
+            this.afterStart = names(afterStart);
+        }
+
+        private static List<String> names(String commaSeparated) {
+            return Stream.of(commaSeparated.split(",")).filter(name -> !name.isBlank()).toList();
         }
 
         // Subscriptions register once every singleton exists, so these are written before any of them starts. A
