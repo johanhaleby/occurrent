@@ -49,9 +49,8 @@ other sections compile fine and behave differently, so read them first.
   token value saved under 0.34.0 isn't valid. **Breaks the build** if you create a token, call
   `new DcbEventStream(events, head)` or `new DcbDomainEventStream(events, head)`, or call `value()`, which a
   `DcbEventStore` of your own usually does.
-- [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, an append that
-  only shares a type with a criteria item that has tags no longer makes the condition refuse, unless it also changes a
-  marker of another item in the criteria.
+- [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, sharing a type
+  with a criteria item that has tags is no longer a reason for a condition to refuse.
 
 ### Subscriptions and catch-up
 
@@ -701,8 +700,7 @@ criteria than its read would then append on the read's criteria instead of throw
 ## Criteria with tags conflict on their tags
 
 On the MongoDB stores, the check of a conditional append reads only the tag markers of an item with tags, and no longer
-the markers of its types. An append that only shares a type with such an item then no longer makes the check refuse,
-unless it also changes a marker of another item in the criteria.
+the markers of its types. Sharing a type with such an item is then no longer a reason for the check to refuse.
 Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
@@ -715,7 +713,7 @@ describes it.
 ### What stays the same
 
 - A conditional append on criteria with tags is still refused when an event that matches them committed after the
-  read, since such an event has every tag of the item it matches.
+  read.
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
 - Nothing changes on disk, so 0.34.0 and 0.35.0 nodes can append to the same store. A conditional append from a 0.34.0
