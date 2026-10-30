@@ -8,7 +8,10 @@ Accepted. Resolves [#1232](https://github.com/johanhaleby/occurrent/issues/1232)
 [ADR 144](0144-a-catch-up-checkpoint-keeps-the-live-start-it-read-before-the-replay.md) covers, on both stacks, and to
 the MongoDB subscription models they run on: `SpringMongoSubscriptionModel` and `NativeMongoSubscriptionModel` on the
 blocking stack, `ReactorMongoSubscriptionModel` on the reactor stack. It closes the gap ADR 144 left between the check
-of the live start and the handover.
+of the live start and the handover. Amended by
+[ADR 155](0155-a-catch-up-reads-its-live-start-from-the-event-store-and-refuses-to-resume-where-it-could-skip-an-event.md),
+which takes over only when the wrapped model loses the live start at its first open, and decides itself what a later
+history loss does.
 
 ## Context
 
