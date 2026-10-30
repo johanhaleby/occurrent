@@ -475,8 +475,11 @@ public final class ChangeStreamSubscriptions {
             } else if (e instanceof UnsupportedStartAtException unsupportedStartAt) {
                 // Refused rather than retried, since a retry runs without end by default and the start never ends
                 log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, e);
-                internalSubscription.failedToStart(unsupportedStartAt);
-                forget(subscriptionId, internalSubscription);
+                // Whoever takes the run out of the map first decides. A pause or a cancel that got there first owns what
+                // happens next, and a resume asks the start again. Otherwise the id is free before a handle throws
+                if (runningSubscriptions.remove(subscriptionId, internalSubscription)) {
+                    internalSubscription.failedToStart(unsupportedStartAt);
+                }
             } else if (isChangeStreamHistoryLost(e)) {
                 if (takenOverAfterHistoryLoss(subscriptionId, internalSubscription, openedAt, e)) {
                     return;
@@ -1289,22 +1292,14 @@ public final class ChangeStreamSubscriptions {
             firstStart.started();
         }
 
-        // Under the same lock as replacedBy, so a failure of a run a resume has replaced doesn't reach the handles the
-        // run after it answers for. A handle that has already answered it started keeps that answer.
+        // Only for a run that is still in the map, so a pause or a resume can't come after it. A handle that has already
+        // answered it started keeps that answer.
         void failedToStart(RuntimeException failure) {
-            lock.lock();
-            try {
-                if (replaced) {
-                    return;
-                }
-                if (startedLatch.getCount() > 0) {
-                    startFailure = failure;
-                }
-                startedLatch.countDown();
-                firstStart.failed(failure);
-            } finally {
-                lock.unlock();
+            if (startedLatch.getCount() > 0) {
+                startFailure = failure;
             }
+            startedLatch.countDown();
+            firstStart.failed(failure);
         }
 
         @Nullable RuntimeException startFailure() {

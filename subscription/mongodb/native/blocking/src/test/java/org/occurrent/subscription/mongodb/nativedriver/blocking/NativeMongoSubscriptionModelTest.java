@@ -1269,6 +1269,136 @@ public class NativeMongoSubscriptionModelTest {
             }
         }
 
+        @Test
+        void a_refusal_of_a_run_a_pause_has_closed_is_left_to_the_resume() throws Exception {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
+            ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
+            modelLogger.addAppender(holdsTheRefusal);
+            try {
+                Subscription first = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), state::add);
+                assertThat(holdsTheRefusal.held.await(10, SECONDS)).isTrue();
+
+                // When the run is paused while its refusal is held, and the refusal is then released
+                subscriptionModel.pauseSubscription(subscriptionId);
+                holdsTheRefusal.release.countDown();
+
+                // Then the handle of the subscribe doesn't throw the refusal, has not started, and the subscription is paused
+                AtomicBoolean startedInTime = new AtomicBoolean(true);
+                Throwable thrown = catchThrowable(() -> startedInTime.set(first.waitUntilStarted(Duration.ofMillis(500))));
+                assertThat(thrown).isNull();
+                assertThat(startedInTime).isFalse();
+                assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
+
+                // And a resume at the present opens it, answering for both handles, and it delivers
+                Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now());
+                assertThat(first.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+                assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+                NameDefined written = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+                mongoEventStore.write("1", 0, serialize(written));
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(state).extracting(CloudEvent::getId).contains(written.eventId()));
+                assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+            } finally {
+                holdsTheRefusal.release.countDown();
+                modelLogger.detachAppender(holdsTheRefusal);
+            }
+        }
+
+        @Test
+        void a_resume_of_a_run_a_pause_has_closed_asks_the_position_again_and_is_refused() throws Exception {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> refused = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<CloudEvent> later = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint checkpoint = GlobalCheckpoint.of(7);
+            HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
+            ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
+            modelLogger.addAppender(holdsTheRefusal);
+            try {
+                Subscription first = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(checkpoint)), refused::add);
+                assertThat(holdsTheRefusal.held.await(10, SECONDS)).isTrue();
+                subscriptionModel.pauseSubscription(subscriptionId);
+                holdsTheRefusal.release.countDown();
+
+                // When the subscription is resumed without a position
+                Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+
+                // Then the position is asked again and answers the checkpoint again, so both handles throw that refusal
+                Throwable fromFirst = catchThrowable(() -> first.waitUntilStarted(Duration.ofSeconds(10)));
+                Throwable fromResumed = catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(10)));
+                assertThat(fromFirst).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                        .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                        .hasMessageContaining("\"" + checkpoint.asString() + "\"");
+                assertThat(fromResumed).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                        .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                        .hasMessageContaining("\"" + checkpoint.asString() + "\"");
+
+                // And nothing is registered under the id
+                assertAll(
+                        () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
+                        () -> assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse(),
+                        () -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId)
+                );
+
+                // And the id can be used again, while the refused handler is never called
+                subscriptionModel.subscribe(subscriptionId, StartAt.now(), later::add).waitUntilStarted(Duration.ofSeconds(10));
+                NameDefined sentinel = new NameDefined(UUID.randomUUID().toString(), now, "name", "sentinel");
+                mongoEventStore.write("1", 0, serialize(sentinel));
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(later).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+                assertThat(refused).isEmpty();
+            } finally {
+                holdsTheRefusal.release.countDown();
+                modelLogger.detachAppender(holdsTheRefusal);
+            }
+        }
+
+        @Test
+        void a_refusal_of_a_run_a_cancel_has_closed_does_not_reach_the_handle_of_the_subscribe() throws Exception {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> later = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
+            ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
+            modelLogger.addAppender(holdsTheRefusal);
+            try {
+                Subscription first = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), __ -> {
+                });
+                assertThat(holdsTheRefusal.held.await(10, SECONDS)).isTrue();
+
+                // When the run is cancelled while its refusal is held, and the refusal is then released
+                subscriptionModel.cancelSubscription(subscriptionId);
+                holdsTheRefusal.release.countDown();
+
+                // Then the handle of the subscribe doesn't throw the refusal and has not started
+                AtomicBoolean startedInTime = new AtomicBoolean(true);
+                Throwable thrown = catchThrowable(() -> startedInTime.set(first.waitUntilStarted(Duration.ofMillis(500))));
+                assertThat(thrown).isNull();
+                assertThat(startedInTime).isFalse();
+
+                // And nothing is registered under the id, which can be used again
+                assertAll(
+                        () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
+                        () -> assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse(),
+                        () -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId)
+                );
+                subscriptionModel.subscribe(subscriptionId, StartAt.now(), later::add).waitUntilStarted(Duration.ofSeconds(10));
+                NameDefined sentinel = new NameDefined(UUID.randomUUID().toString(), now, "name", "sentinel");
+                mongoEventStore.write("1", 0, serialize(sentinel));
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(later).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+            } finally {
+                holdsTheRefusal.release.countDown();
+                modelLogger.detachAppender(holdsTheRefusal);
+            }
+        }
+
         private void assertSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint, boolean paused) {
             // Given
             LocalDateTime now = LocalDateTime.now();
