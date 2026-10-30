@@ -17,15 +17,15 @@ reached the caller as the command's failure. #1379 measured that on a loaded sin
 commands failed with 64 threads on one type marker. Each failure took about 5 seconds.
 
 The native `MongoEventStore` did not fail in the same test. It runs the append through the driver's
-`ClientSession.withTransaction`, which keeps retrying a transient transaction error for up to 120 seconds. The Spring
+`ClientSession.withTransaction`, which keeps retrying a transient transaction error for up to 120 seconds a call. The Spring
 stores run the transaction through Spring's transaction manager, which retries nothing, so their own attempts were the
 whole budget.
 
 ## Decision
 
-Both Spring stores retry a transient transaction conflict for about two minutes of waiting, the 120 seconds the driver
-gives the native store. The limit is a number of attempts and not a deadline, so the time each attempt takes comes on
-top of the waiting.
+Both Spring stores retry a transient transaction conflict for about two minutes of waiting, the 120 seconds that one
+`withTransaction` call gives the native store. The limit is a number of attempts and not a deadline, so the time each
+attempt takes comes on top of the waiting.
 
 - `SpringMongoEventStore` makes 240 attempts with the backoff it already had, 10 ms doubling up to 500 ms.
 - `ReactorMongoEventStore` makes 320 attempts with the same backoff. Reactor's default jitter makes each wait between
@@ -44,9 +44,9 @@ Moving the stores to `ClientSession.withTransaction` was considered and rejected
   attempt still gets the last failure. In the case #1379 measured that was a `DataIntegrityViolationException`, and
   `GenericDcbApplicationService` does not retry that exception.
 - A command that used to fail after about 5 seconds under heavy contention now waits about two minutes between its
-  attempts before it fails, plus the time the attempts themselves take. The native store stops at 120 seconds on a
-  clock, so a Spring store whose attempts are slow fails later than the native one does. A caller with a shorter
-  deadline of its own sees that deadline first.
+  attempts before it fails, plus the time the attempts themselves take. The native store's 120 seconds applies to
+  each `withTransaction` call, and its append runs that call inside a retry of 15 attempts, so neither store has a fixed
+  time limit. A caller with a shorter deadline of its own sees that deadline first.
 - A reserved position block is still abandoned when an append exhausts its retries, so `dcbposition` can still have
   gaps, as ADR 21 says.
 - The reactive stream write retries only a lost version race, 15 times, for an append with

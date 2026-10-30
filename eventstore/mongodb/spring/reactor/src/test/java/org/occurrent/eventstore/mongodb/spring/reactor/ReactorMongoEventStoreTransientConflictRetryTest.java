@@ -57,7 +57,7 @@ import static org.occurrent.eventstore.api.dcb.DcbCriteria.all;
 
 /**
  * A DCB append that loses a transaction conflict again and again gets 320 attempts, about two minutes of waiting
- * like the native store gets from the driver's {@code withTransaction}, and not 15 times. The conflict is forced with a
+ * like a native {@code withTransaction} call, and not 15 times. The conflict is forced with a
  * {@code failCommand} fail point rather than by racing threads, so the number of failed attempts is exact.
  */
 @Testcontainers

@@ -760,9 +760,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * NOT retried here: it propagates to the application service, which re-reads and retries the whole command.
      * <p>
      * Exponential backoff from 10 ms up to 500 ms over 240 attempts, which is about two minutes of waiting with the
-     * time each attempt takes on top. That matches the 120 seconds the MongoDB driver's
-     * {@code ClientSession.withTransaction} gives the native store, so a command that contends on one marker document
-     * is not failed sooner here than there. {@code MongoTransactionManager} retries
+     * time each attempt takes on top. That matches the 120 seconds that each
+     * {@code ClientSession.withTransaction} call gives the native store, so a command that contends on one marker
+     * document is not failed sooner here than there. {@code MongoTransactionManager} retries
      * nothing itself, so these attempts are the whole budget. Appends that write one marker document, or that land in
      * the same partition stream and serialize on stream_version, commit one at a time, so the last writer can need to
      * retry past all the others. A DuplicateKeyException is retried too: it is either two transactions
