@@ -324,6 +324,16 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         namedSubscriptions.pauseSubscription(subscriptionId);
     }
 
+    /**
+     * Cancels the subscription, and stops its replay when it hasn't handed over to the wrapped model yet. While the cancel
+     * this method sends the wrapped model has not ended, a subscribe of {@code subscriptionId} throws
+     * {@link DuplicateSubscriptionIdException}, since the wrapped model cancels by id and its cancel would otherwise reach
+     * a subscription of the id made in the meantime. That includes a subscribe from code this cancel runs, such as a
+     * {@code doOnCancel} on the {@code Mono} an action returned or a handler on {@link Subscription#waitUntilStarted()}.
+     * The cancel ends when the wrapped model throws, or when the {@code Mono} it returned completes or fails, and it ends
+     * before a subscriber of the returned {@code Mono} is told that it completed. {@code ReactorMongoSubscriptionModel}
+     * ends it before this method returns. A cancel the wrapped model never ends keeps a subscribe of the id refused.
+     */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
         return namedSubscriptions.cancelSubscription(subscriptionId);
@@ -388,7 +398,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             // Not a catch-up position, so go straight to live. Filter in-process too, so a backend that does not
             // honor the filter server-side still only delivers matching events, and skip events without a position.
-            return subscriptionModel.subscribe(StreamSubscriptionFilter.filter(filter), resolved == null ? startAt : resolved)
+            return PositionCatchupPipeline.straightToLive(subscriptionModel, StreamSubscriptionFilter.filter(filter), resolved == null ? startAt : resolved)
                     .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && matchesLocally.test(cloudEvent));
         }
 

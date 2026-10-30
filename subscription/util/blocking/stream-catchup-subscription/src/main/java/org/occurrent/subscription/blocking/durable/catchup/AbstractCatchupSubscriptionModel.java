@@ -48,6 +48,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.internal.LongestReplay;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -318,12 +319,57 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * @param lostLiveStart           The live start the live delegate lost when this model last took the subscription
      *                                over, and {@code null} before that. Only a run that a start(true) of the live
      *                                delegate resumed there reports a loss of it again.
+     * @param historyLost             The position the live delegate lost the history from when no replay of this model
+     *                                could take the loss over, and {@code null} before that. Once set, a resume refuses
+     *                                with {@link CatchupCannotResumeException} until the subscription is cancelled, or
+     *                                until {@link AbstractCatchupSubscriptionModel#resumeSubscription(String, StartAt)}
+     *                                resumes it at a position the live delegate still has the history from.
      */
     private record Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action,
-                              CompletableFuture<Void> cancelledReplayReturned, AtomicReference<@Nullable Checkpoint> lostLiveStart) {
+                              CompletableFuture<Void> cancelledReplayReturned, AtomicReference<@Nullable Checkpoint> lostLiveStart,
+                              HistoryLost historyLost) {
 
         private Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            this(owner, filter, startAt, action, CompletableFuture.completedFuture(null), new AtomicReference<>());
+            this(owner, filter, startAt, action, CompletableFuture.completedFuture(null), new AtomicReference<>(), new HistoryLost());
+        }
+    }
+
+    // The position the live delegate lost the history from, how many times a resume at a given position cleared it, and
+    // the position the last such resume gave. A loss reported before such a resume must not be recorded after it, which
+    // would mark a subscription it has resumed as lost, unless it is a loss of the position that resume gave.
+    private static final class HistoryLost {
+        private record State(int clears, @Nullable Checkpoint lostFrom, @Nullable String resumedAt) {
+        }
+
+        private final AtomicReference<State> state = new AtomicReference<>(new State(0, null, null));
+
+        @Nullable Checkpoint get() {
+            return state.get().lostFrom();
+        }
+
+        int clears() {
+            return state.get().clears();
+        }
+
+        // False when it was cleared since clearsWhenReported by a resume at a position other than lostFrom
+        boolean recordUnlessCleared(int clearsWhenReported, Checkpoint lostFrom) {
+            State before = state.getAndUpdate(it -> records(it, clearsWhenReported, lostFrom) ? new State(it.clears(), lostFrom, it.resumedAt()) : it);
+            return records(before, clearsWhenReported, lostFrom);
+        }
+
+        private static boolean records(State seen, int clearsWhenReported, Checkpoint lostFrom) {
+            return seen.clears() == clearsWhenReported || isAt(lostFrom, seen.resumedAt());
+        }
+
+        // Keeps a loss of resumedAt itself. Returns the loss it cleared, or null.
+        @Nullable Checkpoint clear(@Nullable Checkpoint resumedAt) {
+            String at = resumedAt == null ? null : resumedAt.asString();
+            State before = state.getAndUpdate(seen -> new State(seen.clears() + 1, isAt(seen.lostFrom(), at) ? seen.lostFrom() : null, at));
+            return isAt(before.lostFrom(), at) ? null : before.lostFrom();
+        }
+
+        private static boolean isAt(@Nullable Checkpoint lostFrom, @Nullable String position) {
+            return lostFrom != null && lostFrom.asString().equals(position);
         }
     }
 
@@ -354,9 +400,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (isInUse(subscriptionId)) {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
-            Subscription subscription = subscribe(subscriptionId, filter, startAt, action, holdPaused);
-            subscribed.put(subscriptionId, new Subscribed(this, filter, startAt, action));
-            return subscription;
+            // Before the live delegate opens, since it can report a loss from another thread before subscribe returns
+            Subscribed made = new Subscribed(this, filter, startAt, action);
+            Subscribed before = subscribed.put(subscriptionId, made);
+            try {
+                return subscribe(subscriptionId, filter, startAt, action, holdPaused);
+            } catch (RuntimeException | Error e) {
+                // Puts back the record this one replaced, of a subscription no longer in use, as before the subscribe
+                subscribed.compute(subscriptionId, (id, now) -> now == made ? before : now);
+                throw e;
+            }
         }
     }
 
@@ -468,7 +521,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 || !resumeReplays.isEmpty()
                 || handedOver.values().stream().anyMatch(made -> made.owner() == this && (made.takeOverAsked().get() || made.takingOver().get()))
                 || !cancelsUnderWay.isEmpty()
-                || subscribed.values().stream().anyMatch(made -> made.owner() == this && !made.cancelledReplayReturned().isDone());
+                || subscribed.values().stream().anyMatch(made -> made.owner() == this && (!made.cancelledReplayReturned().isDone() || made.historyLost().get() != null));
         return any || cancelsStarted.get() != cancelsStartedBefore;
     }
 
@@ -684,6 +737,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Once the live delegate returns from the resume, this model is started again if a start whose live delegate threw
      * stopped it, so a subscription made afterwards replays at once. After {@link #stop()} it stays stopped.
      * <p>
+     * A subscription paused because the live delegate lost the history it resumed from is resumed by the live delegate
+     * here too. Once that returns, a later {@link #resumeSubscription(String)} or {@link #start(boolean)} may no longer
+     * refuse it, even when the history from {@code startAt} is gone as well. A resume that opens the subscription where
+     * the history is gone pauses it again when the live delegate reports the loss again, so nothing is skipped. When the
+     * live delegate throws, it stays refused.
+     * <p>
      * {@link RepositionableSubscriptions#findIn} finds this model only when the live delegate is repositionable.
      *
      * @throws UnsupportedOperationException if the live delegate is not itself repositionable.
@@ -735,6 +794,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     }
                     putBack(inTheWay, e);
                     throw e;
+                }
+                // Cleared only once the live delegate has resumed. The run that lost the history was paused before
+                // that, so its listener read a generation this clear moves past. Its afterPause records nothing after
+                // this clear, and what it recorded before is cleared here, though its error may already be logged, so
+                // the log says that error no longer applies. A loss of the position given here is kept, since the
+                // run this resume started can report it, unless a late report of the old run replaced it first.
+                Subscribed made = subscribed.get(subscriptionId);
+                Checkpoint resumedAt = startAt instanceof StartAt.StartAtCheckpoint given ? given.checkpoint : null;
+                Checkpoint cleared = made == null ? null : made.historyLost().clear(resumedAt);
+                if (cleared != null) {
+                    String lost = cleared.asString();
+                    log.info(HistoryLossMessages.RESUMED_AFTER_LOSS_LOG, subscriptionId, startAt, lost);
                 }
                 inTheWay.forEach(ReplayInTheWay::end);
                 models.forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
@@ -799,6 +870,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     @Nullable Subscription replayToResume(String subscriptionId, String whatChanged) {
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            Subscribed subscription = subscribed.get(subscriptionId);
+            Checkpoint historyLost = subscription == null || subscription.owner() != this ? null : subscription.historyLost().get();
+            if (historyLost != null) {
+                throw HistoryLossMessages.historyLost(subscriptionId, historyLost);
+            }
             Subscription takenOver = takeOverIfAsked(subscriptionId);
             if (takenOver != null) {
                 return takenOver;
@@ -1078,15 +1154,19 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         return liveDelegate.hasCapability(HistoryLossReportingSubscriptions.class) && liveDelegate.hasCapability(RepositionableSubscriptions.class);
     }
 
-    // Asked by the live delegate, on the thread that found the history lost and without its lock. Takes the
-    // subscription over only when what was lost is exactly the live start the last replay handed over, so a loss after
-    // the subscription read past it is left to the live delegate.
+    // Asked by the live delegate, on the thread that found the history lost and without its lock. A subscription this
+    // model didn't make is left to the live delegate. A loss of exactly the live start the last replay handed over
+    // replays again, and any other loss pauses the subscription for good.
     private HistoryLossHandling takeOverIfHandedOverAt(String subscriptionId, Checkpoint lostFrom) {
         Subscribed subscription = subscribed.get(subscriptionId);
+        // Made on the live delegate directly, or through another child of the same dispatcher, which answers for it
+        if (subscription == null || subscription.owner() != this) {
+            return HistoryLossHandling.leaveToSubscriptionModel();
+        }
         // The live delegate resumed the subscription where it lost the history after this model took it over, as a
         // start(true) of it can. Paused again. A replay of this model that still runs resumes it at the live start it
         // reads, and otherwise it stays paused until it is resumed.
-        if (subscription != null && subscription.owner() == this && !shuttingDown && samePosition(lostFrom, subscription.lostLiveStart().get())) {
+        if (!shuttingDown && samePosition(lostFrom, subscription.lostLiveStart().get())) {
             return HistoryLossHandling.takeOver(() -> {
                 CatchupAttempt running = currentAttempt.get(subscriptionId);
                 if (running == null || running.abandoned()) {
@@ -1096,17 +1176,38 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             });
         }
         HandedOver made = handedOver.get(subscriptionId);
-        if (made == null || made.owner() != this || shuttingDown || !samePosition(lostFrom, made.liveStart()) || subscribed.get(subscriptionId) != made.subscribed()) {
-            return HistoryLossHandling.leaveToSubscriptionModel();
+        if (made != null && made.owner() == this && !shuttingDown && samePosition(lostFrom, made.liveStart()) && subscribed.get(subscriptionId) == made.subscribed()) {
+            // Before the live delegate pauses the subscription, so a resume that finds it paused before the takeover has
+            // started replays instead of resuming the live delegate where it lost the history
+            made.takeOverAsked().set(true);
+            return HistoryLossHandling.takeOver(() -> {
+                if (made.takingOver().compareAndSet(false, true)) {
+                    Thread.ofVirtual().name("occurrent-catchup-takeover-" + subscriptionId).start(() -> takeOver(subscriptionId, made));
+                }
+            });
         }
-        // Before the live delegate pauses the subscription, so a resume that finds it paused before the takeover has
-        // started replays instead of resuming the live delegate where it lost the history
-        made.takeOverAsked().set(true);
+        // No replay of this model can take the loss over without skipping events, so the subscription stays paused.
+        // Recorded in afterPause, which the live delegate runs only for a run that is still current, so a late report
+        // never reaches a subscription made since. A resume at a given position since this report keeps it unrecorded.
+        HistoryLost historyLost = subscription.historyLost();
+        int clearsWhenReported = historyLost.clears();
         return HistoryLossHandling.takeOver(() -> {
-            if (made.takingOver().compareAndSet(false, true)) {
-                Thread.ofVirtual().name("occurrent-catchup-takeover-" + subscriptionId).start(() -> takeOver(subscriptionId, made));
+            if (historyLost.recordUnlessCleared(clearsWhenReported, lostFrom)) {
+                String lost = lostFrom.asString();
+                log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, lost, lost);
             }
         });
+    }
+
+    /**
+     * Refuses to hand {@code subscriptionId} to the live delegate at {@code firstStartAt} when it is a checkpoint the live
+     * delegate no longer has the history back to, so nothing is subscribed and no event is skipped. A start that names
+     * no position, such as now or the model default, and a position a catch-up replays from are not checked.
+     */
+    protected void refuseIfLiveStartLost(String subscriptionId, StartAt firstStartAt) {
+        if (!firstStartAt.isDynamic() && firstStartAt instanceof StartAtCheckpoint at && !isCatchupCheckpoint(at.checkpoint) && !subscriptionModel.canResumeFrom(at.checkpoint)) {
+            throw HistoryLossMessages.cannotStartFrom(subscriptionId, at.checkpoint);
+        }
     }
 
     // By the string form, since a live start is a typed checkpoint where the live delegate reads it and a
@@ -2341,7 +2442,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (made != null) {
                 // Before the cancel under way is removed, so one of them always has the replay. Kept in place, also when
                 // a cancel the live delegate's cancel made for the same id on this thread went through.
-                Subscribed kept = new Subscribed(made.owner(), made.filter(), made.startAt(), made.action(), current.replaysReturned, made.lostLiveStart());
+                Subscribed kept = new Subscribed(made.owner(), made.filter(), made.startAt(), made.action(), current.replaysReturned, made.lostLiveStart(), made.historyLost());
                 if (subscribed.compute(subscriptionId, (id, now) -> now == null || now == made ? kept : now) == kept) {
                     current.kept = kept;
                 }

@@ -36,9 +36,11 @@ public interface CheckpointCarrier {
      * {@code StartAt} that names it. From a dynamic {@code StartAt} it still opens at the present.
      * <p>
      * The checkpoint of a live event holds a change stream resume token. Once the oplog no longer reaches back to it,
-     * the catch-up does not take a subscription restarted from it over, and the subscription model it wraps decides.
-     * A blocking MongoDB subscription model then stops the subscription and logs an error, or restarts it from the
-     * present when it is set to restart after lost history, which skips the events in between.
+     * a catch-up subscription doesn't restart a subscription from the present. On the blocking stack a subscribe from
+     * it throws {@code CatchupCannotResumeException}. On the reactor stack a subscription with an id is paused, and
+     * resuming it throws that exception, and the {@code Flux} of an unnamed one fails with it. A MongoDB subscription
+     * model with no catch-up subscription wrapping it stops the subscription with an error in the log, or restarts it
+     * from the present when it is set to restart after lost history, which skips the events in between.
      *
      * @return The checkpoint as a string.
      */

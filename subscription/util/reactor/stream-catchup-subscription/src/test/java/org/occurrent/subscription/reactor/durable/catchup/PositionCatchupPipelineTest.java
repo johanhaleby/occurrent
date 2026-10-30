@@ -774,6 +774,11 @@ class PositionCatchupPipelineTest {
 
         @Override
         public Flux<CloudEvent> subscribeFailingIfStartLost(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.error(new AssertionError("The live half must be read through subscribeFailingOnHistoryLoss"));
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribeFailingOnHistoryLoss(@Nullable SubscriptionFilter filter, StartAt startAt) {
             return Flux.defer(() -> {
                 Checkpoint token = ((StartAt.StartAtCheckpoint) startAt).checkpoint;
                 opensAt.add(token);

@@ -237,7 +237,8 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * refusals above into a start without a recorded position, accepting the loss window it documents.
  * <p>
  * When the wrapped model implements {@link HistoryLossReportingSubscriptions}, this model passes the listeners and
- * {@link #subscribeFailingIfStartLost(SubscriptionFilter, StartAt)} to it. When this model hands its subscriptions to a
+ * {@link #subscribeFailingIfStartLost(SubscriptionFilter, StartAt)} and {@link #subscribeFailingOnHistoryLoss(SubscriptionFilter, StartAt)}
+ * to it. When this model hands its subscriptions to a
  * wrapped model that implements {@link RepositionableSubscriptions}, it resumes a subscription at a given position
  * there. So a catch-up subscription model that wraps this model takes over a subscription whose live start the wrapped model
  * loses as it opens, and the wrapped model doesn't restart that subscription from the present. A subscription handed
@@ -418,6 +419,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     @Override
     public Flux<CloudEvent> subscribeFailingIfStartLost(@Nullable SubscriptionFilter filter, StartAt startAt) {
         return historyLossReportingOfTheWrappedModel().subscribeFailingIfStartLost(filter, startAt);
+    }
+
+    /**
+     * The wrapped model's {@link HistoryLossReportingSubscriptions#subscribeFailingOnHistoryLoss(SubscriptionFilter, StartAt)},
+     * which stores no checkpoint, as {@link #subscribe(SubscriptionFilter, StartAt)} doesn't.
+     *
+     * @throws UnsupportedOperationException If the wrapped model doesn't implement {@link HistoryLossReportingSubscriptions}.
+     */
+    @Override
+    public Flux<CloudEvent> subscribeFailingOnHistoryLoss(@Nullable SubscriptionFilter filter, StartAt startAt) {
+        return historyLossReportingOfTheWrappedModel().subscribeFailingOnHistoryLoss(filter, startAt);
     }
 
     private Optional<HistoryLossReportingSubscriptions> historyLossReporting() {

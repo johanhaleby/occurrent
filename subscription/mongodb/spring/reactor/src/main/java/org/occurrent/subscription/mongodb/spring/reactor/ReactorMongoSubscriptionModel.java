@@ -250,6 +250,31 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return subscribe(filter, startAt, true);
     }
 
+    /**
+     * Does what {@link #subscribe(SubscriptionFilter, StartAt)} does, except when the oplog no longer reaches back to
+     * where the {@code Flux} reads from, as it opens or after it has read change stream documents. The {@code Flux} then
+     * fails with {@link HistoryLostException}, whatever {@code restartSubscriptionsOnChangeStreamHistoryLost} is
+     * configured to, and its {@link HistoryLostException#lostFrom()} is the position of the last document read, or the
+     * position the {@code Flux} opened at when it has read none.
+     */
+    @Override
+    public Flux<CloudEvent> subscribeFailingOnHistoryLoss(@Nullable SubscriptionFilter filter, StartAt startAt) {
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        return Flux.defer(() -> {
+            MongoCommons.refuseCatchupPosition(startAt);
+            AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
+            AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
+            AtomicReference<@Nullable OpenedAt> openedAt = new AtomicReference<>();
+            return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, openedAt::set, currentStartAt::set, () -> {
+            }).retryWhen(unboundedBackoff().filter(throwable -> !isChangeStreamHistoryLost(throwable) && shouldRestart(null, throwable, () -> {
+            }))).onErrorMap(ReactorMongoSubscriptionModel::isChangeStreamHistoryLost, throwable -> {
+                // Null only for a stream that never opened at a position, which has none to name
+                Checkpoint lostFrom = MongoCommons.lostFrom(currentStartAt.get(), openedAt.get());
+                return lostFrom == null ? throwable : new HistoryLostException(lostFrom, throwable);
+            });
+        });
+    }
+
     private Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt, boolean failIfStartLost) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         Checkpoint start = failIfStartLost && !startAt.isDynamic() && startAt instanceof StartAt.StartAtCheckpoint position ? position.checkpoint : null;
@@ -594,6 +619,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         if (lostFrom == null) {
             return false;
         }
+        // Before the listeners, which can record the loss on the subscription now holding the id
+        if (!isCurrent(internalSubscription, run)) {
+            log.debug("There was not enough oplog to resume subscription {} from {}, but it was paused, resumed or cancelled meanwhile, so no listener is asked.",
+                    subscriptionId, lostFrom.asString(), throwable);
+            return true;
+        }
         HistoryLossHandling.TakeOver takeOver = null;
         try {
             for (HistoryLossListener listener : historyLossListeners) {
@@ -613,7 +644,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         }
         Run paused;
         synchronized (this) {
-            paused = !shutdown && internalSubscription.run == run && runningSubscriptions.get(subscriptionId) == internalSubscription ? pause(subscriptionId) : null;
+            paused = isCurrent(internalSubscription, run) ? pause(subscriptionId) : null;
         }
         if (paused == null) {
             log.debug("There was not enough oplog to resume subscription {} from {}, and a listener took it over, but it was paused, resumed or cancelled meanwhile, so the takeover is dropped.",
@@ -628,6 +659,13 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             log.error("The listener that took subscription {} over after its history was lost failed once it was paused, so it stays paused. Resuming it starts it again.", subscriptionId, e);
         }
         return true;
+    }
+
+    // Whether run is still the one the subscription reads with, which a pause, a cancel and a shutdown end
+    private boolean isCurrent(InternalSubscription internalSubscription, Run run) {
+        synchronized (this) {
+            return !shutdown && internalSubscription.run == run && runningSubscriptions.get(internalSubscription.subscriptionId) == internalSubscription;
+        }
     }
 
     // ChangeStreamHistoryLost (286) restarts from StartAt.now() only when configured to. Everything else
@@ -694,13 +732,21 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     /**
      * Opens a change stream at {@code checkpoint} and closes it again. Emits {@code false} when MongoDB refuses to
-     * open it because the oplog no longer reaches back to {@code checkpoint}.
+     * open it because the oplog no longer reaches back to {@code checkpoint}. A transient failure, such as a lost
+     * connection, a timeout or a primary that stepped down, is asked again with the backoff that
+     * {@link ReactorMongoSubscriptionModelConfig#backoff(Duration, Duration)} sets, until MongoDB answers or the
+     * subscriber cancels. Every failed attempt is logged at warn level. Lost history is never asked again, and any other
+     * failure fails the {@code Mono} at once.
      */
     @Override
     public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
         requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
         return Mono.defer(() -> MongoCommons.changeStreamHistoryProbe(eventCollection, checkpoint)
+                // Only the command is asked again, so a checkpoint this model cannot read fails at once
                 .map(probe -> mongo.executeCommand(probe)
+                        .retryWhen(unboundedBackoff().filter(MongoCommons::isTransientFailure)
+                                .doBeforeRetry(retrySignal -> log.warn("Asking MongoDB whether collection {} can resume from checkpoint {} failed with {}: {}. Will ask again.",
+                                        eventCollection, checkpoint.asString(), retrySignal.failure().getClass().getName(), retrySignal.failure().getMessage(), retrySignal.failure())))
                         .flatMap(reply -> MongoCommons.killChangeStreamHistoryProbeCursor(eventCollection, reply)
                                 // The server closes an idle cursor on its own after a while
                                 .map(killCursors -> mongo.executeCommand(killCursors).onErrorResume(__ -> Mono.empty()).then())

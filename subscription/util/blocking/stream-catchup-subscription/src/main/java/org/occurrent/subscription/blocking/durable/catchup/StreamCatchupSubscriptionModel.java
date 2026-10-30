@@ -212,6 +212,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
 
         CatchupReplay replay = replayFrom(subscriptionId, filter, startAt, action, firstStartAt);
         if (replay == null) {
+            refuseIfLiveStartLost(subscriptionId, firstStartAt);
             return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, firstStartAt), action, holdPaused);
         }
         return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, replay, holdPaused));
