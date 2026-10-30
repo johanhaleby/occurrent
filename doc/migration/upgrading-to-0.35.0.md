@@ -139,7 +139,8 @@ other sections compile fine and behave differently, so read them first.
 
 - [DCB snapshots resume from marker versions](#dcb-snapshots-resume-from-marker-versions). The DCB deciders and
   a `@Snapshot` DCB view save at marker versions, and ignore a snapshot 0.34.0 saved at a position. `Snapshot` gains two
-  components. **Breaks the build** if you use a record pattern over `Snapshot`.
+  components. **Breaks the build** if you use a record pattern over `Snapshot`. A DCB application service with
+  synchronous subscriptions no longer runs your domain function in its transaction executor's transaction.
 - [The reactive `executeAndReturnState` emits a non-null state](#the-reactive-executeandreturnstate-emits-a-non-null-state).
   The emitted state is declared non-null. Breaks the build only for a Kotlin `Mono<State?>` written by hand.
 
@@ -798,7 +799,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
 - A DCB application service with synchronous subscriptions now reads and decides before it enters its transaction
   executor's transaction, so a decider on it saves snapshots. Only the append, the re-read of the written block and the
-  dispatch run in that transaction. Your domain function no longer runs in it. An exception from it no longer marks a
+  dispatch run in that transaction. Your domain function no longer runs in it, so when the executor opens the
+  transaction, a write your domain function makes is no longer part of it. An exception from it no longer marks a
   transaction you own rollback-only, so if you catch it and continue, that transaction commits. The executor's conflict
   retry re-runs only the append, with the token of the first read. When the condition then fails, the service's retry
   strategy reads and decides again.
