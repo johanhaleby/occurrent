@@ -63,6 +63,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalCheckpointErrorMessage;
@@ -215,8 +216,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         }
 
         @Override
-        public Subscription subscription(String subscriptionId, CountDownLatch started) {
-            return new SpringMongoSubscription(subscriptionId, started, () -> subscriptions.isShutdown());
+        public Subscription subscription(String subscriptionId, CountDownLatch started, Supplier<@Nullable RuntimeException> startFailure) {
+            return new SpringMongoSubscription(subscriptionId, started, startFailure, () -> subscriptions.isShutdown());
         }
 
         @Override

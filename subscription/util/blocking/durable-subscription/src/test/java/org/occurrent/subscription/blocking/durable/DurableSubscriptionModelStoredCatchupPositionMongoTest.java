@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
@@ -48,6 +49,7 @@ import java.util.concurrent.Executors;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 import static org.occurrent.tck.ConformanceEvents.event;
@@ -106,7 +108,10 @@ class DurableSubscriptionModelStoredCatchupPositionMongoTest {
 
             // Then the subscription stops, never starts and keeps the stored checkpoint
             await().atMost(TIMEOUT).untilAsserted(() -> assertThat(durable.isRunning(subscriptionId)).isFalse());
-            assertThat(subscription.waitUntilStarted(Duration.ofMillis(200))).isFalse();
+            Throwable refusal = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofMillis(200)));
+            assertThat(refusal).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                    .hasMessageContaining("\"" + stored.asString() + "\"");
             assertThat(storage.read(subscriptionId).asString()).isEqualTo(stored.asString());
 
             // And the event written before it is never delivered, also not once the model has had time to open the change stream

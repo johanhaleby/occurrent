@@ -138,9 +138,10 @@ public final class ChangeStreamSubscriptions {
 
         /**
          * Returns the handle the model gives its caller for a subscription whose change stream has opened once
-         * {@code started} is released.
+         * {@code started} is released. {@code startFailure} answers what the start failed with, when it failed for good
+         * rather than opened, once {@code started} is released.
          */
-        Subscription subscription(String subscriptionId, CountDownLatch started);
+        Subscription subscription(String subscriptionId, CountDownLatch started, Supplier<@Nullable RuntimeException> startFailure);
 
         /**
          * The model's own {@code resumeSubscription(String)}, so an override of it also runs for a subscription that
@@ -267,7 +268,7 @@ public final class ChangeStreamSubscriptions {
         }
         // Follows every run of the subscription, so it answers true once start() or a resume opens the change stream of
         // one subscribed while the model was stopped, or paused before its change stream opened
-        return model.subscription(subscriptionId, internalSubscription.firstStartedLatch);
+        return model.subscription(subscriptionId, internalSubscription.firstStartedLatch, internalSubscription.firstStartFailure::get);
     }
 
     // A position of the subscription's own, so a resume given the very instance subscribe was given isn't taken for the
@@ -470,9 +471,10 @@ public final class ChangeStreamSubscriptions {
                 // nothing else would say why the node went quiet.
                 log.error("Checkpoint write for subscription {} was refused: {}. A node with a newer lease has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it. The refused write was for an event, or for a position reached while no event matched.", subscriptionId, e.getMessage(), e);
                 throw e;
-            } else if (e instanceof UnsupportedStartAtException) {
-                // Refused rather than retried, since a retry runs without end by default and waitUntilStarted() never returns
+            } else if (e instanceof UnsupportedStartAtException unsupportedStartAt) {
+                // Refused rather than retried, since a retry runs without end by default and the start never ends
                 log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, e);
+                internalSubscription.failedToStart(unsupportedStartAt);
                 forget(subscriptionId, internalSubscription);
             } else if (isChangeStreamHistoryLost(e)) {
                 if (takenOverAfterHistoryLoss(subscriptionId, internalSubscription, openedAt, e)) {
@@ -911,7 +913,7 @@ public final class ChangeStreamSubscriptions {
             throw e;
         }
 
-        return model.subscription(subscriptionId, resumed.startedLatch);
+        return model.subscription(subscriptionId, resumed.startedLatch, resumed::startFailure);
     }
 
     // Replaces the position the subscription has read to with repositionTo, or keeps it when repositionTo is a
@@ -1134,8 +1136,12 @@ public final class ChangeStreamSubscriptions {
         // same filter.
         private final List<Bson> pipeline;
         final CountDownLatch startedLatch = new CountDownLatch(1);
+        // Set before startedLatch is released, when this run failed for good instead of opening its change stream
+        private volatile @Nullable RuntimeException startFailure;
         // Shared by every run of the subscription, and released the first time one of them opens its change stream
         final CountDownLatch firstStartedLatch;
+        // Shared like firstStartedLatch, and set before it is released when a run failed for good before any had opened
+        final AtomicReference<@Nullable RuntimeException> firstStartFailure;
         private final CountDownLatch stoppedRestartingLatch = new CountDownLatch(1);
         final AtomicReference<StartAt> currentStartAt;
         // Shared by every run of the subscription
@@ -1155,16 +1161,17 @@ public final class ChangeStreamSubscriptions {
         private @Nullable Thread delivering;
 
         private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe) {
-            this(log, currentStartAt, action, pipeline, presentAtSubscribe, new CountDownLatch(1));
+            this(log, currentStartAt, action, pipeline, presentAtSubscribe, new CountDownLatch(1), new AtomicReference<>());
         }
 
-        private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, CountDownLatch firstStartedLatch) {
+        private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, CountDownLatch firstStartedLatch, AtomicReference<@Nullable RuntimeException> firstStartFailure) {
             this.log = log;
             this.pipeline = pipeline;
             this.currentStartAt = currentStartAt;
             this.presentAtSubscribe = presentAtSubscribe;
             this.action = action;
             this.firstStartedLatch = firstStartedLatch;
+            this.firstStartFailure = firstStartFailure;
         }
 
         // Under the same lock as movedUnlessReplacedTo, so an action of this run that returns after the pause waited
@@ -1177,7 +1184,7 @@ public final class ChangeStreamSubscriptions {
                     // In one step, since the operation time asked for at subscribe can be recorded meanwhile
                     currentStartAt.updateAndGet(reposition);
                 }
-                return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStartedLatch);
+                return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStartedLatch, firstStartFailure);
             } finally {
                 lock.unlock();
             }
@@ -1261,6 +1268,21 @@ public final class ChangeStreamSubscriptions {
         void started() {
             startedLatch.countDown();
             firstStartedLatch.countDown();
+        }
+
+        // A handle that has already answered it started keeps that answer
+        void failedToStart(RuntimeException failure) {
+            if (startedLatch.getCount() > 0) {
+                startFailure = failure;
+            }
+            if (firstStartedLatch.getCount() > 0) {
+                firstStartFailure.set(failure);
+            }
+            started();
+        }
+
+        @Nullable RuntimeException startFailure() {
+            return startFailure;
         }
 
         void stopped() {

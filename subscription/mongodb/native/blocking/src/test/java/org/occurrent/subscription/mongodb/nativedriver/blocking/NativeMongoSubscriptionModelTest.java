@@ -104,6 +104,7 @@ import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.occurrent.filter.Filter.data;
 import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -1150,6 +1151,53 @@ public class NativeMongoSubscriptionModelTest {
         }
 
         @Test
+        void waiting_without_a_timeout_on_a_dynamic_position_answering_a_global_checkpoint_throws_the_refusal_instead_of_hanging() {
+            // Given
+            Checkpoint checkpoint = GlobalCheckpoint.of(0);
+            StartAt answered = StartAt.checkpoint(checkpoint);
+            String subscriptionId = UUID.randomUUID().toString();
+            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> answered), __ -> {
+            });
+
+            // When
+            Throwable refusal = assertTimeoutPreemptively(Duration.ofSeconds(10), () -> catchThrowable(started::waitUntilStarted));
+
+            // Then
+            assertThat(refusal).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                    .hasMessageContaining("\"" + checkpoint.asString() + "\"");
+            assertThat(((UnsupportedStartAtException) refusal).startAt()).isSameAs(answered);
+        }
+
+        @Test
+        void a_paused_subscription_whose_dynamic_position_answers_a_global_checkpoint_when_it_opens_throws_the_refusal_from_both_handles() {
+            // Given
+            CopyOnWriteArrayList<CloudEvent> refused = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint checkpoint = GlobalCheckpoint.of(0);
+            StartAt answered = StartAt.checkpoint(checkpoint);
+            Subscription paused = subscriptionModel.subscribePaused(subscriptionId, null, StartAt.dynamic(ctx -> answered), refused::add);
+
+            // When
+            Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+
+            // Then both handles throw the one refusal
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
+            Throwable fromPaused = catchThrowable(() -> paused.waitUntilStarted(Duration.ofMillis(200)));
+            Throwable fromResumed = catchThrowable(() -> resumed.waitUntilStarted(Duration.ofMillis(200)));
+            assertThat(fromPaused).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                    .hasMessageContaining("\"" + checkpoint.asString() + "\"");
+            assertAll(
+                    () -> assertThat(((UnsupportedStartAtException) fromPaused).startAt()).isSameAs(answered),
+                    () -> assertThat(fromResumed).isSameAs(fromPaused),
+                    () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
+                    () -> assertThat(refused).isEmpty()
+            );
+        }
+
+        @Test
         void subscribing_at_a_dynamic_position_answering_a_live_checkpoint_delivers_the_events_after_it() {
             // Given
             LocalDateTime now = LocalDateTime.now();
@@ -1230,12 +1278,16 @@ public class NativeMongoSubscriptionModelTest {
                 AtomicReference<Subscription> started = new AtomicReference<>();
                 Throwable thrownByTheCall = catchThrowable(() -> started.set(subscriptionModel.subscribe(subscriptionId, startAt, refused::add)));
 
-                // Then the call returns, and the subscription is forgotten without ever starting
+                // Then the call returns, and the subscription is forgotten and its handle throws the refusal instead of starting
                 assertThat(thrownByTheCall).isNull();
                 await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                         assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
+                Throwable refusal = catchThrowable(() -> started.get().waitUntilStarted(Duration.ofMillis(200)));
+                assertThat(refusal).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                        .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                        .hasMessageContaining("\"" + checkpoint.asString() + "\"");
                 assertAll(
-                        () -> assertThat(started.get().waitUntilStarted(Duration.ofMillis(200))).isFalse(),
+                        () -> assertThat(((UnsupportedStartAtException) refusal).startAt()).isSameAs(answered),
                         () -> assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse(),
                         () -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId)
                 );

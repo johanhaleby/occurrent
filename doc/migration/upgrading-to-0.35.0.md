@@ -920,9 +920,9 @@ catch-up stores, and skipped every event before it with no error. Their `subscri
 A `StartAt.dynamic(..)` whose function returns one of these checkpoints opened the change stream at the present too,
 in 0.34.0 and before. `DcbStartAt.dynamic(..)` returning `DcbStartAt.beginning()` is one. The models now refuse that
 as well. They call the function only as the change stream opens, so `subscribe(..)` returns, and the subscription then
-stops with the `UnsupportedStartAtException` instead of delivering events. The reactor model fails
-`waitUntilStarted()` with it, and the blocking models log it at `ERROR`. Only the first position the function returns
-is checked. See [#1371](https://github.com/johanhaleby/occurrent/issues/1371).
+stops with the `UnsupportedStartAtException` instead of delivering events. `waitUntilStarted(..)` throws it on the
+blocking models, which also log it at `ERROR`, and `waitUntilStarted()` fails with it on the reactor model. Only the
+first position the function returns is checked. See [#1371](https://github.com/johanhaleby/occurrent/issues/1371).
 
 ### Who is affected
 
