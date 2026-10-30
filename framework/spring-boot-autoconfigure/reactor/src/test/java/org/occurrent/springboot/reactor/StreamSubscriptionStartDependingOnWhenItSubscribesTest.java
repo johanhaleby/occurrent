@@ -37,7 +37,9 @@ import static org.mockito.Mockito.mock;
  * {@link LateSubscriber#startIsFixed(StartAt)} says its start is the same whenever it runs. A start that depends on
  * when the subscribe runs, NOW or the subscription model default, has to be subscribed where it is, or whatever is
  * written between getting the bean and the subscribe is skipped. So the start that
- * {@code startAt = NOW} produces must never be classified as fixed, whatever the {@code resumeBehavior}.
+ * {@code startAt = NOW} produces must never be classified as fixed, whatever the {@code resumeBehavior}. A replay
+ * start, {@code startAt = BEGINNING_OF_TIME} on a model that supports history replay, is the same whenever it runs, so
+ * it is fixed whatever the {@code resumeBehavior}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class StreamSubscriptionStartDependingOnWhenItSubscribesTest {
@@ -70,7 +72,20 @@ class StreamSubscriptionStartDependingOnWhenItSubscribesTest {
         assertThat(fixed).describedAs("startAt = DEFAULT with %s", resumeBehavior).isFalse();
     }
 
-    // The inverse of the two above, so that the classification is not green because it never answers true.
+    @ParameterizedTest
+    @EnumSource(ResumeBehavior.class)
+    void a_beginning_of_time_start_is_fixed_when_history_replay_is_supported(ResumeBehavior resumeBehavior) {
+        // Given
+        StartAt startAt = support.generateStreamStartAt(definition(StartPosition.BEGINNING_OF_TIME, resumeBehavior), true);
+
+        // When
+        boolean fixed = LateSubscriber.startIsFixed(startAt);
+
+        // Then
+        assertThat(fixed).describedAs("startAt = BEGINNING_OF_TIME with %s", resumeBehavior).isTrue();
+    }
+
+    // The inverse of the ones above, so that the classification is not green because it never answers true.
     @Test
     void a_start_at_an_explicit_position_is_fixed() {
         // Given
