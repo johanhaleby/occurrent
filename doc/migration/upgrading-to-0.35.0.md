@@ -105,7 +105,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
   On the reactive stack a restart no longer replays the history of a `BEGINNING_OF_TIME` `@StreamSubscription`, and a
   `NOW` subscription no longer misses the events written while the application was down. On the blocking stack `NOW` with
   `SAME_AS_START_AT` starts at the present on every restart and no longer competes with the other instances, so every
-  instance is delivered every event. Compiles unchanged.
+  instance is delivered every event. A reactive `NOW` subscription also reads the position of the feed when it
+  registers, so the application does not start when the MongoDB server cannot answer. Compiles unchanged.
 
 ### Brokers
 
@@ -1143,12 +1144,14 @@ with `DEFAULT` starts where its default start does, and whether `BEGINNING_OF_TI
 again depends on whether it stores a checkpoint.
 
 With the starter's durable model, `NOW` with `DEFAULT` also records where the feed is when a subscription with no stored
-checkpoint registers, the way any start from the model default does. If the storage answers nothing for that position,
-as a server that refuses the `hostInfo` command does, the model refuses the registration, and so it does when the read
-fails. Such a subscription waits for its start by default when `occurrent.subscription.mode` is `auto`, so
-the application does not start, where `NOW` used to start anyway. With `startupMode = BACKGROUND`, with mode `manual`,
-or on a bean built after startup, the refusal does not hold up startup, and the subscription is not running. Setting
-`occurrent.subscription.start-when-no-start-position-can-be-recorded=true` starts it when the storage answers nothing, see
+checkpoint registers, the way any start from the model default does. The reactive MongoDB model reads it from the
+server's clock, so a server that cannot be asked, or that replies without a clock, makes the model refuse the
+registration. Such a subscription waits for its start by default when `occurrent.subscription.mode` is `auto`, so
+the application does not start. With `startupMode = BACKGROUND`, with mode `manual`, or on a bean built after startup,
+the refusal does not hold up startup, and the subscription is not running. A wrapped model of your own whose position
+read answers nothing is refused too, and
+`occurrent.subscription.start-when-no-start-position-can-be-recorded=true` starts it in that case only, since a read
+that fails is refused whatever the property says, see
 [section 7 of the 0.34.0 guide](upgrading-to-0.34.0.md#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
 
 A subscription that handled an event before the upgrade normally has a checkpoint stored already, because the old start
@@ -1174,9 +1177,9 @@ that has to be rebuilt on every boot. Without it the read model now starts empty
 last checkpoint. A `NOW` subscription that has to skip the events written during downtime also needs
 `SAME_AS_START_AT`.
 
-Set `occurrent.subscription.start-when-no-start-position-can-be-recorded=true` if a reactive application whose
-storage cannot report the feed position, such as a shared MongoDB Atlas tier, no longer starts with a `NOW`
-subscription.
+A reactive `NOW` subscription with the default `resumeBehavior` now needs the MongoDB server to answer when it
+registers. Set `resumeBehavior = SAME_AS_START_AT` on one that has to start without that, since it keeps the old start
+and is never refused.
 
 On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription that relied on resuming from its
 checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
