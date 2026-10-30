@@ -30,13 +30,13 @@ import static java.util.Objects.requireNonNull;
  * Immutable result of a DCB read.
  *
  * @param events the CloudEvents matched by the DCB query and read options
- * @param lastSequencePosition the event store's global DCB head at the time of the read, that is the highest DCB
- *                             sequence position assigned anywhere in the store. This is NOT the highest position among
+ * @param lastSequencePosition the highest position the event store has reserved at the time of the read, for a DCB
+ *                             or a stream write and whether or not that write committed. This is NOT the highest position among
  *                             the matched {@code events}: the highest matched position can be lower than the head, and
  *                             when the query matches nothing there is no matched position at all, yet
- *                             {@code lastSequencePosition} still reports the store head. It is {@code 0} only when the
- *                             store holds no DCB events yet. It isn't a safe place to resume from on MongoDB. To read on
- *                             from a read, use {@link DcbReadOptions#withVersions()} and
+ *                             {@code lastSequencePosition} still reports that position. It is {@code 0} only when the
+ *                             store has reserved none. It isn't a safe place to resume from on MongoDB. To read on
+ *                             from a read that reports versions, use {@link DcbReadOptions#withVersions()} and
  *                             {@link DcbReadOptions#afterVersions(DcbMarkerVersions)}, or a catch-up subscription's
  *                             checkpoint. It is NOT a safe optimistic-concurrency boundary on its
  *                             own: a store that assigns positions before the events commit can report a head that is

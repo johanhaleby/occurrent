@@ -29,7 +29,7 @@ import static java.util.Objects.requireNonNull;
  * Domain-event result of a DCB read.
  *
  * @param events the domain events matched by the DCB query
- * @param lastSequencePosition the event store's global DCB head at the time of the read, which can be above every event in {@code events}, or {@code 0} when the store holds no DCB events. It isn't a safe place to resume from on MongoDB, and it isn't a safe optimistic-concurrency boundary on its own
+ * @param lastSequencePosition the highest position the event store has reserved at the time of the read, for a DCB or a stream write and whether or not that write committed, so it can be above every event in {@code events}. It isn't a safe place to resume from on MongoDB, and it isn't a safe optimistic-concurrency boundary on its own
  * @param consistencyToken the token a conditional append is checked against, holding the criteria the read was given. Pass it to {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)} for a conditional append
  */
 @NullMarked
