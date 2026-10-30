@@ -1022,8 +1022,9 @@ class SagaExecutionSupportTest {
 
             @Test
             void a_stream_first_seen_by_this_delivery_has_no_floor_so_a_lower_version_of_another_type_is_new_afterwards() {
-                // Given
-                SagaEnvelope<OrderState> afterFirst = apply(null, new EventMeta(STREAM, 10L, null, TYPE_A)).envelope();
+                // Given the instance started on another stream, so stream s1 gets its marks from this delivery
+                SagaEnvelope<OrderState> started = apply(null, new EventMeta("s0", 1L, null, TYPE_A)).envelope();
+                SagaEnvelope<OrderState> afterFirst = apply(started, new EventMeta(STREAM, 10L, null, TYPE_A)).envelope();
 
                 // When
                 Delivery delivery = SagaExecutionSupport.classify(afterFirst, meta(TYPE_B, 3), WINDOW);
@@ -3003,8 +3004,9 @@ class SagaExecutionSupportTest {
 
             @Test
             void a_pending_input_that_is_replayed_after_the_budget_has_passed_is_quarantined_on_its_first_failure_of_the_replay() {
-                // Given version 7 failed first and was parked, version 8 failed and then succeeded, which cleared the record
-                SagaEnvelope<OrderState> parked = failing(null, 7, after(0)).envelope();
+                // Given the instance started at version 1, version 7 failed and was parked, version 8 failed and then succeeded, which cleared the record
+                SagaEnvelope<OrderState> started = succeeding(null, 1);
+                SagaEnvelope<OrderState> parked = failing(started, 7, after(0)).envelope();
                 SagaEnvelope<OrderState> failedOn8 = failing(parked, 8, after(1)).envelope();
                 SagaEnvelope<OrderState> cleared = succeeding(failedOn8, 8);
                 assertThat(cleared.failure()).as("the record is cleared").isNull();
@@ -3024,7 +3026,8 @@ class SagaExecutionSupportTest {
             @Test
             void a_pending_input_that_is_replayed_before_the_budget_has_passed_is_not_quarantined() {
                 // Given
-                SagaEnvelope<OrderState> parked = failing(null, 7, after(0)).envelope();
+                SagaEnvelope<OrderState> started = succeeding(null, 1);
+                SagaEnvelope<OrderState> parked = failing(started, 7, after(0)).envelope();
                 SagaEnvelope<OrderState> cleared = succeeding(failing(parked, 8, after(1)).envelope(), 8);
 
                 // When
@@ -3116,8 +3119,9 @@ class SagaExecutionSupportTest {
 
             @Test
             void a_replay_of_the_first_failed_version_is_applied_after_the_instance_moved_far_past_it_at_a_window_of_one() {
-                // Given a window of 1, versions 7 and 8 failed, and the instance then applied version 20
-                SagaEnvelope<OrderState> failedOn8 = failing(failing(null, 7, after(0), 1).envelope(), 8, after(1), 1).envelope();
+                // Given a window of 1, the instance started at version 1, versions 7 and 8 failed, and the instance then applied version 20
+                SagaEnvelope<OrderState> started = succeeding(null, 1, 1);
+                SagaEnvelope<OrderState> failedOn8 = failing(failing(started, 7, after(0), 1).envelope(), 8, after(1), 1).envelope();
                 SagaEnvelope<OrderState> ahead = succeeding(failedOn8, 20, 1);
 
                 // When
@@ -3130,7 +3134,8 @@ class SagaExecutionSupportTest {
             @Test
             void the_replay_of_the_first_failed_version_at_a_window_of_one_is_processed() {
                 // Given
-                SagaEnvelope<OrderState> failedOn8 = failing(failing(null, 7, after(0), 1).envelope(), 8, after(1), 1).envelope();
+                SagaEnvelope<OrderState> started = succeeding(null, 1, 1);
+                SagaEnvelope<OrderState> failedOn8 = failing(failing(started, 7, after(0), 1).envelope(), 8, after(1), 1).envelope();
                 SagaEnvelope<OrderState> ahead = succeeding(failedOn8, 20, 1);
 
                 // When

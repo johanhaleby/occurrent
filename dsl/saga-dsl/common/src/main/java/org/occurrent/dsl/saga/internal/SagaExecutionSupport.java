@@ -258,6 +258,10 @@ public final class SagaExecutionSupport {
             // the start arrives, on a delivery that can bring it before its start, and skipped on any other.
             return held.holds() && input instanceof SagaInput.Event<E> ? Outcome.heldUntilStarted() : Outcome.skip();
         }
+        if (isBeforeTheStart(saga, current, input, meta)) {
+            log.debug("Saga instance '{}' skipped the event '{}', an earlier version of the stream that started it.", sagaId, meta.redeliveryKey());
+            return Outcome.skip();
+        }
         if (current != null && held.heldCopyKey() == null && classify(current, meta, reorderWindow) != Delivery.NEW) {
             return Outcome.skip();
         }
@@ -329,8 +333,8 @@ public final class SagaExecutionSupport {
                 true,
                 failureAfter(current, meta, terminal),
                 streamMarks,
-                // A save that starts the instance marks a drain as due and records where the start sits, so the drain can
-                // tell a held event that came before the start from one that came after. So does a save outside a drain
+                // A save that starts the instance marks a drain as due and records where the start sits, which the drain
+                // and later deliveries compare the versions of the start's stream with. So does a save outside a drain
                 // that applies a held copy or a self-held version, so a drain's ending save forgets the key it adds.
                 !starting && !addsAKeyOutsideADrain(current, meta, held) && (held.endsDrain() || current.heldEventsChecked()),
                 drainedHeldKeysAfter(current, meta, held),
@@ -602,7 +606,7 @@ public final class SagaExecutionSupport {
     public enum HeldStep {
         /** The instance proves it applied the event, so the copy is released. */
         RELEASE_APPLIED,
-        /** An earlier version of the stream that started the instance, which committed before the start, so the copy is released. */
+        /** An earlier version of the stream that started the instance, on a saga with one start event type, so the copy is released. */
         RELEASE_BEFORE_START,
         /** Applied. */
         APPLY,
@@ -618,7 +622,7 @@ public final class SagaExecutionSupport {
      * What a drain does with the held event {@code ref} describes. A self-held key or an {@code outstanding} copy keeps
      * it new however far behind it is, and anything else is classified as a delivery of it would be.
      */
-    public static <S extends @Nullable Object> HeldStep drainStep(SagaEnvelope<S> current, HeldEventRef ref, int reorderWindow) {
+    public static <E, S extends @Nullable Object, C> HeldStep drainStep(Saga<E, S, C> saga, SagaEnvelope<S> current, HeldEventRef ref, int reorderWindow) {
         String streamId = ref.streamId();
         Long version = ref.version();
         if (streamId == null || version == null) {
@@ -627,7 +631,7 @@ public final class SagaExecutionSupport {
         if (provesApplied(current, streamId, version, ref.key())) {
             return HeldStep.RELEASE_APPLIED;
         }
-        if (isBeforeTheStart(current.startMark(), streamId, version)) {
+        if (hasOneStartEventType(saga) && isBeforeTheStart(current.startMark(), streamId, version)) {
             return HeldStep.RELEASE_BEFORE_START;
         }
         if (current.selfHeldKeys().contains(ref.key()) || ref.outstanding()) {
@@ -649,12 +653,21 @@ public final class SagaExecutionSupport {
     }
 
     /**
-     * Whether {@code meta} is an event of the stream that started {@code current}, below the start's version, so it
-     * committed before the start. A drain releases the held copy of such an event without applying it.
+     * Whether the instance skips this delivery as committed before the start. That is an event of the stream that
+     * started {@code current}, below the start's version and not of a start event type, on a saga with one start event
+     * type. A drain releases the held copy of such an event in the same way. A saga with several start event types
+     * can start on the later of two of them, so everything it receives after the start is classified. An event below
+     * the start on a saga with one start event type can still have committed after an earlier event of that type on the
+     * same stream, which only reading the stream would show.
      */
-    public static <S extends @Nullable Object> boolean isBeforeTheStart(@Nullable SagaEnvelope<S> current, EventMeta meta) {
-        return current != null && meta.streamId() != null && meta.streamVersion() != null
-               && isBeforeTheStart(current.startMark(), meta.streamId(), meta.streamVersion());
+    public static <E, S extends @Nullable Object, C> boolean isBeforeTheStart(Saga<E, S, C> saga, @Nullable SagaEnvelope<S> current, SagaInput<E> input, EventMeta meta) {
+        return hasOneStartEventType(saga) && current != null && meta.streamId() != null && meta.streamVersion() != null
+               && isBeforeTheStart(current.startMark(), meta.streamId(), meta.streamVersion())
+               && input instanceof SagaInput.Event<E> ev && !isStartEvent(saga, ev.event());
+    }
+
+    private static <E, S extends @Nullable Object, C> boolean hasOneStartEventType(Saga<E, S, C> saga) {
+        return saga.startEventTypes().size() == 1;
     }
 
     /** The delivery metadata of the held event {@code ref} describes. */
@@ -775,13 +788,16 @@ public final class SagaExecutionSupport {
         if (hasStarted || !(input instanceof SagaInput.Event<E> ev)) {
             return null;
         }
-        E event = ev.event();
+        return isStartEvent(saga, ev.event()) ? ev.event() : null;
+    }
+
+    private static <E, S extends @Nullable Object, C> boolean isStartEvent(Saga<E, S, C> saga, E event) {
         for (Class<? extends E> startType : saga.startEventTypes()) {
             if (startType.isInstance(event)) {
-                return event;
+                return true;
             }
         }
-        return null;
+        return false;
     }
 
     /**

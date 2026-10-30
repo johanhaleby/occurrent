@@ -756,7 +756,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // load that failed because the process is out of heap says nothing about whether this input
             // would have been skipped, and answering yes on that basis would acknowledge it silently.
             rethrowIfNotTheInstances(loadFailure);
-            switch (wouldHaveSkippedThisInput(sagaId, meta, loadFailure, keysSeenNew)) {
+            switch (wouldHaveSkippedThisInput(sagaId, input, meta, loadFailure, keysSeenNew)) {
                 case SKIPPED -> {
                     return;
                 }
@@ -786,9 +786,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         // that reorders is still found when its event comes back on one that does not.
         HeldEventRef lookedUp = heldEvents != null ? lookUpHeldCopy(heldEvents, current, meta) : null;
         String heldCopyKey = null;
+        boolean beforeTheStart = SagaExecutionSupport.isBeforeTheStart(saga, current, input, meta);
         if (lookedUp != null) {
             Delivery delivery = SagaExecutionSupport.classify(Objects.requireNonNull(current), meta, config.reorderWindow());
-            if (SagaExecutionSupport.provesApplied(current, meta)) {
+            if (SagaExecutionSupport.provesApplied(current, meta) || beforeTheStart) {
                 release(heldEvents, sagaId, lookedUp.key());
                 lookedUp = null;
             } else if (delivery != Delivery.NEW) {
@@ -804,12 +805,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 new HeldContext(holds, heldCopyKey, drained));
         if (outcome.held()) {
             if (holdUntilStarted(Objects.requireNonNull(heldEvents), sagaId, Objects.requireNonNull(cloudEvent), meta)) {
-                SagaEnvelope<S> started = stateStore.find(sagaId).orElse(null);
-                if (meta.redeliveryKey() == null || SagaExecutionSupport.isBeforeTheStart(started, meta)) {
-                    // Drained rather than run again. An event with no redelivery key would be applied by both its held
-                    // copy and the run, and an event of the start's stream below the start is released by the drain,
-                    // which a run would then apply as new.
-                    drainNow(heldEvents, sagaId, started, keysSeenNew);
+                if (meta.redeliveryKey() == null) {
+                    // Drained rather than run again, because the held copy stands for the event now, and an event with
+                    // no redelivery key would be applied by both.
+                    drainNow(heldEvents, sagaId, stateStore.find(sagaId).orElse(null), keysSeenNew);
                 } else {
                     // Run again on the started instance, which drains and then looks up this delivery's own copy. Other
                     // deliveries may have moved the instance past the event's reorder window before the hold, and the
@@ -827,7 +826,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (isOvertakenInFlight(current, meta, keysSeenNew)) {
                 throw new OvertakenInFlight(sagaId, meta);
             }
-            warnIfBehindTheReorderWindow(sagaId, current, meta);
+            if (!beforeTheStart) {
+                warnIfBehindTheReorderWindow(sagaId, current, meta);
+            }
             if (drainChangedSomething && current != null && !current.isCompleted()) {
                 // No save of this input records that the drain ended, so a save of its own does, or every input would
                 // drain again. A lost one is retried with the rest of the attempt.
@@ -969,7 +970,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     releaseOnCompleted(heldEvents, sagaId, ref.key());
                     continue;
                 }
-                SagaExecutionSupport.HeldStep step = SagaExecutionSupport.drainStep(current, ref, config.reorderWindow());
+                SagaExecutionSupport.HeldStep step = SagaExecutionSupport.drainStep(saga, current, ref, config.reorderWindow());
                 if (step == SagaExecutionSupport.HeldStep.APPLY && completesWithOthersLeft(current, body, ordered, from + i, deferred)) {
                     // Applied after every other stream's held events, so completing the instance does not skip them.
                     deferred.add(ref);
@@ -993,7 +994,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     releaseOnCompleted(heldEvents, sagaId, ref.key());
                     continue;
                 }
-                current = drainOne(heldEvents, sagaId, current, ref, body, SagaExecutionSupport.drainStep(current, ref, config.reorderWindow()), keysSeenNew, released);
+                current = drainOne(heldEvents, sagaId, current, ref, body, SagaExecutionSupport.drainStep(saga, current, ref, config.reorderWindow()), keysSeenNew, released);
             }
         }
         return new Drained<>(current, true);
@@ -1125,10 +1126,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // propagates as it did before.
     // A third answer, overtaken, is an input this delivery saw as new on an earlier attempt and that the read now finds
     // behind the reorder window, which process answers the same way.
-    private Skip wouldHaveSkippedThisInput(String sagaId, EventMeta meta, Throwable loadFailure, Set<String> keysSeenNew) {
+    private Skip wouldHaveSkippedThisInput(String sagaId, SagaInput<E> input, EventMeta meta, Throwable loadFailure, Set<String> keysSeenNew) {
         try {
             SagaEnvelope<S> withoutState = stateStore.findWithoutState(sagaId).orElse(null);
             if (withoutState != null && (withoutState.isCompleted() || withoutState.isQuarantined())) {
+                return Skip.SKIPPED;
+            }
+            if (SagaExecutionSupport.isBeforeTheStart(saga, withoutState, input, meta)) {
                 return Skip.SKIPPED;
             }
             if (withoutState == null || !SagaExecutionSupport.isRedelivery(withoutState, meta, config.reorderWindow())) {

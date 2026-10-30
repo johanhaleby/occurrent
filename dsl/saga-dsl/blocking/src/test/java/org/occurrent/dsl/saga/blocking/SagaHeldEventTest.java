@@ -16,10 +16,15 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -35,18 +40,24 @@ import org.occurrent.dsl.saga.InMemorySagaStateStore;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaEnvelope.StartMark;
 import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaHeldEvents;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -80,19 +91,23 @@ class SagaHeldEventTest {
     private static final Duration EXPIRY = Duration.ofMinutes(10);
     private static final String ITEM_ADDED_TYPE = ItemAdded.class.getName();
 
-    sealed interface OrderEvent permits OrderPlaced, ItemAdded, PaymentReceived {
+    sealed interface OrderEvent permits Opening, ItemAdded {
         String eventId();
 
         String orderId();
     }
 
-    record OrderPlaced(String eventId, String orderId) implements OrderEvent {
+    /** The events that can open an order, so that a saga can declare the one type for both. */
+    sealed interface Opening extends OrderEvent permits OrderPlaced, PaymentReceived {
+    }
+
+    record OrderPlaced(String eventId, String orderId) implements Opening {
     }
 
     record ItemAdded(String eventId, String orderId, String item) implements OrderEvent {
     }
 
-    record PaymentReceived(String eventId, String orderId) implements OrderEvent {
+    record PaymentReceived(String eventId, String orderId) implements Opening {
     }
 
     sealed interface OrderCommand permits OpenLedger, Reserve, Ship, Expire {
@@ -173,6 +188,25 @@ class SagaHeldEventTest {
 
     private SagaExecution<OrderEvent, Order, OrderCommand> execution(SagaStateStore<Order> stateStore, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable) {
         return new SagaExecution<>("orders", orderSaga(), stateStore, this::dispatch, converter, config, stillObtainable, now::get, holds);
+    }
+
+    private SagaExecution<OrderEvent, Order, OrderCommand> executionOf(Saga<OrderEvent, Order, OrderCommand> saga) {
+        return new SagaExecution<>("orders", saga, store, this::dispatch, converter, SagaRunnerConfig.defaults(), event -> true, now::get, holds);
+    }
+
+    /** A saga whose payment starts an instance as well as the placement does, so that either can come first. */
+    private Saga<OrderEvent, Order, OrderCommand> sagaStartingOnPlacedAndPayment() {
+        return Saga.<OrderEvent, Order, OrderCommand>builder(null)
+                .correlateAll(OrderEvent::orderId)
+                .startsOn(OrderPlaced.class)
+                .startsOn(PaymentReceived.class)
+                .evolve(OrderPlaced.class, (state, e) -> new Order(List.of(), false))
+                .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new OpenLedger(e.orderId()))))
+                .evolve(PaymentReceived.class, (state, e) -> new Order(state == null ? List.of() : state.items(), true))
+                .react(PaymentReceived.class, (state, e) -> List.of(SagaEffect.issue(new Ship(e.orderId()))))
+                .evolve(ItemAdded.class, (state, e) -> state.withItem(e.item()))
+                .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))))
+                .build();
     }
 
     private void dispatch(OrderCommand command) {
@@ -797,6 +831,22 @@ class SagaHeldEventTest {
         store.markHeldEvents(ORDER, null);
     }
 
+    // Rewrites the stored instance to list versions of the start's stream as outstanding, the way an earlier failure would have left them.
+    @SuppressWarnings("deprecation")
+    private void listOnTheInstance(String pendingType, List<Long> pendingVersions, Set<String> selfHeldKeys, @Nullable SagaFailure failure) {
+        SagaEnvelope<Order> stored = store.find(ORDER).orElseThrow();
+        StreamMarks marks = stored.streamMarks().get(ORDER_STREAM);
+        Map<Long, Instant> pendingSince = new HashMap<>();
+        pendingVersions.forEach(version -> pendingSince.put(version, NOW));
+        StreamMarks listed = new StreamMarks(marks.floor(), marks.byType(), pendingVersions.isEmpty() ? Map.of() : Map.of(pendingType, pendingVersions), marks.legacyFailed(), pendingSince);
+        Map<String, StreamMarks> streamMarks = new HashMap<>(stored.streamMarks());
+        streamMarks.put(ORDER_STREAM, listed);
+        SagaEnvelope<Order> rewritten = new SagaEnvelope<>(stored.sagaId(), stored.state(), stored.status(), stored.version() + 1, stored.timers(), stored.streamWatermarks(),
+                stored.positionWatermark(), stored.createdAt(), stored.updatedAt(), stored.completedAt(), stored.currentStep(), stored.started(), failure, streamMarks,
+                stored.heldEventsChecked(), stored.drainedHeldKeys(), selfHeldKeys, stored.startMark());
+        assertThat(store.compareAndSave(ORDER, rewritten, stored.version())).as("the instance is rewritten").isTrue();
+    }
+
     @Nested
     @DisplayName("when a held copy is left behind the reorder window and the saga no longer holds")
     class WhenAHeldCopyIsLeftBehindTheReorderWindowAndTheSagaNoLongerHolds {
@@ -1122,6 +1172,563 @@ class SagaHeldEventTest {
         }
     }
 
+    @Nested
+    @DisplayName("when an event of the stream that started the instance has a version below the start")
+    class WhenAnEventOfTheStreamThatStartedTheInstanceHasAVersionBelowTheStart {
+
+        private ListAppender<ILoggingEvent> appender;
+        private Logger supportLog;
+        private Logger executionLog;
+        private @Nullable Level originalSupportLevel;
+        private @Nullable Level originalExecutionLevel;
+
+        @BeforeEach
+        void captureTheLogOfTheDecisionAndOfTheExecution() {
+            appender = new ListAppender<>();
+            appender.start();
+            supportLog = (Logger) LoggerFactory.getLogger(SagaExecutionSupport.class);
+            executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            // Restored in teardown, because the level is process-global and would otherwise leak into the next test.
+            originalSupportLevel = supportLog.getLevel();
+            originalExecutionLevel = executionLog.getLevel();
+            supportLog.setLevel(Level.DEBUG);
+            executionLog.setLevel(Level.WARN);
+            supportLog.addAppender(appender);
+            executionLog.addAppender(appender);
+        }
+
+        @AfterEach
+        void restoreTheLogs() {
+            supportLog.detachAppender(appender);
+            executionLog.detachAppender(appender);
+            supportLog.setLevel(originalSupportLevel);
+            executionLog.setLevel(originalExecutionLevel);
+            appender.stop();
+        }
+
+        @Test
+        void the_reaction_of_an_event_of_another_type_does_not_run_and_the_state_is_left_alone() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
+            deliver(execution, placedAt(5));
+            issued.clear();
+            Order before = stateOfTheInstance();
+
+            // When
+            Throwable thrown = catchThrowable(() -> deliver(execution, itemAt(3, "book")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance()).isEqualTo(before));
+        }
+
+        @Test
+        void the_reaction_of_an_event_of_another_type_does_not_run_however_many_times_it_is_delivered() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
+            deliver(execution, placedAt(5));
+            issued.clear();
+
+            // When
+            deliver(execution, itemAt(3, "book"));
+            deliver(execution, itemAt(3, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty());
+        }
+
+        @Test
+        void the_reaction_of_an_event_of_a_start_type_runs_because_the_instance_may_have_started_on_the_later_of_two_start_events() {
+            // Given a saga with two start types, whose stream holds the payment at 3 and the placement at 5, delivered placement first
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnPlacedAndPayment());
+            deliver(execution, placedAt(5));
+            issued.clear();
+
+            // When
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Ship(ORDER)),
+                    () -> assertThat(stateOfTheInstance().paid()).isTrue());
+        }
+
+        @Test
+        void the_reaction_of_an_event_of_another_type_above_the_start_runs() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
+            deliver(execution, placedAt(5));
+            issued.clear();
+
+            // When
+            deliver(execution, itemAt(6, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "book")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"));
+        }
+
+        @Test
+        void the_reaction_of_an_event_of_another_stream_with_a_version_below_the_start_runs() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
+            deliver(execution, placedAt(5));
+            issued.clear();
+
+            // When
+            deliver(execution, itemAt(PAYMENT_STREAM, 3, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "book")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"));
+        }
+
+        @Test
+        void the_held_copy_of_the_event_that_the_lookup_finds_is_released_and_no_reaction_runs() {
+            // Given a copy held for the event after the start's drain ended, so that only the lookup of this delivery can find it
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
+            deliver(execution, itemAt(7, "seven"));
+            deliver(execution, placedAt(5));
+            issued.clear();
+            holdACopyOf(3, itemAt(3, "book"));
+            assertThat(SagaExecutionSupport.isDrainDue(store.find(ORDER).orElseThrow())).as("no drain is due").isFalse();
+            assertThat(heldKeys()).as("the copy is held").containsExactly(ORDER_STREAM + "@3");
+
+            // When
+            deliver(execution, itemAt(3, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("seven"),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+
+        @Test
+        void the_skip_is_logged_at_debug_level_with_the_key_of_the_event() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
+            deliver(execution, placedAt(5));
+
+            // When
+            deliver(execution, itemAt(3, "book"));
+
+            // Then
+            assertThat(appender.list).filteredOn(logged -> logged.getLevel() == Level.DEBUG)
+                    .extracting(ILoggingEvent::getFormattedMessage)
+                    .anyMatch(message -> message.contains(ORDER_STREAM + "@3"));
+        }
+
+        @Test
+        void no_warning_says_that_the_event_is_behind_the_reorder_window_when_it_is() {
+            // Given a window of 1, and the item type applied up to version 8 of the stream
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(store, SagaRunnerConfig.defaults().withReorderWindow(1));
+            deliver(execution, placedAt(5));
+            deliver(execution, itemAt(6, "six"));
+            deliver(execution, itemAt(7, "seven"));
+            deliver(execution, itemAt(8, "eight"));
+            issued.clear();
+
+            // When
+            deliver(execution, itemAt(3, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(appender.list).filteredOn(logged -> logged.getLevel() == Level.WARN).isEmpty());
+        }
+
+        // The copy a hold leaves, without the mark of the drain that the hold sets, so that nothing but the lookup of a delivery of the event finds it.
+        private void holdACopyOf(long version, CloudEvent event) {
+            HeldEventRef ref = new HeldEventRef(ORDER_STREAM + "@" + version, ORDER_STREAM, version, null, event.getType(), now.get(), false, false);
+            store.hold(ORDER, new HeldEvent(ORDER, ref, event));
+        }
+    }
+
+    @Nested
+    @DisplayName("when the instance lists a version below the start as outstanding")
+    class WhenTheInstanceListsAVersionBelowTheStartAsOutstanding {
+
+        private static final String LISTED_KEY = ORDER_STREAM + "@3";
+
+        @Test
+        void the_reaction_of_a_pending_version_of_another_type_than_a_start_type_does_not_run() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
+            deliver(execution, placedAt(5));
+            issued.clear();
+            listOnTheInstance(ITEM_ADDED_TYPE, List.of(3L), Set.of(), null);
+
+            // When
+            deliver(execution, itemAt(3, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty());
+        }
+
+        @Test
+        void the_reaction_of_a_self_held_version_of_another_type_than_a_start_type_does_not_run() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
+            deliver(execution, placedAt(5));
+            issued.clear();
+            listOnTheInstance(ITEM_ADDED_TYPE, List.of(), Set.of(LISTED_KEY), null);
+
+            // When
+            deliver(execution, itemAt(3, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty());
+        }
+
+        @Test
+        void the_reaction_of_a_version_of_another_type_than_a_start_type_that_the_failure_record_names_does_not_run() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
+            deliver(execution, placedAt(5));
+            issued.clear();
+            listOnTheInstance(ITEM_ADDED_TYPE, List.of(), Set.of(), new SagaFailure(LISTED_KEY, null, NOW, IllegalStateException.class.getName(), "cannot reserve"));
+
+            // When
+            deliver(execution, itemAt(3, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty());
+        }
+
+        @Test
+        void the_reaction_of_a_pending_version_of_a_start_type_runs() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnPlacedAndPayment());
+            deliver(execution, placedAt(5));
+            issued.clear();
+            listOnTheInstance(PaymentReceived.class.getName(), List.of(3L), Set.of(), null);
+
+            // When
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Ship(ORDER)),
+                    () -> assertThat(stateOfTheInstance().paid()).isTrue());
+        }
+    }
+
+    @Nested
+    @DisplayName("when an event of another type sits between two start events of the stream, on a saga with two start types")
+    class WhenAnEventOfAnotherTypeSitsBetweenTwoStartEventsOfTheStream {
+
+        // The stream holds the payment at version 3, the item at 4 and the placement at 5, and either payment or placement can start an instance.
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_placement_comes_first_then_the_payment_then_the_item() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnPlacedAndPayment());
+
+            // When
+            deliver(execution, placedAt(5));
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+            deliver(execution, itemAt(4, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER), new Ship(ORDER), new Reserve(ORDER, "book")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_placement_comes_first_then_the_item_then_the_payment() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnPlacedAndPayment());
+
+            // When
+            deliver(execution, placedAt(5));
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER), new Reserve(ORDER, "book"), new Ship(ORDER)),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_item_is_held_before_the_placement_and_the_payment_comes_last() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnPlacedAndPayment());
+
+            // When
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, placedAt(5));
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER), new Reserve(ORDER, "book"), new Ship(ORDER)),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+    }
+
+    @Nested
+    @DisplayName("when the state of the instance cannot be read and the input is of the stream that started it, below the start")
+    class WhenTheStateOfTheInstanceCannotBeReadAndTheInputIsBelowTheStart {
+
+        private final IllegalStateException cannotDecode = new IllegalStateException("the state can no longer be decoded");
+
+        @Test
+        void the_delivery_of_an_event_of_another_type_is_acknowledged_with_no_reaction_and_no_failure_record_on_a_saga_with_one_start_type() {
+            // Given an instance started at version 5 whose state can no longer be read, although the instance can
+            ScriptedStore unreadable = new ScriptedStore(store);
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(unreadable, SagaRunnerConfig.defaults());
+            deliver(execution, placedAt(5));
+            issued.clear();
+            long versionBefore = store.find(ORDER).orElseThrow().version();
+            unreadable.cannotDecodeTheState(cannotDecode);
+
+            // When
+            Throwable thrown = catchThrowable(() -> deliver(execution, itemAt(3, "book")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().failure()).isNull(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(pendingItemVersions()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().version()).isEqualTo(versionBefore));
+        }
+
+        @Test
+        void the_delivery_of_an_event_of_another_type_is_refused_with_the_load_failure_on_a_saga_with_two_start_types() {
+            // Given
+            ScriptedStore unreadable = new ScriptedStore(store);
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = new SagaExecution<>("orders", sagaStartingOnPlacedAndPayment(), unreadable, this::dispatchTo,
+                    converter, SagaRunnerConfig.defaults(), event -> true, now::get, holds);
+            deliver(execution, placedAt(5));
+            issued.clear();
+            unreadable.cannotDecodeTheState(cannotDecode);
+
+            // When
+            Throwable thrown = deliverRefused(execution, itemAt(3, "book"));
+
+            // Then the version is refused and listed as pending, so that a replay is still applied
+            assertAll(
+                    () -> assertThat(thrown).isSameAs(cannotDecode),
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().failure()).isNull(),
+                    () -> assertThat(pendingItemVersions()).containsExactly(3L));
+        }
+
+        private void dispatchTo(OrderCommand command) {
+            dispatch(command);
+        }
+    }
+
+    /**
+     * What a saga with one start event type does when that type appears twice on the stream, which is a known limit and
+     * not a feature. The stream holds the placement at version 3, the item at 4 and the placement again at 5. Only
+     * reading the stream shows that the placement at 3 started the instance, so a saga that sees the one at 5 first
+     * takes the item at 4 for an event that committed before the start, and skips it.
+     */
+    @Nested
+    @DisplayName("when the one start event type appears twice on the stream")
+    class WhenAStartEventTypeAppearsTwiceOnTheStream {
+
+        /** The reaction of a placement names the placement, so that the one at 3 can be told from the one at 5. */
+        private Saga<OrderEvent, Order, OrderCommand> sagaWhoseStartReactionNamesTheEvent() {
+            return Saga.<OrderEvent, Order, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new Order(state == null ? List.of() : state.items(), false))
+                    .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.eventId()))))
+                    .evolve(ItemAdded.class, (state, e) -> state.withItem(e.item()))
+                    .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))))
+                    .build();
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_later_placement_comes_first_then_the_earlier_placement_then_the_item() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaWhoseStartReactionNamesTheEvent());
+
+            // When
+            deliver(execution, placedAt(5));
+            deliver(execution, placedAt(3));
+            deliver(execution, itemAt(4, "book"));
+
+            // Then the earlier placement runs as a late event of a start type, and the item is skipped
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "placed-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_later_placement_comes_first_then_the_item_then_the_earlier_placement() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaWhoseStartReactionNamesTheEvent());
+
+            // When
+            deliver(execution, placedAt(5));
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, placedAt(3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "placed-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_item_is_held_before_the_later_placement_and_the_earlier_placement_comes_last() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaWhoseStartReactionNamesTheEvent());
+
+            // When
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, placedAt(5));
+            deliver(execution, placedAt(3));
+
+            // Then the drain releases the held item as an event below the start
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "placed-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_stream_is_delivered_in_order() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaWhoseStartReactionNamesTheEvent());
+
+            // When
+            deliver(execution, placedAt(3));
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, placedAt(5));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-3"), new Reserve(ORDER, "book"), new Reserve(ORDER, "placed-5")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 3, null)));
+        }
+    }
+
+    /**
+     * The same limit by a different route. The one start event type the saga declares is a supertype of the placement
+     * and the payment, so a payment at version 3 can be the first event of the stream although the saga declares one type
+     * and takes the placement at 5, which it sees first, for the start.
+     */
+    @Nested
+    @DisplayName("when the one start event type is a supertype of two event types that are on the stream")
+    class WhenTheOneStartEventTypeIsASupertypeOfTwoEventTypesOnTheStream {
+
+        /** The reaction of an opening event names it, so that the payment at 3 can be told from the placement at 5. */
+        private Saga<OrderEvent, Order, OrderCommand> sagaStartingOnTheSupertypeOfPlacedAndPayment() {
+            return Saga.<OrderEvent, Order, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(Opening.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new Order(state == null ? List.of() : state.items(), false))
+                    .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.eventId()))))
+                    .evolve(PaymentReceived.class, (state, e) -> new Order(state == null ? List.of() : state.items(), false))
+                    .react(PaymentReceived.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.eventId()))))
+                    .evolve(ItemAdded.class, (state, e) -> state.withItem(e.item()))
+                    .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))))
+                    .build();
+        }
+
+        @Test
+        void the_saga_declares_one_start_event_type_although_two_event_types_can_start_it() {
+            assertThat(sagaStartingOnTheSupertypeOfPlacedAndPayment().startEventTypes()).containsExactly(Opening.class);
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_placement_comes_first_then_the_payment_then_the_item() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheSupertypeOfPlacedAndPayment());
+
+            // When
+            deliver(execution, placedAt(5));
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+            deliver(execution, itemAt(4, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "payment-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_placement_comes_first_then_the_item_then_the_payment() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheSupertypeOfPlacedAndPayment());
+
+            // When
+            deliver(execution, placedAt(5));
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "payment-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_item_is_held_before_the_placement_and_the_payment_comes_last() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheSupertypeOfPlacedAndPayment());
+
+            // When
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, placedAt(5));
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "payment-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_stream_is_delivered_in_order() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheSupertypeOfPlacedAndPayment());
+
+            // When
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, placedAt(5));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "payment-3"), new Reserve(ORDER, "book"), new Reserve(ORDER, "placed-5")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 3, null)));
+        }
+    }
+
     /**
      * An in-memory store whose next read of the instance by {@code find} answers that there is none, as a read that
      * happened before another delivery wrote it would, and that can run something just before the next hold, as a
@@ -1136,6 +1743,7 @@ class SagaHeldEventTest {
         private final AtomicReference<@Nullable Runnable> beforeNextHold = new AtomicReference<>();
         private final List<Set<String>> drainedHeldKeysOfEverySave = new CopyOnWriteArrayList<>();
         private final AtomicReference<@Nullable RuntimeException> failureOnNextRelease = new AtomicReference<>();
+        private final AtomicReference<@Nullable RuntimeException> failureOnFind = new AtomicReference<>();
 
         ScriptedStore(InMemorySagaStateStore<Order> delegate) {
             this.delegate = delegate;
@@ -1144,6 +1752,11 @@ class SagaHeldEventTest {
         /** Makes the next release throw, once, and leave the copy held. */
         void failNextRelease(RuntimeException failure) {
             failureOnNextRelease.set(failure);
+        }
+
+        /** Makes every read of the instance with its state throw, as a store does whose converter no longer understands what it wrote. {@code findWithoutState} keeps answering. */
+        void cannotDecodeTheState(RuntimeException failure) {
+            failureOnFind.set(failure);
         }
 
         void nextFindMissesTheInstance() {
@@ -1161,6 +1774,10 @@ class SagaHeldEventTest {
 
         @Override
         public Optional<SagaEnvelope<Order>> find(String sagaId) {
+            RuntimeException failure = failureOnFind.get();
+            if (failure != null) {
+                throw failure;
+            }
             return missNextFind.compareAndSet(true, false) ? Optional.empty() : delegate.find(sagaId);
         }
 

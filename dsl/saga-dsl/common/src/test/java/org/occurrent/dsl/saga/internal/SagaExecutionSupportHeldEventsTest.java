@@ -338,7 +338,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = startedWith(marksUpTo(10));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 10), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 10), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.RELEASE_APPLIED);
@@ -350,7 +350,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = startedWith(marksUpTo(10, 9L));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 9), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 9), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.RELEASE_APPLIED);
@@ -362,7 +362,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = started(Map.of(), marksUpTo(100), Set.of(STREAM + "@5"), Set.of(), null);
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 5), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 5), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.RELEASE_APPLIED);
@@ -374,7 +374,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = startedWith(Set.of("event-1 from urn:test"), Set.of());
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, withoutStreamKey("event-1 from urn:test", NOW), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, withoutStreamKey("event-1 from urn:test", NOW), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.RELEASE_APPLIED);
@@ -386,7 +386,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = startedWith(Set.of("event-2 from urn:test"), Set.of());
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, withoutStreamKey("event-1 from urn:test", NOW), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, withoutStreamKey("event-1 from urn:test", NOW), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -398,7 +398,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = started(Map.of(), Map.of(), Set.of(), Set.of(), new StartMark(STREAM, 10, null));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 4), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 4), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.RELEASE_BEFORE_START);
@@ -410,7 +410,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = started(Map.of(), Map.of(), Set.of(), Set.of(), new StartMark(STREAM, 10, null));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 11), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 11), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -422,7 +422,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = started(Map.of(), Map.of(), Set.of(), Set.of(), new StartMark(STREAM, 10, null));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 10), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 10), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -434,7 +434,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = started(Map.of(), Map.of(), Set.of(), Set.of(), new StartMark(STREAM, 10, null));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(OTHER_STREAM, 4), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(OTHER_STREAM, 4), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -446,7 +446,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = started(Map.of(), Map.of(), Set.of(), Set.of(), null);
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 4), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 4), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -458,7 +458,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = started(Map.of(), marksUpTo(50), Set.of(), Set.of(STREAM + "@5"), null);
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, selfHeld(STREAM, 5), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, selfHeld(STREAM, 5), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -470,7 +470,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = startedWith(marksUpTo(50));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, outstanding(STREAM, 5), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, outstanding(STREAM, 5), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -482,7 +482,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = startedWith(marksUpTo(10));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 11), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 11), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -494,7 +494,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = startedWith(marksUpTo(10));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(OTHER_STREAM, 1), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(OTHER_STREAM, 1), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -506,7 +506,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = startedWith(marksUpTo(50));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 5), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 5), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.LEAVE_BEHIND_WINDOW);
@@ -518,7 +518,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = startedWith(marksUpTo(50));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, selfHeld(STREAM, 5), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, selfHeld(STREAM, 5), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.LEAVE_SELF_HELD);
@@ -530,7 +530,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = startedWith(marksUpTo(10));
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, selfHeld(STREAM, 11), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, selfHeld(STREAM, 11), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -542,7 +542,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = started(Map.of(STREAM, 10L), Map.of(), Set.of(), Set.of(), null);
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 8), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 8), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY_FROM_THE_FLOOR);
@@ -554,7 +554,7 @@ class SagaExecutionSupportHeldEventsTest {
             SagaEnvelope<OrderState> instance = started(Map.of(STREAM, 10L), Map.of(), Set.of(), Set.of(), null);
 
             // When
-            HeldStep step = SagaExecutionSupport.drainStep(instance, held(STREAM, 11), WINDOW);
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), instance, held(STREAM, 11), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.APPLY);
@@ -895,6 +895,173 @@ class SagaExecutionSupportHeldEventsTest {
 
             // Then
             assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3, 17L));
+        }
+    }
+
+    @Nested
+    @DisplayName("when an event of the stream that started the instance sits below the start")
+    class WhenAnEventOfTheStreamThatStartedTheInstanceSitsBelowTheStart {
+
+        private final SagaEnvelope<OrderState> startedAtFive = started(Map.of(), Map.of(), Set.of(), Set.of(), new StartMark(STREAM, 5, null));
+
+        /** As {@link #orderSaga()}, with the item type a start type too, so the one event is of a start type here and of none there. */
+        private Saga<OrderEvent, OrderState, OrderCommand> sagaStartingOnOrderPlacedAndItemAdded() {
+            return Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .startsOn(ItemAdded.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new Open(0))
+                    .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new OpenLedger(e.orderId()))))
+                    .evolve(ItemAdded.class, (state, e) -> new Open(((Open) state).items() + 1))
+                    .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))))
+                    .react(PaymentReserved.class, (state, e) -> List.of(SagaEffect.issue(new Ship(e.orderId()))))
+                    .build();
+        }
+
+        private SagaInput<OrderEvent> paymentReserved() {
+            return SagaInput.event(new PaymentReserved(SAGA_ID));
+        }
+
+        private EventMeta paymentMetaAt(String streamId, long version) {
+            return new EventMeta(streamId, version, null, PaymentReserved.class.getName());
+        }
+
+        @Test
+        void an_event_of_another_type_than_a_start_type_is_not_processed() {
+            // When
+            Outcome<OrderState, OrderCommand> outcome = process(startedAtFive, itemAdded(), metaAt(STREAM, 3), HeldContext.NONE);
+
+            // Then
+            assertAll(
+                    () -> assertThat(outcome.processed()).isFalse(),
+                    () -> assertThat(outcome.held()).isFalse(),
+                    () -> assertThat(outcome.envelope()).isNull(),
+                    () -> assertThat(outcome.commands()).isEmpty());
+        }
+
+        @Test
+        void an_event_of_another_type_than_a_start_type_is_before_the_start_when_the_saga_has_one_start_type() {
+            assertThat(SagaExecutionSupport.isBeforeTheStart(orderSaga(), startedAtFive, paymentReserved(), paymentMetaAt(STREAM, 3))).isTrue();
+        }
+
+        @Test
+        void an_event_of_another_type_than_a_start_type_is_not_before_the_start_when_the_saga_has_several_start_types() {
+            assertThat(SagaExecutionSupport.isBeforeTheStart(sagaStartingOnOrderPlacedAndItemAdded(), startedAtFive, paymentReserved(), paymentMetaAt(STREAM, 3))).isFalse();
+        }
+
+        @Test
+        void an_event_of_a_start_type_is_not_before_the_start_when_the_saga_has_one_start_type() {
+            // Given
+            SagaInput<OrderEvent> startType = SagaInput.event(new OrderPlaced(SAGA_ID));
+
+            // Then
+            assertThat(SagaExecutionSupport.isBeforeTheStart(orderSaga(), startedAtFive, startType, new EventMeta(STREAM, 3L, null, OrderPlaced.class.getName()))).isFalse();
+        }
+
+        @Test
+        void an_event_of_another_type_than_a_start_type_is_processed_when_the_saga_has_several_start_types() {
+            // When
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(sagaStartingOnOrderPlacedAndItemAdded(), SAGA_ID, startedAtFive,
+                    paymentReserved(), paymentMetaAt(STREAM, 3), NOW, WINDOW, HeldContext.NONE);
+
+            // Then
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.commands()).containsExactly(new Ship(SAGA_ID)));
+        }
+
+        @Test
+        void a_held_copy_below_the_start_is_released_by_a_drain_when_the_saga_has_one_start_type() {
+            // When
+            HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), startedAtFive, held(STREAM, 3), WINDOW);
+
+            // Then
+            assertThat(step).isEqualTo(HeldStep.RELEASE_BEFORE_START);
+        }
+
+        @Test
+        void a_held_copy_below_the_start_is_classified_by_a_drain_and_applied_as_new_when_the_saga_has_several_start_types() {
+            // When
+            HeldStep step = SagaExecutionSupport.drainStep(sagaStartingOnOrderPlacedAndItemAdded(), startedAtFive, held(STREAM, 3), WINDOW);
+
+            // Then
+            assertThat(step).isEqualTo(HeldStep.APPLY);
+        }
+
+        @Test
+        void a_held_copy_below_the_start_that_the_instance_has_already_applied_is_released_as_applied_when_the_saga_has_several_start_types() {
+            // Given the item type applied up to version 3 of the stream
+            SagaEnvelope<OrderState> applied = started(Map.of(), marksUpTo(3), Set.of(), Set.of(), new StartMark(STREAM, 5, null));
+
+            // When
+            HeldStep step = SagaExecutionSupport.drainStep(sagaStartingOnOrderPlacedAndItemAdded(), applied, held(STREAM, 3), WINDOW);
+
+            // Then
+            assertThat(step).isEqualTo(HeldStep.RELEASE_APPLIED);
+        }
+
+        @Test
+        void an_event_of_a_start_type_is_processed() {
+            // When
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(sagaStartingOnOrderPlacedAndItemAdded(), SAGA_ID, startedAtFive,
+                    itemAdded(), metaAt(STREAM, 3), NOW, WINDOW, HeldContext.NONE);
+
+            // Then
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.commands()).containsExactly(new Reserve(SAGA_ID, "book")));
+        }
+
+        @Test
+        void an_event_above_the_start_is_processed() {
+            // When
+            Outcome<OrderState, OrderCommand> outcome = process(startedAtFive, itemAdded(), metaAt(STREAM, 6), HeldContext.NONE);
+
+            // Then
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.commands()).containsExactly(new Reserve(SAGA_ID, "book")));
+        }
+
+        @Test
+        void an_event_at_the_version_of_the_start_is_processed() {
+            // When
+            Outcome<OrderState, OrderCommand> outcome = process(startedAtFive, itemAdded(), metaAt(STREAM, 5), HeldContext.NONE);
+
+            // Then
+            assertThat(outcome.processed()).isTrue();
+        }
+
+        @Test
+        void an_event_of_another_stream_with_a_version_below_the_start_is_processed() {
+            // When
+            Outcome<OrderState, OrderCommand> outcome = process(startedAtFive, itemAdded(), metaAt(OTHER_STREAM, 3), HeldContext.NONE);
+
+            // Then
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.commands()).containsExactly(new Reserve(SAGA_ID, "book")));
+        }
+
+        @Test
+        void an_event_without_a_stream_key_is_processed() {
+            // When
+            Outcome<OrderState, OrderCommand> outcome = process(startedAtFive, itemAdded(), EventMeta.NONE, HeldContext.NONE);
+
+            // Then
+            assertThat(outcome.processed()).isTrue();
+        }
+
+        @Test
+        void an_event_is_processed_when_the_instance_has_no_start_mark_because_it_was_stored_before_0_35_0() {
+            // Given
+            SagaEnvelope<OrderState> withoutStartMark = started(Map.of(), Map.of(), Set.of(), Set.of(), null);
+
+            // When
+            Outcome<OrderState, OrderCommand> outcome = process(withoutStartMark, itemAdded(), metaAt(STREAM, 3), HeldContext.NONE);
+
+            // Then
+            assertThat(outcome.processed()).isTrue();
         }
     }
 

@@ -75,9 +75,10 @@ import static java.util.Objects.requireNonNull;
  * @param selfHeldKeys      the keys of versions that failed on this instance and are held because they could not be
  *                          listed as pending. A version whose key is here is applied when it arrives, however far
  *                          behind it is, and applying it removes the key
- * @param startMark         the event that started the instance, or {@code null} for one stored before 0.35.0. A held
- *                          event of the start's stream with a lower version committed before the start, so the drain
- *                          releases it without applying it
+ * @param startMark         the event that started the instance, or {@code null} for one stored before 0.35.0. An event
+ *                          of the start's stream with a lower version committed before the start. On a saga with one
+ *                          start event type, such an event of another type is skipped when it is delivered after the
+ *                          start, and the drain releases its held copy without applying it
  * @param <S>               the user state type
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
