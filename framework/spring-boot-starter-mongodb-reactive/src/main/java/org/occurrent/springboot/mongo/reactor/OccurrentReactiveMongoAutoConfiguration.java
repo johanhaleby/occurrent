@@ -127,7 +127,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Bean
     @ConditionalOnMissingBean(ReactiveMongoTransactionManager.class)
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
-    public CommitRetryingReactiveMongoTransactionManager reactiveMongoTransactionManager(ReactiveMongoDatabaseFactory dbFactory) {
+    public ReactiveMongoTransactionManager reactiveMongoTransactionManager(ReactiveMongoDatabaseFactory dbFactory) {
         return new CommitRetryingReactiveMongoTransactionManager(dbFactory);
     }
 

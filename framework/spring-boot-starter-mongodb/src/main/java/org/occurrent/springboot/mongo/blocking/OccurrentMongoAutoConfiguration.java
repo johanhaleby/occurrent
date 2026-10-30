@@ -143,7 +143,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Bean
     @ConditionalOnMissingBean(MongoTransactionManager.class)
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
-    public CommitRetryingMongoTransactionManager mongoTransactionManager(MongoDatabaseFactory dbFactory) {
+    public MongoTransactionManager mongoTransactionManager(MongoDatabaseFactory dbFactory) {
         return new CommitRetryingMongoTransactionManager(dbFactory, TransactionOptions.builder().readConcern(ReadConcern.MAJORITY).writeConcern(WriteConcern.MAJORITY).build());
     }
 

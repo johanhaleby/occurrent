@@ -577,6 +577,14 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                 assertThat(context.getBean(MongoTransactionManager.class)).isSameAs(own));
     }
 
+    @Test
+    void the_transaction_manager_method_keeps_the_return_type_it_shipped_with() throws NoSuchMethodException {
+        // Compiled callers bind to the method descriptor and subclasses override it, so narrowing the return type to the
+        // retrying manager would break both. The bean the method returns is still the retrying one.
+        assertThat(OccurrentMongoAutoConfiguration.class.getMethod("mongoTransactionManager", MongoDatabaseFactory.class).getReturnType())
+                .isEqualTo(MongoTransactionManager.class);
+    }
+
     private ApplicationContextRunner eventStoreConfigContextRunner() {
         return contextRunner
                 .withPropertyValues("occurrent.event-store.enabled=true")

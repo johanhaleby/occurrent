@@ -368,6 +368,14 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     }
 
     @Test
+    void the_transaction_manager_method_keeps_the_return_type_it_shipped_with() throws NoSuchMethodException {
+        // Compiled callers bind to the method descriptor and subclasses override it, so narrowing the return type to the
+        // retrying manager would break both. The bean the method returns is still the retrying one.
+        assertThat(OccurrentReactiveMongoAutoConfiguration.class.getMethod("reactiveMongoTransactionManager", ReactiveMongoDatabaseFactory.class).getReturnType())
+                .isEqualTo(ReactiveMongoTransactionManager.class);
+    }
+
+    @Test
     void a_transaction_manager_defined_by_the_application_replaces_the_one_the_starter_creates() {
         ReactiveMongoTransactionManager own = new ReactiveMongoTransactionManager(databaseFactory);
 
