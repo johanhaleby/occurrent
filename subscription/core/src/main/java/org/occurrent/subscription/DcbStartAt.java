@@ -60,9 +60,9 @@ public sealed interface DcbStartAt {
     /**
      * Start subscribing from the beginning of the DCB sequence, replaying the whole history by {@code position} before
      * switching to live delivery. DCB positions are assigned from {@code 1}, so the replay starts after position
-     * {@code 0} and delivers the first event. The history replay is performed by a catch-up-capable subscription model
-     * (the Spring Boot stack includes one), so a subscription model without catch-up support may not replay past events
-     * from this position.
+     * {@code 0} and delivers the first event. A catch-up subscription model replays the history, and the Spring Boot
+     * stack includes one. A subscription model without catch-up support may not replay past events from this position,
+     * and the MongoDB subscription models refuse it with an {@link UnsupportedStartAtException}.
      */
     static DcbStartAt beginning() {
         return new AtPosition(0);

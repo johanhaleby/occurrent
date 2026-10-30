@@ -30,10 +30,21 @@ import java.util.function.Function;
  * <p>
  * It is the DCB counterpart to the reactive {@link FluxSubscriptionModel}, accepting a {@link DcbCriteria} and a
  * {@link DcbStartAt} rather than a stream filter and a generic start position. The {@link DcbStartAt} is passed through
- * to the underlying {@link FluxSubscriptionModel}, so whether a replay-oriented start such as {@link DcbStartAt#beginning()}
- * or {@link DcbStartAt#checkpoint(String)} replays history depends on that model. A plain model such as
- * {@code ReactorMongoSubscriptionModel} has no DCB catch-up and treats such a start as live, whereas a model composed
- * with {@code ReactorDcbCatchupSubscriptionModel} replays history from that position before going live.
+ * to the underlying {@link FluxSubscriptionModel}, so what a start does depends on that model.
+ * <p>
+ * A model composed with {@code ReactorDcbCatchupSubscriptionModel} replays history from {@link DcbStartAt#beginning()},
+ * or from a checkpoint a replayed event delivered, before going live.
+ * <p>
+ * {@code ReactorMongoSubscriptionModel} has no DCB catch-up. It refuses a start at a DCB position, such as
+ * {@link DcbStartAt#beginning()}, and a checkpoint a replayed event delivered, with an
+ * {@link org.occurrent.subscription.UnsupportedStartAtException}, because neither is a position in its change stream.
+ * The {@code Flux}-returning {@code subscribe} methods deliver the exception as an error on the {@code Flux}, and the
+ * named {@code subscribe} methods throw it.
+ * <p>
+ * A checkpoint taken from an event that model delivered live works, and so do {@link DcbStartAt#now()} and
+ * {@link DcbStartAt#subscriptionModelDefault()}. A dynamic start is not checked, so one that resolves to a refused
+ * start opens at the present instead. A checkpoint string the model does not recognise is not refused either, and it
+ * opens at the present.
  * <p>
  * The {@code subscribe(criteria)}/{@code subscribe(criteria, startAt)} methods above return a bare {@link Flux}: the
  * subscription lives as long as something is subscribed to the {@code Flux} and is cancelled by disposing that

@@ -249,7 +249,7 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
     }
 
     // Attached as the context starts, before any subscription does, so it holds the refusal however soon after startup a
-    // catch-up thread logs it. A CapturedOutput misses a line printed while an earlier test method ran.
+    // catch-up thread logs it
     static class CatchupSupportLog {
         private final Logger logger = (Logger) LoggerFactory.getLogger("org.occurrent.subscription.reactor.durable.catchup.NamedCatchupSupport");
         private final ListAppender<ILoggingEvent> appender = new ListAppender<>();

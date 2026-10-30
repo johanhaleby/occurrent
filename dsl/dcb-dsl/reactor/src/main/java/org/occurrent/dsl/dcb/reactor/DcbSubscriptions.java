@@ -48,9 +48,10 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * Delivery is live. Events are filtered by the {@link DcbCriteria} server-side where the backend supports it, with an
  * in-process scoping filter as a correctness floor. A {@link DcbStartAt} is passed through to the underlying
- * {@link FluxSubscriptionModel}, so whether a replay-oriented start such as {@link DcbStartAt#beginning()} replays history
- * depends on that model. A plain model has no DCB catch-up and treats such a start as live, whereas a model composed
- * with {@code ReactorDcbCatchupSubscriptionModel} replays history from that position before going live.
+ * {@link FluxSubscriptionModel}, so what a start such as {@link DcbStartAt#beginning()} does depends on that model. A
+ * model composed with {@code ReactorDcbCatchupSubscriptionModel} replays history from that position before going live.
+ * {@code ReactorMongoSubscriptionModel} has no DCB catch-up and refuses such a start with an
+ * {@link org.occurrent.subscription.UnsupportedStartAtException}, as {@link DcbSubscriptionModel} describes.
  * <p>
  * The {@link #subscribe(String, DcbCriteria, Function)} and {@link #subscribeWithMetadata(String, DcbCriteria, BiFunction)}
  * methods below are the named, lifecycle-managed counterpart to the {@link Flux}-returning methods above, mirroring
