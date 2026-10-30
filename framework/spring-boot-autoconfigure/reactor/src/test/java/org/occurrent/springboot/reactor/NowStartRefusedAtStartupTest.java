@@ -38,10 +38,10 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModelConfig;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.core.NestedExceptionUtils;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.NestedExceptionUtils;
 import reactor.core.publisher.Mono;
 
 import java.util.concurrent.CountDownLatch;
@@ -145,11 +145,12 @@ class NowStartRefusedAtStartupTest {
     // Nothing waits for the refusal in the background, so the position read being asked is what shows the registration
     // reached the point where it is either refused or started. A subscription that was wrongly started would be
     // subscribed in the wrapped model by then or shortly after, which is why the absence is observed for a while.
-    @ParameterizedTest
-    @EnumSource(FeedPosition.class)
-    void the_application_context_starts_without_subscribing_a_background_default_resume_behavior_now_subscription_that_cannot_have_its_start_position_recorded(FeedPosition feedPosition) {
+    // Only ANSWERS_NOTHING is covered here. A failing read is retried with backoff and never subscribes, so from outside
+    // a retry and a refusal look the same within the window and the test would pass either way.
+    @Test
+    void the_application_context_starts_without_subscribing_a_background_default_resume_behavior_now_subscription_that_cannot_have_its_start_position_recorded() {
         // Given
-        ApplicationContextRunner runner = runner(feedPosition).withBean(BackgroundNowHolder.class);
+        ApplicationContextRunner runner = runner(FeedPosition.ANSWERS_NOTHING).withBean(BackgroundNowHolder.class);
 
         // When
         runner.run(context -> {
@@ -157,7 +158,26 @@ class NowStartRefusedAtStartupTest {
             assertThat(context).hasNotFailed();
             UnreadableFeedDelegate delegate = (UnreadableFeedDelegate) context.getBean(RecordingDelegate.Holder.class).delegate();
             assertThat(delegate.positionAsked.await(5, TimeUnit.SECONDS)).describedAs("the feed position was asked for").isTrue();
-            assertThat(holdsFor(() -> delegate.isSubscribed(NOW_ID), 500)).describedAs("subscribed in the wrapped model").isFalse();
+            assertThat(becomesTrueWithin(() -> delegate.isSubscribed(NOW_ID), 500)).describedAs("subscribed in the wrapped model").isFalse();
+        });
+    }
+
+    // In manual mode nothing waits for the subscription to start, so the context starts whatever the feed answers. The
+    // registration is still made, so the feed position is asked for and the refusal it gets does not fail the context.
+    @Test
+    void the_application_context_starts_without_subscribing_a_default_resume_behavior_now_subscription_in_manual_mode_that_cannot_have_its_start_position_recorded() {
+        // Given
+        ApplicationContextRunner runner = runner(FeedPosition.ANSWERS_NOTHING)
+                .withPropertyValues("occurrent.subscription.mode=manual")
+                .withBean(NowHolder.class);
+
+        // When
+        runner.run(context -> {
+            // Then
+            assertThat(context).hasNotFailed();
+            UnreadableFeedDelegate delegate = (UnreadableFeedDelegate) context.getBean(RecordingDelegate.Holder.class).delegate();
+            assertThat(delegate.positionAsked.await(5, TimeUnit.SECONDS)).describedAs("the feed position was asked for").isTrue();
+            assertThat(becomesTrueWithin(() -> delegate.isSubscribed(NOW_ID), 500)).describedAs("subscribed in the wrapped model").isFalse();
         });
     }
 
@@ -179,7 +199,7 @@ class NowStartRefusedAtStartupTest {
     }
 
     // Whether the condition holds at some point within the time given
-    private static boolean holdsFor(BooleanSupplier condition, long millis) throws InterruptedException {
+    private static boolean becomesTrueWithin(BooleanSupplier condition, long millis) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis);
         while (System.nanoTime() < deadline) {
             if (condition.getAsBoolean()) {
