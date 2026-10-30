@@ -28,17 +28,22 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.reactor.DcbSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -63,6 +68,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -412,16 +418,123 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
-        void subscribing_at_a_dynamic_position_is_not_checked() {
+        void subscribing_at_a_global_checkpoint_of_zero_is_refused_and_leaves_the_id_free() {
+            assertNamedSubscribeIsRefusedAndLeavesTheIdFree(GlobalCheckpoint.of(0));
+        }
+
+        @Test
+        void subscribing_at_a_dynamic_position_answering_a_global_checkpoint_is_refused_and_leaves_the_id_free() {
+            assertNamedSubscribeAtADynamicPositionIsRefusedAndLeavesTheIdFree(GlobalCheckpoint.of(0));
+        }
+
+        @Test
+        void subscribing_at_a_dynamic_position_answering_a_catchup_time_checkpoint_is_refused_and_leaves_the_id_free() {
+            assertNamedSubscribeAtADynamicPositionIsRefusedAndLeavesTheIdFree(catchupTimeCheckpoint());
+        }
+
+        @Test
+        void the_flux_subscribed_at_a_dynamic_position_answering_a_global_checkpoint_fails_when_subscribed_to() {
+            assertFluxAtADynamicPositionFailsWhenSubscribedTo(GlobalCheckpoint.of(0), startAt -> subscription.subscribe(startAt));
+        }
+
+        @Test
+        void the_flux_subscribed_at_a_dynamic_position_answering_a_catchup_time_checkpoint_fails_when_subscribed_to() {
+            assertFluxAtADynamicPositionFailsWhenSubscribedTo(catchupTimeCheckpoint(), startAt -> subscription.subscribe(startAt));
+        }
+
+        @Test
+        void the_flux_that_fails_if_the_start_is_lost_fails_when_subscribed_to_at_a_dynamic_position_answering_a_global_checkpoint() {
+            assertFluxAtADynamicPositionFailsWhenSubscribedTo(GlobalCheckpoint.of(0), startAt -> subscription.subscribeFailingIfStartLost(null, startAt));
+        }
+
+        @Test
+        void the_flux_that_fails_on_history_loss_fails_when_subscribed_to_at_a_dynamic_position_answering_a_global_checkpoint() {
+            assertFluxAtADynamicPositionFailsWhenSubscribedTo(GlobalCheckpoint.of(0), startAt -> subscription.subscribeFailingOnHistoryLoss(null, startAt));
+        }
+
+        @Test
+        void the_dcb_flux_subscribed_at_a_dynamic_position_answering_the_beginning_fails_when_subscribed_to() {
             // Given
+            DcbSubscriptionModel dcbSubscription = DcbSubscriptionModel.from(subscription);
+
+            // When
+            Flux<CloudEvent> flux = dcbSubscription.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.dynamic(ctx -> DcbStartAt.beginning()));
+
+            // Then
+            StepVerifier.create(flux)
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                            .hasMessageContaining("\"" + GlobalCheckpoint.of(0).asString() + "\""))
+                    .verify(Duration.ofSeconds(5));
+        }
+
+        @Test
+        void the_dcb_named_subscription_at_a_dynamic_position_answering_the_beginning_stops_with_the_exception() {
+            // Given
+            DcbSubscriptionModel dcbSubscription = DcbSubscriptionModel.from(subscription);
             String subscriptionId = UUID.randomUUID().toString();
 
             // When
-            Throwable throwable = catchThrowable(() -> subscription.subscribe(subscriptionId, StartAt.dynamic(() -> StartAt.checkpoint(GlobalCheckpoint.of(7))), cloudEvent -> Mono.empty()));
+            Subscription started = dcbSubscription.subscribe(subscriptionId, DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.dynamic(ctx -> DcbStartAt.beginning()), cloudEvent -> Mono.empty());
 
             // Then
-            assertThat(throwable).isNull();
-            assertThat(subscription.isRunning(subscriptionId)).isTrue();
+            StepVerifier.create(started.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                            .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                            .hasMessageContaining("\"" + GlobalCheckpoint.of(0).asString() + "\""))
+                    .verify(Duration.ofSeconds(5));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(subscription.isRunning(subscriptionId)).isFalse());
+        }
+
+        @Test
+        void subscribing_at_a_dynamic_position_answering_a_live_checkpoint_delivers_the_events_after_it() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> first = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<CloudEvent> second = new CopyOnWriteArrayList<>();
+            Subscription live = subscription.subscribe(UUID.randomUUID().toString(), StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> first.add(cloudEvent)));
+            assertThat(live.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            NameDefined e1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(e1)).block();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(first).extracting(CloudEvent::getId).contains(e1.eventId()));
+            Checkpoint afterE1 = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(first.getFirst());
+            NameWasChanged e2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+            mongoEventStore.write("1", 1, serialize(e2)).block();
+
+            // When
+            Subscription started = subscription.subscribe(UUID.randomUUID().toString(), StartAt.dynamic(ctx -> StartAt.checkpoint(afterE1)), cloudEvent -> Mono.fromRunnable(() -> second.add(cloudEvent)));
+
+            // Then it starts and delivers what was written after the checkpoint, and not what came before it
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(second).extracting(CloudEvent::getId).contains(e2.eventId()));
+            assertThat(second).extracting(CloudEvent::getId).doesNotContain(e1.eventId());
+        }
+
+        @Test
+        void the_flux_subscribed_at_a_dynamic_position_answering_a_live_checkpoint_delivers_the_events_after_it() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> first = new CopyOnWriteArrayList<>();
+            Subscription live = subscription.subscribe(UUID.randomUUID().toString(), StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> first.add(cloudEvent)));
+            assertThat(live.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            NameDefined e1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(e1)).block();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(first).extracting(CloudEvent::getId).contains(e1.eventId()));
+            Checkpoint afterE1 = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(first.getFirst());
+            NameWasChanged e2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+            mongoEventStore.write("1", 1, serialize(e2)).block();
+
+            // When
+            Flux<CloudEvent> flux = subscription.subscribe(StartAt.dynamic(ctx -> StartAt.checkpoint(afterE1)));
+
+            // Then it delivers what was written after the checkpoint, and not what came before it
+            StepVerifier.create(flux)
+                    .expectNextMatches(cloudEvent -> cloudEvent.getId().equals(e2.eventId()))
+                    .thenCancel()
+                    .verify(Duration.ofSeconds(10));
         }
 
         private void assertNamedSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint) {
@@ -471,6 +584,63 @@ public class ReactorMongoSubscriptionModelTest {
                     .expectErrorSatisfies(throwable -> assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
                             .hasMessageContaining("\"" + checkpoint.asString() + "\"")
                             .satisfies(refused -> assertThat(((UnsupportedStartAtException) refused).startAt()).isSameAs(startAt)))
+                    .verify(Duration.ofSeconds(5));
+        }
+
+        private void assertNamedSubscribeAtADynamicPositionIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint) {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> refused = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<CloudEvent> later = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            NameDefined writtenBefore = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBefore)).block();
+            StartAt answered = StartAt.checkpoint(checkpoint);
+            StartAt startAt = StartAt.dynamic(ctx -> answered);
+
+            // When
+            AtomicReference<Subscription> started = new AtomicReference<>();
+            Throwable thrownByTheCall = catchThrowable(() -> started.set(subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.fromRunnable(() -> refused.add(cloudEvent)))));
+
+            // Then the call returns, and the subscription stops with the exception, naming the id and the checkpoint
+            assertThat(thrownByTheCall).isNull();
+            StepVerifier.create(started.get().waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                            .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                            .hasMessageContaining("\"" + checkpoint.asString() + "\"")
+                            .satisfies(unsupported -> assertThat(((UnsupportedStartAtException) unsupported).startAt()).isSameAs(answered)))
+                    .verify(Duration.ofSeconds(5));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(subscription.isRunning(subscriptionId)).isFalse());
+            assertThat(subscription.isPaused(subscriptionId)).isFalse();
+
+            // And the id can be used again, while the refused handler is never called
+            Subscription restarted = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> later.add(cloudEvent)));
+            assertThat(restarted.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            NameWasChanged sentinel = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "sentinel");
+            mongoEventStore.write("1", 1, serialize(sentinel)).block();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(later).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+            assertThat(refused).isEmpty();
+        }
+
+        private void assertFluxAtADynamicPositionFailsWhenSubscribedTo(Checkpoint checkpoint, Function<StartAt, Flux<CloudEvent>> subscribe) {
+            // Given
+            NameDefined writtenBefore = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBefore)).block();
+            StartAt answered = StartAt.checkpoint(checkpoint);
+            StartAt startAt = StartAt.dynamic(ctx -> answered);
+
+            // When
+            AtomicReference<Flux<CloudEvent>> flux = new AtomicReference<>();
+            Throwable thrownByTheCall = catchThrowable(() -> flux.set(subscribe.apply(startAt)));
+
+            // Then the call returns the Flux, which fails with the exception before it delivers anything, naming the checkpoint
+            assertThat(thrownByTheCall).isNull();
+            StepVerifier.create(flux.get())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                            .hasMessageContaining("\"" + checkpoint.asString() + "\"")
+                            .satisfies(unsupported -> assertThat(((UnsupportedStartAtException) unsupported).startAt()).isSameAs(answered)))
                     .verify(Duration.ofSeconds(5));
         }
 

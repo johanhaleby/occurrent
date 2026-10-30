@@ -42,6 +42,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions.HistoryLossListener;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions.QuietPositionListener;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -242,7 +243,7 @@ public final class ChangeStreamSubscriptions {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
         }
 
-        StartAt subscribedAt = ownInstanceOf(startAt);
+        StartAt subscribedAt = MongoCommons.refusingCatchupPositionAtFirstAnswer(ownInstanceOf(startAt), subscriptionId);
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(subscribedAt);
         PresentAtSubscribe presentAtSubscribe = new PresentAtSubscribe(subscribedAt, (present, cancelled) -> recordThePresent(subscriptionId, currentStartAt, present, cancelled));
         InternalSubscription internalSubscription = new InternalSubscription(log, currentStartAt, action, changeStreamPipeline, presentAtSubscribe);
@@ -469,6 +470,10 @@ public final class ChangeStreamSubscriptions {
                 // nothing else would say why the node went quiet.
                 log.error("Checkpoint write for subscription {} was refused: {}. A node with a newer lease has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it. The refused write was for an event, or for a position reached while no event matched.", subscriptionId, e.getMessage(), e);
                 throw e;
+            } else if (e instanceof UnsupportedStartAtException) {
+                // Refused rather than retried, since a retry runs without end by default and waitUntilStarted() never returns
+                log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, e);
+                forget(subscriptionId, internalSubscription);
             } else if (isChangeStreamHistoryLost(e)) {
                 if (takenOverAfterHistoryLoss(subscriptionId, internalSubscription, openedAt, e)) {
                     return;

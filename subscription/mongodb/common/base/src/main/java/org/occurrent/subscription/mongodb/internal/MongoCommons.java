@@ -48,6 +48,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -528,17 +529,53 @@ public class MongoCommons {
      * A subscription model calls it when a subscription starts, not when one resumes. A durable subscription model
      * wrapping a MongoDB subscription model resumes a subscription at the position a catch-up stored on purpose, and
      * the change stream then goes on from the position the subscription has read to. A dynamic {@link StartAt} is not
-     * checked, for the reason {@link #checkStartPosition(StartAt, SubscriptionModelContext)} gives.
+     * checked here, for the reason {@link #checkStartPosition(StartAt, SubscriptionModelContext)} gives.
+     * {@link #refusingCatchupPositionAtFirstAnswer(StartAt, String)} checks the first position it answers instead.
      *
      * @throws UnsupportedStartAtException If {@code startAt} is a position a catch-up subscription model stores.
      */
     public static void refuseCatchupPosition(@Nullable StartAt startAt) {
-        if (startAt instanceof StartAtCheckpoint position
-                && (GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(position.checkpoint))) {
-            throw new UnsupportedStartAtException(startAt, "Cannot open a change stream at checkpoint \"" + position.checkpoint.asString()
-                    + "\", which is a position a catch-up subscription model stores and not a change stream position. Opening it at the present instead would skip every event written before it. "
-                    + "Start the subscription through the catch-up subscription model that stored the checkpoint.");
+        if (catchupPositionIn(startAt) instanceof Checkpoint checkpoint) {
+            throw new UnsupportedStartAtException(startAt, "Cannot open a change stream at checkpoint \"" + checkpoint.asString()
+                    + "\", " + NOT_A_CHANGE_STREAM_POSITION + "Start the subscription through the catch-up subscription model that stored the checkpoint.");
         }
+    }
+
+    /**
+     * {@code startAt} itself when it isn't dynamic. A dynamic one is wrapped, so that the first position its function
+     * answers is refused when it is a position a catch-up subscription model stores, as
+     * {@link #refuseCatchupPosition(StartAt)} refuses a fixed one. The {@link UnsupportedStartAtException} is thrown
+     * where the subscription model resolves the position, as the change stream opens.
+     * <p>
+     * Only the first answer is checked. The subscription model asks again each time the change stream opens again
+     * before the first event, and refusing then would stop a subscription that is already delivering.
+     *
+     * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
+     */
+    public static StartAt refusingCatchupPositionAtFirstAnswer(StartAt startAt, @Nullable String subscriptionId) {
+        if (!startAt.isDynamic()) {
+            return startAt;
+        }
+        AtomicBoolean answered = new AtomicBoolean();
+        return StartAt.dynamic(ctx -> {
+            StartAt resolved = startAt.get(ctx);
+            if (!answered.get() && catchupPositionIn(resolved) instanceof Checkpoint checkpoint) {
+                String subscription = subscriptionId == null ? "a subscription" : "subscription \"" + subscriptionId + "\"";
+                throw new UnsupportedStartAtException(requireNonNull(resolved), "The dynamic start position of " + subscription + " answered checkpoint \""
+                        + checkpoint.asString() + "\", " + NOT_A_CHANGE_STREAM_POSITION + "Start the subscription through a catch-up subscription model.");
+            }
+            answered.set(true);
+            return resolved;
+        });
+    }
+
+    private static final String NOT_A_CHANGE_STREAM_POSITION = "which is a position a catch-up subscription model stores and not a change stream position. "
+            + "Opening it at the present instead would skip every event written before it. ";
+
+    private static @Nullable Checkpoint catchupPositionIn(@Nullable StartAt startAt) {
+        return startAt instanceof StartAtCheckpoint position
+                && (GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(position.checkpoint))
+                ? position.checkpoint : null;
     }
 
     /**

@@ -29,6 +29,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
@@ -41,6 +42,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class MongoCommonsTest {
@@ -469,5 +471,89 @@ class MongoCommonsTest {
 
     private static Checkpoint checkpointOf(StartAt startAt) {
         return ((StartAt.StartAtCheckpoint) startAt).checkpoint;
+    }
+
+    @Test
+    void refusing_catchup_position_at_first_answer_leaves_a_start_that_is_not_dynamic_as_it_is() {
+        // Given
+        StartAt startAt = StartAt.checkpoint(GlobalCheckpoint.of(0));
+
+        // When
+        StartAt wrapped = MongoCommons.refusingCatchupPositionAtFirstAnswer(startAt, "id");
+
+        // Then
+        assertThat(wrapped).isSameAs(startAt);
+    }
+
+    @Test
+    void refusing_catchup_position_at_first_answer_refuses_a_first_answer_that_is_a_global_checkpoint_naming_the_subscription_and_the_checkpoint() {
+        // Given
+        StartAt answer = StartAt.checkpoint(GlobalCheckpoint.of(0));
+        StartAt wrapped = MongoCommons.refusingCatchupPositionAtFirstAnswer(StartAt.dynamic(ctx -> answer), "mySubscription");
+
+        // When
+        Throwable throwable = catchThrowable(() -> wrapped.get(new SubscriptionModelContext(MongoCommonsTest.class)));
+
+        // Then
+        assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageContaining("subscription \"mySubscription\"")
+                .hasMessageContaining("\"" + GlobalCheckpoint.of(0).asString() + "\"");
+        assertThat(((UnsupportedStartAtException) throwable).startAt()).isSameAs(answer);
+    }
+
+    @Test
+    void refusing_catchup_position_at_first_answer_refuses_a_first_answer_that_is_a_catchup_time_checkpoint() {
+        // Given
+        CatchupTimeCheckpoint checkpoint = CatchupTimeCheckpoint.of("2026-01-01T00:00:00Z", GlobalCheckpoint.of(3), "2026-01-01T00:00:00Z");
+        StartAt wrapped = MongoCommons.refusingCatchupPositionAtFirstAnswer(StartAt.dynamic(ctx -> StartAt.checkpoint(checkpoint)), "id");
+
+        // When
+        Throwable throwable = catchThrowable(() -> wrapped.get(new SubscriptionModelContext(MongoCommonsTest.class)));
+
+        // Then
+        assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("\"" + checkpoint.asString() + "\"");
+    }
+
+    @Test
+    void refusing_catchup_position_at_first_answer_names_no_subscription_when_there_is_no_id() {
+        // Given
+        StartAt wrapped = MongoCommons.refusingCatchupPositionAtFirstAnswer(StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(0))), null);
+
+        // When
+        Throwable throwable = catchThrowable(() -> wrapped.get(new SubscriptionModelContext(MongoCommonsTest.class)));
+
+        // Then
+        assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("a subscription");
+    }
+
+    @Test
+    void refusing_catchup_position_at_first_answer_does_not_refuse_a_later_answer_once_the_first_was_accepted() {
+        // Given
+        AtomicInteger asked = new AtomicInteger();
+        StartAt now = StartAt.checkpoint(new StringBasedCheckpoint("2026-01-01T00:00:00Z"));
+        StartAt catchup = StartAt.checkpoint(GlobalCheckpoint.of(0));
+        StartAt wrapped = MongoCommons.refusingCatchupPositionAtFirstAnswer(StartAt.dynamic(ctx -> asked.getAndIncrement() == 0 ? now : catchup), "id");
+        SubscriptionModelContext context = new SubscriptionModelContext(MongoCommonsTest.class);
+
+        // When
+        StartAt first = wrapped.get(context);
+        StartAt second = wrapped.get(context);
+
+        // Then
+        assertThat(first).isSameAs(now);
+        assertThat(second).isSameAs(catchup);
+    }
+
+    @Test
+    void refusing_catchup_position_at_first_answer_passes_on_a_first_answer_that_is_not_a_catchup_position() {
+        // Given
+        StartAt answer = StartAt.checkpoint(new StringBasedCheckpoint("2026-01-01T00:00:00Z"));
+        StartAt wrapped = MongoCommons.refusingCatchupPositionAtFirstAnswer(StartAt.dynamic(ctx -> answer), "id");
+
+        // When
+        StartAt resolved = wrapped.get(new SubscriptionModelContext(MongoCommonsTest.class));
+
+        // Then
+        assertThat(resolved).isSameAs(answer);
     }
 }

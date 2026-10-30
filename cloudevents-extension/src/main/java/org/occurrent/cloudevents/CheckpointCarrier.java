@@ -33,7 +33,7 @@ public interface CheckpointCarrier {
      * <p>
      * The string means something only to a catch-up subscription. A MongoDB subscription model with no catch-up
      * subscription wrapping it refuses the checkpoint of a replayed event when a subscription starts from a
-     * {@code StartAt} that names it. From a dynamic {@code StartAt} it still opens at the present.
+     * {@code StartAt} that names it, or from a dynamic {@code StartAt} whose function first returns it.
      * <p>
      * The checkpoint of a live event holds a change stream resume token. Once the oplog no longer reaches back to it,
      * a catch-up subscription doesn't restart a subscription from the present. On the blocking stack a subscribe from

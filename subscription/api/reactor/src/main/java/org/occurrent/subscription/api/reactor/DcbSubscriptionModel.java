@@ -41,10 +41,15 @@ import java.util.function.Function;
  * The {@code Flux}-returning {@code subscribe} methods deliver the exception as an error on the {@code Flux}, and the
  * named {@code subscribe} methods throw it.
  * <p>
+ * A {@link DcbStartAt#dynamic(Function) dynamic} start is refused too when the first start its function returns is
+ * one of these. The model calls the function as the change stream opens, so the {@code Flux}-returning methods fail
+ * their {@code Flux} with the exception. A named {@code subscribe} returns normally and then stops the subscription
+ * with it, and {@link Subscription#waitUntilStarted()} fails with it. A start the function returns when the change
+ * stream opens again, before the first event, is not refused.
+ * <p>
  * A checkpoint taken from an event that model delivered live works, and so do {@link DcbStartAt#now()} and
- * {@link DcbStartAt#subscriptionModelDefault()}. A dynamic start is not checked, so one that resolves to a refused
- * start opens at the present instead. A checkpoint string the model does not recognise is not refused either, and it
- * opens at the present.
+ * {@link DcbStartAt#subscriptionModelDefault()}. A checkpoint string the model does not recognise is not refused, and
+ * it opens at the present.
  * <p>
  * The {@code subscribe(criteria)}/{@code subscribe(criteria, startAt)} methods above return a bare {@link Flux}: the
  * subscription lives as long as something is subscribed to the {@code Flux} and is cancelled by disposing that

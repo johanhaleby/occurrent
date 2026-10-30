@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.ThrowableProxy;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
@@ -59,6 +63,7 @@ import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilt
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -1130,17 +1135,43 @@ public class NativeMongoSubscriptionModelTest {
         }
 
         @Test
-        void subscribing_at_a_dynamic_position_is_not_checked() {
+        void subscribing_at_a_global_checkpoint_of_zero_is_refused_and_leaves_the_id_free() {
+            assertSubscribeIsRefusedAndLeavesTheIdFree(GlobalCheckpoint.of(0), false);
+        }
+
+        @Test
+        void subscribing_at_a_dynamic_position_answering_a_global_checkpoint_is_refused_and_leaves_the_id_free() {
+            assertDynamicStartIsRefusedAndLeavesTheIdFree(GlobalCheckpoint.of(0));
+        }
+
+        @Test
+        void subscribing_at_a_dynamic_position_answering_a_catchup_time_checkpoint_is_refused_and_leaves_the_id_free() {
+            assertDynamicStartIsRefusedAndLeavesTheIdFree(catchupTimeCheckpoint());
+        }
+
+        @Test
+        void subscribing_at_a_dynamic_position_answering_a_live_checkpoint_delivers_the_events_after_it() {
             // Given
-            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-            String subscriptionId = UUID.randomUUID().toString();
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> first = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<CloudEvent> second = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), StartAt.now(), first::add).waitUntilStarted(Duration.ofSeconds(10));
+            NameDefined e1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(e1));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(first).extracting(CloudEvent::getId).contains(e1.eventId()));
+            Checkpoint afterE1 = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(first.getFirst());
+            NameWasChanged e2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+            mongoEventStore.write("1", 1, serialize(e2));
 
             // When
-            Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(() -> StartAt.checkpoint(GlobalCheckpoint.of(7))), state::add).waitUntilStarted(Duration.ofSeconds(10)));
+            Subscription started = subscriptionModel.subscribe(UUID.randomUUID().toString(), StartAt.dynamic(ctx -> StartAt.checkpoint(afterE1)), second::add);
 
-            // Then
-            assertThat(throwable).isNull();
-            assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+            // Then it starts and delivers what was written after the checkpoint, and not what came before it
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(second).extracting(CloudEvent::getId).contains(e2.eventId()));
+            assertThat(second).extracting(CloudEvent::getId).doesNotContain(e1.eventId());
         }
 
         private void assertSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint, boolean paused) {
@@ -1170,6 +1201,59 @@ public class NativeMongoSubscriptionModelTest {
                     () -> assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse(),
                     () -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId)
             );
+
+            // And the id can be used again, while the refused handler is never called
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), later::add).waitUntilStarted(Duration.ofSeconds(10));
+            NameWasChanged sentinel = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "sentinel");
+            mongoEventStore.write("1", 1, serialize(sentinel));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(later).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+            assertThat(refused).isEmpty();
+        }
+
+        private void assertDynamicStartIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint) {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> refused = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<CloudEvent> later = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            NameDefined writtenBefore = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBefore));
+            StartAt answered = StartAt.checkpoint(checkpoint);
+            StartAt startAt = StartAt.dynamic(ctx -> answered);
+            ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
+            ListAppender<ILoggingEvent> logged = new ListAppender<>();
+            logged.start();
+            modelLogger.addAppender(logged);
+            try {
+                // When
+                AtomicReference<Subscription> started = new AtomicReference<>();
+                Throwable thrownByTheCall = catchThrowable(() -> started.set(subscriptionModel.subscribe(subscriptionId, startAt, refused::add)));
+
+                // Then the call returns, and the subscription is forgotten without ever starting
+                assertThat(thrownByTheCall).isNull();
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
+                assertAll(
+                        () -> assertThat(started.get().waitUntilStarted(Duration.ofMillis(200))).isFalse(),
+                        () -> assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse(),
+                        () -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId)
+                );
+
+                // And the refusal is logged, naming the id and the checkpoint
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(logged.list).anySatisfy(event -> {
+                            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                            assertThat(event.getThrowableProxy()).isInstanceOfSatisfying(ThrowableProxy.class, proxy -> {
+                                assertThat(proxy.getThrowable()).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                                        .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                                        .hasMessageContaining("\"" + checkpoint.asString() + "\"");
+                                assertThat(((UnsupportedStartAtException) proxy.getThrowable()).startAt()).isSameAs(answered);
+                            });
+                        }));
+            } finally {
+                modelLogger.detachAppender(logged);
+            }
 
             // And the id can be used again, while the refused handler is never called
             subscriptionModel.subscribe(subscriptionId, StartAt.now(), later::add).waitUntilStarted(Duration.ofSeconds(10));

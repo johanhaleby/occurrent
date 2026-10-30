@@ -39,6 +39,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.*;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
@@ -262,7 +263,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         return Flux.defer(() -> {
             MongoCommons.refuseCatchupPosition(startAt);
-            AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
+            AtomicReference<StartAt> currentStartAt = new AtomicReference<>(MongoCommons.refusingCatchupPositionAtFirstAnswer(startAt, null));
             AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
             AtomicReference<@Nullable OpenedAt> openedAt = new AtomicReference<>();
             return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, openedAt::set, currentStartAt::set, () -> {
@@ -285,10 +286,11 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return Flux.defer(() -> {
             // Thrown in here, so the subscriber gets it as the Flux's error
             MongoCommons.refuseCatchupPosition(startAt);
-            AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
+            StartAt subscribedAt = MongoCommons.refusingCatchupPositionAtFirstAnswer(startAt, null);
+            AtomicReference<StartAt> currentStartAt = new AtomicReference<>(subscribedAt);
             AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
             // Only while the Flux hasn't moved off startAt, so a loss after it has read on is handled as subscribe handles it
-            Predicate<Throwable> startLost = throwable -> start != null && isChangeStreamHistoryLost(throwable) && currentStartAt.get() == startAt;
+            Predicate<Throwable> startLost = throwable -> start != null && isChangeStreamHistoryLost(throwable) && currentStartAt.get() == subscribedAt;
             return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, __ -> {
             }, currentStartAt::set, () -> {
             }).retryWhen(unboundedBackoff().filter(throwable -> !startLost.test(throwable) && shouldRestart(null, throwable, () -> {
@@ -324,7 +326,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             // checkStartPosition documents.
             MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(ReactorMongoSubscriptionModel.class));
             MongoCommons.refuseCatchupPosition(startAt);
-            InternalSubscription internalSubscription = new InternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), new AtomicReference<>(presentNow()), action);
+            StartAt subscribedAt = MongoCommons.refusingCatchupPositionAtFirstAnswer(startAt, subscriptionId);
+            InternalSubscription internalSubscription = new InternalSubscription(subscriptionId, filter, new AtomicReference<>(subscribedAt), new AtomicReference<>(presentNow()), action);
             if (!running) {
                 // Model stopped: don't start it, so waitUntilStarted() doesn't complete for a subscription that won't
                 // deliver anything until start(true) or resumeSubscription actually starts it.
@@ -675,6 +678,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         String subscription = subscriptionId == null ? "the subscription" : "subscription " + subscriptionId;
         if (throwable instanceof NoServerClockException) {
             log.error("Cannot work out where to start {}, will not restart subscription!", subscription, throwable);
+            return false;
+        }
+        if (throwable instanceof UnsupportedStartAtException) {
+            log.error("Cannot open the change stream of {} at its start position, will not restart subscription!", subscription, throwable);
             return false;
         }
         if (isChangeStreamHistoryLost(throwable)) {
