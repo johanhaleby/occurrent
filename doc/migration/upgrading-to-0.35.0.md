@@ -715,8 +715,8 @@ To rewind a read model to a point you know is good, keep the checkpoint of the e
 subscription from it.
 
 The string means something only to a catch-up subscription. A MongoDB subscription model with no catch-up wrapping it
-refuses the checkpoint of a replayed event, in a `StartAt` that names it or as the first position a
-`StartAt.dynamic(..)` returns, as
+refuses the checkpoint of a replayed event, in a `StartAt` that names it or as a position a `StartAt.dynamic(..)`
+returns before its change stream has opened, as
 [A MongoDB subscription model refuses a catch-up's checkpoint](#a-mongodb-subscription-model-refuses-a-catch-ups-checkpoint)
 describes.
 
@@ -927,15 +927,22 @@ A `StartAt.dynamic(..)` whose function returns one of these checkpoints opened t
 in 0.34.0 and before. `DcbStartAt.dynamic(..)` returning `DcbStartAt.beginning()` is one. The models now refuse that
 as well. They call the function only as the change stream opens, so `subscribe(..)` returns, and the subscription then
 stops with the `UnsupportedStartAtException` instead of delivering events. `waitUntilStarted(..)` throws it on the
-blocking models, which also log it at `ERROR`, and `waitUntilStarted()` fails with it on the reactor model. Only the
-first position the function returns is checked. See [#1371](https://github.com/johanhaleby/occurrent/issues/1371).
+blocking models, which also log it at `ERROR`, and `waitUntilStarted()` fails with it on the reactor model, except on
+the handle `subscribe(..)` returns while the model is stopped, which never completes. See
+[#1371](https://github.com/johanhaleby/occurrent/issues/1371).
+
+The function is checked until a change stream of the subscription has opened, which on the reactor model means its
+`Flux` was subscribed to. An answer from an opening that a pause or a failure stopped doesn't count. A position the
+function returns after that isn't checked, so a change stream that opens again before the first event opens at the
+present for it.
 
 ### Who is affected
 
 Code that subscribes a MongoDB subscription model directly at a checkpoint a catch-up stored, or delivered with a
 replayed event, in a `StartAt` that names it or from a dynamic start that returns it. A
-resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, still goes on from the position the
-subscription has read to.
+resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, isn't refused. The blocking models go on
+from the position the subscription has read to. The reactor model opens at the moment of the resume, as it did in
+0.34.0, and skips what was written while the subscription was paused.
 
 A blocking `DurableSubscriptionModel` hands the MongoDB model a dynamic start that returns the checkpoint in its
 `CheckpointStorage`. A subscription whose storage holds a catch-up's checkpoint now stops in the same
@@ -943,12 +950,21 @@ way, where it skipped the history before. A Spring Boot starter subscription get
 before it went live and the subscription's start then changed to `DEFAULT`, as
 [#1346](https://github.com/johanhaleby/occurrent/issues/1346) describes.
 
+A `CompetingConsumerSubscriptionModel` wrapping one of these models doesn't see a refusal of a dynamic start, since it
+comes after `subscribe(..)` has returned. The node keeps the lease and the subscription id until you cancel the
+subscription, and it delivers nothing.
+
 ### What to do
 
 Subscribe through the catch-up subscription model that stored the checkpoint. For a `DcbStartAt.dynamic(..)` that
 returns `DcbStartAt.beginning()`, subscribe through a model composed with `DcbCatchupSubscriptionModel` or
 `ReactorDcbCatchupSubscriptionModel`, which replays the history before going live, or return `DcbStartAt.now()` when
 the subscription doesn't need the history.
+
+For a subscription behind a catch-up whose `CheckpointStorage` holds a catch-up's checkpoint, restore the start it had
+when the replay stopped, so the catch-up finishes the replay, or remove the stored checkpoint to start from the new
+start position without the history. A Spring Boot starter subscription at `DEFAULT` waits for its start by default, so
+the exception can stop the application from starting.
 
 ### A record pattern over `NativeMongoSubscription` stops compiling
 

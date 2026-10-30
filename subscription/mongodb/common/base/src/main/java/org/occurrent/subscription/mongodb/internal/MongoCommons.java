@@ -48,9 +48,9 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -527,10 +527,11 @@ public class MongoCommons {
      * present for them, which skips every event written before it.
      * <p>
      * A subscription model calls it when a subscription starts, not when one resumes. A durable subscription model
-     * wrapping a MongoDB subscription model resumes a subscription at the position a catch-up stored on purpose, and
-     * the change stream then goes on from the position the subscription has read to. A dynamic {@link StartAt} is not
-     * checked here, for the reason {@link #checkStartPosition(StartAt, SubscriptionModelContext)} gives.
-     * {@link #refusingCatchupPositionAtFirstAnswer(StartAt, String)} checks the first position it answers instead.
+     * wrapping a blocking MongoDB subscription model resumes a subscription at the position a catch-up stored on
+     * purpose, and the change stream then goes on from the position the subscription has read to. A dynamic
+     * {@link StartAt} is not checked here, for the reason {@link #checkStartPosition(StartAt, SubscriptionModelContext)}
+     * gives. {@link #refusingCatchupPositionUntilOpened(StartAt, String, BooleanSupplier)} checks the positions it
+     * answers instead.
      *
      * @throws UnsupportedStartAtException If {@code startAt} is a position a catch-up subscription model stores.
      */
@@ -542,29 +543,30 @@ public class MongoCommons {
     }
 
     /**
-     * {@code startAt} itself when it isn't dynamic. A dynamic one is wrapped, so that the first position its function
-     * answers is refused when it is a position a catch-up subscription model stores, as
-     * {@link #refuseCatchupPosition(StartAt)} refuses a fixed one. The {@link UnsupportedStartAtException} is thrown
-     * where the subscription model resolves the position, as the change stream opens.
+     * {@code startAt} itself when it isn't dynamic. A dynamic one is wrapped, so that a position its function answers
+     * before a change stream of the subscription has opened is refused when it is a position a catch-up subscription
+     * model stores, as {@link #refuseCatchupPosition(StartAt)} refuses a fixed one. An answer that was never opened at
+     * doesn't count, since a pause or a failure can stop an opening. The {@link UnsupportedStartAtException} is
+     * thrown where the subscription model resolves the position, as the change stream opens.
      * <p>
-     * Only the first answer is checked. The subscription model asks again each time the change stream opens again
-     * before the first event, and refusing then would stop a subscription that is already delivering.
+     * An answer after that isn't checked. The subscription model asks again when a change stream opens again before
+     * the first event, and such an answer opens at the present and skips what was written in between.
      *
      * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
+     * @param opened         Whether a change stream of the subscription has opened, as the model's handle counts it
      */
-    public static StartAt refusingCatchupPositionAtFirstAnswer(StartAt startAt, @Nullable String subscriptionId) {
+    public static StartAt refusingCatchupPositionUntilOpened(StartAt startAt, @Nullable String subscriptionId, BooleanSupplier opened) {
         if (!startAt.isDynamic()) {
             return startAt;
         }
-        AtomicBoolean answered = new AtomicBoolean();
         return StartAt.dynamic(ctx -> {
             StartAt resolved = startAt.get(ctx);
-            if (!answered.get() && catchupPositionIn(resolved) instanceof Checkpoint checkpoint) {
+            if (!opened.getAsBoolean() && catchupPositionIn(resolved) instanceof Checkpoint checkpoint) {
                 String subscription = subscriptionId == null ? "a subscription" : "subscription \"" + subscriptionId + "\"";
                 throw new UnsupportedStartAtException(requireNonNull(resolved), "The dynamic start position of " + subscription + " answered checkpoint \""
-                        + checkpoint.asString() + "\", " + NOT_A_CHANGE_STREAM_POSITION + "Start the subscription through a catch-up subscription model.");
+                        + checkpoint.asString() + "\", " + NOT_A_CHANGE_STREAM_POSITION + "Start the subscription through a catch-up subscription model. "
+                        + "When one already wraps this model, restore the start position its replay had or remove the stored checkpoint.");
             }
-            answered.set(true);
             return resolved;
         });
     }

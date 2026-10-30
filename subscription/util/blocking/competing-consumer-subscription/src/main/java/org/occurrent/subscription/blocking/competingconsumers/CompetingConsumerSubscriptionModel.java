@@ -83,6 +83,9 @@ import static java.util.Objects.requireNonNull;
  * subscription is made, or this model is stopped, {@code subscribe} throws the refusal and the subscription id is free
  * again. When this node gets the lease later, the refusal is logged as a warning and the lease is given back. The
  * subscription stays registered, so it fails the same way every time this node gets the lease, and the id stays taken.
+ * A MongoDB subscription model refuses a dynamic start position on the handle, after {@code subscribe} has returned, so
+ * this model doesn't see that refusal. It keeps the lease and the id until {@link #cancelSubscription(String)}, and the
+ * subscription delivers nothing.
  * <br>
  * <br>
  * {@link #pauseSubscription(String)} works on a node that has not won the lock, not only on the one delivering events.

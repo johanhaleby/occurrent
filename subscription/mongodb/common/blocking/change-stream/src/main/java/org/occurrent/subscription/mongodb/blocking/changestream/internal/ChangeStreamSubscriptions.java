@@ -245,10 +245,11 @@ public final class ChangeStreamSubscriptions {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
         }
 
-        StartAt subscribedAt = MongoCommons.refusingCatchupPositionAtFirstAnswer(ownInstanceOf(startAt), subscriptionId);
+        FirstStart firstStart = new FirstStart();
+        StartAt subscribedAt = MongoCommons.refusingCatchupPositionUntilOpened(ownInstanceOf(startAt), subscriptionId, firstStart::hasStarted);
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(subscribedAt);
         PresentAtSubscribe presentAtSubscribe = new PresentAtSubscribe(subscribedAt, (present, cancelled) -> recordThePresent(subscriptionId, currentStartAt, present, cancelled));
-        InternalSubscription internalSubscription = new InternalSubscription(log, currentStartAt, action, changeStreamPipeline, presentAtSubscribe);
+        InternalSubscription internalSubscription = new InternalSubscription(log, currentStartAt, action, changeStreamPipeline, presentAtSubscribe, firstStart);
         // Known from here on rather than once its change stream opens, so a pause or a cancel reaches it while MongoDB
         // cannot be reached, and a wrapper asking which subscriptions the model runs gets the right answer. On a
         // running model a run that opens at the present asks for it first.
@@ -472,13 +473,17 @@ public final class ChangeStreamSubscriptions {
                 // nothing else would say why the node went quiet.
                 log.error("Checkpoint write for subscription {} was refused: {}. A node with a newer lease has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it. The refused write was for an event, or for a position reached while no event matched.", subscriptionId, e.getMessage(), e);
                 throw e;
-            } else if (e instanceof UnsupportedStartAtException unsupportedStartAt) {
-                // Refused rather than retried, since a retry runs without end by default and the start never ends
+            } else if (cursor == null && e instanceof UnsupportedStartAtException unsupportedStartAt) {
+                // Refused rather than retried, since a retry runs without end by default and the start never ends. Only
+                // before the cursor exists, since an action can throw this type too and restarts like any other failure
                 log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, e);
                 // Whoever takes the run out of the map first decides. A pause or a cancel that got there first owns what
-                // happens next, and a resume asks the start again. Otherwise the id is free before a handle throws
-                if (runningSubscriptions.remove(subscriptionId, internalSubscription)) {
-                    internalSubscription.failedToStart(unsupportedStartAt);
+                // happens next, and a resume asks the start again. Otherwise the id is free before a handle throws. Under
+                // the monitor, so start() sees the failure along with the removal and stop() never pauses a removed run
+                synchronized (monitor) {
+                    if (runningSubscriptions.remove(subscriptionId, internalSubscription)) {
+                        internalSubscription.failedToStart(unsupportedStartAt);
+                    }
                 }
             } else if (isChangeStreamHistoryLost(e)) {
                 if (takenOverAfterHistoryLoss(subscriptionId, internalSubscription, openedAt, e)) {
@@ -688,9 +693,11 @@ public final class ChangeStreamSubscriptions {
     }
 
     // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which
-    // has not lost anything. Runs on the executor thread without the model's monitor.
+    // has not lost anything. Under the model's monitor, so stop() never pauses a removed run.
     private void forget(String subscriptionId, InternalSubscription internalSubscription) {
-        runningSubscriptions.remove(subscriptionId, internalSubscription);
+        synchronized (monitor) {
+            runningSubscriptions.remove(subscriptionId, internalSubscription);
+        }
     }
 
     private @Nullable BsonTimestamp currentOperationTime() {
@@ -801,9 +808,8 @@ public final class ChangeStreamSubscriptions {
                     }
                     try {
                         Subscription subscription = model.resumeSubscription(subscriptionId);
-                        // Only the executor thread writes to this map without the monitor, and it only removes a run
-                        // whose history was lost, so this is the run the resume started, or nothing when there is
-                        // nothing to wait for
+                        // The executor thread removes a run under the monitor too, so this is the run the resume
+                        // started, or nothing when there is nothing to wait for
                         InternalSubscription run = runningSubscriptions.get(subscriptionId);
                         if (run != null) {
                             resumed.put(subscriptionId, new ResumedByStart(subscription, run));
@@ -836,7 +842,12 @@ public final class ChangeStreamSubscriptions {
         Subscription subscription = resumedByStart.subscription();
         InternalSubscription internalSubscription = resumedByStart.run();
         while (!subscription.waitUntilStarted(Duration.ofMillis(100))) {
-            if (shutdown || runningSubscriptions.get(subscriptionId) != internalSubscription || internalSubscription.hasStoppedRestarting()) {
+            if (!isRunningOn(subscriptionId, internalSubscription)) {
+                // Asked once more, since a refusal that removed the run throws from here
+                subscription.waitUntilStarted(Duration.ZERO);
+                return;
+            }
+            if (internalSubscription.hasStoppedRestarting()) {
                 return;
             }
         }
@@ -1153,6 +1164,11 @@ public final class ChangeStreamSubscriptions {
             Optional<RuntimeException> decided = outcome.get();
             return decided == null ? null : decided.orElse(null);
         }
+
+        boolean hasStarted() {
+            Optional<RuntimeException> decided = outcome.get();
+            return decided != null && decided.isEmpty();
+        }
     }
 
     private static class InternalSubscription {
@@ -1182,10 +1198,6 @@ public final class ChangeStreamSubscriptions {
         // or handing over a quiet position right now.
         private @Nullable MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
         private @Nullable Thread delivering;
-
-        private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe) {
-            this(log, currentStartAt, action, pipeline, presentAtSubscribe, new FirstStart());
-        }
 
         private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, FirstStart firstStart) {
             this.log = log;

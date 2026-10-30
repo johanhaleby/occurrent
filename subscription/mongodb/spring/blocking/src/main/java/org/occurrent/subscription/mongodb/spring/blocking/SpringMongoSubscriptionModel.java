@@ -422,8 +422,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
      * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off.
      * <p>
-     * When a resume or a wait throws, every other subscription is still resumed and waited for, and then this method
-     * throws the first exception with the others added as suppressed.
+     * A wait throws for a start position the model refuses. When a resume or a wait throws, every other subscription
+     * is still resumed and waited for, and then this method throws the first exception with the others added as
+     * suppressed.
      * <p>
      * A subscription made while the model is stopped is paused until this call or a resume starts it. For one given
      * {@link StartAt#now()}, no position, or a {@code StartAt.dynamic(..)} position that resolves to one of those,

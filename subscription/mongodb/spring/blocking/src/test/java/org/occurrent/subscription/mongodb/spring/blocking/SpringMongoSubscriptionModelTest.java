@@ -31,6 +31,7 @@ import com.mongodb.event.CommandSucceededEvent;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.*;
+import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
@@ -50,12 +51,14 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.occurrent.time.TimeConversion;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -73,6 +76,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -1385,6 +1389,152 @@ public class SpringMongoSubscriptionModelTest {
             }
         }
 
+        @Test
+        void a_resume_of_a_run_a_pause_closed_before_it_opened_is_refused_when_the_position_then_answers_a_global_checkpoint() throws Exception {
+            // Given a live checkpoint with an event written after it, and a position that answers it only to the first run
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint afterE1 = checkpointAfter(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"));
+            mongoEventStore.write("1", 1, serialize(new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2")));
+            Checkpoint catchup = GlobalCheckpoint.of(7);
+            AtomicInteger calls = new AtomicInteger();
+            CountDownLatch asked = new CountDownLatch(1);
+            CountDownLatch mayAnswer = new CountDownLatch(1);
+            subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
+                if (calls.incrementAndGet() > 1) {
+                    return StartAt.checkpoint(catchup);
+                }
+                asked.countDown();
+                try {
+                    mayAnswer.await(20, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return StartAt.checkpoint(afterE1);
+            }), state::add);
+            assertThat(asked.await(10, SECONDS)).isTrue();
+
+            // And the run is paused while it is asked, so it ends without opening a change stream
+            subscriptionModel.pauseSubscription(subscriptionId);
+            mayAnswer.countDown();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(activeSubscriptionThreads(subscriptionModel)).isZero());
+
+            // When the subscription is resumed without a position
+            Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+
+            // Then the position answers the catch-up checkpoint, which refuses it instead of opening at the present
+            Throwable refusal = catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(10)));
+            assertThat(refusal).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                    .hasMessageContaining("\"" + catchup.asString() + "\"");
+            assertAll(
+                    () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
+                    () -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId),
+                    () -> assertThat(state).isEmpty()
+            );
+        }
+
+        @Test
+        void a_dynamic_position_whose_first_answer_fails_to_open_and_whose_retry_answers_a_global_checkpoint_is_refused() {
+            // Given a first answer that is not a resume token MongoDB accepts, and a retry that answers a catch-up checkpoint
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint catchup = GlobalCheckpoint.of(7);
+            AtomicInteger calls = new AtomicInteger();
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+
+            // When it subscribes
+            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> calls.incrementAndGet() == 1
+                    ? StartAt.checkpoint(new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("not-a-token"))))
+                    : StartAt.checkpoint(catchup)), state::add);
+
+            // Then no change stream has opened at either answer, so the second is refused
+            Throwable refusal = catchThrowable(() -> started.waitUntilStarted(Duration.ofSeconds(10)));
+            assertThat(refusal).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                    .hasMessageContaining("\"" + catchup.asString() + "\"");
+            assertAll(
+                    () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
+                    () -> assertThat(state).isEmpty()
+            );
+        }
+
+        @Test
+        void an_action_that_throws_the_refusal_type_on_a_delivering_subscription_does_not_forget_the_subscription() throws Exception {
+            assertSubscriptionIsKnownAfterTheActionThrows(new UnsupportedStartAtException(StartAt.now(), "thrown by the action"));
+        }
+
+        @Test
+        void an_action_that_throws_another_exception_on_a_delivering_subscription_does_not_forget_the_subscription() throws Exception {
+            assertSubscriptionIsKnownAfterTheActionThrows(new IllegalStateException("thrown by the action"));
+        }
+
+        @Test
+        void start_throws_the_refusal_of_a_subscription_made_while_stopped_whose_position_answers_a_global_checkpoint() {
+            // Given a stopped model whose resume holds its monitor until the run is gone, or for at most two seconds
+            String subscriptionId = UUID.randomUUID().toString();
+            SpringMongoSubscriptionModel model = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, timeRepresentation, RetryStrategy.none()) {
+                @Override
+                public synchronized Subscription resumeSubscription(String id) {
+                    Subscription resumed = super.resumeSubscription(id);
+                    pollForUpToTwoSecondsUntil(() -> !isRunning(id));
+                    return resumed;
+                }
+            };
+            try {
+                model.stop();
+                model.subscribePaused(subscriptionId, null, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), __ -> {
+                });
+
+                // When it starts and resumes the subscription
+                Throwable thrown = catchThrowable(() -> model.start(true));
+
+                // Then it waits for the run and throws the refusal, whether or not the run had been removed meanwhile
+                assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                        .hasMessageContaining("subscription \"" + subscriptionId + "\"");
+            } finally {
+                model.shutdown();
+            }
+        }
+
+        @Test
+        void stop_does_not_throw_when_the_refusal_of_a_run_races_the_pause_of_it() throws Exception {
+            // Given a refusal held between the check and the removal, and a model whose first pause releases it and
+            // holds for at most two seconds until the run is gone
+            String subscriptionId = UUID.randomUUID().toString();
+            HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
+            ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
+            AtomicBoolean firstPause = new AtomicBoolean(true);
+            SpringMongoSubscriptionModel model = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, timeRepresentation, RetryStrategy.none()) {
+                @Override
+                public void pauseSubscription(String id) {
+                    if (firstPause.getAndSet(false)) {
+                        holdsTheRefusal.release.countDown();
+                        pollForUpToTwoSecondsUntil(() -> !isRunning(id));
+                    }
+                    super.pauseSubscription(id);
+                }
+            };
+            modelLogger.addAppender(holdsTheRefusal);
+            try {
+                model.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), __ -> {
+                });
+                assertThat(holdsTheRefusal.held.await(10, SECONDS)).isTrue();
+
+                // When the model is stopped
+                Throwable thrown = catchThrowable(model::stop);
+
+                // Then the pause of a run the refusal was about to remove doesn't fail
+                assertThat(thrown).isNull();
+            } finally {
+                holdsTheRefusal.release.countDown();
+                modelLogger.detachAppender(holdsTheRefusal);
+                model.shutdown();
+            }
+        }
+
         private void assertSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint, boolean paused) {
             // Given
             LocalDateTime now = LocalDateTime.now();
@@ -1477,6 +1627,58 @@ public class SpringMongoSubscriptionModelTest {
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                     assertThat(later).extracting(CloudEvent::getId).contains(sentinel.eventId()));
             assertThat(refused).isEmpty();
+        }
+
+        private void assertSubscriptionIsKnownAfterTheActionThrows(RuntimeException thrownByTheAction) throws Exception {
+            // Given a model that doesn't retry, and a delivering subscription whose action throws
+            String subscriptionId = UUID.randomUUID().toString();
+            CountDownLatch actionRan = new CountDownLatch(1);
+            SpringMongoSubscriptionModel noRetries = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, timeRepresentation, RetryStrategy.none());
+            try {
+                Subscription started = noRetries.subscribe(subscriptionId, StartAt.now(), __ -> {
+                    actionRan.countDown();
+                    throw thrownByTheAction;
+                });
+                assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+
+                // When an event is written and the action throws
+                mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+                assertThat(actionRan.await(10, SECONDS)).isTrue();
+                // The executor thread ends with the exception of the action, which an await would otherwise throw
+                await().atMost(FIVE_SECONDS).dontCatchUncaughtExceptions().with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(activeSubscriptionThreads(noRetries)).isZero());
+
+                // Then the subscription is still known, as for any exception an action throws
+                assertThat(noRetries.subscriptionIds()).contains(subscriptionId);
+            } finally {
+                noRetries.shutdown();
+            }
+        }
+
+        // Writes the event through a subscription at the present and returns the checkpoint of what it delivered
+        private Checkpoint checkpointAfter(NameDefined written) {
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            String helperId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(helperId, StartAt.now(), delivered::add).waitUntilStarted(Duration.ofSeconds(10));
+            mongoEventStore.write("1", 0, serialize(written));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(delivered).extracting(CloudEvent::getId).contains(written.eventId()));
+            subscriptionModel.cancelSubscription(helperId);
+            return CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(delivered.getFirst());
+        }
+
+        // Threads of the executor that run a subscription or its start, so zero once every run has ended
+        private static int activeSubscriptionThreads(SpringMongoSubscriptionModel model) {
+            return ((ThreadPoolTaskExecutor) model.executor).getActiveCount();
+        }
+
+        // Not an assertion. The bound gives another thread the time to act, and a thread that waits for a monitor this one holds can't
+        private static void pollForUpToTwoSecondsUntil(Callable<Boolean> condition) {
+            try {
+                await().atMost(Duration.ofSeconds(2)).with().pollInterval(Duration.of(10, MILLIS)).until(condition);
+            } catch (ConditionTimeoutException bound) {
+                // The bound expired
+            }
         }
 
         private Checkpoint liveStart() {

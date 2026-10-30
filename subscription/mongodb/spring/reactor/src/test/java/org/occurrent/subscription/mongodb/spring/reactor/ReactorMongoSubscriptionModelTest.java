@@ -66,7 +66,10 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -76,6 +79,7 @@ import static com.mongodb.client.model.Filters.eq;
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.groups.Tuple.tuple;
@@ -537,6 +541,70 @@ public class ReactorMongoSubscriptionModelTest {
                     .verify(Duration.ofSeconds(10));
         }
 
+        @Test
+        void a_resume_of_a_run_a_pause_closed_before_it_opened_is_refused_when_the_position_then_answers_a_global_checkpoint() throws Exception {
+            // Given a live checkpoint with an event written after it, and a position that answers it only to the first run
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint afterE1 = checkpointAfter(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"));
+            mongoEventStore.write("1", 1, serialize(new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2"))).block();
+            Checkpoint catchup = GlobalCheckpoint.of(7);
+            AtomicInteger calls = new AtomicInteger();
+            CountDownLatch asked = new CountDownLatch(1);
+            CountDownLatch mayAnswer = new CountDownLatch(1);
+            StartAt startAt = StartAt.dynamic(ctx -> {
+                if (calls.incrementAndGet() > 1) {
+                    return StartAt.checkpoint(catchup);
+                }
+                asked.countDown();
+                try {
+                    mayAnswer.await(20, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return StartAt.checkpoint(afterE1);
+            });
+
+            // And the subscribing thread is held where the position is asked, since the subscribe asks it on that thread
+            CompletableFuture<Subscription> subscribing = CompletableFuture.supplyAsync(() ->
+                    subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent))));
+            try {
+                assertThat(asked.await(10, SECONDS)).isTrue();
+
+                // And the run is paused while it is asked, so it ends without opening a change stream
+                subscription.pauseSubscription(subscriptionId);
+                mayAnswer.countDown();
+                subscribing.get(10, SECONDS);
+
+                // When the subscription is resumed without a position
+                Subscription resumed = subscription.resumeSubscription(subscriptionId);
+
+                // Then the position answers the catch-up checkpoint, which refuses it instead of opening at the present
+                StepVerifier.create(resumed.waitUntilStarted(Duration.ofSeconds(10)))
+                        .expectErrorSatisfies(throwable -> assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                                .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                                .hasMessageContaining("\"" + catchup.asString() + "\""))
+                        .verify(Duration.ofSeconds(15));
+                assertAll(
+                        () -> assertThat(subscription.isRunning(subscriptionId)).isFalse(),
+                        () -> assertThat(state).isEmpty()
+                );
+            } finally {
+                mayAnswer.countDown();
+            }
+        }
+
+        @Test
+        void an_action_that_fails_with_the_refusal_type_on_a_delivering_subscription_is_delivered_the_event_again() {
+            assertTheEventIsDeliveredAgainAfterTheActionFailsWith(new UnsupportedStartAtException(StartAt.now(), "failed by the action"));
+        }
+
+        @Test
+        void an_action_that_fails_with_another_exception_on_a_delivering_subscription_is_delivered_the_event_again() {
+            assertTheEventIsDeliveredAgainAfterTheActionFailsWith(new IllegalStateException("failed by the action"));
+        }
+
         private void assertNamedSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint) {
             // Given
             LocalDateTime now = LocalDateTime.now();
@@ -642,6 +710,40 @@ public class ReactorMongoSubscriptionModelTest {
                             .hasMessageContaining("\"" + checkpoint.asString() + "\"")
                             .satisfies(unsupported -> assertThat(((UnsupportedStartAtException) unsupported).startAt()).isSameAs(answered)))
                     .verify(Duration.ofSeconds(5));
+        }
+
+        private void assertTheEventIsDeliveredAgainAfterTheActionFailsWith(RuntimeException failure) {
+            // Given a delivering subscription whose action fails for the first event it is handed
+            String subscriptionId = UUID.randomUUID().toString();
+            CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+            AtomicInteger calls = new AtomicInteger();
+            Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.defer(() -> {
+                handled.add(cloudEvent.getId());
+                return calls.incrementAndGet() == 1 ? Mono.error(failure) : Mono.empty();
+            }));
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+
+            // When an event is written
+            NameDefined written = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(written)).block();
+
+            // Then the subscription restarts and is handed the event again, as for any exception an action fails with
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(handled).containsExactly(written.eventId(), written.eventId()));
+            assertThat(subscription.subscriptionIds()).contains(subscriptionId);
+        }
+
+        // Writes the event through a subscription at the present and returns the checkpoint of what it delivered
+        private Checkpoint checkpointAfter(NameDefined written) {
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            String helperId = UUID.randomUUID().toString();
+            Subscription helper = subscription.subscribe(helperId, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent)));
+            assertThat(helper.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            mongoEventStore.write("1", 0, serialize(written)).block();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(delivered).extracting(CloudEvent::getId).contains(written.eventId()));
+            subscription.cancelSubscription(helperId).block(Duration.ofSeconds(10));
+            return CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(delivered.getFirst());
         }
 
         private Checkpoint liveStart() {
