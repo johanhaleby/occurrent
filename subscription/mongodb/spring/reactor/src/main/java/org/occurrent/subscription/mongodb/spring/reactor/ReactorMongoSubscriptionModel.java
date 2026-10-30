@@ -673,7 +673,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         }
     }
 
-    // The one place a refusal can come from. The same exception from a listener or an action is a failure that restarts
+    // Only what asking the position throws counts as a refusal. The same exception from a listener or an action is a failure that restarts
     private static @Nullable StartAt asked(StartAt position, SubscriptionModelContext context) {
         try {
             return position.get(context);
