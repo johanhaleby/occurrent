@@ -135,8 +135,8 @@ class DurableSubscriptionModelFixture implements RestartableSubscriptionModelFix
     }
 
     /**
-     * False, since {@link DurableSubscriptionModel} hands the position to the native model, which starts at the present
-     * for a {@code GlobalCheckpoint}.
+     * False, since {@link DurableSubscriptionModel} hands the position to the native model, which refuses a
+     * {@code GlobalCheckpoint} with an {@code UnsupportedStartAtException}.
      */
     @Override
     public boolean honoursAGlobalPosition() {

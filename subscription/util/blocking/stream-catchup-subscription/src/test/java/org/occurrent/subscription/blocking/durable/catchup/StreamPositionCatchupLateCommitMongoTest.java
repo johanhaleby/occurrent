@@ -37,6 +37,7 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -47,7 +48,6 @@ import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig;
-import org.occurrent.tck.internal.scaffolding.ExpectedGuaranteeViolation;
 import org.occurrent.tck.latecommit.LateCommitGuarantee;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.ChangeStreamHistory;
@@ -72,6 +72,7 @@ import java.util.concurrent.TimeUnit;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
@@ -88,9 +89,6 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
 @Timeout(240)
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
-@ExpectedGuaranteeViolation(
-        tests = "a_position_stored_by_0_34_without_a_live_start_resumes_and_delivers_a_late_commit",
-        issue = "https://github.com/johanhaleby/occurrent/issues/1297")
 class StreamPositionCatchupLateCommitMongoTest {
 
     private static final Duration AT_MOST = Duration.ofSeconds(20);
@@ -579,7 +577,8 @@ class StreamPositionCatchupLateCommitMongoTest {
     }
 
     @Test
-    void a_position_stored_by_0_34_without_a_live_start_resumes_and_delivers_a_late_commit() throws Exception {
+    void a_position_stored_by_0_34_without_a_live_start_is_refused_before_anything_is_written() throws Exception {
+        // Given
         Thread writerA = new Thread(() -> appendToStream("stream-a", named("A")), HELD_WRITER);
         writerA.start();
         assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
@@ -597,7 +596,25 @@ class StreamPositionCatchupLateCommitMongoTest {
         writerA.join(20_000);
         assertThat(eventStore.currentPosition()).isEqualTo(3);
 
-        assertThatARestartDelivers("A", config, received);
+        // When the subscription restarts
+        SpringMongoSubscriptionModel secondLive = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        StreamCatchupSubscriptionModel second = new StreamCatchupSubscriptionModel(secondLive, eventStore, config);
+        try {
+            Subscription subscription = second.subscribe("sub", StartAt.subscriptionModelDefault(), cloudEvent -> received.add(nameOf(cloudEvent)));
+            Throwable failure = catchThrowable(subscription::waitUntilStarted);
+            appendToStream("stream-d", named("D"));
+
+            // Then the start is refused, naming the subscription and the way out
+            assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("sub")
+                    .hasMessageContaining("after position 2")
+                    .hasMessageContaining("EventMetadata.getCheckpoint()");
+            // And the stored position is as it was, with nothing delivered
+            assertThat(storage.read("sub")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(GlobalCheckpoint.of(2).asString());
+            await().during(Duration.ofSeconds(1)).atMost(AT_MOST).untilAsserted(() -> assertThat(received).as("delivered").isEmpty());
+        } finally {
+            second.shutdown();
+        }
     }
 
     // Resumes "sub" the way the model default does, appends D and requires the late commit to have arrived by the time

@@ -25,14 +25,12 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
-import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
-import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.api.reactor.*;
 import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
@@ -2078,8 +2076,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // checkpoint written back, before the subscription starts, and before resolveFirstCheckpointRace for a
             // registration with positionAtRegistration.
             TakeOver readAfter = storedAtTheCall != null ? storedAtTheCall.takeOver() : writer.takeOver;
-            Mono<Checkpoint> stored = (storedAtTheCall != null ? storedAtTheCall.read() : readStoredPosition(subscriptionId, readAfter))
-                    .doOnNext(checkpoint -> warnIfStoredWithoutLiveStart(subscriptionId, checkpoint));
+            Mono<Checkpoint> stored = storedAtTheCall != null ? storedAtTheCall.read() : readStoredPosition(subscriptionId, readAfter);
             Mono<Checkpoint> held = readAfter.writtenBack == null ? stored
                     : stored.flatMap(checkpoint -> holdStartPosition(subscriptionId, checkpoint, readAfter, writer));
             final Mono<Checkpoint> startsFrom;
@@ -2153,20 +2150,6 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             return Mono.empty();
         }
         return resolveStartAt(subscriptionId, nextStartAt, positionNow, positionAtRegistration, present, writer, storedAtTheCall);
-    }
-
-    // A global position without a live start was stored by a catch-up from before the live start was kept. The
-    // catch-up resumes from it with a live start read now, which misses an event whose position was reserved below
-    // the stored one but written after the earlier replay read past it.
-    private static void warnIfStoredWithoutLiveStart(String subscriptionId, Checkpoint stored) {
-        // A marked form always holds a live start, and GlobalCheckpoint.parse throws on it
-        if (CatchupCheckpoints.isMarked(stored)) {
-            return;
-        }
-        if (GlobalCheckpoint.isGlobalCheckpoint(stored) && GlobalCheckpoint.parse(stored).liveFrom().isEmpty()) {
-            log.warn("Subscription {} resumes from stored checkpoint \"{}\", which has no live start. If a catch-up subscription stored it, an event written to a position below it after the earlier replay read past that position is not delivered. See the 0.34.0 upgrade guide.",
-                    subscriptionId, stored.asString());
-        }
     }
 
     // Deferred, so storage is asked only when the read is subscribed to, which is never under the monitor

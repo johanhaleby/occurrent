@@ -217,13 +217,18 @@ final class PositionCatchupPipeline {
      * Resolves, in the scope of the next attempt, the start a replay runs again from after the wrapped model lost the
      * history from the token {@code lost} handed over, as it opened its change stream at it. It replays from the
      * position the first attempt started from, with a token read in that scope. Fails with
-     * {@link CatchupCannotResumeException} instead once the replay has already run again {@value #MAX_REPLAYS_AGAIN}
-     * times, as {@link #liveStartHolds} does, naming the longest replay {@code longestReplay} measured.
-     * {@code subscriptionId} only names the subscription in the warning and the failure, and may be null.
+     * {@link CatchupCannotResumeException} instead when that position is above 0, since a replay from there with a
+     * token read now would skip an event below it that was written after the lost token was read, and once the replay
+     * has already run again {@value #MAX_REPLAYS_AGAIN} times, as {@link #liveStartHolds} does, naming the longest
+     * replay {@code longestReplay} measured. {@code subscriptionId} only names the subscription in the warning and the
+     * failure, and may be null.
      */
     Function<CatchupScope, Mono<ReplayStart>> replayAgainAfterLiveStartLost(CheckpointAwareSubscriptionModel subscriptionModel, ReplayStart lost, @Nullable String subscriptionId, int replaysAgain,
                                                                            LongestReplay longestReplay) {
         return scope -> Mono.defer(() -> {
+            if (lost.replayOrigin() > 0) {
+                return Mono.error(liveStartLostAbovePositionZero(subscriptionId, lost.replayOrigin(), lost.liveFrom()));
+            }
             if (replaysAgain >= MAX_REPLAYS_AGAIN) {
                 return Mono.error(liveStartLostEachTime(subscriptionId, replaysAgain + 1, lost.liveFrom(), longestReplay));
             }
@@ -247,6 +252,29 @@ final class PositionCatchupPipeline {
         return other != null && checkpoint.asString().equals(other.asString());
     }
 
+    private static CatchupCannotResumeException startsAfterPositionWithoutLiveStart(@Nullable String subscriptionId, long position) {
+        return new CatchupCannotResumeException("Cannot start catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId) + " after position " + position
+                + ", because the checkpoint holds no live start read before position " + position + " was, and an event that committed below position " + position
+                + " after it was read would never be delivered. " + cancelFirst(subscriptionId)
+                + "Start the subscription from the beginning, or from the checkpoint it delivered with the event at position " + position
+                + ", which EventMetadata.getCheckpoint() returns.");
+    }
+
+    // A named subscription may run under a durable model that reads the refused checkpoint from its storage again on
+    // the next start, which a cancel deletes
+    private static String cancelFirst(@Nullable String subscriptionId) {
+        return subscriptionId == null ? "" : "If the subscription stores its checkpoint, cancel it first, which deletes that checkpoint. ";
+    }
+
+    // A replay again from a position above 0, with a token read now, skips an event below that position that was
+    // written after the lost token was read
+    private static CatchupCannotResumeException liveStartLostAbovePositionZero(@Nullable String subscriptionId, long origin, Checkpoint lostLiveStart) {
+        return new CatchupCannotResumeException("Cannot replay catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId) + " again from position " + origin
+                + ", because the subscription model no longer has the history from its live start, and a replay from there with a live start read now would never deliver an event before position "
+                + origin + " that was written after the lost live start was read. " + cancelFirst(subscriptionId) + "Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay. Lost live start: "
+                + lostLiveStart.asString());
+    }
+
     private static CatchupCannotResumeException liveStartLostEachTime(@Nullable String subscriptionId, int replays, Checkpoint lastLiveStart, LongestReplay longestReplay) {
         return new CatchupCannotResumeException("Cannot hand catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId)
                 + " over to live delivery, because the subscription model lost the live start during or right after each of its " + replays
@@ -262,6 +290,10 @@ final class PositionCatchupPipeline {
      * attempt. Handing the lost token over instead would leave it to the wrapped model, and a MongoDB model that
      * restarts on lost history goes live from the present and skips every event between the token and the restart. A
      * token read now is asked about after its own replay too, since a long replay can lose it as well.
+     * <p>
+     * When the first attempt at the replay started above position 0, this fails with
+     * {@link CatchupCannotResumeException} instead of emitting {@code false}, since a replay again from there with a
+     * token read now would skip an event below that position that was written after the lost token was read.
      * <p>
      * {@code replaysAgain} is how many times the replay has already run again. Once that is
      * {@value #MAX_REPLAYS_AGAIN} and the token is lost once more, this fails with
@@ -279,6 +311,9 @@ final class PositionCatchupPipeline {
         }).flatMap(canResume -> {
             if (canResume) {
                 return Mono.just(true);
+            }
+            if (replayed.replayOrigin() > 0) {
+                return Mono.error(liveStartLostAbovePositionZero(subscriptionId, replayed.replayOrigin(), replayed.liveFrom()));
             }
             if (replaysAgain >= MAX_REPLAYS_AGAIN) {
                 return Mono.error(liveStartLostEachTime(subscriptionId, replaysAgain + 1, replayed.liveFrom(), longestReplay));
@@ -340,13 +375,18 @@ final class PositionCatchupPipeline {
     /**
      * Resolves where a replay from {@code start} reads from and goes live from. A {@code start} that has a live
      * token keeps it while {@code subscriptionModel} can still resume from it. Otherwise the replay starts over from
-     * the stored start position with a token read now, which counts as a replay run again. A {@code start} without a
-     * live token gets one read now, before the replay. {@code subscriptionId} only names the subscription in the warning and may be null. {@code liveStart}
+     * the position the first attempt started from with a token read now, which counts as a replay run again, when that
+     * is position 0, and fails with {@link CatchupCannotResumeException} when it is above 0. A {@code start} at
+     * position 0 without a live token gets one read now, before the replay, and one above 0 without it fails the same
+     * way, since an event that committed below that position after it was read would never be delivered. {@code subscriptionId} only names the subscription in the warning and may be null. {@code liveStart}
      * is the one the scope the start is resolved in reports, see {@link #captureLiveToken}.
      */
     Mono<ReplayStart> resolveStart(CheckpointAwareSubscriptionModel subscriptionModel, CatchupCheckpoints.Position start, @Nullable String subscriptionId, @Nullable String liveStart) {
         Checkpoint storedLiveFrom = start.liveFrom();
         if (storedLiveFrom == null) {
+            if (start.position() > 0) {
+                return Mono.error(startsAfterPositionWithoutLiveStart(subscriptionId, start.position()));
+            }
             return captureLiveToken(subscriptionModel, liveStart).map(liveToken -> new ReplayStart(start.position(), liveToken, start.position(), null));
         }
         long replayOrigin = start.replayOrigin();
@@ -354,6 +394,9 @@ final class PositionCatchupPipeline {
         return subscriptionModel.canResumeFrom(storedLiveFrom).flatMap(canResume -> {
             if (canResume) {
                 return Mono.just(new ReplayStart(start.position(), storedLiveFrom, replayOrigin, storedReplayTo));
+            }
+            if (replayOrigin > 0) {
+                return Mono.error(liveStartLostAbovePositionZero(subscriptionId, replayOrigin, storedLiveFrom));
             }
             log.warn("The subscription model no longer has the history from the live start stored for catch-up subscription {}, so the catch-up replays again from position {} instead of {} and redelivers the events in between. Live start: {}",
                     subscriptionId == null ? "(unnamed)" : subscriptionId, replayOrigin, start.position(), storedLiveFrom.asString());

@@ -236,6 +236,7 @@ public final class ChangeStreamSubscriptions {
         // thread, where the retry wrapper throws it again forever and the caller holds a subscription whose latch
         // never counts down. A dynamic position is a no-op in there, for a reason checkStartPosition documents.
         MongoCommons.checkStartPosition(startAt, subscriptionModelContext());
+        MongoCommons.refuseCatchupPosition(startAt);
 
         if (shutdown || model.executorIsShutDown()) {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");

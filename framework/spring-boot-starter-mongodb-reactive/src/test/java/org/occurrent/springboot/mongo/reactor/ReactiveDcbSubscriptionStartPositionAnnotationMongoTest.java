@@ -17,7 +17,11 @@
 
 package org.occurrent.springboot.mongo.reactor;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -32,7 +36,9 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -63,8 +69,8 @@ import static org.awaitility.Awaitility.await;
 /**
  * Fills the reactive DCB start-position gap: {@code ReactiveDcbSubscriptionAnnotationMongoTest} only exercises
  * {@code startAt = BEGINNING}. This proves {@code DEFAULT} and {@code NOW} never replay history written more than a
- * second before they subscribe, and that
- * {@code startAtDcbPosition} correctly resumes strictly after the given position, mirroring the blocking
+ * second before they subscribe, that {@code startAtDcbPosition = 0} replays the whole history, and that
+ * a {@code startAtDcbPosition} above 0 is refused, mirroring the blocking
  * {@code DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest} and
  * {@code DcbSubscriptionStartAtPositionAnnotationMongoTest}.
  */
@@ -100,8 +106,14 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
     @Autowired
     private ExplicitPositionSubscriber explicitPositionSubscriber;
 
+    @Autowired
+    private RefusedPositionSubscriber refusedPositionSubscriber;
+
+    @Autowired
+    private CatchupSupportLog catchupSupportLog;
+
     @Test
-    void default_and_now_never_replay_history_older_than_a_second_while_an_explicit_position_resumes_strictly_after_it() {
+    void default_and_now_never_replay_history_older_than_a_second_while_an_explicit_position_0_replays_all_of_it() {
         // Neither DEFAULT nor NOW ever sees the history, written more than a second before they subscribed.
         await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
             assertThat(defaultPositionSubscriber.invocationCount()).isZero();
@@ -112,10 +124,8 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
             assertThat(nowPositionSubscriber.received()).isEmpty();
         });
 
-        // startAtDcbPosition = 1 means: deliver from position 2 onward, i.e. skip "event-1".
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                assertThat(explicitPositionSubscriber.received()).extracting(TestEvent::name).containsExactlyInAnyOrder("event-2", "event-3"));
-        assertThat(explicitPositionSubscriber.received()).extracting(TestEvent::name).doesNotContain("event-1");
+                assertThat(explicitPositionSubscriber.received()).extracting(TestEvent::name).containsExactlyInAnyOrder("event-1", "event-2", "event-3"));
 
         append(new TestEvent("live-default"));
         append(new TestEvent("live-now"));
@@ -124,6 +134,19 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
                 assertThat(defaultPositionSubscriber.received()).extracting(TestEvent::name).containsExactly("live-default"));
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(nowPositionSubscriber.received()).extracting(TestEvent::name).containsExactly("live-now"));
+    }
+
+    @Test
+    void an_explicit_position_above_0_is_refused_and_delivers_nothing() {
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(catchupSupportLog.events()).anySatisfy(event -> {
+                    assertThat(event.getThrowableProxy()).isNotNull();
+                    assertThat(event.getThrowableProxy().getClassName()).isEqualTo(CatchupCannotResumeException.class.getName());
+                    assertThat(event.getThrowableProxy().getMessage())
+                            .contains("Cannot start catch-up subscription reactive-dcb-sp-refused-position after position 1");
+                }));
+
+        assertThat(refusedPositionSubscriber.received()).isEmpty();
     }
 
     private void append(TestEvent event) {
@@ -149,6 +172,11 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
     @SpringBootApplication
     @EnableOccurrentReactive
     static class DcbOnlyApplication {
+
+        @Bean
+        CatchupSupportLog catchupSupportLog() {
+            return new CatchupSupportLog();
+        }
 
         @Bean
         CloudEventTypeMapper<TestEvent> testEventCloudEventTypeMapper() {
@@ -189,6 +217,12 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
         ExplicitPositionSubscriber explicitPositionSubscriber() {
             return new ExplicitPositionSubscriber();
         }
+
+        @Bean
+        @DependsOn("historyAppender")
+        RefusedPositionSubscriber refusedPositionSubscriber() {
+            return new RefusedPositionSubscriber();
+        }
     }
 
     static class HistoryAppender {
@@ -211,6 +245,30 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
                     .toList();
             dcbEventStore.append(cloudEvents).block();
             Thread.sleep(1500);
+        }
+    }
+
+    // Attached as the context starts, before any subscription does, so it holds the refusal however soon after startup a
+    // catch-up thread logs it
+    static class CatchupSupportLog {
+        private final Logger logger = (Logger) LoggerFactory.getLogger("org.occurrent.subscription.reactor.durable.catchup.NamedCatchupSupport");
+        private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+
+        CatchupSupportLog() {
+            appender.start();
+            logger.addAppender(appender);
+        }
+
+        List<ILoggingEvent> events() {
+            synchronized (appender) {
+                return List.copyOf(appender.list);
+            }
+        }
+
+        @PreDestroy
+        void detach() {
+            logger.detachAppender(appender);
+            appender.stop();
         }
     }
 
@@ -263,7 +321,21 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
     static class ExplicitPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
-        @DcbSubscription(id = "reactive-dcb-sp-explicit-position", startAtDcbPosition = 1)
+        @DcbSubscription(id = "reactive-dcb-sp-explicit-position", startAtDcbPosition = 0)
+        Mono<Void> onEvent(TestEvent event) {
+            received.add(event);
+            return Mono.empty();
+        }
+
+        List<TestEvent> received() {
+            return received;
+        }
+    }
+
+    static class RefusedPositionSubscriber {
+        private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        @DcbSubscription(id = "reactive-dcb-sp-refused-position", startAtDcbPosition = 1)
         Mono<Void> onEvent(TestEvent event) {
             received.add(event);
             return Mono.empty();

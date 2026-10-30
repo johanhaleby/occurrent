@@ -1063,6 +1063,122 @@ public class SpringMongoSubscriptionModelTest {
     }
 
     @Nested
+    @DisplayName("Subscribe at a catch-up position")
+    class SubscribeAtACatchupPositionTest {
+
+        @Test
+        void subscribing_at_a_global_checkpoint_is_refused_and_leaves_the_id_free() {
+            assertSubscribeIsRefusedAndLeavesTheIdFree(GlobalCheckpoint.of(7), false);
+        }
+
+        @Test
+        void subscribing_at_a_global_checkpoint_with_a_live_start_is_refused_and_leaves_the_id_free() {
+            assertSubscribeIsRefusedAndLeavesTheIdFree(GlobalCheckpoint.of(5, liveStart(), 0, 7), false);
+        }
+
+        @Test
+        void subscribing_at_a_global_checkpoint_read_back_as_a_string_is_refused_and_leaves_the_id_free() {
+            assertSubscribeIsRefusedAndLeavesTheIdFree(new StringBasedCheckpoint(GlobalCheckpoint.of(5, liveStart(), 0, 7).asString()), false);
+        }
+
+        @Test
+        void subscribing_at_a_catchup_time_checkpoint_is_refused_and_leaves_the_id_free() {
+            assertSubscribeIsRefusedAndLeavesTheIdFree(catchupTimeCheckpoint(), false);
+        }
+
+        @Test
+        void subscribing_at_a_catchup_time_checkpoint_read_back_as_a_string_is_refused_and_leaves_the_id_free() {
+            assertSubscribeIsRefusedAndLeavesTheIdFree(new StringBasedCheckpoint(catchupTimeCheckpoint().asString()), false);
+        }
+
+        @Test
+        void subscribing_paused_at_a_global_checkpoint_is_refused_and_leaves_the_id_free() {
+            assertSubscribeIsRefusedAndLeavesTheIdFree(GlobalCheckpoint.of(7), true);
+        }
+
+        @Test
+        void subscribing_paused_at_a_catchup_time_checkpoint_is_refused_and_leaves_the_id_free() {
+            assertSubscribeIsRefusedAndLeavesTheIdFree(catchupTimeCheckpoint(), true);
+        }
+
+        @Test
+        void subscribing_at_a_time_string_is_still_accepted() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            subscriptionModel.subscribe(subscriptionId, StartAt.checkpoint(new StringBasedCheckpoint("2026-01-01T00:00:00Z")), state::add).waitUntilStarted(Duration.ofSeconds(10));
+            NameDefined written = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(written));
+
+            // Then
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(state).extracting(CloudEvent::getId).contains(written.eventId()));
+        }
+
+        @Test
+        void subscribing_at_a_dynamic_position_is_not_checked() {
+            // Given
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(() -> StartAt.checkpoint(GlobalCheckpoint.of(7))), state::add).waitUntilStarted(Duration.ofSeconds(10)));
+
+            // Then
+            assertThat(throwable).isNull();
+            assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+        }
+
+        private void assertSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint, boolean paused) {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> refused = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<CloudEvent> later = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            NameDefined writtenBefore = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBefore));
+            StartAt startAt = StartAt.checkpoint(checkpoint);
+
+            // When
+            Throwable throwable = catchThrowable(() -> {
+                if (paused) {
+                    subscriptionModel.subscribePaused(subscriptionId, null, startAt, refused::add);
+                } else {
+                    subscriptionModel.subscribe(subscriptionId, startAt, refused::add);
+                }
+            });
+
+            // Then it is refused by the call itself, naming the checkpoint, and nothing is registered under the id
+            assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("\"" + checkpoint.asString() + "\"");
+            assertAll(
+                    () -> assertThat(((UnsupportedStartAtException) throwable).startAt()).isSameAs(startAt),
+                    () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
+                    () -> assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse(),
+                    () -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId)
+            );
+
+            // And the id can be used again, while the refused handler is never called
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), later::add).waitUntilStarted(Duration.ofSeconds(10));
+            NameWasChanged sentinel = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "sentinel");
+            mongoEventStore.write("1", 1, serialize(sentinel));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(later).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+            assertThat(refused).isEmpty();
+        }
+
+        private Checkpoint liveStart() {
+            return requireNonNull(subscriptionModel.globalCheckpoint());
+        }
+
+        private CatchupTimeCheckpoint catchupTimeCheckpoint() {
+            return CatchupTimeCheckpoint.of("2026-01-01T00:00:00Z", liveStart(), "2026-01-01T00:00:00Z");
+        }
+    }
+
+    @Nested
     @DisplayName("SubscriptionFilter for BsonMongoDBFilterSpecification")
     class MongoBsonFilterSpecificationTest {
         @Test

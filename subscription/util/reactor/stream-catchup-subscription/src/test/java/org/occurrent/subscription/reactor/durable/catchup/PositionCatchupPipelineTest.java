@@ -409,17 +409,75 @@ class PositionCatchupPipelineTest {
     }
 
     @Test
-    void a_stored_live_start_the_model_no_longer_has_replays_again_from_the_origin_and_goes_live_from_a_start_read_now() {
+    void a_stored_live_start_the_model_no_longer_has_replays_again_from_the_beginning_and_goes_live_from_a_start_read_now() {
+        FakeReader reader = FakeReader.withEventsInRange(1, 4).head(4).taggedWithTheirPosition();
+        Checkpoint agedOut = new StringBasedCheckpoint("aged out live start");
+        RecordingLiveSource live = new RecordingLiveSource(agedOut);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(3, agedOut, 0, 3)).map(PositionCatchupPipelineTest::checkpointOf))
+                .expectNext(GlobalCheckpoint.of(1, RecordingLiveSource.READ_NOW, 0, 4), GlobalCheckpoint.of(2, RecordingLiveSource.READ_NOW, 0, 4),
+                        GlobalCheckpoint.of(3, RecordingLiveSource.READ_NOW, 0, 4), GlobalCheckpoint.of(4, RecordingLiveSource.READ_NOW, 0, 4))
+                .verifyComplete();
+        assertThat(live.resumeProbes).containsExactly(agedOut, RecordingLiveSource.READ_NOW);
+        assertThat(live.liveStarts).containsExactly(StartAt.checkpoint(RecordingLiveSource.READ_NOW).toString());
+    }
+
+    @Test
+    void a_stored_live_start_the_model_no_longer_has_is_refused_when_the_replay_began_above_the_beginning() {
         FakeReader reader = FakeReader.withEventsInRange(1, 4).head(4).taggedWithTheirPosition();
         Checkpoint agedOut = new StringBasedCheckpoint("aged out live start");
         RecordingLiveSource live = new RecordingLiveSource(agedOut);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
 
         StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(3, agedOut, 1, 3)).map(PositionCatchupPipelineTest::checkpointOf))
-                .expectNext(marked(2, 1, 4, RecordingLiveSource.READ_NOW), marked(3, 1, 4, RecordingLiveSource.READ_NOW), marked(4, 1, 4, RecordingLiveSource.READ_NOW))
-                .verifyComplete();
-        assertThat(live.resumeProbes).containsExactly(agedOut, RecordingLiveSource.READ_NOW);
-        assertThat(live.liveStarts).containsExactly(StartAt.checkpoint(RecordingLiveSource.READ_NOW).toString());
+                .expectErrorSatisfies(throwable -> assertThat(throwable)
+                        .isInstanceOf(CatchupCannotResumeException.class)
+                        .hasMessageContaining("position 1")
+                        .hasMessageContaining("from the beginning again")
+                        .hasMessageNotContaining("cancel it first"))
+                .verify(Duration.ofSeconds(10));
+        assertThat(live.resumeProbes).containsExactly(agedOut);
+        assertThat(live.liveStarts).as("nothing handed over").isEmpty();
+        assertThat(reader.closed).as("scope closed").hasValue(1);
+    }
+
+    @Test
+    void a_live_start_the_model_loses_during_a_replay_that_began_above_the_beginning_is_refused_instead_of_replaying_again() {
+        FakeReader reader = FakeReader.withEventsInRange(1, 4).head(4).taggedWithTheirPosition();
+        Checkpoint storedLiveStart = new StringBasedCheckpoint("stored live start");
+        RecordingLiveSource live = new RecordingLiveSource();
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(2, storedLiveStart, 1, 4))
+                        .doOnNext(__ -> live.lose(storedLiveStart))
+                        .map(PositionCatchupPipelineTest::checkpointOf))
+                .expectNext(marked(3, 1, 4, storedLiveStart), marked(4, 1, 4, storedLiveStart))
+                .expectErrorSatisfies(throwable -> assertThat(throwable)
+                        .isInstanceOf(CatchupCannotResumeException.class)
+                        .hasMessageContaining("position 1")
+                        .hasMessageContaining("from the beginning again")
+                        .hasMessageNotContaining("cancel it first"))
+                .verify(Duration.ofSeconds(10));
+        assertThat(live.liveStarts).as("nothing handed over").isEmpty();
+    }
+
+    @Test
+    void a_live_start_the_model_loses_as_it_opens_is_refused_when_the_replay_began_above_the_beginning() {
+        LosingAtOpenLiveSource live = new LosingAtOpenLiveSource(1);
+        FakeReader reader = FakeReader.withEventsInRange(1, 4).head(4);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+        Checkpoint storedLiveStart = new StringBasedCheckpoint("stored live start");
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(1, storedLiveStart, 1, 4)).map(CloudEvent::getId))
+                .expectNext("e2", "e3", "e4")
+                .expectErrorSatisfies(throwable -> assertThat(throwable)
+                        .isInstanceOf(CatchupCannotResumeException.class)
+                        .hasMessageContaining("position 1")
+                        .hasMessageContaining("from the beginning again")
+                        .hasMessageNotContaining("cancel it first"))
+                .verify(Duration.ofSeconds(10));
+        assertThat(live.opensAt).as("opened once at the stored live start, not again after a second replay").containsExactly(storedLiveStart);
     }
 
     @Test
@@ -446,16 +504,34 @@ class PositionCatchupPipelineTest {
     }
 
     @Test
-    void a_start_without_a_live_start_reads_one_now_and_asks_the_model_about_it_only_after_the_replay() {
+    void a_start_at_position_0_reads_a_live_start_now_and_asks_the_model_about_it_only_after_the_replay() {
+        FakeReader reader = FakeReader.withEventsInRange(1, 3).head(3).taggedWithTheirPosition();
+        RecordingLiveSource live = new RecordingLiveSource();
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(0)).map(PositionCatchupPipelineTest::checkpointOf))
+                .expectNext(GlobalCheckpoint.of(1, RecordingLiveSource.READ_NOW, 0, 3), GlobalCheckpoint.of(2, RecordingLiveSource.READ_NOW, 0, 3), GlobalCheckpoint.of(3, RecordingLiveSource.READ_NOW, 0, 3))
+                .verifyComplete();
+        assertThat(live.resumeProbes).containsExactly(RecordingLiveSource.READ_NOW);
+        assertThat(live.liveStarts).containsExactly(StartAt.checkpoint(RecordingLiveSource.READ_NOW).toString());
+    }
+
+    @Test
+    void a_start_at_a_bare_position_above_0_is_refused_before_anything_is_read_or_delivered() {
         FakeReader reader = FakeReader.withEventsInRange(1, 3).head(3).taggedWithTheirPosition();
         RecordingLiveSource live = new RecordingLiveSource();
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
 
         StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(1)).map(PositionCatchupPipelineTest::checkpointOf))
-                .expectNext(marked(2, 1, 3, RecordingLiveSource.READ_NOW), marked(3, 1, 3, RecordingLiveSource.READ_NOW))
-                .verifyComplete();
-        assertThat(live.resumeProbes).containsExactly(RecordingLiveSource.READ_NOW);
-        assertThat(live.liveStarts).containsExactly(StartAt.checkpoint(RecordingLiveSource.READ_NOW).toString());
+                .expectErrorSatisfies(throwable -> assertThat(throwable)
+                        .isInstanceOf(CatchupCannotResumeException.class)
+                        .hasMessageContaining("after position 1")
+                        .hasMessageContaining("EventMetadata.getCheckpoint()")
+                        .hasMessageNotContaining("cancel it first"))
+                .verify(Duration.ofSeconds(10));
+        assertThat(live.resumeProbes).as("asked").isEmpty();
+        assertThat(live.liveStarts).as("handed over").isEmpty();
+        assertThat(reader.closed).as("scope closed").hasValue(1);
     }
 
     @Test
@@ -465,11 +541,12 @@ class PositionCatchupPipelineTest {
         // READ_NOW is the only live start the catch-up reads
         RecordingLiveSource live = new RecordingLiveSource(RecordingLiveSource.READ_NOW);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
-        Checkpoint second = marked(2, 1, 3, RecordingLiveSource.READ_NOW);
-        Checkpoint third = marked(3, 1, 3, RecordingLiveSource.READ_NOW);
+        Checkpoint first = GlobalCheckpoint.of(1, RecordingLiveSource.READ_NOW, 0, 3);
+        Checkpoint second = GlobalCheckpoint.of(2, RecordingLiveSource.READ_NOW, 0, 3);
+        Checkpoint third = GlobalCheckpoint.of(3, RecordingLiveSource.READ_NOW, 0, 3);
 
-        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(1)).map(PositionCatchupPipelineTest::checkpointOf))
-                .expectNext(second, third, second, third, second, third, second, third)
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(0)).map(PositionCatchupPipelineTest::checkpointOf))
+                .expectNext(first, second, third, first, second, third, first, second, third, first, second, third)
                 .expectErrorSatisfies(throwable -> assertThat(throwable)
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("4 replays")

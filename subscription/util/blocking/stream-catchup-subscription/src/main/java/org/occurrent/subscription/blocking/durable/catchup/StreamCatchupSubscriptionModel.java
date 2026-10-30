@@ -196,7 +196,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         if (requestedStartAt.isDefault()) {
             // Resume from a stored position if there is one, otherwise delegate to the parent subscription model.
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
-            warnIfStoredWithoutLiveStart(subscriptionId, checkpoint);
+            refuseIfStoredWithoutLiveStart(subscriptionId, checkpoint);
             if (checkpoint == null) {
                 // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
                 // the handover would, keeping DCB events out.
@@ -208,12 +208,30 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         } else {
             firstStartAt = requestedStartAt;
         }
+        refuseGlobalPositionWithoutPositions(subscriptionId, firstStartAt);
 
         CatchupReplay replay = replayFrom(subscriptionId, filter, startAt, action, firstStartAt);
         if (replay == null) {
             return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, firstStartAt), action, holdPaused);
         }
         return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, replay, holdPaused));
+    }
+
+    // A store that writes no position has no global position above 0 to replay after, and the wrapped model refuses to
+    // open a change stream at one, with a message that sends the caller back here. Position 0 replays from the
+    // beginning of time instead, see replayFrom.
+    private void refuseGlobalPositionWithoutPositions(String subscriptionId, StartAt firstStartAt) {
+        if (!streamStoreWritesPosition() && classifyStreamStart(firstStartAt, subscriptionModelContextType) == StreamStart.GLOBAL_POSITION
+                && !startsAtPositionZero(firstStartAt, subscriptionModelContextType)) {
+            throw new UnsupportedStartAtException(firstStartAt, "Cannot start catch-up subscription " + subscriptionId + " after a global position, since the event store doesn't write one. "
+                    + "Start it from the beginning of time with StartAtTime.beginningOfTime(), or from a time. "
+                    + "If the position is the checkpoint stored for the subscription, delete that checkpoint first.");
+        }
+    }
+
+    private static boolean startsAtPositionZero(StartAt startAt, Class<?> contextType) {
+        return startAt.get(new SubscriptionModelContext(contextType)) instanceof StartAtCheckpoint start
+                && CatchupCheckpoints.parse(start.checkpoint) instanceof CatchupCheckpoints.Position position && position.position() == 0;
     }
 
     @Override
@@ -238,7 +256,11 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         }
         return switch (streamStart) {
             case BEGINNING_OF_TIME, SPECIFIC_TIME -> streamTimeReplay(subscriptionId, filter, startAt, action, firstStartAt);
-            case GLOBAL_POSITION, LIVE -> null;
+            // Position 0 is the whole history, as the beginning of time is, which is what StartPosition.BEGINNING
+            // asks for in Spring Boot
+            case GLOBAL_POSITION -> startsAtPositionZero(firstStartAt, subscriptionModelContextType)
+                    ? streamTimeReplay(subscriptionId, filter, startAt, action, StartAtTime.beginningOfTime()) : null;
+            case LIVE -> null;
         };
     }
 

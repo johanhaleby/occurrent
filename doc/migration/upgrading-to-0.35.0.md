@@ -64,6 +64,15 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [A catch-up over both a stream and a DCB model refuses a position start without a filter](#a-catch-up-over-both-a-stream-and-a-dcb-model-refuses-a-position-start-without-a-filter).
   A subscription with no filter that starts at a position checkpoint throws `IllegalArgumentException`. Compiles
   unchanged.
+- [A catch-up refuses a start that could skip an event committed below it](#a-catch-up-refuses-a-start-that-could-skip-an-event-committed-below-it).
+  A start after a position above 0 with no live start, `DcbStartAt.afterPosition(n)` among them, and a replay from
+  above the beginning whose live start is lost throw `CatchupCannotResumeException`. Compiles with a removal warning.
+- [A stream catch-up over an event store without positions replays from position 0](#a-stream-catch-up-over-an-event-store-without-positions-replays-from-position-0).
+  `StartAt.checkpoint(GlobalCheckpoint.of(0))` replays the history where it used to go live, and a position above 0
+  throws `UnsupportedStartAtException`. Compiles unchanged.
+- [A MongoDB subscription model refuses a catch-up's checkpoint](#a-mongodb-subscription-model-refuses-a-catch-ups-checkpoint).
+  A subscribe at a `GlobalCheckpoint` or a `CatchupTimeCheckpoint` throws `UnsupportedStartAtException` instead of
+  opening at the present. Compiles unchanged.
 
 ### Spring Boot starter
 
@@ -76,6 +85,12 @@ The compiler finds those for you. The other sections compile fine and behave dif
   unchanged.
 - [A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from). A
   `SubscriptionResumePoints` bean says where each annotated subscription resumes. Compiles unchanged.
+- [A catch-up refuses a start that could skip an event committed below it](#a-catch-up-refuses-a-start-that-could-skip-an-event-committed-below-it).
+  `startAtGlobalPosition` and `startAtDcbPosition` above 0 are refused at start, and deprecated for removal. Compiles
+  with a removal warning.
+- [A stream catch-up over an event store without positions replays from position 0](#a-stream-catch-up-over-an-event-store-without-positions-replays-from-position-0).
+  `startAt = StartPosition.BEGINNING` replays the history over a store with stream position off, where from 0.30.0 to
+  0.34.0 it got none of it. Compiles unchanged.
 
 ### Brokers
 
@@ -628,8 +643,11 @@ configured with.
 
 ### When a catch-up loses its live start on every replay
 
-After its replay, a catch-up checks that its live start is still in the change stream history. When it isn't, the
-catch-up replays again with a new live start, up to three times. When it loses the live start after each of those
+After its replay, a catch-up checks that its live start is still in the change stream history. When it isn't, and the
+replay started at position 0 or at the beginning of time, the catch-up replays again with a new live start, up to three
+times. A replay that started later is refused the first time, as
+[A catch-up refuses a start that could skip an event committed below it](#a-catch-up-refuses-a-start-that-could-skip-an-event-committed-below-it)
+describes. When it loses the live start after each of those
 replays too, it fails with `CatchupCannotResumeException`, an `IllegalStateException`, and the message names the longest
 replay, from reading its live start to checking it. Size the change stream history to reach back at least that far. On
 MongoDB that is the oplog, which you can keep for a minimum time with the `oplogMinRetentionHours` setting.
@@ -681,7 +699,9 @@ To rewind a read model to a point you know is good, keep the checkpoint of the e
 subscription from it.
 
 The string means something only to a catch-up subscription. A MongoDB subscription model with no catch-up wrapping it
-opens at its default with no error when you give it the checkpoint of a replayed event.
+refuses the checkpoint of a replayed event in a `StartAt` that names it, as
+[A MongoDB subscription model refuses a catch-up's checkpoint](#a-mongodb-subscription-model-refuses-a-catch-ups-checkpoint)
+describes. From a `StartAt.dynamic(..)` it still opens the change stream at the present.
 
 The checkpoint of a live event holds a change stream resume token, so a restart from it needs the change stream
 history to still reach back to it. On MongoDB that is the oplog. Once it no longer does, the catch-up does not take the
@@ -772,3 +792,129 @@ same way every time it gets the lease.
 
 Pass a `StreamSubscriptionFilter` for stream events, a `DcbSubscriptionFilter` for DCB events, or an
 `AgnosticSubscriptionFilter` for both. For a broker forwarder, use the `forward` overload that takes a filter.
+
+## A catch-up refuses a start that could skip an event committed below it
+
+On MongoDB an append takes its position before its transaction commits, so an event can commit below a position a
+reader has already read past. A catch-up that went live from a live start read before that position still delivers
+such an event, from the change stream. A catch-up started after a position with no such live start never delivers it.
+A catch-up now refuses every start that could skip an event that way, before it delivers or stores anything, and fails
+with `CatchupCannotResumeException`. A replay that loses its live start fails with the same exception, but only after
+its handler has received the events the replay delivered, in this run or before a restart, and after any checkpoint
+storage it uses has kept the progress. So the exception doesn't mean that nothing reached the handler. See
+[#1230](https://github.com/johanhaleby/occurrent/issues/1230).
+
+### Who is affected
+
+| Start | 0.34 | 0.35 |
+| --- | --- | --- |
+| `startAtGlobalPosition` on `@Subscription`, `@Projection`, `@Saga` or `@Snapshot`, or `startAtDcbPosition` on `@DcbSubscription`, above 0 | Replays after the position | Refused |
+| `DcbStartAt.afterPosition(n)` or `StartAt.checkpoint(GlobalCheckpoint.of(n))`, with `n` above 0 | Replays after `n` | Refused |
+| A stored `position:<n>` checkpoint that holds no live start, with `n` above 0 | Resumes after `n` | Refused |
+| A time checkpoint, `TimeBasedCheckpoint`, that a blocking catch-up resumes from and that holds no live start | Resumes from the time and logs a warning | Refused |
+| A replay whose live start the change stream history no longer reaches, when it started above position 0 or after the beginning of time | Replays again from where it started, with a live start read then, up to three times | Refused the first time |
+
+The table's last row also covers a catch-up from a specific time, `StartAt.checkpoint(TimeBasedCheckpoint)` or a time
+start in Spring Boot. When its replay outlasts the change stream history, it now fails at once instead of replaying
+again.
+
+The same applies to a checkpoint 0.34 stored in the middle of a replay that started above position 0. When the
+application is down for the upgrade for so long that the change stream history no longer reaches back to the live start
+in that checkpoint, 0.35 refuses it.
+
+A start at position 0, `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or the beginning of time is not refused. A
+replay from there whose live start is lost still replays again, as
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay)
+describes.
+
+On an event store that writes no positions, a blocking stream catch-up throws `UnsupportedStartAtException` instead for
+`StartAt.checkpoint(GlobalCheckpoint.of(n))`, `startAtGlobalPosition` or a stored `position:<n>`, with `n` above 0, and
+for a stored one also when it holds a live start. Over such a store none of them replayed from 0.30.0 to 0.34.0. They
+went live at the present, as
+[A stream catch-up over an event store without positions replays from position 0](#a-stream-catch-up-over-an-event-store-without-positions-replays-from-position-0)
+describes.
+
+The blocking catch-up throws `CatchupCannotResumeException` from `subscribe(..)` or from `waitUntilStarted()`, and a
+replay a resume or a takeover started is held, as for a lost live start. The reactor catch-up fails its `Flux` with it.
+The message names the subscription and what to do.
+
+### What to do
+
+To resume after an event, keep the checkpoint the subscription delivers with it, and start from that, as
+[A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from)
+describes. In Spring Boot, return it from a `SubscriptionResumePoints` bean. That checkpoint holds the live start, so a
+start from it is not refused while the change stream history still reaches back to that live start. Once it no longer
+does, a start from it is refused when the replay that delivered the event started at a specific time, or is a 0.34
+replay that started above position 0. A checkpoint from a replay that started at position 0 or at the beginning
+replays again from there instead.
+
+A subscription that is refused, and has no such checkpoint stored with its state, can only start from the beginning
+again: `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or `StartAt.checkpoint(GlobalCheckpoint.of(0))`. Cancel it
+first with `cancelSubscription(id)`, which deletes its stored checkpoint. A blocking catch-up holds a refused resume,
+and holds the stored checkpoint it read with it, so deleting the checkpoint and resuming is refused again. With every
+instance of the application stopped, deleting the stored checkpoint is enough. From then on it delivers a checkpoint
+with every event. For a refused replay whose live start was lost, size the change stream history to reach back across
+the replay. On MongoDB that is the oplog.
+
+`startAtGlobalPosition`, `startAtDcbPosition` and `DcbStartAt.afterPosition(long)` are deprecated for removal, since
+every value above 0 is refused. Use `StartPosition.BEGINNING` or `DcbStartAt.beginning()` instead of 0.
+
+## A stream catch-up over an event store without positions replays from position 0
+
+A blocking `StreamCatchupSubscriptionModel` over an event store that writes no positions handed
+`StartAt.checkpoint(GlobalCheckpoint.of(n))` to the subscription model it wraps, without a replay. The MongoDB
+subscription model opened the change stream at the present for it, and skipped every event before it with no error.
+Every release from 0.30.0 to 0.34.0 did that. Position 0 now replays from the beginning of time and then goes live. A
+position above 0, whether passed, from `startAtGlobalPosition`, or read from the stored checkpoint, throws
+`UnsupportedStartAtException` from `subscribe(..)`, since the store has no position to replay after.
+
+### Who is affected
+
+A Spring Boot application on the blocking MongoDB starter with `startAt = StartPosition.BEGINNING` or
+`startAtGlobalPosition = 0` on `@Subscription`, `@Projection`, `@Saga` or `@Snapshot`, which Spring Boot starts at
+position 0, over an event store that writes no stream positions. A store writes none when
+`occurrent.event-store.stream.position` is `false`. It also writes none when stream position is on only by default and
+the store started against a collection that already held events without a `position`, since it then turns stream
+position off for itself and logs how to turn it on. On any release from 0.30.0 to 0.34.0 such a subscription got none
+of the history, only the events written after it started. On 0.30.0 that is `@Subscription` alone, since `@Projection`,
+`@Saga` and `@Snapshot` arrived in 0.31.0. An application that upgrades straight from 0.30, 0.31, 0.32 or 0.33 is
+affected in the same way.
+
+The same goes for code that starts a blocking stream catch-up at `StartAt.checkpoint(GlobalCheckpoint.of(n))` over such
+a store. A DCB event store always writes positions.
+
+### What to do
+
+Under `resumeBehavior = SAME_AS_START_AT` there is nothing to do. The subscription keeps no checkpoint, and replays the
+whole history the next time it starts.
+
+Under the default `resumeBehavior`, a subscription that went live this way before 0.35 stored a checkpoint as it handled
+events, and resumes from that checkpoint in 0.35, so it still never gets the history. To get it, stop every instance of
+the application, delete the checkpoint stored for the subscription, and start the application again. The subscription
+then replays the whole history, including the events it already handled after it went live, so rebuild the read
+model it feeds first, or make sure its handler can take an event it already handled.
+
+For a start above position 0 in your own code, start from `StartAtTime.beginningOfTime()` or from a time instead.
+
+## A MongoDB subscription model refuses a catch-up's checkpoint
+
+`NativeMongoSubscriptionModel`, `SpringMongoSubscriptionModel` and `ReactorMongoSubscriptionModel` opened the change
+stream at the present when you subscribed at a `GlobalCheckpoint` or a `CatchupTimeCheckpoint`, the checkpoints a
+catch-up stores, and skipped every event before it with no error. Their `subscribe(..)` now throws an
+`UnsupportedStartAtException`, and the reactor model's unnamed `subscribe(..)` fails its `Flux` with it. See
+[#1336](https://github.com/johanhaleby/occurrent/issues/1336).
+
+Only a `StartAt` that names the checkpoint is refused. A `StartAt.dynamic(..)` that answers one still opens the change
+stream at the present. A blocking `DurableSubscriptionModel` does that when it reads one from its storage for a dynamic
+start, which [#1346](https://github.com/johanhaleby/occurrent/issues/1346) tracks.
+
+### Who is affected
+
+Code that subscribes a MongoDB subscription model directly at a checkpoint a catch-up stored, or delivered with a
+replayed event. The Spring Boot starters put a catch-up in front of the MongoDB model, so they are not affected. A
+resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, still goes on from the position the
+subscription has read to.
+
+### What to do
+
+Subscribe through the catch-up subscription model that stored the checkpoint.
