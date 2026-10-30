@@ -21,52 +21,37 @@ import org.jspecify.annotations.NullMarked;
 import java.util.Optional;
 
 /**
- * A subscription model that can say whether it delivers the events of a subscription in the order they committed.
+ * A subscription model that says whether it delivers the events of every subscription in the order they committed.
  * <p>
  * That order matters to a caller that builds up state from the events one by one, such as a saga, where an event applied before an
- * earlier one gives a different result. A model answers per subscription, and its answer can change over time.
+ * earlier one gives a different result.
  * <p>
- * A model answers {@code true} for a subscription only when no event is delivered to it before every earlier event
- * matching it has been delivered and its listener call returned normally. An event is earlier when it committed
- * earlier, or when it was written earlier in the same commit, so the events of one commit are delivered in the order
- * they were written. A delivery whose listener throws is retried in place before anything after it is delivered.
+ * A model that answers {@code true} delivers no event to a subscription before every earlier event matching it has been
+ * delivered and its listener call returned normally. An event is earlier when it committed earlier, or when it was
+ * written earlier in the same commit, so the events of one commit are delivered in the order they were written. Earlier
+ * events count from the position the subscription was started or resumed at, so a subscription started at the present
+ * waits for nothing written before it. A model that can move a subscription past events it never delivered, without
+ * being asked to, answers {@code false}. A delivery whose listener throws is retried in place before anything after it
+ * is delivered.
  * <p>
  * A caller that finds no implementation, which is an empty result from {@link #findIn(SubscriptionModelCapability)},
  * treats the model as not delivering in commit order.
  *
- * @see #deliversInCommitOrder(String)
+ * @see #deliversEveryEventInCommitOrder()
  */
 @NullMarked
 public interface CommitOrderedSubscriptions extends SubscriptionModelCapability {
 
     /**
-     * Whether the subscription {@code subscriptionId} is delivered in commit order. The answer covers the delivery in
-     * progress and every later one, for as long as the model keeps answering {@code true}.
+     * Whether this model delivers every one of its subscriptions in commit order. The answer is the same for the whole
+     * life of the model instance, so a caller can read it once.
      * <p>
-     * Ask it on the delivering thread, from inside the listener. Asked from any other thread, it may speak for a
-     * delivery that is already over.
+     * Declared by the model rather than worked out by the caller, because a caller can't conclude it from the
+     * deliveries it happened to see.
      *
-     * @param subscriptionId The id of the subscription.
-     * @return {@code true} when no event is delivered before every earlier event matching the subscription has been
-     * delivered and its listener call returned normally, where an event is earlier when it committed earlier or was
-     * written earlier in the same commit. {@code false} otherwise, and for an id this model does not know.
+     * @return {@code true} when this model delivers every one of its subscriptions in commit order.
      */
-    boolean deliversInCommitOrder(String subscriptionId);
-
-    /**
-     * Whether every subscription this model delivers to is delivered in commit order, at every moment. When it is
-     * {@code true}, {@link #deliversInCommitOrder(String)} answers {@code true} for every subscription id the model
-     * knows.
-     * <p>
-     * Declared by the model rather than worked out by the caller, because a caller cannot conclude it from the
-     * {@code true} answers it happened to get. The default is {@code false}, which is the right answer for a model that
-     * says nothing.
-     *
-     * @return {@code true} when this model delivers every one of its subscriptions in commit order, always.
-     */
-    default boolean deliversEveryEventInCommitOrder() {
-        return false;
-    }
+    boolean deliversEveryEventInCommitOrder();
 
     /**
      * The commit-ordered model behind {@code subscriptionModel}. A {@link SubscriptionModelWrapper} is not unwrapped

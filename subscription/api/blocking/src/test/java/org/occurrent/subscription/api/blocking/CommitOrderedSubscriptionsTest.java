@@ -77,16 +77,6 @@ class CommitOrderedSubscriptionsTest {
         assertThat(found).containsSame(wrapper);
     }
 
-    @Test
-    void a_model_that_does_not_say_is_not_taken_to_deliver_every_event_in_commit_order() {
-        assertThat(new CommitOrderedModel().deliversEveryEventInCommitOrder()).isFalse();
-    }
-
-    @Test
-    void a_model_can_declare_that_it_delivers_every_event_in_commit_order() {
-        assertThat(new AlwaysCommitOrderedModel().deliversEveryEventInCommitOrder()).isTrue();
-    }
-
     private static class PlainModel implements SubscriptionModel {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -130,15 +120,7 @@ class CommitOrderedSubscriptionsTest {
         }
     }
 
-    // Overrides only the required method, so deliversEveryEventInCommitOrder keeps its default.
     private static class CommitOrderedModel extends PlainModel implements CommitOrderedSubscriptions {
-        @Override
-        public boolean deliversInCommitOrder(String subscriptionId) {
-            return true;
-        }
-    }
-
-    private static final class AlwaysCommitOrderedModel extends CommitOrderedModel {
         @Override
         public boolean deliversEveryEventInCommitOrder() {
             return true;
@@ -166,7 +148,7 @@ class CommitOrderedSubscriptionsTest {
         }
 
         @Override
-        public boolean deliversInCommitOrder(String subscriptionId) {
+        public boolean deliversEveryEventInCommitOrder() {
             return true;
         }
     }

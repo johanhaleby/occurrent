@@ -156,7 +156,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * </ul>
  */
 @NullMarked
-public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions {
+public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions, CommitOrderedSubscriptions {
 
     private static final Logger log = LoggerFactory.getLogger(DurableSubscriptionModel.class);
 
@@ -1095,6 +1095,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     @Override
     public CheckpointAwareSubscriptionModel getWrappedSubscriptionModel() {
         return subscriptionModel;
+    }
+
+    /**
+     * What the wrapped model answers, and {@code false} when it doesn't declare it. This model calls each action on the
+     * wrapped model's thread and stores the checkpoint only after the action returned normally.
+     */
+    @Override
+    public boolean deliversEveryEventInCommitOrder() {
+        return CommitOrderedSubscriptions.findIn(subscriptionModel).map(CommitOrderedSubscriptions::deliversEveryEventInCommitOrder).orElse(false);
     }
 
     /**
