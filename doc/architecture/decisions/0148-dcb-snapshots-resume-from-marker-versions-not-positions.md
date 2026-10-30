@@ -629,8 +629,10 @@ is the order the service has without synchronous subscriptions, and these are th
   on such a retry, as it could before. When the conflicting append moved a marker of the read's criteria the condition now
   fails, and the service's retry strategy reads and decides again. Otherwise the append goes through on the decision it
   already made.
-  So the decision still runs against the current events of its boundary, and a conflict that only the condition can see
-  spends an attempt of the service's retry strategy instead of one of the executor's. By default the service allows 5
+  The condition has the same limits here as on any append, after a prune
+  ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)) and on `DcbCriteria.all()`, where the append can go
+  through on a decision that didn't see a matching event. A conflict that only the condition can see spends an attempt
+  of the service's retry strategy instead of one of the executor's. By default the service allows 5
   attempts and the Spring executors about 15, so a command on a contended boundary can fail sooner, with the same budget
   a service without synchronous subscriptions has.
 - The domain function no longer runs in the executor's transaction, and a decision with no new events no longer opens
@@ -644,9 +646,9 @@ is the order the service has without synchronous subscriptions, and these are th
 needs no marker versions.
 
 A transaction the caller owns stays the limitation described below, because the read still joins it and reports no
-versions. An executor on `PROPAGATION_REQUIRES_NEW` under such a transaction reads in the caller's transaction and appends
-in its own, so a read that has gone stale stays stale on every attempt and can use up the retries. This comes from
-reading the code, and no test runs it.
+versions. With an executor on `PROPAGATION_REQUIRES_NEW` under such a transaction, the service reads in the caller's
+transaction and the executor appends in its own, so a read that has gone stale stays stale on every attempt and can use
+up the service's retries. No test in this repository runs this.
 
 ### The decider confirms its append before it saves
 
@@ -1011,7 +1013,7 @@ the store unchanged.
   can save.
 - On a DCB application service with synchronous subscriptions the domain function no longer runs in the executor's
   transaction. The executor's conflict retry re-runs the append, the re-read and the dispatch, with the token of the
-  first read, and not the read or the domain function.
+  read before it, and not the read or the domain function.
 - A decider inside a transaction the caller owns never saves a snapshot. Saving after that transaction commits isn't in
   0.35.0, and this is a known limitation, tracked in #1307. The warning lists a transaction the caller owns as one of
   the causes.
