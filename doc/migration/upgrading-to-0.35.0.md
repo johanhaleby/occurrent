@@ -713,18 +713,19 @@ describes it.
 ### What stays the same
 
 - A conditional append on criteria with tags is still refused when an event that matches them committed after the
-  read.
+  read, unless the markers were pruned in between ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)).
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
 - Nothing changes on disk, so 0.34.0 and 0.35.0 nodes can append to the same store. A conditional append from a 0.34.0
-  node still increments the type markers of its criteria, also for an item with tags, which a 0.35.0 node doesn't. A
-  0.35.0 check reads a type marker only for an item without tags, so such an increment can make that check refuse an
-  append and the command retry, and it can't let an append through. Going back to 0.34.0 is safe for the data.
+  node still increments the type markers of its criteria, also for an item with tags. A 0.35.0 node increments a type
+  marker of such an item only when it appends an event of that type. A 0.35.0 check reads a type marker only for an item
+  without tags, so a 0.34.0 increment can make that check refuse an append and the command retry, and it can't let an
+  append through. Going back to 0.34.0 is safe for the data.
 
 ### Who is affected
 
 - **Code that counted on the refusal.** A command whose conditional append failed because an event of the same type
-  with other tags was appended now succeeds. If the decision depends on every event of that type, read with criteria
+  with other tags was appended can now succeed. If the decision depends on every event of that type, read with criteria
   that hold only the type.
 - **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
