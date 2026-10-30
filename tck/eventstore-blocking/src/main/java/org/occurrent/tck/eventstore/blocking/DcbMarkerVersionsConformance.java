@@ -367,6 +367,19 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
                     .as("A whole-store append committed after the read must reject a whole-store lock built from its token")
                     .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
         }
+
+        @Test
+        void a_read_of_everything_with_versions_lets_a_whole_store_lock_through_when_nothing_was_committed_after_it() {
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)), DcbAppendCondition.wholeStoreLock());
+            DcbEventStream read = dcbEventStore().read(DcbCriteria.all(), DcbReadOptions.fromBeginning().withVersions());
+
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_B)), DcbAppendCondition.wholeStoreLock(read.consistencyToken())))
+                    .as("The token of a read of everything that asked for versions must be accepted by a whole-store lock "
+                            + "when nothing was committed after the read, on a store that already holds an event, "
+                            + "or it refuses an append it should let through")
+                    .doesNotThrowAnyException();
+        }
     }
 
     @Nested

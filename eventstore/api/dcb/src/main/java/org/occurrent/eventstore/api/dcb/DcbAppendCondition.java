@@ -60,9 +60,9 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
      * Creates a condition that fails if any existing event matches {@code criteria}.
      * <p>
      * With {@link DcbCriteria#all()} this is a whole-store optimistic lock. On the MongoDB stores it doesn't conflict
-     * with a concurrent tag-scoped or type-scoped append, so use it only for single-writer operations or for an append
-     * that only an empty store should accept (see ADR 30). Use scoped {@code criteria} for a consistency boundary on a
-     * store with several writers. Use {@link #wholeStoreLock()} instead of {@code failIfEventsMatch(DcbCriteria.all())},
+     * with a concurrent tag-scoped or type-scoped append, so use it only for single-writer operations, or for a bootstrap
+     * append that races only with other bootstrap appends (see ADR 30). Use scoped {@code criteria} for a consistency
+     * boundary on a store with several writers. Use {@link #wholeStoreLock()} instead of {@code failIfEventsMatch(DcbCriteria.all())},
      * so the call site says it's a whole-store lock and doesn't read like a read-everything query.
      */
     public static DcbAppendCondition failIfEventsMatch(DcbCriteria criteria) {
@@ -102,7 +102,7 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
      * read-everything query at the call site.
      * <p>
      * On the MongoDB stores it doesn't conflict with a concurrent tag-scoped or type-scoped append (see ADR 30), so it's
-     * correct only for single-writer operations, or for a bootstrap append that only an empty store should accept.
+     * correct only for single-writer operations, or for a bootstrap append that races only with other bootstrap appends.
      */
     public static DcbAppendCondition wholeStoreLock() {
         return failIfEventsMatch(DcbCriteria.all());
@@ -132,9 +132,9 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
                     + " doesn't conflict with a tag-scoped or type-scoped append.";
         }
         return "The consistency token was read with " + tokenCriteria + ", which isn't the same criteria as the append"
-                + " condition's " + conditionCriteria + ". Use DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken),"
-                + " which takes the criteria from the token. If the append needs the condition's criteria, read with them"
+                + " condition's " + conditionCriteria + ". If the append needs the condition's criteria, read with them"
                 + " before you decide, and decide from that read. A token read after the decision can hide an event"
-                + " committed in between.";
+                + " committed in between. If the append needs the read's criteria, use"
+                + " DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken), which takes the criteria from the token.";
     }
 }

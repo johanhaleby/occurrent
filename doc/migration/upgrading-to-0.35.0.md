@@ -24,7 +24,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
   **Breaks the build** if you implement the interface yourself.
 - [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
   `DcbConsistencyToken` becomes a class, and `DcbEventStream(List, long)` and `DcbDomainEventStream(List, long)` are
-  removed. **Breaks the build** if you create a token or a stream, or implement a `DcbEventStore`.
+  removed. **Breaks the build** if you create a token or a stream, or call `value()`, which a `DcbEventStore` of your own
+  usually does.
 
 ### Sagas
 
@@ -42,8 +43,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
   use a record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`.
 - [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
   A `DcbAppendCondition` with a token read with other criteria throws `IllegalArgumentException`, on every store. A
-  token value saved under 0.34.0 isn't valid. **Breaks the build** if you create a token or a stream, or implement a
-  `DcbEventStore`.
+  token value saved under 0.34.0 isn't valid. **Breaks the build** if you create a token or a stream, or call `value()`,
+  which a `DcbEventStore` of your own usually does.
 
 ### Subscriptions and catch-up
 
@@ -623,15 +624,20 @@ aren't the same, even when they select the same events, so `types("A", "B")` isn
 
 The check runs in the condition's constructor, before any store is called, so it works the same on every store, a
 `DcbEventStore` of your own included. `GenericDcbApplicationService` reads and appends with the same criteria on both
-stacks, so it isn't affected.
+stacks, so it isn't affected on a store that returns the criteria it was given.
 
 ### Who is affected
 
 - **A `DcbEventStore` of your own.** It stops compiling where it calls `new DcbConsistencyToken(..)`,
   `DcbConsistencyToken.of(long)`, `value()` or `new DcbEventStream(events, head)`.
 - **Code that creates tokens or streams**, such as a test double that returns a `DcbEventStream` or a
-  `DcbDomainEventStream`. It stops compiling the same way. A record pattern over `DcbConsistencyToken` stops compiling
-  too, since the token is no longer a record.
+  `DcbDomainEventStream`. It stops compiling the same way. So does a call to `value()`, and a record pattern over
+  `DcbConsistencyToken`, since the token is no longer a record.
+- **A `DcbEventStore` decorator that rewrites criteria**, adding a tenant tag for example, and passes the inner store's
+  token through. It compiles, but the token holds the rewritten criteria, so a condition on the caller's criteria throws
+  `IllegalArgumentException`. In `read`, return `DcbConsistencyToken.of(criteria, innerToken.version())`. In `append`,
+  rewrite the criteria the same way, and give the inner store a condition with
+  `DcbConsistencyToken.of(rewrittenCriteria, token.version())`.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
   condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
   deprecation warning, and `wholeStoreLock(token)` and `new DcbAppendCondition(criteria, Optional.of(token))` compile
@@ -659,9 +665,9 @@ DcbEventStream stream = eventStore.read(criteria);
 eventStore.append(newEvents, DcbAppendCondition.failIfEventsMatch(stream.consistencyToken()));
 ```
 
-Where you passed the criteria and the token separately, drop the criteria. If the append really needs other criteria
-than the read, read with those criteria before you decide, and decide from that read. A token read after the decision
-can hide an event committed in between, so don't swap in a fresh token for the one the decision was made with.
+Where you passed the criteria the read was given and the token separately, drop the criteria. If the append really needs
+other criteria than the read, read with those criteria before you decide, and decide from that read. A token read after
+the decision can hide an event committed in between, so don't swap in a fresh token for the one the decision was made with.
 
 Don't save a token value to use later. Read again when the command runs, and decide from that read. That includes a
 client's ETag. Replacing a stale ETag with a fresh token makes the append check against a read the client's decision
