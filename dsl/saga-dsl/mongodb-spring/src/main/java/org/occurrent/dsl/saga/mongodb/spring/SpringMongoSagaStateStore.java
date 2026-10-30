@@ -320,7 +320,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         // Decoding happens outside the retried supplier, so a stored state that no longer reads back throws once
         // instead of being attempted ten times.
-        Supplier<@Nullable Document> read = () -> mongoOperations.findById(sagaId, Document.class, collectionName);
+        // From the primary, because a hold that found the instance started reads it again here to drain, and a secondary
+        // behind the start's save or the hold's mark would show no drain due.
+        Query query = Query.query(where(ID).is(sagaId)).withReadPreference(ReadPreference.primary());
+        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(query, Document.class, collectionName);
         return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
 

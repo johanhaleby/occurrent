@@ -66,12 +66,17 @@ stores, `InMemorySagaStateStore` and `SpringMongoSagaStateStore`, implement it.
 A non-start event of an instance that has not started is held when `holds` is true, and skipped otherwise. To hold it,
 the executor:
 
-1. inserts a copy with `SagaHeldEvents.hold`. The key is the event's redelivery key, or its CloudEvent id and source
-   when it has none, as for an event the saga cannot route. A duplicate key is a redelivery of an event already held.
+1. inserts a copy with `SagaHeldEvents.hold`. The key is the event's redelivery key, which ends in `@` and a version.
+   An event without one is keyed by the length of its CloudEvent id, the id and its source, followed by a suffix no
+   redelivery key ends in, so two held events share a key only when they are the same event. A duplicate key is a
+   redelivery of an event already held.
 2. reads the instance from the primary.
    - When the instance is absent or not started, the event is acknowledged and the start's delivery applies it.
-   - When it is started and active, `markHeldEvents(sagaId, null)` marks the instance as having events to drain, and
-     the delivery drains them.
+   - When it is started and active, `markHeldEvents(sagaId, null)` marks the instance as having events to drain. A
+     delivery with a redelivery key then runs again on the started instance, which drains the held events and looks up
+     its own copy. Other deliveries can move the instance past the event's reorder window before the hold, and a drain
+     does not apply such a copy but waits for the next delivery of its event, which this delivery is. A delivery without a redelivery key
+     only drains, since running it again would apply the event a second time beside its copy.
    - When it is completed, the copy is released with a WARN, which is what 0.34.0 does with an event that arrives after
      completion.
    - When it is quarantined, the copy stays and the event is acknowledged.
@@ -80,7 +85,8 @@ A hold creates no instance, and nothing that lists instances sees a held event.
 
 The fence is the order of the two writes on each side. The hold reads after its insert, and the start lists the held
 events after its save. A hold whose read comes before the start's save inserted before the start's list, so the list
-finds it. A hold whose read comes after sees the instance started and drains it itself. Both reads go to the primary.
+finds it. A hold whose read comes after sees the instance started and drains it itself. Both reads go to the primary,
+and so does the read of the whole instance that the drain starts from.
 
 ### The drain
 
@@ -93,8 +99,10 @@ the version, that save loses, and the retry drains again.
 
 **Proof that a version applied** means positive evidence on the instance only. The version is a mark, or in `applied`
 of a type mark of its stream, or its key is in `drainedHeldKeys`. A save that applies a held copy adds its key to
-`drainedHeldKeys` before the copy is released, so the proof survives a crash between the two. The drain's ending save
-empties the set, except for the keys it applied itself.
+`drainedHeldKeys` before the copy is released, so the proof survives a crash between the two. Each later save in the
+same drain drops the keys whose copies the drain has released since, so the set holds the keys whose release has not
+happened yet rather than every key the drain applied, and a drain of many copies does not grow the instance towards the
+store's document limit. The drain's ending save empties the set, except for the keys it applied itself.
 
 **The whole set.** The drain reads `heldIndex(sagaId)`, every held copy without its body, orders it by `heldAt` with
 each stream's versions sorted within that stream's slots, and fetches the bodies in pages of `timerBatchLimit`. A body

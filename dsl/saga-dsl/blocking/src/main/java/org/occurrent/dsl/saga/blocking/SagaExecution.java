@@ -453,7 +453,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     private HeldEvent heldEvent(String sagaId, CloudEvent cloudEvent, EventMeta meta, boolean selfHeld, boolean outstanding) {
-        HeldEventRef ref = new HeldEventRef(unroutableKey(meta, cloudEvent), meta.streamId(), meta.streamVersion(), meta.position(),
+        HeldEventRef ref = new HeldEventRef(heldKey(meta, cloudEvent), meta.streamId(), meta.streamVersion(), meta.position(),
                 cloudEvent.getType(), clock.get(), selfHeld, outstanding);
         return new HeldEvent(sagaId, ref, cloudEvent);
     }
@@ -468,6 +468,19 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private static String unroutableKey(EventMeta meta, CloudEvent cloudEvent) {
         String redeliveryKey = meta.redeliveryKey();
         return redeliveryKey != null ? redeliveryKey : cloudEvent.getId() + " from " + cloudEvent.getSource();
+    }
+
+    // The key a held copy is stored and found by. The redelivery key where the event has one, which ends in @ and a
+    // version. Otherwise the CloudEvent id, prefixed with its length so it cannot run into the source, and the source,
+    // followed by a suffix no redelivery key ends in. Two events held for one instance then share a key only when they
+    // are the same event.
+    private static String heldKey(EventMeta meta, CloudEvent cloudEvent) {
+        String redeliveryKey = meta.redeliveryKey();
+        if (redeliveryKey != null) {
+            return redeliveryKey;
+        }
+        String id = cloudEvent.getId();
+        return id.length() + ":" + id + " from " + cloudEvent.getSource() + " (no stream key)";
     }
 
     /**
@@ -783,9 +796,17 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 new HeldContext(holds, heldCopyKey, drained));
         if (outcome.held()) {
             if (holdUntilStarted(Objects.requireNonNull(heldEvents), sagaId, Objects.requireNonNull(cloudEvent), meta)) {
-                // Drained rather than run again, because the held copy stands for the event now, and an event with no
-                // redelivery key would be applied by both.
-                drainNow(heldEvents, sagaId, stateStore.find(sagaId).orElse(null), keysSeenNew);
+                if (meta.redeliveryKey() == null) {
+                    // Drained rather than run again, because the held copy stands for the event now, and an event with
+                    // no redelivery key would be applied by both.
+                    drainNow(heldEvents, sagaId, stateStore.find(sagaId).orElse(null), keysSeenNew);
+                } else {
+                    // Run again on the started instance, which drains and then looks up this delivery's own copy. Other
+                    // deliveries may have moved the instance past the event's reorder window before the hold, and the
+                    // drain does not apply such a copy but waits for the next delivery of its event, which this
+                    // delivery is.
+                    attemptOnce(sagaId, input, meta, requireTimerName, keysSeenNew, cloudEvent, attempt);
+                }
             }
             return;
         }
@@ -916,6 +937,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
         List<HeldEventRef> deferred = new ArrayList<>();
         Set<String> deferredStreams = new HashSet<>();
+        // The keys released so far, which the next apply save forgets.
+        Set<String> released = new HashSet<>();
         int pageSize = Math.max(1, config.timerBatchLimit());
         for (int from = 0; from < ordered.size(); from += pageSize) {
             List<HeldEventRef> page = ordered.subList(from, Math.min(ordered.size(), from + pageSize));
@@ -943,7 +966,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     }
                     continue;
                 }
-                current = drainOne(heldEvents, sagaId, current, ref, body, step, keysSeenNew);
+                current = drainOne(heldEvents, sagaId, current, ref, body, step, keysSeenNew, released);
             }
         }
         for (int from = 0; from < deferred.size(); from += pageSize) {
@@ -958,7 +981,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     releaseOnCompleted(heldEvents, sagaId, ref.key());
                     continue;
                 }
-                current = drainOne(heldEvents, sagaId, current, ref, body, SagaExecutionSupport.drainStep(current, ref, config.reorderWindow()), keysSeenNew);
+                current = drainOne(heldEvents, sagaId, current, ref, body, SagaExecutionSupport.drainStep(current, ref, config.reorderWindow()), keysSeenNew, released);
             }
         }
         return new Drained<>(current, true);
@@ -976,9 +999,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     private SagaEnvelope<S> drainOne(SagaHeldEvents<S> heldEvents, String sagaId, SagaEnvelope<S> current, HeldEventRef ref, HeldEvent body,
-                                     SagaExecutionSupport.HeldStep step, Set<String> keysSeenNew) {
+                                     SagaExecutionSupport.HeldStep step, Set<String> keysSeenNew, Set<String> released) {
         switch (step) {
-            case RELEASE_APPLIED -> release(heldEvents, sagaId, ref.key());
+            case RELEASE_APPLIED -> {
+                release(heldEvents, sagaId, ref.key());
+                released.add(ref.key());
+            }
             case RELEASE_BEFORE_START -> {
                 release(heldEvents, sagaId, ref.key());
                 log.debug("Saga '{}' instance '{}' released the held event '{}', an earlier version of the stream that started it.", subscriptionId, sagaId, ref.key());
@@ -988,8 +1014,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 if (step == SagaExecutionSupport.HeldStep.APPLY_FROM_THE_FLOOR) {
                     logAppliedFromTheFloor(sagaId, ref.key());
                 }
-                SagaEnvelope<S> applied = applyHeldCopy(sagaId, current, ref, body, keysSeenNew);
+                SagaEnvelope<S> applied = applyHeldCopy(sagaId, current, ref, body, keysSeenNew, released);
                 release(heldEvents, sagaId, ref.key());
+                released.add(ref.key());
                 return applied;
             }
         }
@@ -997,8 +1024,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     // Apply one held copy in a save that adds its key to the drained ones, so the instance proves it applied even when
-    // the release after it never happens.
-    private SagaEnvelope<S> applyHeldCopy(String sagaId, SagaEnvelope<S> current, HeldEventRef ref, HeldEvent body, Set<String> keysSeenNew) {
+    // the release after it never happens. The same save forgets the keys in released, whose copies are gone.
+    private SagaEnvelope<S> applyHeldCopy(String sagaId, SagaEnvelope<S> current, HeldEventRef ref, HeldEvent body, Set<String> keysSeenNew,
+                                          Set<String> released) {
         EventMeta heldMeta = SagaExecutionSupport.metaOf(ref);
         String key = heldMeta.redeliveryKey();
         try {
@@ -1007,7 +1035,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 keysSeenNew.add(key);
             }
             Outcome<S, C> outcome = SagaExecutionSupport.process(saga, sagaId, current, SagaInput.event(event, EventMetadata.from(body.cloudEvent())), heldMeta,
-                    clock.get(), config.reorderWindow(), new HeldContext(false, ref.key(), false));
+                    clock.get(), config.reorderWindow(), new HeldContext(false, ref.key(), false, released));
             if (!outcome.processed()) {
                 return current;
             }

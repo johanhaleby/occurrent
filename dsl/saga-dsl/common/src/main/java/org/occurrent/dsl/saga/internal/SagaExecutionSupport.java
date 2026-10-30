@@ -169,10 +169,21 @@ public final class SagaExecutionSupport {
      *                    {@code null}
      * @param endsDrain   whether a drain ran before this input, so its save records that no drain is due and forgets
      *                    the keys the drain applied
+     * @param released    the keys of held events the running drain has released since it applied them, which the save
+     *                    forgets, since a released copy needs no proof that it applied
      */
-    public record HeldContext(boolean holds, @Nullable String heldCopyKey, boolean endsDrain) {
+    public record HeldContext(boolean holds, @Nullable String heldCopyKey, boolean endsDrain, Set<String> released) {
         /** Nothing held, which is how an input was processed before events were held. */
         public static final HeldContext NONE = new HeldContext(false, null, false);
+
+        public HeldContext {
+            released = Set.copyOf(released);
+        }
+
+        /** A context that forgets no released keys. */
+        public HeldContext(boolean holds, @Nullable String heldCopyKey, boolean endsDrain) {
+            this(holds, heldCopyKey, endsDrain, Set.of());
+        }
     }
 
     /**
@@ -547,11 +558,14 @@ public final class SagaExecutionSupport {
 
     // A save that applies a held copy or a self-held version adds its key, and a save that ends a drain forgets the keys
     // the drain applied, since the copies are released by then. When one save does both, it keeps the keys it applies.
+    // A save inside a drain forgets the keys whose copies the drain has released, so the set holds only the keys whose
+    // release has not happened yet rather than every key of the drain.
     private static <S extends @Nullable Object> Set<String> drainedHeldKeysAfter(@Nullable SagaEnvelope<S> current, EventMeta meta, HeldContext held) {
         if (current == null) {
             return Set.of();
         }
         Set<String> drained = new LinkedHashSet<>(held.endsDrain() ? Set.of() : current.drainedHeldKeys());
+        drained.removeAll(held.released());
         if (held.heldCopyKey() != null) {
             drained.add(held.heldCopyKey());
         }
