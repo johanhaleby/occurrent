@@ -124,8 +124,9 @@ because the stores live in other modules than the token, and a `DcbEventStore` o
 
 ### Upgrading
 
-Nothing changes on disk. The marker documents, their ids and what increments them stay the same, so 0.34 and 0.35
-nodes can append to the same store. A conditional append from a 0.34 node still increments type markers that 0.35
+Nothing changes on disk. The marker documents and their ids stay the same, so 0.34 and 0.35 nodes can append to the
+same store. A conditional append from a 0.35 node increments a type marker of an item with tags only when it appends an
+event of that type. A conditional append from a 0.34 node still increments type markers that 0.35
 doesn't read for criteria with tags. An append only ever raises a marker version, so an extra increment can make a
 check refuse an append and the command retry, and it can't make a check let one through. Going back to 0.34 is safe
 for the data.
@@ -170,8 +171,11 @@ catch that.
   unconditional append that only shares a type. Appends of one type that run at the same time still write the same
   `type:X` document on MongoDB, whatever their tags, and the TCK test below runs its appends one after another, so it
   doesn't show that they stop conflicting.
-- For a criteria item with both types and tags, a prune of only its tag marker between the read and the append can let
-  a conflicting append through until [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed.
+- For a criteria item with both types and tags, the token no longer includes the versions of its type markers, so a
+  prune between the read and the append can let through a conflicting append that 0.34 refused, until
+  [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. After a prune of only the tag marker, no type
+  marker is left in the sum to refuse the append. After a prune of both, one matching append can bring the tag marker
+  back to the version the token holds.
 - `DcbConsistencyToken` becomes a class and the two stream constructors are removed, which breaks store
   implementations and code that creates tokens or streams. The refusal breaks code that appends with other criteria
   than it read with. There is no OpenRewrite recipe for either, because the replacement needs the read criteria,

@@ -32,7 +32,8 @@ import static java.util.Objects.requireNonNull;
  * it fail (see {@link #wholeStoreLock(DcbConsistencyToken)}). A store may also make it fail when no matching event was
  * committed. The MongoDB stores can do that, for example when an event committed after the read shares a tag with
  * {@code criteria} but doesn't match it, or when another conditional append on the same criteria committed after the
- * read, whatever events it appended.
+ * read, whatever events it appended. A prune of the criteria's markers between the read and the append can make a
+ * MongoDB store let a conflicting append through until issue 1300 is fixed.
  * <p>
  * A token belongs to the criteria it was read with, so the constructor throws {@link IllegalArgumentException} when the
  * token's criteria aren't the same as {@code criteria}. Every factory goes through the constructor, so this happens

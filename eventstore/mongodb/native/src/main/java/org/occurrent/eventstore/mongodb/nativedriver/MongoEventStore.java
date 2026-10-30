@@ -755,9 +755,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return DcbMarkerVersionsDocuments.markersByKey(dcbCheckpointCollection.find(clientSession, DcbMarkerVersionsDocuments.markersFilter(markerKeys)));
     }
 
-    // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. The sum is
-    // monotonically increasing (every append increments at least one marker), so it changes if and only if some
-    // append touched one of the query's markers since the reader observed it. Because versions bump inside the
+    // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. While the markers
+    // exist the sum only grows, so it changes when an append touches one of the query's markers after the reader
+    // observed it. A prune can bring the sum back to a value a reader holds (#1300). Because versions bump inside the
     // append transaction, not when positions are reserved, this token reflects only committed appends and is
     // immune to the read-watermark overshoot a position-based check suffers (ADR 0021).
     private long consistencyToken(@Nullable ClientSession clientSession, DcbCriteria criteria) {

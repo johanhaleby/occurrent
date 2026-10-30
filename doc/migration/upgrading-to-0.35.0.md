@@ -700,7 +700,8 @@ criteria than its read would then append on the read's criteria instead of throw
 ## Criteria with tags conflict on their tags
 
 On the MongoDB stores, the check of a conditional append reads only the tag markers of an item with tags, and no longer
-the markers of its types. Sharing a type with such an item is then no longer a reason for the check to refuse.
+the markers of its types. Sharing a type with such an item is then no longer a reason for the check to refuse. A
+conditional append on such an item also increments a type marker of the item only when it appends an event of that type.
 Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
@@ -726,7 +727,8 @@ describes it.
 
 - **Code that counted on the refusal.** A command whose conditional append failed because an event of the same type
   with other tags was appended can now succeed. If the decision depends on every event of that type, read with criteria
-  that hold only the type.
+  that hold only the type. A conditional append on `type("X").tags(a)` that appends an event of another type also no
+  longer makes an append with a token read on `type("X")` alone refuse, since it no longer increments that type marker.
 - **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
   succeed, so a store that still reads the type marker for an item with tags fails the case.
