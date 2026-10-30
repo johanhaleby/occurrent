@@ -43,6 +43,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnsupportedStartAtException;
@@ -334,6 +335,49 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
         assertThat(CommandLog.changeStreamField(commands.changeStreamsOpened().getLast(), "startAfter")).isEqualTo(resumeTokenOf(quietPositions.getFirst()));
         assertThat(subscriptionModel.isRunning("refusing-hand-over")).isTrue();
+        NameDefined matched = nameDefined();
+        write(matched);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));
+    }
+
+    @Test
+    void a_quiet_position_listener_that_fails_with_the_refusal_type_naming_a_catchup_position_restarts_the_subscription() {
+        // Given a listener whose first hand-over fails with the refusal type naming a catch-up position
+        CopyOnWriteArrayList<Checkpoint> quietPositions = new CopyOnWriteArrayList<>();
+        AtomicInteger handedOver = new AtomicInteger();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> Mono.just(quietPosition -> {
+            quietPositions.add(quietPosition);
+            return handedOver.incrementAndGet() == 1 ? Mono.error(new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown by the handler")) : Mono.empty();
+        }));
+        CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+
+        // When it subscribes
+        subscriptionModel.subscribe("refusing-handler", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event)));
+
+        // Then the change stream is opened again at the position that could not be handed over, and the subscription keeps delivering
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
+        assertThat(CommandLog.changeStreamField(commands.changeStreamsOpened().getLast(), "startAfter")).isEqualTo(resumeTokenOf(quietPositions.getFirst()));
+        assertThat(subscriptionModel.isRunning("refusing-handler")).isTrue();
+        NameDefined matched = nameDefined();
+        write(matched);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));
+    }
+
+    @Test
+    void a_quiet_position_listener_that_fails_before_reading_with_the_refusal_type_naming_a_catchup_position_is_asked_again_and_the_subscription_keeps_running() {
+        // Given a listener that fails the first time it is asked before reading
+        AtomicInteger asked = new AtomicInteger();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> asked.incrementAndGet() == 1
+                ? Mono.error(new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown before reading"))
+                : Mono.just(quietPosition -> Mono.empty()));
+        CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+
+        // When it subscribes
+        subscriptionModel.subscribe("refusing-before-reading", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event)));
+
+        // Then the listener is asked again, and the subscription keeps delivering
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(asked).as("times the listener was asked").hasValueGreaterThanOrEqualTo(2));
+        assertThat(subscriptionModel.isRunning("refusing-before-reading")).isTrue();
         NameDefined matched = nameDefined();
         write(matched);
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));

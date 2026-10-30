@@ -272,7 +272,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 // Null only for a stream that never opened at a position, which has none to name
                 Checkpoint lostFrom = MongoCommons.lostFrom(currentStartAt.get(), openedAt.get());
                 return lostFrom == null ? throwable : new HistoryLostException(lostFrom, throwable);
-            });
+            }).onErrorMap(StartPositionRefused.class, refused -> refused.refusal);
         });
     }
 
@@ -297,7 +297,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 // Set before currentStartAt, so an opening that reads StartAt.now() also reads this moment
                 presentAt.set(presentNow());
                 currentStartAt.set(StartAt.now());
-            }))).onErrorMap(startLost, throwable -> new HistoryLostException(requireNonNull(start), throwable));
+            }))).onErrorMap(startLost, throwable -> new HistoryLostException(requireNonNull(start), throwable)).onErrorMap(StartPositionRefused.class, refused -> refused.refusal);
         });
     }
 
@@ -396,7 +396,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                     // Set before currentStartAt, so an opening that reads StartAt.now() also reads this moment
                     internalSubscription.presentAt.set(presentNow());
                     run.move(currentStartAt, StartAt.now());
-                })));
+                }))).onErrorMap(StartPositionRefused.class, refused -> refused.refusal);
     }
 
     // How subscriptions with an id read before the model read the driver's cursor
@@ -563,7 +563,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return Mono.defer(() -> {
             SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
             StartAt tracked = currentStartAt.get();
-            StartAt resolved = tracked.get(subscriptionModelContext);
+            StartAt resolved = asked(tracked, subscriptionModelContext);
             if (!MongoCommons.opensAtThePresent(resolved)) {
                 StartAt openingPosition = requireNonNull(resolved);
                 opened.accept(new OpenedAt(openingPosition, tracked));
@@ -673,6 +673,18 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         }
     }
 
+    // The one place a refusal can come from. The same exception from a listener or an action is a failure that restarts
+    private static @Nullable StartAt asked(StartAt position, SubscriptionModelContext context) {
+        try {
+            return position.get(context);
+        } catch (UnsupportedStartAtException e) {
+            if (MongoCommons.isCatchupPosition(e.startAt())) {
+                throw new StartPositionRefused(e);
+            }
+            throw e;
+        }
+    }
+
     // ChangeStreamHistoryLost (286) restarts from StartAt.now() only when configured to. Everything else
     // (failover, transient network error, anything the driver itself couldn't resume) restarts from the
     // tracked position. Mirrors NativeMongoSubscriptionModel and SpringMongoSubscriptionModel.
@@ -682,8 +694,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             log.error("Cannot work out where to start {}, will not restart subscription!", subscription, throwable);
             return false;
         }
-        if (throwable instanceof UnsupportedStartAtException unsupported && MongoCommons.isCatchupPosition(unsupported.startAt())) {
-            log.error("Cannot open the change stream of {} at its start position, will not restart subscription!", subscription, throwable);
+        if (throwable instanceof StartPositionRefused refused) {
+            log.error("Cannot open the change stream of {} at its start position, will not restart subscription!", subscription, refused.refusal);
             return false;
         }
         if (isChangeStreamHistoryLost(throwable)) {
@@ -1228,6 +1240,16 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 hasEnded = true;
             }
             ended.tryEmitEmpty();
+        }
+    }
+
+    // Only ever on its way from asked to the retry that stops on it, and the subscriber gets the refusal
+    private static final class StartPositionRefused extends RuntimeException {
+        private final UnsupportedStartAtException refusal;
+
+        private StartPositionRefused(UnsupportedStartAtException refusal) {
+            super(refusal);
+            this.refusal = refusal;
         }
     }
 

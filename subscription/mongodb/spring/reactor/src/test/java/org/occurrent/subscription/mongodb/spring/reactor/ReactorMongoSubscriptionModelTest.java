@@ -740,6 +740,11 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
+        void an_action_that_fails_with_the_refusal_type_naming_a_catchup_position_on_a_delivering_subscription_is_delivered_the_event_again() {
+            assertTheEventIsDeliveredAgainAfterTheActionFailsWith(new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "failed by the action"));
+        }
+
+        @Test
         void an_action_that_fails_with_another_exception_on_a_delivering_subscription_is_delivered_the_event_again() {
             assertTheEventIsDeliveredAgainAfterTheActionFailsWith(new IllegalStateException("failed by the action"));
         }
