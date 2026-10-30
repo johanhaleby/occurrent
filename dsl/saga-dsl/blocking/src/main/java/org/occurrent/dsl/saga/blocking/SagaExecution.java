@@ -194,7 +194,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         // The redelivery keys this delivery saw as new and has not yet seen applied. A local rather than a field,
         // because deliveries on other threads share this object, and a set rather than a flag, because a flag raised
         // by one key would let another key be taken as overtaken.
-        Set<String> keysSeenNew = new HashSet<>();
+        KeysSeenNew keysSeenNew = new KeysSeenNew();
         try {
             // NONE until this returns, so a failure to read the extensions at all is an event carrying no redelivery
             // key, which is what the conditions below already say about an event nothing can tell a redelivery of.
@@ -234,7 +234,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * whichever step after routing threw. This method checks the ones that need no store read, and {@link #quarantine}
      * checks the rest.
      */
-    private boolean letTheSubscriptionPast(@Nullable String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Set<String> keysSeenNew) {
+    private boolean letTheSubscriptionPast(@Nullable String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, KeysSeenNew keysSeenNew) {
         if (sagaId == null) {
             refuseUnroutableDelivery(meta, cloudEvent, failure);
             return false;
@@ -245,7 +245,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         return keepFailed(sagaId, cloudEvent, meta, failure, keysSeenNew);
     }
 
-    private boolean keepFailed(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Set<String> keysSeenNew) {
+    private boolean keepFailed(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, KeysSeenNew keysSeenNew) {
         if (!meta.carriesRedeliveryKey() || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
             return false;
         }
@@ -268,7 +268,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * few milliseconds reads the instance each time, as the quarantine path does. A lost compare-and-set is read again and retried up to {@link SagaRunnerConfig#maxCasAttempts()} times. A write
      * that cannot be made, and a version the instance cannot list, is kept by {@link #keepUnlisted} instead.
      */
-    private void recordPending(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Set<String> keysSeenNew) {
+    private void recordPending(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, KeysSeenNew keysSeenNew) {
         try {
             for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
                 SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
@@ -299,7 +299,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // or would, or the instance does not need it. Asked of the same read the listing uses, because a null pending
     // record means a redelivery, a completed or quarantined instance and a version overtaken in flight alike, and only
     // the last of those is a loss.
-    private @Nullable Unlisted unlisted(String sagaId, @Nullable SagaEnvelope<S> current, EventMeta meta, Set<String> keysSeenNew) {
+    private @Nullable Unlisted unlisted(String sagaId, @Nullable SagaEnvelope<S> current, EventMeta meta, KeysSeenNew keysSeenNew) {
         if (current == null || current.isCompleted() || current.isQuarantined() || !meta.carriesRedeliveryKey()) {
             return null;
         }
@@ -313,10 +313,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         return null;
     }
 
-    // An event below the start that this feed skips, as 0.34.0 does. Only a store failure can fail it on the way to that
-    // skip, so the failure lists nothing and charges nothing, since no later delivery would apply or clear it.
+    // An event below the start that this feed skips, as 0.34.0 does. A failure on the way to that skip lists nothing and
+    // charges nothing, since the source offers it again in place, and an entry would stay until a lower start arrived.
     private boolean skipsBelowTheStart(@Nullable SagaEnvelope<S> current, CloudEvent cloudEvent, EventMeta meta) {
-        return !holds && SagaExecutionSupport.isBelowTheStart(saga, current, SagaInput.event(converter.toDomainEvent(cloudEvent), EventMetadata.from(cloudEvent)), meta);
+        return !holds && SagaExecutionSupport.isBelowTheStart(current, meta) && !isStartEvent(cloudEvent);
     }
 
     // The ways a failed version can end up not listed as pending.
@@ -326,17 +326,17 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     /**
      * Keep a failed version the instance could not list as pending, so that it is not acknowledged unapplied. Where the
-     * delivery may hold events it gets a held copy, and so does a version that an attempt with held copies to decide found
-     * overtaken, because those copies can have passed it unapplied. Anywhere else it is logged at ERROR. The original failure is rethrown
+     * delivery may hold events it gets a held copy, and so does one that met held copies of its own stream, because those
+     * can pass it unapplied. Anywhere else it is logged at ERROR. The original failure is rethrown
      * either way, so the source retries it in place, which is what a delivery in commit order does. Never throws what the
      * store throws.
      */
-    private void keepUnlisted(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Unlisted unlisted, @Nullable Throwable storeFailure, Set<String> keysSeenNew) {
+    private void keepUnlisted(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Unlisted unlisted, @Nullable Throwable storeFailure, KeysSeenNew keysSeenNew) {
         if (storeFailure != null && storeFailure != failure) {
             failure.addSuppressed(storeFailure);
         }
         SagaHeldEvents<S> heldEvents = this.heldEvents;
-        if (heldEvents != null && (holds || failure instanceof OvertakenInFlight overtaken && overtaken.heldCopiesToDecide)) {
+        if (heldEvents != null && (holds || keysSeenNew.metCopiesOfItsStream())) {
             holdPlainCopy(heldEvents, sagaId, cloudEvent, meta, failure, keysSeenNew);
             return;
         }
@@ -360,7 +360,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // the event is by then. Not on an instance that has not started, where a redelivery still runs it, nor one the event
     // is proven applied on or listed on, nor one it is behind the window on while this delivery never saw it new, which
     // is an arrival behind the window and may be a replay of an event applied long ago.
-    private void holdPlainCopy(SagaHeldEvents<S> heldEvents, String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Set<String> keysSeenNew) {
+    private void holdPlainCopy(SagaHeldEvents<S> heldEvents, String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, KeysSeenNew keysSeenNew) {
         try {
             SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
             if (current == null || !current.started() || current.status() != SagaStatus.ACTIVE
@@ -522,7 +522,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * Earlier versions of this javadoc said it was, on an accounting that was true of one instance and false of the
      * batch they share.
      */
-    private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Duration quarantineAfter, Set<String> keysSeenNew) {
+    private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Duration quarantineAfter, KeysSeenNew keysSeenNew) {
         try {
             Instant now = clock.get();
             // Read without the state, because nothing on this path applies it and an instance whose state no longer
@@ -669,7 +669,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         .toList();
                 for (String timerName : dueTimerNames) {
                     try {
-                        process(envelope.sagaId(), SagaInput.timeout(envelope.sagaId(), TimerName.parse(timerName)), EventMeta.NONE, timerName, new HashSet<>(), null);
+                        process(envelope.sagaId(), SagaInput.timeout(envelope.sagaId(), TimerName.parse(timerName)), EventMeta.NONE, timerName, new KeysSeenNew(), null);
                     } catch (HeldCopyFailed failed) {
                         // The timer stays due and fires once the held event applies. Nothing else may ever deliver to
                         // the instance, so the copy's budget runs here too.
@@ -692,7 +692,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
     }
 
-    private void process(String sagaId, SagaInput<E> input, EventMeta meta, @Nullable String requireTimerName, Set<String> keysSeenNew, @Nullable CloudEvent cloudEvent) {
+    private void process(String sagaId, SagaInput<E> input, EventMeta meta, @Nullable String requireTimerName, KeysSeenNew keysSeenNew, @Nullable CloudEvent cloudEvent) {
         // A lost compare-and-set is a retryable concurrency conflict: signal it with CasConflict so casRetry retries the
         // whole body, and map an exhausted retry to the public SagaConcurrencyException. Any other failure (a throwing
         // dispatcher or store) is not a CasConflict, so retryIf leaves it alone and it propagates on the first attempt.
@@ -707,7 +707,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     // One attempt of the retry body. It reads the instance, then the held events, settles those, runs the input and saves.
-    private void attemptOnce(String sagaId, SagaInput<E> input, EventMeta meta, @Nullable String requireTimerName, Set<String> keysSeenNew,
+    private void attemptOnce(String sagaId, SagaInput<E> input, EventMeta meta, @Nullable String requireTimerName, KeysSeenNew keysSeenNew,
                                 @Nullable CloudEvent cloudEvent, RetryInfo attempt) {
         Instant now = clock.get();
         SagaEnvelope<S> current;
@@ -723,7 +723,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     return;
                 }
                 case OVERTAKEN -> {
-                    OvertakenInFlight overtaken = new OvertakenInFlight(sagaId, meta, false);
+                    OvertakenInFlight overtaken = new OvertakenInFlight(sagaId, meta);
                     overtaken.addSuppressed(loadFailure);
                     throw overtaken;
                 }
@@ -739,6 +739,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         // Read after the instance, so a copy the instance does not show applied yet cannot have been forgotten by it.
         List<HeldEventRef> index = heldEvents == null ? List.of() : copiesToDecide(heldEvents, sagaId, current);
         boolean ownCopy = cloudEvent != null && index.stream().anyMatch(ref -> ref.key().equals(heldKey(meta, cloudEvent)));
+        if (meta.streamId() != null && index.stream().anyMatch(ref -> meta.streamId().equals(ref.streamId()))) {
+            keysSeenNew.sawCopiesOfItsStream();
+        }
         if (!index.isEmpty() && hasCopy(Objects.requireNonNull(heldEvents), sagaId, meta)) {
             keysSeenNew.remove(meta.redeliveryKey());
         }
@@ -775,7 +778,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // deliveries have since moved behind the reorder window. Skipping it would acknowledge an event
             // this delivery never applied, so it fails instead and is kept on the failure path.
             if (isOvertakenInFlight(current, meta, keysSeenNew)) {
-                throw new OvertakenInFlight(sagaId, meta, !index.isEmpty());
+                throw new OvertakenInFlight(sagaId, meta);
             }
             warnIfBehindTheReorderWindow(sagaId, current, meta);
             return;
@@ -853,20 +856,23 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // one the instance would skip anyway, which is asked of a new read, since the copies applied before the failure can
     // have moved the start or the marks. An event below the start waits whatever its type's marks say about it.
     private void keepTheDelivery(SagaHeldEvents<S> heldEvents, String sagaId, SagaInput<E> input, CloudEvent cloudEvent, EventMeta meta,
-                                 @Nullable SagaEnvelope<S> attemptsRead, Set<String> keysSeenNew, HeldCopyFailed failed) {
+                                 @Nullable SagaEnvelope<S> attemptsRead, KeysSeenNew keysSeenNew, HeldCopyFailed failed) {
         SagaEnvelope<S> current = attemptsRead;
+        boolean readFailed = false;
         try {
             current = stateStore.findWithoutState(sagaId).orElse(null);
         } catch (Throwable readFailure) {
-            // The attempt's read answers instead. Marks only move forward, so what it found handled still is, and a copy of
-            // an event the instance has forgotten applying would react again.
+            // The attempt's read answers instead, since a copy of an event the instance has forgotten applying would react
+            // again. The copies applied since can have moved the start, so a skip on that answer doesn't let the delivery past.
             rethrowIfNotTheInstances(readFailure);
             failed.addSuppressed(readFailure);
+            readFailed = true;
         }
         boolean skips = SagaExecutionSupport.isBelowTheStart(saga, current, input, meta)
                 ? !holds
                 : current != null && !isOvertakenInFlight(current, meta, keysSeenNew) && SagaExecutionSupport.classify(current, meta, config.reorderWindow()) != Delivery.NEW;
         if (skips) {
+            failed.deliveryNotKept = readFailed;
             return;
         }
         try {
@@ -1083,7 +1089,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // propagates as it did before.
     // A third answer, overtaken, is an input this delivery saw as new on an earlier attempt and that the read now finds
     // behind the reorder window, which process answers the same way.
-    private Skip wouldHaveSkippedThisInput(String sagaId, SagaInput<E> input, EventMeta meta, Throwable loadFailure, Set<String> keysSeenNew) {
+    private Skip wouldHaveSkippedThisInput(String sagaId, SagaInput<E> input, EventMeta meta, Throwable loadFailure, KeysSeenNew keysSeenNew) {
         try {
             SagaEnvelope<S> withoutState = stateStore.findWithoutState(sagaId).orElse(null);
             if (withoutState != null && (withoutState.isCompleted() || withoutState.isQuarantined())) {
@@ -1122,7 +1128,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         NOT_SKIPPED, SKIPPED, OVERTAKEN
     }
 
-    private boolean isOvertakenInFlight(@Nullable SagaEnvelope<S> current, EventMeta meta, Set<String> keysSeenNew) {
+    private boolean isOvertakenInFlight(@Nullable SagaEnvelope<S> current, EventMeta meta, KeysSeenNew keysSeenNew) {
         return current != null && !current.isCompleted() && !current.isQuarantined()
                && keysSeenNew.contains(meta.redeliveryKey())
                && SagaExecutionSupport.classify(current, meta, config.reorderWindow()) == Delivery.BEHIND_WINDOW;
@@ -1170,15 +1176,37 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // A stream event this delivery saw as new, whose save lost, and that a later read of the same delivery finds behind
     // the reorder window. Beside CasConflict, so casRetry does not retry it, and the failure path keeps the event
     // instead of letting the skip acknowledge it.
-    private static final class OvertakenInFlight extends RuntimeException {
-        // Whether the attempt that found this had held copies to decide, which can pass an event nobody applied. ADR 158 has
-        // what a feed in commit order does without any.
-        private final boolean heldCopiesToDecide;
+    // What one delivery learned on its attempts. Copies of its stream can move the instance past it unapplied, on any
+    // feed, so a delivery that met them is kept the way one that holds is.
+    private static final class KeysSeenNew {
+        private final Set<String> keys = new HashSet<>();
+        private boolean metCopiesOfItsStream;
 
-        private OvertakenInFlight(String sagaId, EventMeta meta, boolean heldCopiesToDecide) {
+        void add(String key) {
+            keys.add(key);
+        }
+
+        void remove(@Nullable String key) {
+            keys.remove(key);
+        }
+
+        boolean contains(@Nullable String key) {
+            return keys.contains(key);
+        }
+
+        void sawCopiesOfItsStream() {
+            metCopiesOfItsStream = true;
+        }
+
+        boolean metCopiesOfItsStream() {
+            return metCopiesOfItsStream;
+        }
+    }
+
+    private static final class OvertakenInFlight extends RuntimeException {
+        private OvertakenInFlight(String sagaId, EventMeta meta) {
             super("Saga instance '" + sagaId + "' saw the event '" + meta.redeliveryKey() + "' as new and lost its save, and other deliveries have since moved the instance "
                   + "past it by more than the reorder window, so this delivery did not apply it and a skip would acknowledge it unapplied");
-            this.heldCopiesToDecide = heldCopiesToDecide;
         }
     }
 

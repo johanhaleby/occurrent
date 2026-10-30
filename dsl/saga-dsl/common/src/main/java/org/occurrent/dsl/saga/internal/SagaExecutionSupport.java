@@ -567,11 +567,15 @@ public final class SagaExecutionSupport {
         return start != null && start.streamId().equals(streamId) && version < start.version();
     }
 
+    /** Whether {@code meta} is below the start on the start's own stream, whatever the event is. */
+    public static <S extends @Nullable Object> boolean isBelowTheStart(@Nullable SagaEnvelope<S> current, EventMeta meta) {
+        return current != null && meta.streamId() != null && meta.streamVersion() != null
+               && isBelowTheStart(current, meta.streamId(), meta.streamVersion());
+    }
+
     /** Whether the input is an event below the start on the start's own stream, which is not itself a start event. */
     public static <E, S extends @Nullable Object, C> boolean isBelowTheStart(Saga<E, S, C> saga, @Nullable SagaEnvelope<S> current, SagaInput<E> input, EventMeta meta) {
-        return current != null && meta.streamId() != null && meta.streamVersion() != null
-               && isBelowTheStart(current, meta.streamId(), meta.streamVersion())
-               && input instanceof SagaInput.Event<E> ev && !isStartEvent(saga, ev.event());
+        return isBelowTheStart(current, meta) && input instanceof SagaInput.Event<E> ev && !isStartEvent(saga, ev.event());
     }
 
     // An applied start event below the start moves the start down to it, so what waited above it no longer waits.
@@ -796,8 +800,8 @@ public final class SagaExecutionSupport {
     }
 
     /**
-     * {@link #pendingRecord} for an event refused because a held copy failed. Its own reaction has not failed, so nothing
-     * says when it first failed, and its first failure of its own starts its clock.
+     * {@link #pendingRecord} for an event refused because a held copy failed. Its own reaction has not failed, so a listing
+     * that would start its clock now starts none, and its first failure of its own does. A clock it already has stays.
      */
     public static <E, S extends @Nullable Object, C> @Nullable FailureRecord<S> pendingRecordWithoutAClock(Saga<E, S, C> saga, String sagaId,
                                                                                                             @Nullable SagaEnvelope<S> current,
@@ -811,6 +815,9 @@ public final class SagaExecutionSupport {
         Map<String, StreamMarks> streamMarks = new LinkedHashMap<>(listed.streamMarks());
         StreamMarks marks = Objects.requireNonNull(streamMarks.get(meta.streamId()));
         Map<Long, Instant> pendingSince = new LinkedHashMap<>(marks.pendingSince());
+        if (!now.equals(pendingSince.get(meta.streamVersion()))) {
+            return record;
+        }
         pendingSince.remove(meta.streamVersion());
         streamMarks.put(Objects.requireNonNull(meta.streamId()), new StreamMarks(marks.floor(), marks.byType(), marks.pending(), marks.legacyFailed(), pendingSince));
         return new FailureRecord<>(new SagaEnvelope<>(listed.sagaId(), listed.state(), listed.status(), listed.version(), listed.timers(),

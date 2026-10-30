@@ -544,9 +544,9 @@ replaying a parked event on an instance with quarantine on.
 
 ### Stored saga state
 
-Each pending version records when it first failed, in a `pendingSince` list beside `pending` in `streamMarks`. A
-document without it falls back to the failure record's `firstFailedAt` for the event the record names, and any other
-event starts its clock on its next failure.
+A pending version whose own reaction failed records when it first failed, in a `pendingSince` list beside `pending` in
+`streamMarks`. A version with no entry there falls back to the failure record's `firstFailedAt` for the event the record
+names, and any other event starts its clock on its next failure.
 
 ## The deprecated `accept(..)` on the projection feeds is removed
 
