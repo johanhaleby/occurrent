@@ -42,8 +42,8 @@ import static java.util.Objects.requireNonNull;
  *                             given, so pass it unchanged to
  *                             {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)} and the append is
  *                             refused if an event matching those criteria was committed after this read. For a token read with
- *                             {@link DcbCriteria#all()}, the MongoDB stores don't refuse the append when a tag-scoped
- *                             or type-scoped event was committed after the read, which
+ *                             {@link DcbCriteria#all()}, the MongoDB stores don't refuse the append for an event
+ *                             committed after the read by an append with no condition on {@code all()}, which
  *                             {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} describes. Unlike
  *                             {@code lastSequencePosition}, it protects an append while other appends are still
  *                             committing, because the store derives it from data a reader can only see once it's

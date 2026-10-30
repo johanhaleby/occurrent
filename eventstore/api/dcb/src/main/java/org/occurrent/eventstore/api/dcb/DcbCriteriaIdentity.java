@@ -29,8 +29,9 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * Two criteria are the same when they hold the same set of alternatives. {@link DcbCriteria#all()} is the same only as
  * {@code all()}, a {@link DcbCriterion} is the same as an {@link DcbCriteria.Items} holding only that criterion, and two
- * {@code Items} are the same when they hold the same criteria in any order. Criteria that select the same events but are
- * built differently aren't the same, so {@code types("A", "B")} isn't the same as {@code anyOf(type("A"), type("B"))}.
+ * {@code Items} are the same when they hold the same criteria in any order. Criteria with different alternatives aren't
+ * the same, even when they select the same events, so {@code types("A", "B")} isn't the same as
+ * {@code anyOf(type("A"), type("B"))}.
  * {@link DcbCriteria}'s own {@code equals} still compares an {@code Items} in order.
  */
 @NullMarked

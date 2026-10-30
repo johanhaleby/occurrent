@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
@@ -964,7 +965,48 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
-        void a_condition_on_other_criteria_is_refused_even_when_a_marker_sum_would_collide() {
+        void a_condition_on_the_alternatives_of_the_token_in_another_order_is_the_same_boundary() {
+            assertConditionOnSameAlternativesIsTheSameBoundary(
+                    DcbCriteria.anyOf(DcbCriteria.tags(tag(NAME_1)), DcbCriteria.tags(tag(NAME_2))),
+                    DcbCriteria.anyOf(DcbCriteria.tags(tag(NAME_2)), DcbCriteria.tags(tag(NAME_1))));
+        }
+
+        @Test
+        void a_condition_on_the_alternatives_of_the_token_without_its_duplicate_is_the_same_boundary() {
+            assertConditionOnSameAlternativesIsTheSameBoundary(
+                    DcbCriteria.anyOf(DcbCriteria.tags(tag(NAME_1)), DcbCriteria.tags(tag(NAME_1)), DcbCriteria.tags(tag(NAME_2))),
+                    DcbCriteria.anyOf(DcbCriteria.tags(tag(NAME_1)), DcbCriteria.tags(tag(NAME_2))));
+        }
+
+        private void assertConditionOnSameAlternativesIsTheSameBoundary(DcbCriteria readWith, DcbCriteria conditionOn) {
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1), taggedEvent(DEFINED, NAME_2)));
+
+            DcbConsistencyToken untouched = dcbEventStore().read(readWith).consistencyToken();
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(SNAPSHOT, "unrelated")), failIfEventsMatch(conditionOn, untouched)))
+                    .as("A condition on the same alternatives as the token was read with, only reordered or without "
+                            + "a duplicate, must be accepted when nothing matched since the read")
+                    .doesNotThrowAnyException();
+
+            DcbConsistencyToken firstMatched = dcbEventStore().read(readWith).consistencyToken();
+            dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_1)));
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(SNAPSHOT, "unrelated")), failIfEventsMatch(conditionOn, firstMatched)))
+                    .as("An event of the first alternative committed after the read must refuse a condition on the "
+                            + "same alternatives, so the condition guards the boundary the token was read with")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+
+            DcbConsistencyToken secondMatched = dcbEventStore().read(readWith).consistencyToken();
+            dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_2)));
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(SNAPSHOT, "unrelated")), failIfEventsMatch(conditionOn, secondMatched)))
+                    .as("An event of the second alternative committed after the read must refuse a condition on the "
+                            + "same alternatives, so the condition guards the boundary the token was read with")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
+        void a_condition_on_other_criteria_is_refused_whatever_version_the_token_holds() {
             String tagA = "collision:a";
             String tagB = "collision:b";
             dcbEventStore().append(List.of(taggedEvent(DEFINED, tagA)));
@@ -980,8 +1022,9 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
                     List.of(taggedEvent(SNAPSHOT, tagB)),
                     failIfEventsMatch(DcbCriteria.tags(tag(tagB)), tokenReadWithA)))
                     .as("A token belongs to the criteria it was read with, so building a condition on tag b from a "
-                            + "token read with tag a throws before append is called. The token read with tag a has "
-                            + "the version a condition on tag b would have, and the condition is refused anyway")
+                            + "token read with tag a throws before append is called, whatever version the token holds. "
+                            + "On a store with a marker sum the two versions are equal here, and the condition is "
+                            + "refused anyway")
                     .isExactlyInstanceOf(IllegalArgumentException.class);
 
             DcbEventStream after = dcbEventStore().read(DcbCriteria.tags(tag(tagB)));

@@ -27,12 +27,13 @@ import static java.util.Objects.requireNonNull;
  * {@link DcbEventStore#read(DcbCriteria, DcbReadOptions)} returns a token on {@link DcbEventStream#consistencyToken()}.
  * Pass it to {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)}, and the store refuses the append when an
  * event matching the read's criteria was committed after the read. For a token read with
- * {@link DcbCriteria#all()}, the MongoDB stores don't refuse the append when a tag-scoped or type-scoped event was
- * committed after the read, which {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} describes.
+ * {@link DcbCriteria#all()}, the MongoDB stores don't refuse the append for an event committed after the read by an
+ * append with no condition on {@code all()}, which {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)}
+ * describes.
  * <p>
  * The token holds the {@link #criteria() criteria} it was read with. An append condition with other criteria throws
  * {@link IllegalArgumentException} when it's created, on every store, so code that reads with one criteria and appends
- * with another fails before it reaches the store.
+ * with another, passing the token the read returned, fails before it reaches the store.
  * <p>
  * The {@link #version() version} is defined by the store that created the token and means nothing outside it. Only
  * store implementations read it. Don't save it to turn it back into a token later, and don't assume the criteria and

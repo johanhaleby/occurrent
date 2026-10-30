@@ -44,6 +44,7 @@ import java.util.TreeMap;
 import java.util.function.UnaryOperator;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.tck.ConformanceEvents.extension;
@@ -321,6 +322,34 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             assertThat(thrown)
                     .as("An event of the second alternative committed after the resumed read must reject the append")
                     .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
+        void a_read_with_versions_lets_a_conditional_append_through_when_nothing_matching_was_committed_after_it() {
+            DcbCriteria boundary = DcbCriteria.anyOf(DcbCriteria.tags(tag(ACCOUNT_A)), DcbCriteria.tags(tag(ACCOUNT_B)));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A), taggedEvent(DEPOSITED, ACCOUNT_B)));
+            DcbEventStream read = dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions());
+
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)), failIfEventsMatch(read.consistencyToken())))
+                    .as("The token of a read that asked for versions must be accepted when no event of the boundary "
+                            + "was committed after the read, or it refuses an append it should let through")
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        void a_read_after_versions_lets_a_conditional_append_through_when_nothing_matching_was_committed_after_it() {
+            DcbCriteria boundary = DcbCriteria.anyOf(DcbCriteria.tags(tag(ACCOUNT_A)), DcbCriteria.tags(tag(ACCOUNT_B)));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A), taggedEvent(DEPOSITED, ACCOUNT_B)));
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions()));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
+            DcbEventStream resumed = dcbEventStore().read(boundary, DcbReadOptions.afterVersions(saved));
+
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)), failIfEventsMatch(resumed.consistencyToken())))
+                    .as("The token of a resumed read must be accepted when no event of the boundary was committed "
+                            + "after the read, or it refuses an append it should let through")
+                    .doesNotThrowAnyException();
         }
 
         @Test

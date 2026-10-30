@@ -617,8 +617,9 @@ describes it.
 - `wholeStoreLock(DcbConsistencyToken)` throws `IllegalArgumentException` for a token not read with `DcbCriteria.all()`.
 
 Two criteria are the same when they hold the same set of alternatives. `anyOf(a, b)` is the same as `anyOf(b, a)`, and
-a `DcbCriterion` is the same as an `anyOf(..)` with only that criterion in it. Criteria that select the same events but
-are built differently aren't the same, so `types("A", "B")` isn't the same as `anyOf(type("A"), type("B"))`.
+a `DcbCriterion` is the same as an `anyOf(..)` with only that criterion in it. Criteria with different alternatives
+aren't the same, even when they select the same events, so `types("A", "B")` isn't the same as
+`anyOf(type("A"), type("B"))`.
 
 The check runs in the condition's constructor, before any store is called, so it works the same on every store, a
 `DcbEventStore` of your own included. `GenericDcbApplicationService` reads and appends with the same criteria on both
@@ -631,8 +632,10 @@ stacks, so it isn't affected.
 - **Code that creates tokens or streams**, such as a test double that returns a `DcbEventStream` or a
   `DcbDomainEventStream`. It stops compiling the same way. A record pattern over `DcbConsistencyToken` stops compiling
   too, since the token is no longer a record.
-- **Code that reads with one criteria and appends with another**, passing the token the read returned. It compiles with
-  a deprecation warning, and the append throws `IllegalArgumentException` on every store.
+- **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
+  condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
+  deprecation warning, and `wholeStoreLock(token)` and `new DcbAppendCondition(criteria, Optional.of(token))` compile
+  with no warning, so the compiler doesn't find all of this code.
 - **Code that saved a token value**, in an ETag or a queued command for example. A token value saved under 0.34.0 isn't
   valid on 0.35.0.
 
@@ -662,12 +665,13 @@ can hide an event committed in between, so don't swap in a fresh token for the o
 
 Don't save a token value to use later. Read again when the command runs, and decide from that read. That includes a
 client's ETag. Replacing a stale ETag with a fresh token makes the append check against a read the client's decision
-wasn't made from.
+wasn't made from. To refuse a client's stale write, keep a version of your own in your events, and compare the client's
+ETag against it in the decision.
 
 ### Why there is no recipe
 
-The only part a recipe could rewrite is `value()` to `version()`. That rename would compile, and it would keep a token
-value saved under 0.34.0 in use, although such a value isn't valid on 0.35.0. `DcbConsistencyToken.of(criteria, version)`
+A recipe could rewrite `value()` to `version()`. That rename would compile, and it would keep a token value saved under
+0.34.0 in use, although such a value isn't valid on 0.35.0. `DcbConsistencyToken.of(criteria, version)`
 needs the criteria the read was given, and a recipe can't tell from the call site which criteria those were. Rewriting
 `failIfEventsMatch(criteria, token)` to `failIfEventsMatch(token)` would compile too, but a condition that used other
 criteria than its read would then append on the read's criteria instead of throwing.

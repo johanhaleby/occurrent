@@ -41,8 +41,9 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * Two criteria are the same when they hold the same set of alternatives, in any order. {@code anyOf(a, b)} is the same
  * as {@code anyOf(b, a)}, a {@link DcbCriterion} is the same as an {@code anyOf(..)} holding only that criterion, and
- * {@link DcbCriteria#all()} is the same only as {@code all()}. Criteria that select the same events but are built
- * differently aren't the same, so {@code types("A", "B")} isn't the same as {@code anyOf(type("A"), type("B"))}.
+ * {@link DcbCriteria#all()} is the same only as {@code all()}. Criteria with different alternatives aren't the same,
+ * even when they select the same events, so {@code types("A", "B")} isn't the same as
+ * {@code anyOf(type("A"), type("B"))}.
  */
 @NullMarked
 public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyToken> consistencyToken) {
