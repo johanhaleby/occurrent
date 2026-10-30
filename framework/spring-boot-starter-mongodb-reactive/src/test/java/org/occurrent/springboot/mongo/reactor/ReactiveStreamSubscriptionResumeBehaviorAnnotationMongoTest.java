@@ -18,6 +18,7 @@
 package org.occurrent.springboot.mongo.reactor;
 
 import jakarta.annotation.PostConstruct;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -31,6 +32,10 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.reactor.ApplicationService;
+import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
@@ -51,6 +56,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static java.time.Duration.ofMillis;
@@ -80,53 +86,81 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
     @Test
     void beginning_of_time_with_default_resume_behavior_replays_history_once_and_resumes_from_the_stored_position_after_restart() {
-        restart("reactive-resume-bot-default", BeginningOfTimeDefault.class,
+        restart("reactive-resume-bot-default", BeginningOfTimeDefault.class, FirstBootEnds.WHEN_THE_MARKER_IS_CHECKPOINTED,
                 List.of("historic-1", "historic-2", "live-1"),
                 List.of("while-down-1", "live-2"));
     }
 
     @Test
     void beginning_of_time_with_same_as_start_at_replays_the_whole_history_again_after_restart() {
-        restart("reactive-resume-bot-same", BeginningOfTimeSameAsStartAt.class,
+        restart("reactive-resume-bot-same", BeginningOfTimeSameAsStartAt.class, FirstBootEnds.WHEN_THE_MARKER_IS_DELIVERED,
                 List.of("historic-1", "historic-2", "live-1"),
                 List.of("historic-1", "historic-2", "live-1", "while-down-1", "live-2"));
     }
 
     @Test
     void now_with_default_resume_behavior_ignores_history_on_first_boot_and_receives_events_written_while_down_after_restart() {
-        restart("reactive-resume-now-default", NowDefault.class,
+        restart("reactive-resume-now-default", NowDefault.class, FirstBootEnds.WHEN_THE_MARKER_IS_CHECKPOINTED,
                 List.of("live-1"),
                 List.of("while-down-1", "live-2"));
     }
 
     @Test
+    void now_with_default_resume_behavior_receives_events_written_while_down_after_a_first_boot_that_delivered_nothing() {
+        restart("reactive-resume-now-default-nothing-delivered", NowDefaultNothingDelivered.class, FirstBootEnds.WHEN_THE_SUBSCRIPTION_IS_RUNNING,
+                List.of(),
+                List.of("while-down-1", "live-2"));
+    }
+
+    @Test
     void now_with_same_as_start_at_starts_at_the_present_again_after_restart_and_misses_events_written_while_down() {
-        restart("reactive-resume-now-same", NowSameAsStartAt.class,
+        restart("reactive-resume-now-same", NowSameAsStartAt.class, FirstBootEnds.WHEN_THE_MARKER_IS_DELIVERED,
                 List.of("live-1"),
                 List.of("live-2"));
     }
 
     @Test
     void plain_defaults_ignore_history_on_first_boot_and_resume_from_the_stored_position_after_restart() {
-        restart("reactive-resume-plain-defaults", PlainDefaults.class,
+        restart("reactive-resume-plain-defaults", PlainDefaults.class, FirstBootEnds.WHEN_THE_MARKER_IS_CHECKPOINTED,
                 List.of("live-1"),
                 List.of("while-down-1", "live-2"));
     }
 
-    private static <S extends RecordingSubscriber> void restart(String databaseName, Class<S> subscriberType,
+    // What has to have happened before the first boot is closed. A subscription that resumes from a stored position
+    // resumes from whatever was stored when the context closed, and the position of an event is stored after its
+    // handler returned, so closing on the delivery alone races the store.
+    private enum FirstBootEnds {
+        // The marker reached the handler, which is all a subscription that does not resume from a stored position needs.
+        WHEN_THE_MARKER_IS_DELIVERED,
+        // The marker reached the handler and its checkpoint is what the checkpoint storage holds.
+        WHEN_THE_MARKER_IS_CHECKPOINTED,
+        // No event is written after the subscription starts, so there is no marker. The subscription is running.
+        WHEN_THE_SUBSCRIPTION_IS_RUNNING
+    }
+
+    // The subscription id doubles as the name of the database, so each scenario starts from an empty one.
+    private static <S extends RecordingSubscriber> void restart(String subscriptionId, Class<S> subscriberType, FirstBootEnds firstBootEnds,
                                                                 List<String> expectedFirstBoot, List<String> expectedSecondBoot) {
+        String firstBootAfterStart = firstBootEnds == FirstBootEnds.WHEN_THE_SUBSCRIPTION_IS_RUNNING ? "" : "live-1";
         ConfigurableApplicationContext firstBoot = SpringApplication.run(RestartApplication.class,
-                bootArgs(databaseName, "historic-1,historic-2", "live-1"));
+                bootArgs(subscriptionId, "historic-1,historic-2", firstBootAfterStart));
         try {
             S subscriber = firstBoot.getBean(subscriberType);
-            awaitDelivered(subscriber, "live-1");
+            switch (firstBootEnds) {
+                case WHEN_THE_MARKER_IS_DELIVERED -> awaitDelivered(subscriber, "live-1");
+                case WHEN_THE_MARKER_IS_CHECKPOINTED -> {
+                    awaitDelivered(subscriber, "live-1");
+                    awaitCheckpointed(firstBoot, subscriptionId, subscriber, "live-1");
+                }
+                case WHEN_THE_SUBSCRIPTION_IS_RUNNING -> awaitRunning(firstBoot, subscriptionId);
+            }
             assertThat(subscriber.names()).containsExactlyElementsOf(expectedFirstBoot);
         } finally {
             firstBoot.close();
         }
 
         ConfigurableApplicationContext secondBoot = SpringApplication.run(RestartApplication.class,
-                bootArgs(databaseName, "while-down-1", "live-2"));
+                bootArgs(subscriptionId, "while-down-1", "live-2"));
         try {
             S subscriber = secondBoot.getBean(subscriberType);
             awaitDelivered(subscriber, "live-2");
@@ -139,6 +173,21 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
     private static void awaitDelivered(RecordingSubscriber subscriber, String marker) {
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(subscriber.names()).contains(marker));
+    }
+
+    private static void awaitRunning(ConfigurableApplicationContext context, String subscriptionId) {
+        SubscriptionModelLifeCycle subscriptions = context.getBean(SubscriptionModelLifeCycle.class);
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(subscriptions.isRunning(subscriptionId)).isTrue());
+    }
+
+    // The checkpoint is stored after the handler returned, so the marker being delivered does not mean it is stored.
+    private static void awaitCheckpointed(ConfigurableApplicationContext context, String subscriptionId, RecordingSubscriber subscriber, String marker) {
+        CheckpointStorage storage = context.getBean(CheckpointStorage.class);
+        String markerCheckpoint = subscriber.checkpointOf(marker);
+        assertThat(markerCheckpoint).describedAs("the checkpoint %s was delivered with", marker).isNotNull();
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(storage.read(subscriptionId).blockOptional().map(Checkpoint::asString)).contains(markerCheckpoint));
     }
 
     // Booted with SpringApplication.run rather than @SpringBootTest, so there is no @ServiceConnection and the url is
@@ -195,6 +244,11 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
         }
 
         @Bean
+        NowDefaultNothingDelivered nowDefaultNothingDelivered() {
+            return new NowDefaultNothingDelivered();
+        }
+
+        @Bean
         NowSameAsStartAt nowSameAsStartAt() {
             return new NowSameAsStartAt();
         }
@@ -213,7 +267,7 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
         EventWriter(ApplicationService<TestEvent> applicationService, String beforeSubscribe, String afterStart) {
             this.applicationService = applicationService;
             this.beforeSubscribe = List.of(beforeSubscribe.split(","));
-            this.afterStart = List.of(afterStart.split(","));
+            this.afterStart = afterStart.isEmpty() ? List.of() : List.of(afterStart.split(","));
         }
 
         // Subscriptions register once every singleton exists, so these are written before any of them starts. A
@@ -237,10 +291,16 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
     abstract static class RecordingSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final ConcurrentHashMap<String, String> checkpoints = new ConcurrentHashMap<>();
 
-        Mono<Void> record(TestEvent event) {
+        Mono<Void> record(TestEvent event, EventMetadata metadata) {
+            metadata.getCheckpoint().ifPresent(checkpoint -> checkpoints.put(event.name(), checkpoint));
             received.add(event);
             return Mono.empty();
+        }
+
+        @Nullable String checkpointOf(String name) {
+            return checkpoints.get(name);
         }
 
         List<String> names() {
@@ -250,36 +310,43 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
     static class BeginningOfTimeDefault extends RecordingSubscriber {
         @StreamSubscription(id = "reactive-resume-bot-default", startAt = StartPosition.BEGINNING_OF_TIME, resumeBehavior = ResumeBehavior.DEFAULT)
-        Mono<Void> on(TestEvent event) {
-            return record(event);
+        Mono<Void> on(TestEvent event, EventMetadata metadata) {
+            return record(event, metadata);
         }
     }
 
     static class BeginningOfTimeSameAsStartAt extends RecordingSubscriber {
         @StreamSubscription(id = "reactive-resume-bot-same", startAt = StartPosition.BEGINNING_OF_TIME, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
-        Mono<Void> on(TestEvent event) {
-            return record(event);
+        Mono<Void> on(TestEvent event, EventMetadata metadata) {
+            return record(event, metadata);
         }
     }
 
     static class NowDefault extends RecordingSubscriber {
         @StreamSubscription(id = "reactive-resume-now-default", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.DEFAULT)
-        Mono<Void> on(TestEvent event) {
-            return record(event);
+        Mono<Void> on(TestEvent event, EventMetadata metadata) {
+            return record(event, metadata);
+        }
+    }
+
+    static class NowDefaultNothingDelivered extends RecordingSubscriber {
+        @StreamSubscription(id = "reactive-resume-now-default-nothing-delivered", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.DEFAULT)
+        Mono<Void> on(TestEvent event, EventMetadata metadata) {
+            return record(event, metadata);
         }
     }
 
     static class NowSameAsStartAt extends RecordingSubscriber {
         @StreamSubscription(id = "reactive-resume-now-same", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
-        Mono<Void> on(TestEvent event) {
-            return record(event);
+        Mono<Void> on(TestEvent event, EventMetadata metadata) {
+            return record(event, metadata);
         }
     }
 
     static class PlainDefaults extends RecordingSubscriber {
         @StreamSubscription(id = "reactive-resume-plain-defaults")
-        Mono<Void> on(TestEvent event) {
-            return record(event);
+        Mono<Void> on(TestEvent event, EventMetadata metadata) {
+            return record(event, metadata);
         }
     }
 

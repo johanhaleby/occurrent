@@ -109,7 +109,7 @@ class StartPositionSupport {
             return replayThenResumeAgnostic(subscription.id(), StartAt.checkpoint(GlobalCheckpoint.of(0)), subscription.resumeBehavior());
         }
         return switch (subscription.startAt()) {
-            case NOW -> nowThenResume(subscription.id(), subscription.resumeBehavior());
+            case NOW -> nowThenResume(subscription.resumeBehavior());
             // DEFAULT resumes from the durably stored position, falling back to the subscription model default on first start.
             case DEFAULT -> StartAt.subscriptionModelDefault();
             case BEGINNING_OF_TIME -> throw new IllegalStateException("Unreachable: BEGINNING_OF_TIME handled above");
@@ -117,15 +117,13 @@ class StartPositionSupport {
     }
 
     // NOW is where the subscription starts the first time. Under DEFAULT a restart continues from the stored position
-    // instead, so an event written while the application was down is not skipped. Under SAME_AS_START_AT every start is
-    // NOW.
-    private StartAt nowThenResume(String subscriptionId, ResumeBehavior resumeBehavior) {
+    // instead, so an event written while the application was down is not skipped. The model default does that, and it
+    // records the position of the first start, which a plain StartAt.now() would not. Under SAME_AS_START_AT every start
+    // is NOW.
+    private StartAt nowThenResume(ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case SAME_AS_START_AT -> StartAt.now();
-            case DEFAULT -> StartAt.dynamic(ctx -> {
-                CheckpointStorage storage = applicationContext.getBean(CheckpointStorage.class);
-                return storage.read(subscriptionId).blockOptional().isPresent() ? StartAt.subscriptionModelDefault() : StartAt.now();
-            });
+            case DEFAULT -> StartAt.subscriptionModelDefault();
         };
     }
 
