@@ -360,6 +360,11 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
                         };
             });
 
+            assertThat(failuresOf(outcomes.subList(1, outcomes.size())))
+                    .as("Iteration %d: an append with no condition has nothing to fail on, and it races only two other "
+                            + "writers on a fresh tag, so a store that retries its own collisions can't run out of "
+                            + "attempts. Failing it is the store giving up on its own collision", iteration)
+                    .isEmpty();
             started++;
             Outcome<String> conditional = outcomes.get(0);
             if (!conditional.succeeded()) {
@@ -402,7 +407,7 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             dcbEventStore().append(List.of(taggedEventWithId("moves-k-" + iteration, OTHER + iteration, tagK)));
             dcbEventStore().append(List.of(taggedEventWithId("moves-m-" + iteration, OTHER + iteration, tagM)));
 
-            assertExactlyOneWinnerOfTwo(iteration, "two type-and-tag-scoped conditions whose tags a non-matching event moved",
+            assertWinnersOfTwoAfterAMarkerMoved(iteration, "two type-and-tag-scoped conditions whose tags a non-matching event moved",
                     DcbCriteria.anyOf(readByFirst, readBySecond),
                     taggedEventWithId("writes-u-m-" + iteration, typeU, tagM), onFirst,
                     taggedEventWithId("writes-t-k-" + iteration, typeT, tagK), onSecond);
@@ -428,7 +433,7 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             dcbEventStore().append(List.of(taggedEventWithId("moves-k1-" + iteration, OTHER + iteration, tagK1)));
             dcbEventStore().append(List.of(taggedEventWithId("moves-m1-" + iteration, OTHER + iteration, tagM1)));
 
-            assertExactlyOneWinnerOfTwo(iteration, "two two-tag conditions of which a non-matching event moved one tag each",
+            assertWinnersOfTwoAfterAMarkerMoved(iteration, "two two-tag conditions of which a non-matching event moved one tag each",
                     DcbCriteria.anyOf(readByFirst, readBySecond),
                     taggedEventWithId("writes-m-" + iteration, RESERVED + iteration, tagM1, tagM2), onFirst,
                     taggedEventWithId("writes-k-" + iteration, RELEASED + iteration, tagK1, tagK2), onSecond);
@@ -544,6 +549,22 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
     private void assertExactlyOneWinnerOfTwo(int iteration, String what, DcbCriteria committed,
                                              CloudEvent firstEvent, DcbAppendCondition firstCondition,
                                              CloudEvent secondEvent, DcbAppendCondition secondCondition) {
+        assertWinnersOfTwo(iteration, what, committed, firstEvent, firstCondition, secondEvent, secondCondition, true);
+    }
+
+    // For two conditions that a non-matching event moved a marker of. A store that settles a moved marker by its events
+    // owes one winner. A store that compares markers only may refuse both, and then it still owes the append condition's
+    // exception, and it never owes two winners.
+    private void assertWinnersOfTwoAfterAMarkerMoved(int iteration, String what, DcbCriteria committed,
+                                                     CloudEvent firstEvent, DcbAppendCondition firstCondition,
+                                                     CloudEvent secondEvent, DcbAppendCondition secondCondition) {
+        assertWinnersOfTwo(iteration, what, committed, firstEvent, firstCondition, secondEvent, secondCondition,
+                expectedToSettleAMovedMarkerByItsEvents());
+    }
+
+    private void assertWinnersOfTwo(int iteration, String what, DcbCriteria committed,
+                                    CloudEvent firstEvent, DcbAppendCondition firstCondition,
+                                    CloudEvent secondEvent, DcbAppendCondition secondCondition, boolean exactlyOneWinner) {
         List<Outcome<String>> outcomes = ConcurrentRendezvous.collide(2, index -> {
             CloudEvent event = index == 0 ? firstEvent : secondEvent;
             DcbAppendCondition condition = index == 0 ? firstCondition : secondCondition;
@@ -553,14 +574,16 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             };
         });
 
-        String winner = assertExactlyOneWinner(iteration, outcomes, what);
-        assertThat(winner)
+        List<String> winners = exactlyOneWinner
+                ? List.of(assertExactlyOneWinner(iteration, outcomes, what))
+                : assertAtMostOneWinner(iteration, outcomes, what);
+        assertThat(winners)
                 .as("Iteration %d: the winner must be one of the two events raced", iteration)
-                .isIn(firstEvent.getId(), secondEvent.getId());
+                .isSubsetOf(firstEvent.getId(), secondEvent.getId());
         assertThat(idsOf(dcbEventStore().read(committed).events()))
                 .as("Iteration %d: only the winner's event may be committed, since both writers checked a boundary "
                         + "the other's event falls inside", iteration)
-                .containsExactly(winner);
+                .containsExactlyElementsOf(winners);
     }
 
     /**
@@ -568,6 +591,18 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
      * sharing its tag a success, since none of them matches. Only a model that compares markers alone may refuse.
      */
     private boolean expectedToLetAnAppendOfAnotherTypeSharingATagRace() {
+        return switch (appendConditionModel()) {
+            case EXACT_CRITERIA, MARKERS_THEN_EVENTS -> true;
+            case TAG_MARKER -> false;
+        };
+    }
+
+    /**
+     * Whether the declared append-condition model settles a condition whose marker a non-matching event moved by looking
+     * at the events, and so owes one winner of two writers that each match the other's event. A model that compares
+     * markers only may refuse both.
+     */
+    private boolean expectedToSettleAMovedMarkerByItsEvents() {
         return switch (appendConditionModel()) {
             case EXACT_CRITERIA, MARKERS_THEN_EVENTS -> true;
             case TAG_MARKER -> false;
@@ -588,6 +623,22 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
                 .allSatisfy(failure -> assertThat(failure).isInstanceOf(DcbAppendConditionNotFulfilledException.class));
 
         return outcomes.stream().filter(Outcome::succeeded).map(Outcome::value).findFirst().orElseThrow();
+    }
+
+    private List<String> assertAtMostOneWinner(int iteration, List<Outcome<String>> outcomes, String what) {
+        List<Throwable> failures = failuresOf(outcomes);
+
+        assertThat(outcomes.size() - failures.size())
+                .as("Iteration %d: %s must leave at most one winner. Two winners means the store let a write-skew "
+                        + "through", iteration, what)
+                .isLessThanOrEqualTo(1);
+        assertThat(failures)
+                .as("Iteration %d: every loser of %s must be rejected by the append condition. A duplicate-key or "
+                        + "write-conflict error reaching the caller is the store failing to retry its own storage "
+                        + "collision", iteration, what)
+                .allSatisfy(failure -> assertThat(failure).isInstanceOf(DcbAppendConditionNotFulfilledException.class));
+
+        return outcomes.stream().filter(Outcome::succeeded).map(Outcome::value).toList();
     }
 
     private static List<Throwable> failuresOf(List<Outcome<String>> outcomes) {

@@ -62,7 +62,9 @@ class MongoEventStoreDcbShardedClusterTest {
 
     @Container
     private static final MongoDBContainer mongos =
-            new MongoDBContainer(ReplicaSetReadyMongoDBContainer.withDefaultVersion().getDockerImageName()).withSharding();
+            new MongoDBContainer(ReplicaSetReadyMongoDBContainer.withDefaultVersion().getDockerImageName())
+                    .withSharding()
+                    .withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1");
 
     private MongoEventStoreConformanceFixture fixture;
     private DcbEventStore eventStore;

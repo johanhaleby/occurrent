@@ -24,9 +24,9 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 /**
  * How a store decides whether a token-qualified {@link DcbAppendCondition} was violated.
  * <p>
- * Every model is sound. None lets an append succeed after a conflicting event. They differ in what else they do,
- * and the difference is observable, so a fixture declares which one its store implements and
- * {@code DcbEventStoreConformance} asserts the outcome that model owes rather than skipping the question.
+ * The models differ in which appends they refuse, and the difference is observable, so a fixture declares which one
+ * its store implements and {@code DcbEventStoreConformance} asserts the outcome that model owes rather than skipping
+ * the question.
  * <p>
  * The suite asks two questions of a model. Does an event of a type the criteria excludes conflict when it has a
  * tag the criteria requires? And does {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} see a tag-scoped
