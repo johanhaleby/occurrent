@@ -30,6 +30,8 @@ import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
+import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.SubscriptionMode;
 import org.occurrent.springboot.reactor.LateRegistrationOnANonBlockingThreadTest.BaseConfiguration;
 import org.occurrent.springboot.reactor.LateRegistrationOnANonBlockingThreadTest.ParkingCheckpointStorage;
 import org.occurrent.springboot.reactor.LateRegistrationOnANonBlockingThreadTest.RecordingDelegate;
@@ -145,12 +147,11 @@ class NowStartRefusedAtStartupTest {
     // Nothing waits for the refusal in the background, so the position read being asked is what shows the registration
     // reached the point where it is either refused or started. A subscription that was wrongly started would be
     // subscribed in the wrapped model by then or shortly after, which is why the absence is observed for a while.
-    // Only ANSWERS_NOTHING is covered here. A failing read is retried with backoff and never subscribes, so from outside
-    // a retry and a refusal look the same within the window and the test would pass either way.
-    @Test
-    void the_application_context_starts_without_subscribing_a_background_default_resume_behavior_now_subscription_that_cannot_have_its_start_position_recorded() {
+    @ParameterizedTest
+    @EnumSource(FeedPosition.class)
+    void the_application_context_starts_without_subscribing_a_background_default_resume_behavior_now_subscription_that_cannot_have_its_start_position_recorded(FeedPosition feedPosition) {
         // Given
-        ApplicationContextRunner runner = runner(FeedPosition.ANSWERS_NOTHING).withBean(BackgroundNowHolder.class);
+        ApplicationContextRunner runner = runner(feedPosition).withBean(BackgroundNowHolder.class);
 
         // When
         runner.run(context -> {
@@ -162,8 +163,9 @@ class NowStartRefusedAtStartupTest {
         });
     }
 
-    // In manual mode nothing waits for the subscription to start, so the context starts whatever the feed answers. The
-    // registration is still made, so the feed position is asked for and the refusal it gets does not fail the context.
+    // In manual mode the starter stops the durable model before anything registers, and nothing waits for the subscription
+    // to start, so the context starts whatever the feed answers. The registration is still made on the stopped model, so
+    // the feed position is asked for and the refusal it gets does not fail the context.
     @Test
     void the_application_context_starts_without_subscribing_a_default_resume_behavior_now_subscription_in_manual_mode_that_cannot_have_its_start_position_recorded() {
         // Given
@@ -244,8 +246,13 @@ class NowStartRefusedAtStartupTest {
 
         @Bean(destroyMethod = "shutdown")
         ReactorDurableSubscriptionModel durableSubscriptionModel(RecordingDelegate.Holder delegate, ParkingCheckpointStorage storage,
-                                                                 ObjectProvider<ReactorDurableSubscriptionModelConfig> config) {
-            return new ReactorDurableSubscriptionModel(delegate.delegate(), storage, config.getIfAvailable(() -> new ReactorDurableSubscriptionModelConfig(event -> false)));
+                                                                 ObjectProvider<ReactorDurableSubscriptionModelConfig> config, OccurrentProperties properties) {
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate.delegate(), storage, config.getIfAvailable(() -> new ReactorDurableSubscriptionModelConfig(event -> false)));
+            if (properties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
+                // As the starter does, so every subscription registers on a model that is stopped
+                model.stop();
+            }
+            return model;
         }
 
         @Bean
