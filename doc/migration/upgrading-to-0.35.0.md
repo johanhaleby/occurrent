@@ -21,8 +21,8 @@ other sections compile fine and behave differently, so read them first.
 - [A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from).
   `DcbStartAt` gains the case `DcbStartAt.AtCheckpoint`. **Breaks the build** if you `switch` exhaustively over
   `DcbStartAt` without a `default`.
-- [DCB snapshots resume from marker versions](#dcb-snapshots-resume-from-marker-versions). `Snapshot` gains a 4th record
-  component. **Breaks the build** if you use a record pattern over it.
+- [DCB snapshots resume from marker versions](#dcb-snapshots-resume-from-marker-versions). `Snapshot` gains a 4th and a 5th
+  record component. **Breaks the build** if you use a record pattern over it.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
@@ -135,8 +135,8 @@ other sections compile fine and behave differently, so read them first.
 ### Snapshots
 
 - [DCB snapshots resume from marker versions](#dcb-snapshots-resume-from-marker-versions). The DCB deciders and
-  a `@Snapshot` DCB view save at marker versions, and ignore a snapshot 0.34.0 saved at a position. `Snapshot` gains a
-  component. **Breaks the build** if you use a record pattern over `Snapshot`.
+  a `@Snapshot` DCB view save at marker versions, and ignore a snapshot 0.34.0 saved at a position. `Snapshot` gains two
+  components. **Breaks the build** if you use a record pattern over `Snapshot`.
 - [The reactive `executeAndReturnState` emits a non-null state](#the-reactive-executeandreturnstate-emits-a-non-null-state).
   The emitted state is declared non-null. Breaks the build only for a Kotlin `Mono<State?>` written by hand.
 
@@ -777,8 +777,14 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   late, and folding it last could give another state than a read in position order.
 - When the store reported no versions, or didn't confirm the append, the snapshot isn't saved. The first skip for each
   reason logs a warning, and later ones log at debug.
+- A boundary over several tags or types reports no versions until each of them has a marker, so a decider or view on it
+  reads the whole boundary and saves nothing until every one has had an event. 0.34.0 saved at a position there.
 - A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot and logs a warning at start, since a read of every event
-  has no marker versions. A decider over `DcbCriteria.all()` saves no snapshot either, so every command reads every
+  has no marker versions. A snapshot 0.34.0 saved for it stays in the store and stops changing, so delete it or give the
+  view a boundary. `dcbSnapshotView { }` in Kotlin uses `DcbCriteria.all()` unless you set tags or criteria.
+- A custom key function on a decider should stay keyed on the criteria. If you widen the criteria and keep the key, the next
+  execute resumes after the saved versions and doesn't read the older events the wider criteria now matches, and nothing
+  reports it. A decider over `DcbCriteria.all()` saves no snapshot either, so every command reads every
   event of the store, and the first skip logs a warning.
 - Inside a transaction of yours a read reports no versions, so a decider that runs in one reads the whole
   boundary and saves no snapshot.
@@ -793,8 +799,9 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   snapshot, whose `version` is 0.
 - `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` array, a
   `highestFoldedPosition` field and no `version` field. A stream snapshot is stored as before.
-- A DCB snapshot that 0.34.0 saved at a position is never used. The first execute or delivery after the upgrade reads
-  the whole boundary and saves over it, so nothing needs migrating.
+- A DCB snapshot that 0.34.0 saved at a position is never used. After the upgrade an execute or delivery reads the whole
+  boundary until one can save over it, so nothing needs migrating. On a boundary whose markers 0.34.0 wrote, the first
+  append gives them an epoch, and a later command saves.
 - A 0.34.0 node that reads a snapshot 0.35.0 saved, during a rolling upgrade or after a rollback, finds no `version`. It
   reads the whole boundary and saves a snapshot at a position, which 0.35.0 then doesn't use.
 - A snapshot store of your own has to persist `Snapshot.markerVersions()` and `Snapshot.highestFoldedPosition()`. If it

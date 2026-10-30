@@ -64,8 +64,8 @@ import java.util.function.Function;
  * committed ({@link DcbApplicationService#isAppendConfirmed(DcbAppendResult)}). Otherwise the save is skipped, and the
  * first skip for each reason is logged as a warning. When the store refuses to read after the saved versions, for
  * example because a marker was pruned, the execute reads the whole boundary from the initial state instead. A snapshot
- * that 0.34 saved at a DCB position is never used, so the first execute after an upgrade reads the whole boundary and
- * saves over it.
+ * that 0.34 saved at a DCB position is never used, so after an upgrade an execute reads the whole boundary until one
+ * can save over it.
  * <p>
  * Deliberate asymmetry with the stream executor: this executor only advances the base (calls
  * {@code maybeSaveBestEffort}) when the decision actually appended events, since a no-op decision returns no

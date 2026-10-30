@@ -99,7 +99,8 @@ class SnapshotViewBuilder<S, E : Any> @PublishedApi internal constructor(initial
  * ```
  *
  * Set the boundary with [DcbSnapshotViewBuilder.tags] (a tag filter) or an explicit [DcbSnapshotViewBuilder.criteria].
- * With neither, the boundary defaults to [DcbCriteria.all].
+ * With neither, the boundary defaults to [DcbCriteria.all], which has no marker versions to save at. A `@Snapshot` view
+ * over it keeps no snapshot and logs a warning at start.
  */
 fun <S, E : Any> dcbSnapshotView(initialState: S, block: DcbSnapshotViewBuilder<S, E>.() -> Unit): DcbSnapshotView<S, E> {
     val builder = DcbSnapshotViewBuilder<S, E>(initialState)

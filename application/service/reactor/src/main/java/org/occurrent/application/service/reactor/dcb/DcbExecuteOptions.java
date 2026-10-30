@@ -144,7 +144,8 @@ public final class DcbExecuteOptions<E> {
     }
 
     /**
-     * Ask the store for the marker versions of the boundary on the read, and read the whole boundary. When the store
+     * Ask the store for the marker versions of the boundary on the read. The read takes the whole boundary unless
+     * {@link #fromVersions(DcbMarkerVersions, long)} was set on these options, which this keeps. When the store
      * reports them, and the read and the append report the same epoch for every marker key, the returned
      * {@link org.occurrent.eventstore.api.dcb.DcbAppendResult#markerVersions()} holds the versions after this append.
      * Otherwise they are empty. A snapshot saves them and passes them to {@link #fromVersions(DcbMarkerVersions, long)} on
@@ -168,7 +169,7 @@ public final class DcbExecuteOptions<E> {
      * The read throws {@link org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException} when the store can't compare
      * {@code markerVersions} with its own, for example after its markers were pruned, and when it returns an event below
      * {@code highestFoldedPosition}. That event committed late, and folding it last could give another state than a read
-     * in position order. Execute again with {@link #withVersions()} and fold from the initial state then.
+     * in position order. Execute again without this method, with only {@link #withVersions()}, and fold from the initial state then.
      *
      * @param markerVersions        the versions to read after
      * @param highestFoldedPosition the highest position among the events folded into the saved state. After an append

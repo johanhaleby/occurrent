@@ -605,8 +605,9 @@ domain events. It runs before the domain function, so a refused read decides not
 as a required argument, since a caller that folds onto saved state has the same problem as the decider.
 `SnapshotSupport.refuseEventBelowFoldedPosition` makes the check for the view.
 
-A resumed state now equals a full read in position order. Every event in the tail is above every folded event, so
-position order folds the tail last as well. A fold that doesn't depend on order pays for this with full reads it didn't
+A late event can't put a resumed state out of position order any more. Every event in the tail is above every folded
+event, so position order folds the tail last as well. A decider that emits an event outside its boundary still folds it
+into the snapshot, where a full read of the boundary doesn't see it. A fold that doesn't depend on order pays for this with full reads it didn't
 need, from the late event until the next save. Both Spring Mongo snapshot stores treat a DCB document without the field
 as unreadable, which also means a full read.
 
@@ -937,6 +938,11 @@ two constraints. It must not change the DCB path above. And if it reads windows 
 live start (ADR 144) in the same causal session, with `afterClusterTime` at or above the head read.
 
 ## Consequences
+
+A boundary over several tags or types reports versions only when each has a marker, so a decider or view on it saves
+nothing and reads in full until every one has had an event. 0.34 saved at a position there, so this is a cost I accept
+for not saving at a position. A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot, and one 0.34 saved stays in
+the store unchanged.
 
 - #1230 is fixed for the snapshot deciders and the `@Snapshot` view on every store in this repository, without a new
   shared write, a background task or a clock. The one timeout is meant to bound how long a read waits, not what it
