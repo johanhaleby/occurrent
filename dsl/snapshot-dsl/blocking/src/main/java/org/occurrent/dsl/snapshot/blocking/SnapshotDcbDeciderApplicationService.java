@@ -168,8 +168,9 @@ public final class SnapshotDcbDeciderApplicationService<E> {
             executed = executeFrom(base, criteria, commands, dcbDecider, decided);
         } catch (DcbSnapshotInvalidException e) {
             // After a decision the append may have committed, for example when a synchronous subscription throws this
-            // without a transaction, and reading in full would run the command twice
-            if (base.markerVersions().isEmpty() || decided.get()) {
+            // without a transaction, and reading in full would run the command twice. A refusal marked as before the
+            // append is the read of a retry, and the default retry strategy retries only a failed append condition
+            if (base.markerVersions().isEmpty() || (decided.get() && !e.isBeforeAppend())) {
                 throw e;
             }
             log.debug("Reading the whole boundary of snapshot '{}' since the store can't read after its marker versions: {}", key, e.getMessage());

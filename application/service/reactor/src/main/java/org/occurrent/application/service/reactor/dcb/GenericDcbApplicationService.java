@@ -142,7 +142,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
         Function<AtomicReference<@Nullable DcbSnapshotInvalidException>, Mono<Result<E>>> readDecideAppendUnit = refusal -> (readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions)).doOnNext(eventStream -> refuseEventBelowFoldedPosition(criteria, options, eventStream)).onErrorResume(DcbSnapshotInvalidException.class, refused -> {
-            refusal.set(refused);
+            refusal.set(refused.beforeAppend());
             return Mono.empty();
         }).flatMap(eventStream -> {
             List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();

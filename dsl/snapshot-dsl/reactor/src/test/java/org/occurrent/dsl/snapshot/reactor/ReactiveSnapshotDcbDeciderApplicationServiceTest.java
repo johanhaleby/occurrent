@@ -80,6 +80,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -234,6 +235,51 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
                 () -> assertThat(controlled.reads).containsExactly(DcbReadOptions.afterVersions(savedVersions), DcbReadOptions.fromBeginning().withVersions()),
                 // The seed (1), A (1) and the produced B (1), so the state was folded from the initial state
                 () -> assertThat(evolveCount.get()).isEqualTo(3),
+                () -> assertThat(replaced.state()).isEqualTo("B"),
+                () -> assertThat(replaced.markerVersions()).isPresent().isNotEqualTo(Optional.of(savedVersions))
+        );
+    }
+
+    @Test
+    void a_conflict_followed_by_a_refused_resume_read_reads_in_full_and_decides_on_that_state() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.refuseReadsAfterVersions = true;
+
+        assertConflictThenRefusedResumeReadIsReadInFull(controlled);
+    }
+
+    @Test
+    void a_conflict_followed_by_a_resume_read_with_an_event_below_the_saved_position_reads_in_full_and_decides_on_that_state() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.refuseReadsAfterVersions = true;
+        controlled.answerRefusedReadsWithEventsBelowTheSavedPosition = true;
+
+        assertConflictThenRefusedResumeReadIsReadInFull(controlled);
+    }
+
+    private void assertConflictThenRefusedResumeReadIsReadInFull(ControlledStore controlled) {
+        List<String> decidedOnStates = new CopyOnWriteArrayList<>();
+        var conflictingService = new ReactiveSnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry()));
+        var account = ReactiveSnapshotDcbDecider.from(DcbDecider.from(decideRecordingStates(countingDecider(evolveCount, time), decidedOnStates), command -> criteria(), event -> Set.of(tag())), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+        conflictingService.execute(new Define("A"), account).block(TIMEOUT);
+        DcbMarkerVersions savedVersions = store.findLatest(key).blockOptional().orElseThrow().markerVersions().orElseThrow();
+        decidedOnStates.clear();
+        controlled.reads.clear();
+        // The first resume read succeeds, then the append loses to this event, and the retry's resume read is refused
+        controlled.afterVersionsReadsAllowed = 1;
+        controlled.beforeNextAppend = appendOutOfBandLater(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "X")).then();
+
+        Throwable thrown = catchThrowable(() -> conflictingService.execute(new Change("B"), account).block(TIMEOUT));
+
+        Snapshot<String> replaced = store.findLatest(key).blockOptional().orElseThrow();
+        assertAll(
+                () -> assertThat(thrown).as("what escaped execute after the conflicted append").isNull(),
+                () -> assertThat(controlled.reads).containsExactly(DcbReadOptions.afterVersions(savedVersions), DcbReadOptions.afterVersions(savedVersions), DcbReadOptions.fromBeginning().withVersions()),
+                // The first attempt decides on the snapshot's state and the full read on the seed, A and X
+                () -> assertThat(decidedOnStates).containsExactly("A", "X"),
+                // The seed, A, X and the one B that was appended
+                () -> assertThat(eventStore.count(criteria()).block(TIMEOUT)).as("events in the boundary").isEqualTo(4L),
                 () -> assertThat(replaced.state()).isEqualTo("B"),
                 () -> assertThat(replaced.markerVersions()).isPresent().isNotEqualTo(Optional.of(savedVersions))
         );
@@ -581,8 +627,12 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     }
 
     private void appendOutOfBand(DomainEvent event) {
+        appendOutOfBandLater(event).block();
+    }
+
+    private Mono<DcbAppendResult> appendOutOfBandLater(DomainEvent event) {
         List<Tag> tags = List.of(tag());
-        eventStore.append(converter.toCloudEvents(List.of(event)).stream().map(ce -> DcbCloudEvents.withTags(ce, tags)).toList()).block();
+        return Mono.defer(() -> eventStore.append(converter.toCloudEvents(List.of(event)).stream().map(ce -> DcbCloudEvents.withTags(ce, tags)).toList()));
     }
 
     private static DcbCriteria criteria() {
@@ -647,17 +697,45 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         };
     }
 
+    private static Decider<Cmd, String, DomainEvent> decideRecordingStates(Decider<Cmd, String, DomainEvent> delegate, List<String> decidedOnStates) {
+        return new Decider<>() {
+            @Override
+            public String initialState() {
+                return delegate.initialState();
+            }
+
+            @NonNull
+            @Override
+            public List<DomainEvent> decide(@NonNull Cmd command, String state) {
+                decidedOnStates.add(state);
+                return delegate.decide(command, state);
+            }
+
+            @Override
+            public String evolve(String state, @NonNull DomainEvent event) {
+                return delegate.evolve(state, event);
+            }
+        };
+    }
+
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
         throw (T) failure;
     }
 
     /**
-     * Delegates to the Mongo store and can refuse a resume, drop the marker versions of a read or decline to confirm.
+     * Delegates to the Mongo store and can refuse a resume, drop the marker versions of a read, decline to confirm or
+     * run an action just before the next append.
      */
     private static final class ControlledStore implements DcbEventStore, DcbAppendConfirmation {
         final List<DcbReadOptions> reads = new ArrayList<>();
         volatile boolean refuseReadsAfterVersions;
+        // Resume reads up to this many are answered, the ones after are refused
+        volatile int afterVersionsReadsAllowed;
+        // A refused resume read gets the whole boundary instead, which holds events below the saved position
+        volatile boolean answerRefusedReadsWithEventsBelowTheSavedPosition;
+        volatile @Nullable Mono<Void> beforeNextAppend;
+        private final AtomicInteger afterVersionsReads = new AtomicInteger();
         volatile boolean refuseEveryRead;
         volatile boolean reportsVersions = true;
         volatile boolean confirms = true;
@@ -670,7 +748,11 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         @Override
         public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
             reads.add(options);
-            if (refuseEveryRead || (refuseReadsAfterVersions && options.afterVersions().isPresent())) {
+            boolean refuseThisResume = refuseReadsAfterVersions && options.afterVersions().isPresent() && afterVersionsReads.incrementAndGet() > afterVersionsReadsAllowed;
+            if (refuseThisResume && answerRefusedReadsWithEventsBelowTheSavedPosition) {
+                return delegate.read(criteria, DcbReadOptions.fromBeginning().withVersions()).map(stream -> reportsVersions ? stream : new DcbEventStream(stream.events(), stream.lastSequencePosition(), stream.consistencyToken()));
+            }
+            if (refuseEveryRead || refuseThisResume) {
                 DcbMarkerVersions refused = options.afterVersions().orElseGet(() -> DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))));
                 return Mono.error(new DcbSnapshotInvalidException(criteria, refused, "refused (test double)"));
             }
@@ -684,7 +766,11 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
 
         @Override
         public Mono<DcbAppendResult> append(List<CloudEvent> events, DcbAppendCondition condition) {
-            return delegate.append(events, condition);
+            return Mono.defer(() -> {
+                Mono<Void> action = beforeNextAppend;
+                beforeNextAppend = null;
+                return (action == null ? Mono.<Void>empty() : action).then(Mono.defer(() -> delegate.append(events, condition)));
+            });
         }
 
         @Override

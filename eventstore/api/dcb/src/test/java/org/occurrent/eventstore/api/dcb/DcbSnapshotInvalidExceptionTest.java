@@ -24,6 +24,7 @@ import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbSnapshotInvalidExceptionTest {
@@ -44,5 +45,39 @@ class DcbSnapshotInvalidExceptionTest {
 
         assertThat(exception.criteria()).isEqualTo(CRITERIA);
         assertThat(exception.afterVersions()).isEqualTo(AFTER);
+    }
+
+    @Test
+    void a_refusal_is_not_marked_as_before_the_append_until_an_application_service_marks_it() {
+        DcbSnapshotInvalidException exception = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused");
+
+        assertThat(exception.isBeforeAppend()).isFalse();
+    }
+
+    @Test
+    void marking_a_refusal_as_before_the_append_returns_a_marked_copy_and_leaves_the_original_unmarked() {
+        DcbSnapshotInvalidException original = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused");
+
+        DcbSnapshotInvalidException marked = original.beforeAppend();
+
+        assertAll(
+                () -> assertThat(marked).isNotSameAs(original),
+                () -> assertThat(marked.isBeforeAppend()).isTrue(),
+                () -> assertThat(original.isBeforeAppend()).isFalse()
+        );
+    }
+
+    @Test
+    void a_marked_refusal_keeps_the_criteria_the_versions_and_the_message_and_has_the_original_as_its_cause() {
+        DcbSnapshotInvalidException original = DcbSnapshotInvalidException.eventBelowFoldedPosition(CRITERIA, AFTER, 42);
+
+        DcbSnapshotInvalidException marked = original.beforeAppend();
+
+        assertAll(
+                () -> assertThat(marked.criteria()).isEqualTo(CRITERIA),
+                () -> assertThat(marked.afterVersions()).isEqualTo(AFTER),
+                () -> assertThat(marked).hasMessage(original.getMessage()),
+                () -> assertThat(marked).hasCause(original)
+        );
     }
 }

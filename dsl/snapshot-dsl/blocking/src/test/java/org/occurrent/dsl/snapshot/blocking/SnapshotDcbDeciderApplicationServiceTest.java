@@ -22,6 +22,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
@@ -250,6 +251,51 @@ class SnapshotDcbDeciderApplicationServiceTest {
                 () -> assertThat(controlled.reads).containsExactly(DcbReadOptions.afterVersions(savedVersions), DcbReadOptions.fromBeginning().withVersions()),
                 // The seed (1), A (1) and the produced B (1), so the state was folded from the initial state
                 () -> assertThat(evolveCount.get()).isEqualTo(3),
+                () -> assertThat(replaced.state()).isEqualTo("B"),
+                () -> assertThat(replaced.markerVersions()).isPresent().isNotEqualTo(Optional.of(savedVersions))
+        );
+    }
+
+    @Test
+    void a_conflict_followed_by_a_refused_resume_read_reads_in_full_and_decides_on_that_state() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.refuseReadsAfterVersions = true;
+
+        assertConflictThenRefusedResumeReadIsReadInFull(controlled);
+    }
+
+    @Test
+    void a_conflict_followed_by_a_resume_read_with_an_event_below_the_saved_position_reads_in_full_and_decides_on_that_state() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.refuseReadsAfterVersions = true;
+        controlled.answerRefusedReadsWithEventsBelowTheSavedPosition = true;
+
+        assertConflictThenRefusedResumeReadIsReadInFull(controlled);
+    }
+
+    private void assertConflictThenRefusedResumeReadIsReadInFull(ControlledStore controlled) {
+        List<String> decidedOnStates = new ArrayList<>();
+        var conflictingService = new SnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetryStrategy()));
+        var account = SnapshotDcbDecider.from(DcbDecider.from(decideRecordingStates(countingDecider(evolveCount, time), decidedOnStates), command -> criteria(), event -> Set.of(tag())), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+        conflictingService.execute(new Define("A"), account);
+        DcbMarkerVersions savedVersions = store.findLatest(key).orElseThrow().markerVersions().orElseThrow();
+        decidedOnStates.clear();
+        controlled.reads.clear();
+        // The first resume read succeeds, then the append loses to this event, and the retry's resume read is refused
+        controlled.afterVersionsReadsAllowed = 1;
+        controlled.beforeNextAppend = () -> appendOutOfBand(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "X"));
+
+        Throwable thrown = catchThrowable(() -> conflictingService.execute(new Change("B"), account));
+
+        Snapshot<String> replaced = store.findLatest(key).orElseThrow();
+        assertAll(
+                () -> assertThat(thrown).as("what escaped execute after the conflicted append").isNull(),
+                () -> assertThat(controlled.reads).containsExactly(DcbReadOptions.afterVersions(savedVersions), DcbReadOptions.afterVersions(savedVersions), DcbReadOptions.fromBeginning().withVersions()),
+                // The first attempt decides on the snapshot's state and the full read on the seed, A and X
+                () -> assertThat(decidedOnStates).containsExactly("A", "X"),
+                // The seed, A, X and the one B that was appended
+                () -> assertThat(eventStore.read(criteria()).events()).as("events in the boundary").hasSize(4),
                 () -> assertThat(replaced.state()).isEqualTo("B"),
                 () -> assertThat(replaced.markerVersions()).isPresent().isNotEqualTo(Optional.of(savedVersions))
         );
@@ -511,12 +557,40 @@ class SnapshotDcbDeciderApplicationServiceTest {
         };
     }
 
+    private static Decider<Cmd, String, DomainEvent> decideRecordingStates(Decider<Cmd, String, DomainEvent> delegate, List<String> decidedOnStates) {
+        return new Decider<>() {
+            @Override
+            public String initialState() {
+                return delegate.initialState();
+            }
+
+            @NonNull
+            @Override
+            public List<DomainEvent> decide(@NonNull Cmd command, String state) {
+                decidedOnStates.add(state);
+                return delegate.decide(command, state);
+            }
+
+            @Override
+            public String evolve(String state, @NonNull DomainEvent event) {
+                return delegate.evolve(state, event);
+            }
+        };
+    }
+
     /**
-     * Delegates to an in-memory store and can refuse a resume, drop the marker versions of a read or decline to confirm.
+     * Delegates to an in-memory store and can refuse a resume, drop the marker versions of a read, decline to confirm or
+     * run an action just before the next append.
      */
     private static final class ControlledStore implements DcbEventStore, DcbAppendConfirmation {
         final List<DcbReadOptions> reads = new ArrayList<>();
         boolean refuseReadsAfterVersions;
+        // Resume reads up to this many are answered, the ones after are refused
+        int afterVersionsReadsAllowed;
+        // A refused resume read gets the whole boundary instead, which holds events below the saved position
+        boolean answerRefusedReadsWithEventsBelowTheSavedPosition;
+        @Nullable Runnable beforeNextAppend;
+        private int afterVersionsReads;
         boolean refuseEveryRead;
         boolean reportsVersions = true;
         boolean confirms = true;
@@ -529,7 +603,11 @@ class SnapshotDcbDeciderApplicationServiceTest {
         @Override
         public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
             reads.add(options);
-            if (refuseEveryRead || (refuseReadsAfterVersions && options.afterVersions().isPresent())) {
+            boolean refuseThisResume = refuseReadsAfterVersions && options.afterVersions().isPresent() && ++afterVersionsReads > afterVersionsReadsAllowed;
+            if (refuseThisResume && answerRefusedReadsWithEventsBelowTheSavedPosition) {
+                return delegate.read(criteria, DcbReadOptions.fromBeginning().withVersions());
+            }
+            if (refuseEveryRead || refuseThisResume) {
                 DcbMarkerVersions refused = options.afterVersions().orElseGet(() -> DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))));
                 throw new DcbSnapshotInvalidException(criteria, refused, "refused (test double)");
             }
@@ -544,6 +622,11 @@ class SnapshotDcbDeciderApplicationServiceTest {
 
         @Override
         public DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition) {
+            Runnable action = beforeNextAppend;
+            beforeNextAppend = null;
+            if (action != null) {
+                action.run();
+            }
             return delegate.append(events, condition);
         }
 

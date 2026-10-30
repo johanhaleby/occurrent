@@ -154,7 +154,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     eventStream = readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions);
                     refuseEventBelowFoldedPosition(criteria, options, eventStream);
                 } catch (DcbSnapshotInvalidException refused) {
-                    refusal.set(refused);
+                    refusal.set(refused.beforeAppend());
                     return new Tuple<>(Optional.empty(), List.of());
                 }
                 List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();

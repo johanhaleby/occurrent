@@ -223,7 +223,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             }).block());
 
             assertAll(
-                    () -> assertThat(thrown).as("what reached the caller").isSameAs(store.refusal),
+                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal), () -> assertThat(refused.isBeforeAppend()).as("marked as before the append").isTrue())),
                     () -> assertThat(executor.completed).as("transactions that completed normally").isEqualTo(1),
                     () -> assertThat(executor.failed).as("transactions that saw an error").isZero(),
                     () -> assertThat(domainFunctionRan).as("domain function ran").isFalse(),
@@ -239,7 +239,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             Throwable thrown = catchThrowable(() -> service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3), events -> List.of(new DomainEvent("Changed", "name:1"))).block());
 
             assertAll(
-                    () -> assertThat(thrown).as("what reached the caller").isSameAs(store.refusal),
+                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal), () -> assertThat(refused.isBeforeAppend()).as("marked as before the append").isTrue())),
                     () -> assertThat(store.readOptions).as("reads, since a refusal isn't retried").hasSize(1),
                     () -> assertThat(store.appendCalls).as("appends").isZero()
             );
@@ -312,7 +312,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             Throwable second = catchThrowable(execution::block);
 
             assertAll(
-                    () -> assertThat(first).as("first subscription").isSameAs(store.refusal),
+                    () -> assertThat(first).as("first subscription").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal), () -> assertThat(refused.isBeforeAppend()).as("marked as before the append").isTrue())),
                     () -> assertThat(second).as("second subscription, whose domain function has nothing to append").isNull(),
                     () -> assertThat(store.readOptions).as("reads, one for each subscription").hasSize(2)
             );

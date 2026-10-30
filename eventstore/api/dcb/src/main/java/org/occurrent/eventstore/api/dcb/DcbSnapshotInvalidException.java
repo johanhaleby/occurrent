@@ -39,6 +39,7 @@ import java.util.StringJoiner;
 public class DcbSnapshotInvalidException extends RuntimeException {
     private final DcbCriteria criteria;
     private final DcbMarkerVersions afterVersions;
+    private final boolean beforeAppend;
 
     /**
      * Creates an exception for a refused read.
@@ -60,9 +61,14 @@ public class DcbSnapshotInvalidException extends RuntimeException {
      * @param cause         the error that kept the store from comparing the versions, or {@code null}
      */
     public DcbSnapshotInvalidException(DcbCriteria criteria, DcbMarkerVersions afterVersions, String message, @Nullable Throwable cause) {
+        this(criteria, afterVersions, message, cause, false);
+    }
+
+    private DcbSnapshotInvalidException(DcbCriteria criteria, DcbMarkerVersions afterVersions, String message, @Nullable Throwable cause, boolean beforeAppend) {
         super(message, cause);
         this.criteria = criteria;
         this.afterVersions = afterVersions;
+        this.beforeAppend = beforeAppend;
     }
 
     /**
@@ -92,12 +98,34 @@ public class DcbSnapshotInvalidException extends RuntimeException {
         return afterVersions;
     }
 
+    /**
+     * This refusal, marked as thrown by the read of an application service's attempt, with {@code this} as its cause.
+     * The default retry strategies start a later attempt only after an append failed its condition, so nothing was
+     * appended when this is thrown. A retry strategy that also retries after a committed append runs the command again
+     * by itself.
+     *
+     * @return the marked exception to throw
+     */
+    public DcbSnapshotInvalidException beforeAppend() {
+        return new DcbSnapshotInvalidException(criteria, afterVersions, String.valueOf(getMessage()), this, true);
+    }
+
+    /**
+     * Whether an application service marked this refusal with {@link #beforeAppend()}. A caller can then read in full
+     * and decide again without running a command twice, even when an earlier attempt of the same execute already decided.
+     * A refusal without the mark can come from a synchronous subscription, after the append committed.
+     */
+    public boolean isBeforeAppend() {
+        return beforeAppend;
+    }
+
     @Override
     public String toString() {
         return new StringJoiner(", ", DcbSnapshotInvalidException.class.getSimpleName() + "[", "]")
                 .add("message=" + getMessage())
                 .add("criteria=" + criteria)
                 .add("afterVersions=" + afterVersions)
+                .add("beforeAppend=" + beforeAppend)
                 .toString();
     }
 }

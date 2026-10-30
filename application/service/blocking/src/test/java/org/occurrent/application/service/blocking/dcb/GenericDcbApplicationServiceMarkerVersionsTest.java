@@ -221,7 +221,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             }));
 
             assertAll(
-                    () -> assertThat(thrown).as("what reached the caller").isSameAs(store.refusal),
+                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal), () -> assertThat(refused.isBeforeAppend()).as("marked as before the append").isTrue())),
                     () -> assertThat(executor.returned).as("transactions that returned normally").isEqualTo(1),
                     () -> assertThat(executor.threw).as("transactions that saw an exception").isZero(),
                     () -> assertThat(domainFunctionRan).as("domain function ran").isFalse(),
@@ -237,7 +237,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             Throwable thrown = catchThrowable(() -> service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3), events -> List.of(new DomainEvent("Changed", "name:1"))));
 
             assertAll(
-                    () -> assertThat(thrown).as("what reached the caller").isSameAs(store.refusal),
+                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal), () -> assertThat(refused.isBeforeAppend()).as("marked as before the append").isTrue())),
                     () -> assertThat(store.readOptions).as("reads, since a refusal isn't retried").hasSize(1),
                     () -> assertThat(store.appendCalls).as("appends").isZero()
             );
