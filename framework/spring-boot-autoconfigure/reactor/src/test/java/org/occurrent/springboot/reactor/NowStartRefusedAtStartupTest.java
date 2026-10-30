@@ -60,7 +60,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * registered at startup that waits until it has started then fails the application context, which is the default setup.
  * {@code startWhenNoStartPositionCanBeRecorded} starts it anyway, and {@code startupMode = BACKGROUND} leaves it to be
  * refused without anything waiting for it. A {@code resumeBehavior} of {@code SAME_AS_START_AT} makes the start NOW, a
- * start of its own that is never refused.
+ * start of its own that the durable model does not refuse. The wrapped model here never reads a clock, so this class says
+ * nothing about what the MongoDB model does with a start at the present.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -146,7 +147,9 @@ class NowStartRefusedAtStartupTest {
 
     // Nothing waits for the refusal in the background, so the position read being asked is what shows the registration
     // reached the point where it is either refused or started. A subscription that was wrongly started would be
-    // subscribed in the wrapped model by then or shortly after, which is why the absence is observed for a while.
+    // subscribed in the wrapped model by then or shortly after, which is why the absence is observed for a while. From
+    // outside a refusal and a registration that is stuck look the same here, the auto mode tests above are what show
+    // the refusal.
     @ParameterizedTest
     @EnumSource(FeedPosition.class)
     void the_application_context_starts_without_subscribing_a_background_default_resume_behavior_now_subscription_that_cannot_have_its_start_position_recorded(FeedPosition feedPosition) {
@@ -163,9 +166,9 @@ class NowStartRefusedAtStartupTest {
         });
     }
 
-    // In manual mode the starter stops the durable model before anything registers, and nothing waits for the subscription
-    // to start, so the context starts whatever the feed answers. The registration is still made on the stopped model, so
-    // the feed position is asked for and the refusal it gets does not fail the context.
+    // In manual mode the starter stops the durable model before anything registers, and this configuration does the same,
+    // though nothing here observes that the model is stopped. Nothing waits for the subscription to start, so the context
+    // starts whatever the feed answers, and the feed position is still asked for.
     @Test
     void the_application_context_starts_without_subscribing_a_default_resume_behavior_now_subscription_in_manual_mode_that_cannot_have_its_start_position_recorded() {
         // Given
