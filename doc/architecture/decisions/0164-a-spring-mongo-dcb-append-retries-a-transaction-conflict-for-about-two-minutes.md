@@ -23,13 +23,14 @@ whole budget.
 
 ## Decision
 
-Both Spring stores retry a transient transaction conflict for about two minutes, the same budget the driver gives the
-native store.
+Both Spring stores retry a transient transaction conflict for about two minutes of waiting, the 120 seconds the driver
+gives the native store. The limit is a number of attempts and not a deadline, so the time each attempt takes comes on
+top of the waiting.
 
 - `SpringMongoEventStore` makes 240 attempts with the backoff it already had, 10 ms doubling up to 500 ms.
 - `ReactorMongoEventStore` makes 320 attempts with the same backoff. Reactor's default jitter makes each wait between
-  250 and 500 ms once the backoff reaches its cap, 375 ms on average, so 320 attempts take about as long as 240 do on
-  the blocking store.
+  250 and 500 ms once the backoff reaches its cap, 375 ms on average, so 320 attempts add up to about as much waiting
+  as 240 do on the blocking store.
 - There is no setting for the count and no extra jitter. A user who needs another budget can raise it when a need shows up.
 - The retry still runs only when the store owns the transaction, as in [ADR 74](0074-retry-only-where-the-transaction-is-owned.md).
 
@@ -38,11 +39,14 @@ Moving the stores to `ClientSession.withTransaction` was considered and rejected
 
 ## Consequences
 
-- ADR 21's sentence is true with a limit. An append that contends on a marker document is retried for about two
-  minutes. A caller that keeps losing for longer than that still gets the last failure. In the case #1379 measured
-  that was a `DataIntegrityViolationException`, and `GenericDcbApplicationService` does not retry that exception.
-- A command that used to fail after about 5 seconds under heavy contention now waits up to about two minutes before
-  it fails, the same as with the native store. A caller with a shorter deadline of its own sees that deadline first.
+- ADR 21's sentence is true with a limit. An append that contends on a marker document is retried 240 times on the
+  blocking store and 320 times on the reactive one, which is about two minutes of waiting. A caller that loses every
+  attempt still gets the last failure. In the case #1379 measured that was a `DataIntegrityViolationException`, and
+  `GenericDcbApplicationService` does not retry that exception.
+- A command that used to fail after about 5 seconds under heavy contention now waits about two minutes between its
+  attempts before it fails, plus the time the attempts themselves take. The native store stops at 120 seconds on a
+  clock, so a Spring store whose attempts are slow fails later than the native one does. A caller with a shorter
+  deadline of its own sees that deadline first.
 - A reserved position block is still abandoned when an append exhausts its retries, so `dcbposition` can still have
   gaps, as ADR 21 says.
 - The reactive stream write retries only a lost version race, 15 times, for an append with

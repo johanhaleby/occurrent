@@ -13,7 +13,7 @@ markers and no longer its `type:` markers, so an append that only shares a type 
 makes the check refuse a later append on them. What an append increments for its own events is unchanged, so two
 appends of one type that run at the same time still write the same `type:` marker.
 
-Amended by [ADR 164](0164-a-spring-mongo-dcb-append-retries-a-transaction-conflict-for-about-two-minutes.md). "Contention surfaces as a retry, not a spurious command failure" holds for about two minutes of losing in a row. An append that loses for longer than that fails with the last error.
+Amended by [ADR 164](0164-a-spring-mongo-dcb-append-retries-a-transaction-conflict-for-about-two-minutes.md). "Contention surfaces as a retry, not a spurious command failure" holds while an append loses fewer than 240 attempts in a row on the blocking store, or 320 on the reactive one, which is about two minutes of waiting. An append that loses every attempt fails with the last error.
 
 ## Context
 

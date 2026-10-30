@@ -134,10 +134,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private static final Logger LOGGER = LoggerFactory.getLogger(ReactorMongoEventStore.class);
     private static final String ID = "_id";
 
-    // About two minutes, the budget the MongoDB driver's withTransaction gives the native store. The reactive driver
-    // has no withTransaction and ReactiveMongoTransactionManager retries nothing, so these attempts are the whole
-    // budget. Reactor's default jitter makes each wait between 250 and 500 ms once the backoff reaches its 500 ms cap,
-    // 375 ms on average, which takes 320 attempts to reach 120 s.
+    // About two minutes of waiting, the 120 seconds the MongoDB driver's withTransaction gives the native store, with
+    // the time each attempt takes on top. The reactive driver has no withTransaction and
+    // ReactiveMongoTransactionManager retries nothing, so these attempts are the whole budget. Reactor's default
+    // jitter makes each wait between 250 and 500 ms once the backoff reaches its 500 ms cap, 375 ms on average, which
+    // takes 320 attempts to reach 120 s.
     private static final Retry TRANSIENT_CONFLICT_RETRY = Retry.backoff(320, Duration.ofMillis(10))
             .maxBackoff(Duration.ofMillis(500))
             .filter(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
