@@ -106,13 +106,26 @@ class StartPositionSupport {
         }
         if (beginningOfTimeStart) {
             // Map BEGINNING_OF_TIME to position 0, which the reactive stream catch-up model replays before going live.
-            return StartAt.checkpoint(GlobalCheckpoint.of(0));
+            return replayThenResumeAgnostic(subscription.id(), StartAt.checkpoint(GlobalCheckpoint.of(0)), subscription.resumeBehavior());
         }
         return switch (subscription.startAt()) {
-            case NOW -> StartAt.now();
+            case NOW -> nowThenResume(subscription.id(), subscription.resumeBehavior());
             // DEFAULT resumes from the durably stored position, falling back to the subscription model default on first start.
             case DEFAULT -> StartAt.subscriptionModelDefault();
             case BEGINNING_OF_TIME -> throw new IllegalStateException("Unreachable: BEGINNING_OF_TIME handled above");
+        };
+    }
+
+    // NOW is where the subscription starts the first time. Under DEFAULT a restart continues from the stored position
+    // instead, so an event written while the application was down is not skipped. Under SAME_AS_START_AT every start is
+    // NOW.
+    private StartAt nowThenResume(String subscriptionId, ResumeBehavior resumeBehavior) {
+        return switch (resumeBehavior) {
+            case SAME_AS_START_AT -> StartAt.now();
+            case DEFAULT -> StartAt.dynamic(ctx -> {
+                CheckpointStorage storage = applicationContext.getBean(CheckpointStorage.class);
+                return storage.read(subscriptionId).blockOptional().isPresent() ? StartAt.subscriptionModelDefault() : StartAt.now();
+            });
         };
     }
 
