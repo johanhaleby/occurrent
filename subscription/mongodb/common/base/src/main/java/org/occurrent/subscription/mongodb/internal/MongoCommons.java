@@ -557,7 +557,7 @@ public class MongoCommons {
      * wouldn't have.
      *
      * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
-     * @param opened         Whether a change stream of the subscription has opened, as the model's handle counts it
+     * @param opened         Whether a change stream of the subscription has opened, as the subscription model counts it
      */
     public static StartAt refusingCatchupPositionUntilOpened(StartAt startAt, @Nullable String subscriptionId, BooleanSupplier opened) {
         if (!startAt.isDynamic()) {

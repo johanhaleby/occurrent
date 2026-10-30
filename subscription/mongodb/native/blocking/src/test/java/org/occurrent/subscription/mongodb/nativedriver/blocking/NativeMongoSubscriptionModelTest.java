@@ -1759,6 +1759,36 @@ public class NativeMongoSubscriptionModelTest {
         }
 
         @Test
+        void an_answer_that_throws_the_refusal_type_after_a_cursor_opened_restarts() {
+            // Given a dynamic position that answers a live checkpoint, then throws the refusal type, then answers a live checkpoint
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint live = liveStart();
+            AtomicInteger answers = new AtomicInteger();
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
+                if (answers.incrementAndGet() == 2) {
+                    throw new UnsupportedStartAtException(StartAt.now(), "thrown by the answer");
+                }
+                return StartAt.checkpoint(live);
+            }), delivered::add);
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+
+            // When it is paused and resumed, so the position is asked again after a cursor has opened
+            subscriptionModel.pauseSubscription(subscriptionId);
+            subscriptionModel.resumeSubscription(subscriptionId);
+
+            // Then the throw restarts the subscription like any other failure, and it delivers an event written afterwards
+            NameDefined written = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+                assertThat(answers).hasValueGreaterThanOrEqualTo(3);
+                assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+            });
+            mongoEventStore.write("1", 0, serialize(written));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(delivered).extracting(CloudEvent::getId).contains(written.eventId()));
+        }
+
+        @Test
         void a_refused_run_stays_known_until_its_failure_is_recorded() throws Exception {
             // Given a run whose position waits to answer a global checkpoint, and a started latch whose first read, made
             // while the failure of the run is recorded, holds the thread until released

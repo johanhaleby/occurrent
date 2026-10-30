@@ -45,6 +45,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions.QuietPositionListener;
 import org.occurrent.subscription.api.reactor.Subscription;
@@ -310,6 +311,29 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
         // Then: the change stream is opened again at the position that could not be handed over
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
         assertThat(CommandLog.changeStreamField(commands.changeStreamsOpened().getLast(), "startAfter")).isEqualTo(resumeTokenOf(quietPositions.getFirst()));
+        NameDefined matched = nameDefined();
+        write(matched);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));
+    }
+
+    @Test
+    void a_quiet_position_listener_that_fails_with_the_refusal_type_restarts_the_subscription() {
+        // Given a listener whose first hand-over fails with the refusal type
+        CopyOnWriteArrayList<Checkpoint> quietPositions = new CopyOnWriteArrayList<>();
+        AtomicInteger handedOver = new AtomicInteger();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> Mono.just(quietPosition -> {
+            quietPositions.add(quietPosition);
+            return handedOver.incrementAndGet() == 1 ? Mono.error(new UnsupportedStartAtException(StartAt.now(), "thrown by the listener")) : Mono.empty();
+        }));
+        CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+
+        // When it subscribes
+        subscriptionModel.subscribe("refusing-hand-over", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event)));
+
+        // Then the change stream is opened again at the position that could not be handed over, and the subscription keeps delivering
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
+        assertThat(CommandLog.changeStreamField(commands.changeStreamsOpened().getLast(), "startAfter")).isEqualTo(resumeTokenOf(quietPositions.getFirst()));
+        assertThat(subscriptionModel.isRunning("refusing-hand-over")).isTrue();
         NameDefined matched = nameDefined();
         write(matched);
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));
