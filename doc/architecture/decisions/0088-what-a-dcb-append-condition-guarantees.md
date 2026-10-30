@@ -10,6 +10,10 @@ Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was
 `IllegalArgumentException` before any store is called. On the MongoDB stores, sharing a type with a criteria item that
 has tags is no longer a reason for the check to refuse, as in memory.
 
+Amended by [ADR 149](0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md). On a replica set the MongoDB stores no longer refuse an append for an event that shares a tag
+with the criteria and doesn't match them, so the answer for an excluded type is the same as in memory there. On a
+sharded cluster the store still refuses for an event with every tag of a criteria item.
+
 ## Context
 
 DCB is the biggest block of untested-in-common behaviour left in #394: roughly 5,300 lines of DCB test code across the
