@@ -23,6 +23,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartPosition;
+import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -167,6 +168,56 @@ class NowStartResumeBehaviorStartAtTest {
         // Then
         assertThat(start).isSameAs(DcbStartAt.now());
         assertThat(resolve(start, subscriptionModelType)).isSameAs(DcbStartAt.now());
+    }
+
+    @ParameterizedTest
+    @MethodSource("layersThatKeepThePosition")
+    void same_as_start_at_makes_a_stream_subscription_now_start_answer_null_for_a_durable_or_competing_consumer_layer_and_its_subclasses(Class<?> subscriptionModelType) {
+        // Given
+        StartPositionSupport support = support();
+
+        // When
+        StartAt start = streamNowStart(support, ResumeBehavior.SAME_AS_START_AT);
+
+        // Then
+        assertThat(start.isDynamic()).isTrue();
+        assertThat(start.get(contextOf(subscriptionModelType))).isNull();
+    }
+
+    @ParameterizedTest
+    @MethodSource("layersThatStartNow")
+    void same_as_start_at_makes_a_stream_subscription_now_start_answer_now_for_any_other_layer(Class<?> subscriptionModelType) {
+        // Given
+        StartPositionSupport support = support();
+
+        // When
+        StartAt start = streamNowStart(support, ResumeBehavior.SAME_AS_START_AT);
+
+        // Then
+        @Nullable StartAt answer = start.get(contextOf(subscriptionModelType));
+        assertThat(answer).isNotNull();
+        assertThat(answer.isNow()).isTrue();
+    }
+
+    @ParameterizedTest
+    @MethodSource("allLayers")
+    void default_resume_behavior_makes_a_stream_subscription_now_start_the_plain_now_start_whatever_the_layer(Class<?> subscriptionModelType) {
+        // Given
+        StartPositionSupport support = support();
+
+        // When
+        StartAt start = streamNowStart(support, ResumeBehavior.DEFAULT);
+
+        // Then
+        assertThat(start.isNow()).isTrue();
+        assertThat(start.isDynamic()).isFalse();
+        @Nullable StartAt answer = start.get(contextOf(subscriptionModelType));
+        assertThat(answer).isNotNull();
+        assertThat(answer.isNow()).isTrue();
+    }
+
+    private static StartAt streamNowStart(StartPositionSupport support, ResumeBehavior resumeBehavior) {
+        return support.generateStartAt(ID, new StartPositionSupport.StartPositionToUse.StartAtStartPosition(StreamSubscription.StartPosition.NOW), resumeBehavior);
     }
 
     private static SubscriptionModelContext contextOf(Class<?> subscriptionModelType) {

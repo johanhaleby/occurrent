@@ -102,9 +102,10 @@ class StartPositionSupport {
         };
     }
 
-    // Competing consumer and durable layers store a position and let the instances compete, which a subscription that
-    // starts at the same place on every boot must not do, so they are told to delegate to the parent model.
-    private static boolean keepsNoPosition(SubscriptionModelContext ctx) {
+    // The competing consumer layer lets the instances compete and the durable layer stores and reads a position. A
+    // subscription that starts at the same place on every boot must do neither, so these layers are told to delegate
+    // to the parent model.
+    private static boolean delegatesItsStart(SubscriptionModelContext ctx) {
         Class<?> type = ctx.subscriptionModelType();
         return CompetingConsumerSubscriptionModel.class.isAssignableFrom(type) || DurableSubscriptionModel.class.isAssignableFrom(type);
     }
@@ -116,7 +117,7 @@ class StartPositionSupport {
     private StartAt replayThenResumeAgnostic(String subscriptionId, StartAt replayStart, ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                return keepsNoPosition(ctx) ? null : replayStart;
+                return delegatesItsStart(ctx) ? null : replayStart;
             });
             case DEFAULT -> StartAt.dynamic(ctx -> {
                 CheckpointStorage checkpointStorage = applicationContext.getBean(CheckpointStorage.class);
@@ -132,7 +133,7 @@ class StartPositionSupport {
         return switch (resumeBehavior) {
             case DEFAULT -> StartAt.now();
             case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                return keepsNoPosition(ctx) ? null : StartAt.now();
+                return delegatesItsStart(ctx) ? null : StartAt.now();
             });
         };
     }
@@ -141,7 +142,7 @@ class StartPositionSupport {
         return switch (resumeBehavior) {
             case DEFAULT -> DcbStartAt.now();
             case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> {
-                return keepsNoPosition(ctx) ? null : DcbStartAt.now();
+                return delegatesItsStart(ctx) ? null : DcbStartAt.now();
             });
         };
     }
@@ -181,7 +182,7 @@ class StartPositionSupport {
     private DcbStartAt replayThenResume(String subscriptionId, DcbStartAt replayStart, ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> {
-                return keepsNoPosition(ctx) ? null : replayStart;
+                return delegatesItsStart(ctx) ? null : replayStart;
             });
             case DEFAULT -> DcbStartAt.dynamic(ctx -> {
                 CheckpointStorage checkpointStorage = applicationContext.getBean(CheckpointStorage.class);
@@ -198,7 +199,7 @@ class StartPositionSupport {
         return switch (startPositionToUse) {
             case StartPositionToUse.StartAtISO8601 iso8601 -> switch (resumeBehavior) {
                 case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                    if (keepsNoPosition(ctx)) {
+                    if (delegatesItsStart(ctx)) {
                         // The subscription always starts and resumes at the same place, so it is in-memory only. The competing
                         // consumer must not kick in and the durable model has no position to store, so both delegate to the parent.
                         return null;
@@ -228,7 +229,7 @@ class StartPositionSupport {
             case StartPositionToUse.StartAtStartPosition startAtStartPosition -> switch (startAtStartPosition.startPosition) {
                 case BEGINNING_OF_TIME -> switch (resumeBehavior) {
                     case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                        if (keepsNoPosition(ctx)) {
+                        if (delegatesItsStart(ctx)) {
                             // The subscription always starts and resumes at the same place, so it is in-memory only. The competing
                             // consumer must not kick in and the durable model has no position to store, so both delegate to the parent.
                             return null;
