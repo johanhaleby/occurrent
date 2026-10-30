@@ -373,8 +373,6 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     private void runEnded(InternalSubscription internalSubscription, Run run, Throwable throwable) {
         String subscriptionId = internalSubscription.subscriptionId;
         log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
-        // No-op if the subscription had already started, otherwise this keeps waitUntilStarted() from hanging forever
-        run.failedToStart(throwable);
         run.close();
         synchronized (this) {
             // A dead subscription must not count as running, or isRunning(id) would lie and the id couldn't be reused
@@ -385,6 +383,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 runningSubscriptions.remove(subscriptionId, internalSubscription);
             }
         }
+        // After the id is free, so a caller that reacts to the failure can subscribe with it again. No-op if the
+        // subscription had already started, otherwise this keeps waitUntilStarted() from hanging forever
+        run.failedToStart(throwable);
     }
 
     private Flux<Void> reads(InternalSubscription internalSubscription, Run run) {

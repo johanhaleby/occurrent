@@ -437,6 +437,57 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
+        void the_id_of_a_refused_subscription_is_free_when_its_handle_fails() throws Exception {
+            // Given a position that fails once, so the retry asks it again off the subscribing thread and the handle exists by then
+            String subscriptionId = UUID.randomUUID().toString();
+            AtomicInteger calls = new AtomicInteger();
+            CountDownLatch mayAnswer = new CountDownLatch(1);
+            StartAt startAt = StartAt.dynamic(ctx -> {
+                if (calls.incrementAndGet() == 1) {
+                    throw new IllegalStateException("Fails once");
+                }
+                try {
+                    mayAnswer.await(20, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return StartAt.checkpoint(GlobalCheckpoint.of(0));
+            });
+            AtomicReference<Boolean> runningInTheCallback = new AtomicReference<>();
+            AtomicReference<Throwable> thrownBySubscribingAgain = new AtomicReference<>();
+            AtomicReference<Subscription> subscribedAgain = new AtomicReference<>();
+            CountDownLatch called = new CountDownLatch(1);
+
+            // And the handle's failure is reacted to by subscribing with the same id, on the thread that emits it
+            Subscription refused = subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.empty());
+            try {
+                refused.waitUntilStarted().doOnError(throwable -> {
+                    runningInTheCallback.set(subscription.isRunning(subscriptionId));
+                    thrownBySubscribingAgain.set(catchThrowable(() ->
+                            subscribedAgain.set(subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.empty()))));
+                    called.countDown();
+                }).subscribe(__ -> {
+                }, __ -> {
+                });
+
+                // When the position answers a catchup checkpoint, which refuses the subscription
+                mayAnswer.countDown();
+
+                // Then the id is free when the handle fails, so subscribing with it again throws nothing
+                assertThat(called.await(10, SECONDS)).isTrue();
+                assertAll(
+                        () -> assertThat(runningInTheCallback.get()).isFalse(),
+                        () -> assertThat(thrownBySubscribingAgain.get()).isNull()
+                );
+            } finally {
+                mayAnswer.countDown();
+                if (subscribedAgain.get() != null) {
+                    subscription.cancelSubscription(subscriptionId).block(Duration.ofSeconds(10));
+                }
+            }
+        }
+
+        @Test
         void the_flux_subscribed_at_a_dynamic_position_answering_a_global_checkpoint_fails_when_subscribed_to() {
             assertFluxAtADynamicPositionFailsWhenSubscribedTo(GlobalCheckpoint.of(0), startAt -> subscription.subscribe(startAt));
         }

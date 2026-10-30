@@ -552,8 +552,9 @@ public class MongoCommons {
      * model resolves the position, as the change stream opens.
      * <p>
      * An answer after that isn't checked. When the earlier answer was a position of its own rather than the present, the
-     * subscription model asks again as a change stream opens again before the first event, and such an answer opens later
-     * than the earlier one and can skip what was written between the two.
+     * subscription model asks again as a change stream opens again before the first event, and such an answer opens at
+     * another position than the earlier one. It can skip what the earlier one would have delivered, or deliver what it
+     * wouldn't have.
      *
      * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
      * @param opened         Whether a change stream of the subscription has opened, as the model's handle counts it

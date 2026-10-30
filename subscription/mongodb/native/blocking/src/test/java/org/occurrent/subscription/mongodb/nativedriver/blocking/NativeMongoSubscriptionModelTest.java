@@ -1713,6 +1713,52 @@ public class NativeMongoSubscriptionModelTest {
         }
 
         @Test
+        void a_resume_that_answered_it_started_ends_the_check_before_its_handle_is_released() throws Exception {
+            // Given a paused subscription whose position answers a live checkpoint first and a global checkpoint after
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint live = liveStart();
+            AtomicInteger answers = new AtomicInteger();
+            CountDownLatch positionAsked = new CountDownLatch(1);
+            CountDownLatch positionMayAnswer = new CountDownLatch(1);
+            CountDownLatch held = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            Subscription original = subscriptionModel.subscribePaused(subscriptionId, null, StartAt.dynamic(ctx -> {
+                if (answers.incrementAndGet() == 1) {
+                    positionAsked.countDown();
+                    awaitUpToTenSeconds(positionMayAnswer);
+                    return StartAt.checkpoint(live);
+                }
+                return StartAt.checkpoint(GlobalCheckpoint.of(0));
+            }), __ -> {
+            });
+            try {
+                // And a resume whose thread is held right after it released the handle of the resume
+                Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+                assertThat(positionAsked.await(10, SECONDS)).isTrue();
+                replaceLatchOfTheRunOf(subscriptionModel, subscriptionId, "startedLatch", own -> new HoldsAfterReleasingTheStartedLatch(own, held, release));
+                positionMayAnswer.countDown();
+                assertThat(resumed.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+                assertThat(held.await(10, SECONDS)).isTrue();
+
+                // When the subscription is paused and resumed while the thread is held, and the second run has answered
+                boolean[] secondRunStarted = new boolean[1];
+                subscriptionModel.pauseSubscription(subscriptionId);
+                Subscription resumedAgain = subscriptionModel.resumeSubscription(subscriptionId);
+                Throwable thrownByTheSecondRun = catchThrowable(() -> secondRunStarted[0] = resumedAgain.waitUntilStarted(Duration.ofSeconds(5)));
+                release.countDown();
+
+                // Then the second run isn't refused, since a change stream has opened, and the original handle doesn't throw
+                assertThat(thrownByTheSecondRun).isNull();
+                assertThat(secondRunStarted[0]).isTrue();
+                assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+                Throwable thrownByTheOriginal = catchThrowable(() -> original.waitUntilStarted(Duration.ofSeconds(5)));
+                assertThat(thrownByTheOriginal).isNull();
+            } finally {
+                release.countDown();
+            }
+        }
+
+        @Test
         void a_refused_run_stays_known_until_its_failure_is_recorded() throws Exception {
             // Given a run whose position waits to answer a global checkpoint, and a started latch whose first read, made
             // while the failure of the run is recorded, holds the thread until released
@@ -2024,6 +2070,33 @@ public class NativeMongoSubscriptionModelTest {
                 look.run();
             }
             own.countDown();
+        }
+
+        @Override
+        public long getCount() {
+            return own.getCount();
+        }
+    }
+
+    // Replaces the latch a resume releases its handle through. The thread that counts it down is held right after
+    // that, before it records that the subscription started
+    private static final class HoldsAfterReleasingTheStartedLatch extends CountDownLatch {
+        private final CountDownLatch own;
+        private final CountDownLatch held;
+        private final CountDownLatch release;
+
+        private HoldsAfterReleasingTheStartedLatch(CountDownLatch own, CountDownLatch held, CountDownLatch release) {
+            super(1);
+            this.own = own;
+            this.held = held;
+            this.release = release;
+        }
+
+        @Override
+        public void countDown() {
+            own.countDown();
+            held.countDown();
+            awaitUpToTenSeconds(release);
         }
 
         @Override

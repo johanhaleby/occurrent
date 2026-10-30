@@ -502,8 +502,9 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     /**
      * {@code false} for a checkpoint the change stream can't open at, such as a catch-up's position
-     * ({@code GlobalCheckpoint}) or a time. A subscribe at a {@code GlobalCheckpoint} is refused, a subscribe at a time
-     * starts at the present, and a resume at either goes on from the position the subscription has read to.
+     * ({@code GlobalCheckpoint}, {@code CatchupTimeCheckpoint}) or a {@code TimeBasedCheckpoint}. A subscribe at a
+     * catch-up's position is refused, a subscribe at a {@code TimeBasedCheckpoint} starts at the present, and a resume at
+     * any of them goes on from the position the subscription has read to.
      */
     @Override
     public boolean restartsAt(Checkpoint checkpoint) {

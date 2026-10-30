@@ -1306,8 +1306,8 @@ public final class ChangeStreamSubscriptions {
         }
 
         void started() {
-            startedLatch.countDown();
             firstStart.started();
+            startedLatch.countDown();
         }
 
         // Only for a run that is still in the map, so a pause or a resume can't come after it. A handle that has already

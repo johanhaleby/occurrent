@@ -935,8 +935,8 @@ The function is checked until a change stream of the subscription has opened. On
 cursor opened, so an answer from an opening that a pause or a failure stopped doesn't end the check. On the reactor
 model it means its `Flux` was subscribed to, so a pause after that, or an answer the server rejects, ends it. A position
 the function returns after that isn't checked. When its earlier answer was a resume token or an operation time and a
-change stream opens again before the first event, one of these checkpoints from the function opens later than that
-earlier answer, and can skip what was written between the two.
+change stream opens again before the first event, one of these checkpoints from the function opens at another position
+than that earlier answer. It can skip what the earlier answer would have delivered, or deliver what it wouldn't have.
 
 ### Who is affected
 
