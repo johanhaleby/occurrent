@@ -21,6 +21,7 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -65,6 +66,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -166,10 +168,12 @@ class ReactorStreamCatchupDynamicStartCancelMongoTest {
         assertThat(mongoRunsXWhenTheBlockReturned.get()).as("whether the Mongo model runs x when the block returned").isFalse();
         assertThat(catchupRunsXWhenTheBlockReturned.get()).as("whether the catch-up model runs x when the block returned").isFalse();
 
-        // The control was started first, so the event it gets is one a surviving x would have got too
+        // The control and x read separate change streams, so a surviving x can get the event after the control did.
+        // The negative is held for 3 seconds instead of read once at the latch.
         writeAnEvent();
         awaitLatch(controlGotTheEvent, DEADLINE, "The control subscription did not get the event");
-        assertThat(xGot).as("events the cancelled x got").isEmpty();
+        Awaitility.await("The cancelled x gets no event").during(3, SECONDS).atMost(5, SECONDS)
+                .untilAsserted(() -> assertThat(xGot).as("events the cancelled x got").isEmpty());
     }
 
     @Test

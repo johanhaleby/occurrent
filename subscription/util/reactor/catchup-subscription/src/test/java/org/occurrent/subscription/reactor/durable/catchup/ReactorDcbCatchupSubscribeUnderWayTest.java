@@ -17,6 +17,7 @@
 package org.occurrent.subscription.reactor.durable.catchup;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -34,6 +35,7 @@ import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptio
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
@@ -55,7 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * A subscribe that goes straight to live calls the wrapped model's {@code subscribe(..)}, which can call the caller's
  * dynamic {@link StartAt} again on the calling thread. That call holds no lock of the catch-up model, so the function
  * can cancel another subscription through the catch-up, and a cancel of an id whose subscribe is under way returns
- * without waiting for it. Code on the thread of the wrapped subscribe is neither refused nor made to wait for it. A thread
+ * without waiting for it. On the calling thread a cancel does not wait, and a subscribe gets the other checks. A thread
  * that never returns fails its test at the deadline rather than hanging the build.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -161,10 +163,91 @@ class ReactorDcbCatchupSubscribeUnderWayTest {
         assertThat(wrapped.isRunning("x")).as("whether the wrapped model runs x").isFalse();
     }
 
+    @Test
+    void an_event_the_wrapped_model_delivers_while_the_wrapped_subscribe_is_under_way_reaches_the_action_when_the_id_was_not_cancelled() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.registersBeforeTheStart = true;
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(wrapped, new UnusedDcbEventStore());
+        HeldStart held = new HeldStart();
+        List<String> reached = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.fromRunnable(() -> reached.add(cloudEvent.getId())))).start();
+        held.awaitInside();
+
+        wrapped.deliver("x", anEvent("e1"));
+        held.release();
+
+        await(subscribeOfX, "The subscribe of x did not return");
+        assertThat(reached).as("events that reached the action of x").containsExactly("e1");
+    }
+
+    @Test
+    void an_event_the_wrapped_model_delivers_after_a_cancel_from_another_thread_returned_does_not_reach_the_action_though_the_wrapped_subscribe_is_still_under_way() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.registersBeforeTheStart = true;
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(wrapped, new UnusedDcbEventStore());
+        HeldStart held = new HeldStart();
+        List<String> reached = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.fromRunnable(() -> reached.add(cloudEvent.getId())))).start();
+        held.awaitInside();
+        CompletableFuture<Void> cancel = cancelFromAnotherThread(catchup, "x");
+        assertThat(cancel).as("a cancel of x issued while the wrapped subscribe of x is under way").isNotDone();
+
+        wrapped.deliver("x", anEvent("e1"));
+        held.release();
+
+        await(subscribeOfX, "The subscribe of x did not return");
+        await(cancel, "The cancel of x did not complete");
+        assertThat(reached).as("events that reached the action of x after its cancel returned").isEmpty();
+    }
+
     // Keeps the time the threads of a test take to load these classes out of what the deadline measures
     private static void loadClassesOfASubscribeAndACancel(ReactorDcbCatchupSubscriptionModel catchup) {
         catchup.subscribe("warm-up", FILTER, StartAt.now(), cloudEvent -> Mono.empty());
         catchup.cancelSubscription("warm-up").block(STARTUP);
+    }
+
+    private static CloudEvent anEvent(String id) {
+        return DcbCloudEvents.withTags(CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("type").build(), Set.of());
+    }
+
+    // The call itself runs on a thread of its own, so a call that blocks fails at the deadline
+    private static CompletableFuture<Void> cancelFromAnotherThread(ReactorDcbCatchupSubscriptionModel catchup, String subscriptionId) {
+        CompletableFuture<Mono<Void>> cancelling = new CompletableFuture<>();
+        CountDownLatch running = new CountDownLatch(1);
+        Thread thread = daemon("cancel-" + subscriptionId, new CompletableFuture<>(), () -> {
+            running.countDown();
+            cancelling.complete(catchup.cancelSubscription(subscriptionId));
+        });
+        thread.start();
+        awaitLatch(running, STARTUP, "The thread cancel-" + subscriptionId + " never started");
+        return awaitValue(cancelling, "The cancel of " + subscriptionId + " did not return, " + describe(thread)).toFuture();
+    }
+
+    // A start that answers null to the catch-up and then waits in the call the wrapped model makes, until released
+    private static final class HeldStart {
+        private final CountDownLatch inside = new CountDownLatch(1);
+        private final CountDownLatch released = new CountDownLatch(1);
+
+        StartAt startAt() {
+            return StartAt.dynamic(context -> {
+                if (context.hasSubscriptionModelType(ReactorDcbCatchupSubscriptionModel.class)) {
+                    return null;
+                }
+                inside.countDown();
+                awaitLatch(released, DEADLINE.multipliedBy(2), "The wrapped subscribe was never released");
+                return StartAt.now();
+            });
+        }
+
+        void awaitInside() {
+            awaitLatch(inside, STARTUP, "The wrapped model never evaluated the start");
+        }
+
+        void release() {
+            released.countDown();
+        }
     }
 
     // Answers null to the catch-up, which sends the subscribe straight to live, and cancels the other id from the call
@@ -236,6 +319,7 @@ class ReactorDcbCatchupSubscribeUnderWayTest {
         final Set<String> paused = ConcurrentHashMap.newKeySet();
         // Holds the id from before it evaluates the start, as ReactorMongoSubscriptionModel does
         volatile boolean registersBeforeTheStart;
+        final Map<String, List<Function<CloudEvent, Mono<Void>>>> actions = new ConcurrentHashMap<>();
 
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
@@ -254,6 +338,7 @@ class ReactorDcbCatchupSubscribeUnderWayTest {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            actions.computeIfAbsent(subscriptionId, id -> new CopyOnWriteArrayList<>()).add(action);
             if (registersBeforeTheStart) {
                 register(subscriptionId);
             }
@@ -262,6 +347,11 @@ class ReactorDcbCatchupSubscribeUnderWayTest {
                 register(subscriptionId);
             }
             return handle(subscriptionId);
+        }
+
+        // Hands the event to each action of the id, the way the wrapped model does for an event it reads
+        void deliver(String subscriptionId, CloudEvent event) {
+            actions.getOrDefault(subscriptionId, List.of()).forEach(action -> action.apply(event).block(BLOCKED));
         }
 
         private void register(String subscriptionId) {

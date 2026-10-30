@@ -17,10 +17,12 @@
 package org.occurrent.subscription.reactor.durable.catchup;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
@@ -32,6 +34,7 @@ import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptio
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
@@ -55,9 +58,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * dynamic {@link StartAt} again on the calling thread. That call holds no lock of the catch-up model, so the function
  * can cancel another subscription through the catch-up. A cancel of an id whose subscribe is under way returns without
  * waiting for it, and its Mono completes once the subscribe returned and the wrapped model cancelled what it made. A
- * second subscribe of that id is refused meanwhile. Code on the thread of the wrapped subscribe is neither refused nor
- * made to wait for it. A thread that never returns fails its test at the deadline rather
- * than hanging the build.
+ * second subscribe of that id is refused meanwhile. On the calling thread a cancel does not wait, and a subscribe gets
+ * the other checks. A thread that never returns fails its test at the deadline rather than hanging the build.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorCatchupSubscribeUnderWayTest {
@@ -340,10 +342,91 @@ class ReactorCatchupSubscribeUnderWayTest {
         assertThat(wrapped.events).as("what the wrapped model was told").containsOnlyOnce("subscribed:x");
     }
 
+    @Test
+    void an_event_the_wrapped_model_delivers_while_the_wrapped_subscribe_is_under_way_reaches_the_action_when_the_id_was_not_cancelled() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.registersBeforeTheStart = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        HeldStart held = new HeldStart();
+        List<String> reached = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.fromRunnable(() -> reached.add(cloudEvent.getId())))).start();
+        held.awaitInside();
+
+        wrapped.deliver("x", anEvent("e1"));
+        held.release();
+
+        await(subscribeOfX, "The subscribe of x did not return");
+        assertThat(reached).as("events that reached the action of x").containsExactly("e1");
+    }
+
+    @Test
+    void an_event_the_wrapped_model_delivers_after_a_cancel_from_another_thread_returned_does_not_reach_the_action_though_the_wrapped_subscribe_is_still_under_way() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.registersBeforeTheStart = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        HeldStart held = new HeldStart();
+        List<String> reached = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.fromRunnable(() -> reached.add(cloudEvent.getId())))).start();
+        held.awaitInside();
+        CompletableFuture<Void> cancel = returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture());
+        assertThat(cancel).as("a cancel of x issued while the wrapped subscribe of x is under way").isNotDone();
+
+        wrapped.deliver("x", anEvent("e1"));
+        held.release();
+
+        await(subscribeOfX, "The subscribe of x did not return");
+        await(cancel, "The cancel of x did not complete");
+        assertThat(reached).as("events that reached the action of x after its cancel returned").isEmpty();
+    }
+
+    @Test
+    void a_cancel_from_another_thread_stops_the_action_of_a_nested_subscribe_of_the_id_that_shares_the_entry_of_the_outer_subscribe() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.registersBeforeTheStart = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        loadClassesOfASubscribeAndACancel(catchup);
+        wrapped.events.clear();
+        HeldStart held = new HeldStart();
+        List<String> outerReached = new CopyOnWriteArrayList<>();
+        List<String> innerReached = new CopyOnWriteArrayList<>();
+        AtomicReference<Throwable> nestedFailure = new AtomicReference<>();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, StartAt.dynamic(context -> {
+            if (context.hasSubscriptionModelType(ReactorStreamCatchupSubscriptionModel.class)) {
+                return null;
+            }
+            try {
+                catchup.cancelSubscription("x").subscribe();
+                catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> innerReached.add(cloudEvent.getId())));
+            } catch (Throwable t) {
+                nestedFailure.set(t);
+            }
+            return held.startAt().get(context);
+        }), cloudEvent -> Mono.fromRunnable(() -> outerReached.add(cloudEvent.getId())))).start();
+        held.awaitInside();
+        wrapped.deliver("x", anEvent("before"));
+        CompletableFuture<Void> cancel = returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture());
+
+        wrapped.deliver("x", anEvent("after"));
+        held.release();
+
+        await(subscribeOfX, "The subscribe of x did not return");
+        await(cancel, "The cancel of x did not complete");
+        assertThat(nestedFailure.get()).as("what the nested subscribe of x threw").isNull();
+        assertThat(innerReached).as("events that reached the action of the nested subscribe").containsExactly("before");
+        assertThat(outerReached).as("events that reached the action of the outer subscribe").containsExactly("before");
+    }
+
     // Keeps the time the threads of a test take to load these classes out of what the deadline measures
     private static void loadClassesOfASubscribeAndACancel(ReactorStreamCatchupSubscriptionModel catchup) {
         catchup.subscribe("warm-up", FILTER, StartAt.now(), cloudEvent -> Mono.empty());
         catchup.cancelSubscription("warm-up").block(STARTUP);
+    }
+
+    private static CloudEvent anEvent(String id) {
+        return OccurrentCloudEventExtension.withPosition(CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("type").build(), 1);
     }
 
     // Answers null to the catch-up, which sends the subscribe straight to live, and cancels the other id from the call
@@ -508,6 +591,8 @@ class ReactorCatchupSubscribeUnderWayTest {
         final Map<String, Runnable> onCancel = new ConcurrentHashMap<>();
         // Holds the id from before it evaluates the start, as ReactorMongoSubscriptionModel does
         volatile boolean registersBeforeTheStart;
+        // Every action each id was subscribed with, since a nested subscribe of an id adds one
+        final Map<String, List<Function<CloudEvent, Mono<Void>>>> actions = new ConcurrentHashMap<>();
 
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
@@ -526,6 +611,7 @@ class ReactorCatchupSubscribeUnderWayTest {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            actions.computeIfAbsent(subscriptionId, id -> new CopyOnWriteArrayList<>()).add(action);
             if (registersBeforeTheStart) {
                 register(subscriptionId);
             }
@@ -537,6 +623,11 @@ class ReactorCatchupSubscribeUnderWayTest {
                 register(subscriptionId);
             }
             return handle(subscriptionId);
+        }
+
+        // Hands the event to each action of the id, the way the wrapped model does for an event it reads
+        void deliver(String subscriptionId, CloudEvent event) {
+            actions.getOrDefault(subscriptionId, List.of()).forEach(action -> action.apply(event).block(BLOCKED));
         }
 
         private void register(String subscriptionId) {
