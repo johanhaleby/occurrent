@@ -72,6 +72,9 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -487,6 +490,46 @@ public class ReactorMongoSubscriptionModelTest {
                 if (subscribedAgain.get() != null) {
                     subscription.cancelSubscription(subscriptionId).block(Duration.ofSeconds(10));
                 }
+            }
+        }
+
+        @Test
+        void a_caller_holding_the_model_while_it_waits_for_a_refused_start_is_told_of_the_refusal() throws Exception {
+            // Given a position that fails with a plain exception first, so nothing subscribes and the handle stays unanswered,
+            // and answers a catchup checkpoint when the backoff asks again on its retry thread
+            String subscriptionId = UUID.randomUUID().toString();
+            AtomicInteger asks = new AtomicInteger();
+            StartAt answered = StartAt.checkpoint(GlobalCheckpoint.of(0));
+            StartAt startAt = StartAt.dynamic(ctx -> {
+                if (asks.incrementAndGet() == 1) {
+                    throw new IllegalStateException("Fails once");
+                }
+                return answered;
+            });
+            ExecutorService caller = Executors.newSingleThreadExecutor();
+            try {
+                // When a caller subscribes and waits for the start while it holds the model's monitor
+                Future<Throwable> waitFailure = caller.submit(() -> {
+                    synchronized (subscription) {
+                        Subscription refused = subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.empty());
+                        return catchThrowable(() -> refused.waitUntilStarted().block(Duration.ofSeconds(5)));
+                    }
+                });
+
+                // Then the wait fails with the refusal inside a bound far above the backoff
+                Throwable throwable = waitFailure.get(15, SECONDS);
+                assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                        .hasMessageContaining("subscription \"" + subscriptionId + "\"")
+                        .hasMessageContaining("\"" + GlobalCheckpoint.of(0).asString() + "\"")
+                        .satisfies(unsupported -> assertThat(((UnsupportedStartAtException) unsupported).startAt()).isSameAs(answered));
+                assertThat(asks).hasValue(2);
+
+                // And the id is free
+                assertThat(subscription.isRunning(subscriptionId)).isFalse();
+                Subscription again = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.empty());
+                assertThat(again.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            } finally {
+                caller.shutdownNow();
             }
         }
 

@@ -374,15 +374,11 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         String subscriptionId = internalSubscription.subscriptionId;
         log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
         run.close();
-        synchronized (this) {
-            // A dead subscription must not count as running, or isRunning(id) would lie and the id couldn't be reused
-            // without an explicit cancelSubscription(). Only while this run is still the subscription's, since a pause
-            // and a resume, or a cancel and a new subscription with the same id, start a newer run.
-            if (internalSubscription.run == run) {
-                internalSubscription.run = null;
-                runningSubscriptions.remove(subscriptionId, internalSubscription);
-            }
-        }
+        // A dead subscription must not count as running, or isRunning(id) would lie and the id couldn't be reused
+        // without an explicit cancelSubscription(). Only while this run is still the subscription's, since a pause
+        // and a resume, or a cancel and a new subscription with the same id, start a newer run. Without the monitor,
+        // since a caller can hold it while it waits for the failure published below.
+        runningSubscriptions.computeIfPresent(subscriptionId, (id, current) -> current.run == run ? null : current);
         // After the id is free, so a caller that reacts to the failure can subscribe with it again. No-op if the
         // subscription had already started, otherwise this keeps waitUntilStarted() from hanging forever
         run.failedToStart(throwable);
@@ -843,10 +839,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             requireKnown(subscriptionId);
             if (isPaused(subscriptionId)) {
                 throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
-            } else if (!isRunning(subscriptionId)) {
-                throw new SubscriptionNotRunningException(subscriptionId);
             }
             run = pause(subscriptionId);
+            // A run that ends frees its id without the monitor, so the id can be gone by now
+            if (run == null) {
+                throw new SubscriptionNotRunningException(subscriptionId);
+            }
         }
         closeOutsideTheMonitor(run);
     }
@@ -1060,8 +1058,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         // cursor that's the cursor answering, on Spring's changeStream the subscribe
         final AtomicBoolean opened;
         final Function<CloudEvent, Mono<Void>> action;
-        // The run that reads for the subscription while it's running. Read and written only while holding the model's monitor
-        @Nullable Run run;
+        // The run that reads for the subscription while it's running. Written only while holding the model's monitor.
+        // A run that ends compares itself to it without the monitor.
+        volatile @Nullable Run run;
 
         private InternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt, AtomicBoolean opened, Function<CloudEvent, Mono<Void>> action) {
             this.subscriptionId = subscriptionId;
