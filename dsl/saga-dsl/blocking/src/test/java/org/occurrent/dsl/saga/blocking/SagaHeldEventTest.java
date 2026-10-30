@@ -494,7 +494,7 @@ class SagaHeldEventTest {
         @Test
         void an_event_that_finds_the_instance_started_after_it_was_held_is_applied_by_its_own_delivery_exactly_once() {
             // Given
-            ReadsAnEmptyInstanceOnce racing = new ReadsAnEmptyInstanceOnce(store);
+            ScriptedStore racing = new ScriptedStore(store);
             SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(racing, SagaRunnerConfig.defaults());
             deliver(execution, placedAt(1));
             racing.nextFindMissesTheInstance();
@@ -513,7 +513,7 @@ class SagaHeldEventTest {
         @Test
         void an_event_that_finds_the_instance_completed_after_it_was_held_is_released_and_its_reaction_does_not_run() {
             // Given
-            ReadsAnEmptyInstanceOnce racing = new ReadsAnEmptyInstanceOnce(store);
+            ScriptedStore racing = new ScriptedStore(store);
             SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(racing, SagaRunnerConfig.defaults());
             deliver(execution, placedAt(1));
             deliver(execution, paymentAt(PAYMENT_STREAM, 1));
@@ -526,6 +526,152 @@ class SagaHeldEventTest {
             assertAll(
                     () -> assertThat(thrown).isNull(),
                     () -> assertThat(issued).containsExactly(new OpenLedger(ORDER), new Ship(ORDER)),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+    }
+
+    @Nested
+    @DisplayName("when other deliveries start the instance and move it past the event's reorder window before the hold")
+    class WhenOtherDeliveriesMoveTheInstancePastTheEventBeforeTheHold {
+
+        private ScriptedStore racing;
+        private SagaExecution<OrderEvent, Order, OrderCommand> execution;
+
+        @BeforeEach
+        void readAnAbsentInstanceThenLetOtherDeliveriesStartAndAdvanceIt() {
+            racing = new ScriptedStore(store);
+            execution = execution(racing, SagaRunnerConfig.defaults().withReorderWindow(1));
+            racing.nextFindMissesTheInstance();
+            racing.beforeNextHold(() -> {
+                deliver(execution, placedAt(1));
+                deliver(execution, itemAt(3, "three"));
+                deliver(execution, itemAt(4, "four"));
+            });
+        }
+
+        @Test
+        void the_reaction_of_the_event_runs_exactly_once_in_its_own_delivery() {
+            // When
+            Throwable thrown = catchThrowable(() -> deliver(execution, itemAt(2, "two")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(issued).containsExactlyInAnyOrder(new OpenLedger(ORDER), new Reserve(ORDER, "three"), new Reserve(ORDER, "four"), new Reserve(ORDER, "two")));
+        }
+
+        @Test
+        void the_held_copy_of_the_event_is_released() {
+            // When
+            deliver(execution, itemAt(2, "two"));
+
+            // Then
+            assertThat(heldKeys()).isEmpty();
+        }
+
+        @Test
+        void a_second_delivery_of_the_event_does_not_apply_it_again() {
+            // Given
+            deliver(execution, itemAt(2, "two"));
+            issued.clear();
+
+            // When
+            deliver(execution, itemAt(2, "two"));
+
+            // Then
+            assertThat(issued).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("when an event without a stream key finds its instance started after it was held")
+    class WhenAnEventWithoutAStreamKeyFindsTheInstanceStartedAfterItWasHeld {
+
+        @Test
+        void it_is_applied_exactly_once_because_its_held_copy_stands_for_it() {
+            // Given
+            ScriptedStore racing = new ScriptedStore(store);
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(racing, SagaRunnerConfig.defaults().withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT));
+            racing.nextFindMissesTheInstance();
+            racing.beforeNextHold(() -> deliver(execution, placedAt(1)));
+
+            // When
+            deliver(execution, unkeyedItem("book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER), new Reserve(ORDER, "book")),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+    }
+
+    @Nested
+    @DisplayName("when two events held for one instance could be taken for one event")
+    class WhenTwoHeldEventsCouldBeTakenForOneEvent {
+
+        private SagaExecution<OrderEvent, Order, OrderCommand> bestEffortExecution() {
+            return execution(store, SagaRunnerConfig.defaults().withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT));
+        }
+
+        private CloudEvent unkeyedItemFrom(String eventId, String source, String item) {
+            return CloudEventBuilder.v1(converter.toCloudEvent(new ItemAdded(eventId, ORDER, item))).withSource(URI.create(source)).build();
+        }
+
+        @Test
+        void a_keyed_event_and_an_event_without_a_stream_key_whose_id_and_source_spell_the_same_text_are_both_applied_when_the_start_arrives() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = bestEffortExecution();
+            deliver(execution, itemAt("e from urn:test", 2, "keyed"));
+            deliver(execution, unkeyedItemFrom("e", "urn:test@2", "unkeyed"));
+
+            // When
+            deliver(execution, placedAt(1));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactlyInAnyOrder(new OpenLedger(ORDER), new Reserve(ORDER, "keyed"), new Reserve(ORDER, "unkeyed")),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+
+        @Test
+        void the_same_event_without_a_stream_key_delivered_twice_is_still_held_once_and_applied_once() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = bestEffortExecution();
+            deliver(execution, unkeyedItemFrom("e", "urn:test@2", "unkeyed"));
+            deliver(execution, unkeyedItemFrom("e", "urn:test@2", "unkeyed"));
+
+            // When
+            deliver(execution, placedAt(1));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER), new Reserve(ORDER, "unkeyed")),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+    }
+
+    @Nested
+    @DisplayName("when a drain applies many held copies")
+    class WhenADrainAppliesManyHeldCopies {
+
+        @Test
+        void no_save_in_the_drain_carries_more_than_the_key_of_the_copy_whose_release_is_still_to_come() {
+            // Given
+            ScriptedStore observing = new ScriptedStore(store);
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(observing, SagaRunnerConfig.defaults());
+            for (int version = 2; version <= 6; version++) {
+                deliver(execution, itemAt(version, "item-" + version));
+            }
+
+            // When
+            deliver(execution, placedAt(1));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).hasSize(6),
+                    () -> assertThat(observing.drainedHeldKeysOfEverySave()).as("the save that starts the instance, a save for each of the five copies and the save that ends the drain").hasSize(7),
+                    () -> assertThat(observing.drainedHeldKeysOfEverySave()).allSatisfy(keys -> assertThat(keys).hasSizeLessThanOrEqualTo(1)),
+                    () -> assertThat(store.find(ORDER).orElseThrow().drainedHeldKeys()).isEmpty(),
                     () -> assertThat(heldKeys()).isEmpty());
         }
     }
@@ -860,19 +1006,32 @@ class SagaHeldEventTest {
 
     /**
      * An in-memory store whose next read of the instance by {@code find} answers that there is none, as a read that
-     * happened before another delivery wrote it would. Every other read, and every write, sees the instance.
+     * happened before another delivery wrote it would, and that can run something just before the next hold, as a
+     * delivery that paused between its read and its hold would let other deliveries do. Every other read, and every
+     * write, sees the instance. It records the drained held keys of every instance it saves.
      */
-    private static final class ReadsAnEmptyInstanceOnce implements SagaStateStore<Order>, SagaHeldEvents<Order> {
+    private static final class ScriptedStore implements SagaStateStore<Order>, SagaHeldEvents<Order> {
 
         private final InMemorySagaStateStore<Order> delegate;
         private final AtomicBoolean missNextFind = new AtomicBoolean();
+        private final AtomicReference<@Nullable Runnable> beforeNextHold = new AtomicReference<>();
+        private final List<Set<String>> drainedHeldKeysOfEverySave = new CopyOnWriteArrayList<>();
 
-        ReadsAnEmptyInstanceOnce(InMemorySagaStateStore<Order> delegate) {
+        ScriptedStore(InMemorySagaStateStore<Order> delegate) {
             this.delegate = delegate;
         }
 
         void nextFindMissesTheInstance() {
             missNextFind.set(true);
+        }
+
+        /** Runs once, just before the next hold, which then goes through. */
+        void beforeNextHold(Runnable action) {
+            beforeNextHold.set(action);
+        }
+
+        List<Set<String>> drainedHeldKeysOfEverySave() {
+            return drainedHeldKeysOfEverySave;
         }
 
         @Override
@@ -887,6 +1046,7 @@ class SagaHeldEventTest {
 
         @Override
         public boolean compareAndSave(String sagaId, SagaEnvelope<Order> envelope, long expectedVersion) {
+            drainedHeldKeysOfEverySave.add(envelope.drainedHeldKeys());
             return delegate.compareAndSave(sagaId, envelope, expectedVersion);
         }
 
@@ -902,6 +1062,10 @@ class SagaHeldEventTest {
 
         @Override
         public boolean hold(String sagaId, HeldEvent event) {
+            Runnable before = beforeNextHold.getAndSet(null);
+            if (before != null) {
+                before.run();
+            }
             return delegate.hold(sagaId, event);
         }
 

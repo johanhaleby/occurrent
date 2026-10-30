@@ -671,6 +671,19 @@ class SagaExecutionSupportHeldEventsTest {
         }
 
         @Test
+        void the_save_forgets_the_released_keys_and_keeps_the_others_beside_the_key_of_the_copy_it_adds() {
+            // Given
+            SagaEnvelope<OrderState> instance = startedWith(Set.of("released@1", "waiting@2"), Set.of());
+            HeldContext heldCopy = new HeldContext(false, STREAM + "@5", false, Set.of("released@1"));
+
+            // When
+            Outcome<OrderState, OrderCommand> outcome = process(instance, itemAdded(), metaAt(STREAM, 5), heldCopy);
+
+            // Then
+            assertThat(outcome.envelope().drainedHeldKeys()).containsExactlyInAnyOrder("waiting@2", STREAM + "@5");
+        }
+
+        @Test
         void the_save_leaves_the_instance_with_a_drain_due_when_none_ended_before_it() {
             // Given
             SagaEnvelope<OrderState> instance = startedWith(marksUpTo(50));
