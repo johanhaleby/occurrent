@@ -699,14 +699,14 @@ criteria than its read would then append on the read's criteria instead of throw
 
 ## Criteria with tags conflict on their tags
 
-On the MongoDB stores, the check of a conditional append reads only the tag markers of an item with tags, and no longer
-the markers of its types. Sharing a type with such an item is then no longer a reason for the check to refuse. A
-conditional append on such an item also increments a type marker of the item only when it appends an event of that type.
+On the MongoDB stores, the check of a conditional append with a token reads only the tag markers of an item with tags,
+and no longer the markers of its types. Sharing a type with such an item is then no longer a reason for the check to
+refuse. Such an item also no longer adds its type markers to what a conditional append increments.
 Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
 example. The MongoDB stores can still refuse an append the in-memory store accepts, for example after an event that has
-only one of the criteria's tags. An item without tags is checked against its type markers as before. The change is the
+only one of the criteria's tags. With a token, an item without tags is checked against its type markers as before. The change is the
 first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
 [ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
 describes it.
@@ -717,11 +717,12 @@ describes it.
   read, unless the markers were pruned in between ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)).
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
-- Nothing changes on disk, so 0.34.0 and 0.35.0 nodes can append to the same store. A conditional append from a 0.34.0
-  node still increments the type markers of its criteria, also for an item with tags. A 0.35.0 node increments a type
-  marker of such an item only when it appends an event of that type. A 0.35.0 check reads a type marker only for an item
+- This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the
+  limits in [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). A conditional
+  append from a 0.34.0 node still increments the type markers of its criteria, also for an item with tags. A conditional
+  append from a 0.35.0 node doesn't add them for such an item. A 0.35.0 check reads a type marker only for an item
   without tags, so a 0.34.0 increment can make that check refuse an append and the command retry, and it can't let an
-  append through. Going back to 0.34.0 is safe for the data.
+  append through. This change doesn't stop you going back to 0.34.0 either, within the same limits.
 
 ### Who is affected
 
@@ -733,7 +734,7 @@ describes it.
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
   succeed, so a store that still reads the type marker for an item with tags fails the case.
 - **Code that saved a token value.** For an item with both types and tags, a 0.34.0 token value is a sum over its tag
-  and type markers, and 0.35.0 compares it against the tag markers only. An old value can then let an append through
+  and type markers, and 0.35.0 no longer counts the type markers of that item. An old value can then let an append through
   that should have been refused. Read again instead, as
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
   says.

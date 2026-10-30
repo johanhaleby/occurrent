@@ -11,8 +11,7 @@ Accepted. Decides [#1228](https://github.com/johanhaleby/occurrent/issues/1228) 
 [ADR 31](0031-capture-dcb-consistency-token-in-a-single-read.md), [ADR 53](0053-dcb-api-freeze-consistency.md) and
 [ADR 88](0088-what-a-dcb-append-condition-guarantees.md).
 
-The second part of #1229 and [#1231](https://github.com/johanhaleby/occurrent/issues/1231) are not decided here,
-because both depend on how the MongoDB stores reserve positions.
+The second part of #1229 and [#1231](https://github.com/johanhaleby/occurrent/issues/1231) are not decided here.
 
 ## Context
 
@@ -124,15 +123,15 @@ because the stores live in other modules than the token, and a `DcbEventStore` o
 
 ### Upgrading
 
-Nothing changes on disk. The marker documents and their ids stay the same, so 0.34 and 0.35 nodes can append to the
-same store. A conditional append from a 0.35 node increments a type marker of an item with tags only when it appends an
-event of that type. A conditional append from a 0.34 node still increments type markers that 0.35
-doesn't read for criteria with tags. An append only ever raises a marker version, so an extra increment can make a
-check refuse an append and the command retry, and it can't make a check let one through. Going back to 0.34 is safe
-for the data.
+This change adds nothing on disk. The marker documents and their ids stay the same, so it doesn't stop 0.34 and 0.35
+nodes appending to the same store. An item with tags no longer adds its type markers to what a conditional append from
+a 0.35 node increments. A conditional append from a 0.34 node still increments type markers that 0.35 doesn't read for
+criteria with tags. An append only ever raises a marker version, so an extra increment can make a check refuse an append
+and the command retry, and it can't make a check let one through. This change doesn't stop you going back to 0.34
+either. The upgrade guide says what else in 0.35 limits a rolling upgrade or a rollback.
 
 A token value saved under 0.34 isn't valid on 0.35. For a criteria item with both types and tags it is a sum over tag
-and type markers, while 0.35 sums the tag markers only, so an old value can let an append through that should have been
+and type markers, while 0.35 no longer counts that item's type markers, so an old value can let an append through that should have been
 refused. The migration guide tells anyone who saved a token value, in an ETag or a queued command for example, to read
 again instead. Occurrent itself doesn't save a token.
 
@@ -184,7 +183,7 @@ catch that.
 - ADR 31 and ADR 53 decided that the token stays a `long`. This ADR reverses that, while ADR 31's single read stands.
 - The TCK gets tests for the refusal on every store. It also gets a test on every store that reads
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token, which succeeds. Its
-  control appends an `X` tagged `a` instead, and that append is refused. A store that still reads the type marker fails
+  control appends an `X` tagged `a` instead, and the append with the token is then refused. A store that still reads the type marker fails
   the first test, and a store that checks no marker fails the control.
 - `DcbConcurrencyConformance` gets two cases where a condition on a type and a tag races a condition on that type
   alone, and one on that tag alone, over the same event. That event matches both conditions, so these races show that
