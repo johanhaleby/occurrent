@@ -101,6 +101,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   `restart-on-change-stream-history-lost` no longer affects a subscription the starter runs through a catch-up
   subscription, which is every subscription by default. Compiles unchanged.
+- [A Spring Mongo event store sends a commit again when MongoDB can't say whether it succeeded](#a-spring-mongo-event-store-sends-a-commit-again-when-mongodb-cant-say-whether-it-succeeded).
+  The starters now create `CommitRetryingMongoTransactionManager` and `CommitRetryingReactiveMongoTransactionManager`,
+  and an event store built by hand logs a warning until it uses one. Compiles unchanged.
 
 ### Brokers
 
@@ -1094,6 +1097,51 @@ counts is the time since that position was written. On the reactor stack a subsc
 while it matches no events only while the MongoDB subscription model reads quiet positions. When it can't, it logs a
 warning saying that a subscription that matches no event keeps the position of the last event it handled. An unnamed
 reactor `Flux` saves no position, and its position moves only when it reads an event.
+
+## A Spring Mongo event store sends a commit again when MongoDB can't say whether it succeeded
+
+MongoDB labels a commit it could not answer `UnknownTransactionCommitResult`: the commit reached the server, or may
+have, and the reply was lost. The native `MongoEventStore` sends such a commit again for up to two minutes, because it
+runs through the driver's `withTransaction`. `SpringMongoEventStore` and `ReactorMongoEventStore` ran through Spring's
+`MongoTransactionManager` and `ReactiveMongoTransactionManager`, which retry nothing, so an append that may have been
+saved was reported as a failure. A caller that sent it again could write its events twice.
+
+0.35.0 adds `CommitRetryingMongoTransactionManager` in `org.occurrent.eventstore.mongodb.spring.blocking` and
+`CommitRetryingReactiveMongoTransactionManager` in `org.occurrent.eventstore.mongodb.spring.reactor`. Each extends
+Spring's manager and sends the commit again for up to two minutes from the first attempt. It does not retry a
+`MaxTimeMSExpired` error, as the driver doesn't.
+
+### Who is affected
+
+- With the Spring Boot starters and no `MongoTransactionManager` or `ReactiveMongoTransactionManager` bean of your own,
+  nothing to do. The starters create the new managers.
+- With a bean of your own, or an event store you wire by hand, the retry is off until you switch the manager. The blocking
+  store logs a warning when it is created, and the reactive one when `EventStoreConfig.Builder.transactionConfig(..)` is
+  called with a `ReactiveTransactionManager` that is not the new one. `transactionConfig(TransactionalOperator)` logs
+  nothing, because the operator does not expose its manager.
+
+### What to do
+
+Replace the manager and keep its other arguments:
+
+```java
+// Before
+MongoTransactionManager transactionManager = new MongoTransactionManager(databaseFactory, transactionOptions);
+// After
+MongoTransactionManager transactionManager = new CommitRetryingMongoTransactionManager(databaseFactory, transactionOptions);
+```
+
+```java
+// Before
+ReactiveMongoTransactionManager transactionManager = new ReactiveMongoTransactionManager(databaseFactory);
+// After
+ReactiveMongoTransactionManager transactionManager = new CommitRetryingReactiveMongoTransactionManager(databaseFactory);
+```
+
+When your code starts a transaction and the event store joins it, the commit belongs to your transaction manager, so
+that one has to be the new manager for the retry to apply.
+
+An append whose commit is still unknown after two minutes fails as before, and it may or may not be saved.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 

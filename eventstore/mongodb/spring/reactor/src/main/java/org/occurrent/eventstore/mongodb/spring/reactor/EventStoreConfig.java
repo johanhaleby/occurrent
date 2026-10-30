@@ -23,6 +23,8 @@ import org.occurrent.eventstore.api.dcb.PartitionedDcbStreamIdGenerator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.ReactiveTransactionManager;
@@ -40,6 +42,7 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
  * Configuration for the <a href="https://projectreactor.io/">project reactor</a> Spring java driver for MongoDB EventStore
  */
 public class EventStoreConfig {
+    private static final Logger LOGGER = LoggerFactory.getLogger(EventStoreConfig.class);
     private static final Function<Query, Query> DEFAULT_QUERY_OPTIONS_FUNCTION = Function.identity();
     private static final Function<Query, Query> DEFAULT_READ_OPTIONS_FUNCTION = Function.identity();
     private static final Set<EventStoreCapability> DEFAULT_EVENT_STORE_CAPABILITIES = Set.of(STREAM);
@@ -194,6 +197,12 @@ public class EventStoreConfig {
          * @return A same {@code Builder instance}
          */
         public Builder transactionConfig(ReactiveTransactionManager reactiveTransactionManager) {
+            // Only this overload sees the manager. A TransactionalOperator does not expose the manager it was created from.
+            if (!(reactiveTransactionManager instanceof CommitRetryingReactiveMongoTransactionManager)) {
+                LOGGER.warn("The reactive transaction manager of this EventStoreConfig is a {}, which does not send a commit again when MongoDB cannot say whether it succeeded. " +
+                                "An append that may have been saved is then reported as a failure, and retrying it can write its events twice. " +
+                                "Use a {} instead.", reactiveTransactionManager.getClass().getName(), CommitRetryingReactiveMongoTransactionManager.class.getSimpleName());
+            }
             this.transactionalOperator = TransactionalOperator.create(reactiveTransactionManager);
             return this;
         }

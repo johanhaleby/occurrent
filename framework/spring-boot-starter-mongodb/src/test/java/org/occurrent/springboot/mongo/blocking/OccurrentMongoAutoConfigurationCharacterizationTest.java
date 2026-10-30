@@ -31,6 +31,7 @@ import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.mongodb.spring.blocking.CommitRetryingMongoTransactionManager;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.dsl.projection.AppliedAppendStore;
@@ -49,6 +50,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
+import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
@@ -559,6 +561,20 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
             assertThat(context).doesNotHaveBean(CloudEventConverter.class);
             assertThat(context).doesNotHaveBean(OccurrentProperties.class);
         });
+    }
+
+    @Test
+    void the_transaction_manager_the_starter_creates_sends_a_commit_again_when_its_result_is_unknown() {
+        eventStoreConfigContextRunner().run(context ->
+                assertThat(context.getBean(MongoTransactionManager.class)).isInstanceOf(CommitRetryingMongoTransactionManager.class));
+    }
+
+    @Test
+    void a_transaction_manager_defined_by_the_application_replaces_the_one_the_starter_creates() {
+        MongoTransactionManager own = new MongoTransactionManager(mock(MongoDatabaseFactory.class));
+
+        eventStoreConfigContextRunner().withBean(MongoTransactionManager.class, () -> own).run(context ->
+                assertThat(context.getBean(MongoTransactionManager.class)).isSameAs(own));
     }
 
     private ApplicationContextRunner eventStoreConfigContextRunner() {

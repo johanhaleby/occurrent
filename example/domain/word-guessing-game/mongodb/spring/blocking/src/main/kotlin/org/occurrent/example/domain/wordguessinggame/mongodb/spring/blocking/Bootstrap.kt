@@ -20,6 +20,7 @@ import org.occurrent.application.service.blocking.generic.GenericApplicationServ
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
+import org.occurrent.eventstore.mongodb.spring.blocking.CommitRetryingMongoTransactionManager
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
@@ -66,7 +67,7 @@ class Bootstrap : WebMvcConfigurer {
     }
 
     @Bean
-    fun transactionManager(dbFactory: MongoDatabaseFactory) = MongoTransactionManager(dbFactory)
+    fun transactionManager(dbFactory: MongoDatabaseFactory) = CommitRetryingMongoTransactionManager(dbFactory)
 
     @Bean
     fun eventStore(template: MongoTemplate, transactionManager: MongoTransactionManager): SpringMongoEventStore {
