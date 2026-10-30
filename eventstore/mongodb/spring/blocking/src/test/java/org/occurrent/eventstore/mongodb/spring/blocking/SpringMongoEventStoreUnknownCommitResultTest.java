@@ -178,8 +178,8 @@ class SpringMongoEventStoreUnknownCommitResultTest {
                 .cause()
                 .isInstanceOf(MongoException.class)
                 .satisfies(cause -> assertThat(((MongoException) cause).hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)).isTrue());
-        // The commit is sent again until the limit, and not given up on after the first retry.
-        assertThat(Duration.ofNanos(System.nanoTime() - start)).isGreaterThanOrEqualTo(Duration.ofMillis(250));
+        // The commit is sent again until the limit, and neither given up on after the first retry nor sent again past the limit.
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isBetween(Duration.ofMillis(250), Duration.ofSeconds(10));
     }
 
     @Test

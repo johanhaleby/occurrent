@@ -37,6 +37,9 @@ The retry follows the driver's `withTransaction`:
 - It stops retrying 120 seconds after the first commit was sent, and throws or emits the last error. The number is the
   driver's `MAX_RETRY_TIME_LIMIT_MS`, but the driver counts it from the start of its `withTransaction` call, before the
   transaction body runs, so the driver's window can be shorter than ours by the time the body takes. The caller sees the same failure it sees today, and the append may or may not be saved.
+- It does not share a `timeoutMS` across the resends the way `withTransaction` does, because Spring calls the plain
+  `commitTransaction()`, so with `timeoutMS` configured each resend gets a fresh timeout and the 120 seconds still
+  end the retry.
 - It checks the time between attempts, as the driver does, so a commit that has started is not interrupted and ends on
   the driver's own timeouts.
 - It sends the next commit at once, as the driver does. The second `commitTransaction` call on the same session is the

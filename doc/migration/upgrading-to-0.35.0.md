@@ -103,7 +103,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
   subscription, which is every subscription by default. Compiles unchanged.
 - [A Spring Mongo event store sends a commit again when MongoDB can't say whether it succeeded](#a-spring-mongo-event-store-sends-a-commit-again-when-mongodb-cant-say-whether-it-succeeded).
   The starters now create `CommitRetryingMongoTransactionManager` and `CommitRetryingReactiveMongoTransactionManager`,
-  and an event store built by hand logs a warning until it uses one. Compiles unchanged.
+  and a blocking event store built by hand, or a reactive one built from a `ReactiveTransactionManager`, logs a warning
+  until it uses one. Compiles unchanged.
 
 ### Brokers
 
