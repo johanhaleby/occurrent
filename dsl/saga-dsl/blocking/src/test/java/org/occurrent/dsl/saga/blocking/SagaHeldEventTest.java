@@ -20,6 +20,8 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -47,6 +49,9 @@ import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaHeldEvents;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.flow.Continuation;
+import org.occurrent.dsl.saga.flow.FlowSaga;
+import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.slf4j.LoggerFactory;
 
@@ -91,7 +96,7 @@ class SagaHeldEventTest {
     private static final Duration EXPIRY = Duration.ofMinutes(10);
     private static final String ITEM_ADDED_TYPE = ItemAdded.class.getName();
 
-    sealed interface OrderEvent permits Opening, ItemAdded {
+    sealed interface OrderEvent permits Opening, ItemAdded, Intake, Booking {
         String eventId();
 
         String orderId();
@@ -108,6 +113,77 @@ class SagaHeldEventTest {
     }
 
     record PaymentReceived(String eventId, String orderId) implements Opening {
+    }
+
+    /**
+     * The intakes that can open an order, as an abstract class rather than an interface. It is a class and not a record so
+     * that a saga can start on it, and sealed because a saga cannot derive its event types from an open hierarchy.
+     */
+    abstract static sealed class Intake implements OrderEvent permits PhoneIntake, WebIntake {
+        private final String eventId;
+        private final String orderId;
+
+        Intake(String eventId, String orderId) {
+            this.eventId = eventId;
+            this.orderId = orderId;
+        }
+
+        @Override
+        @JsonProperty("eventId")
+        public String eventId() {
+            return eventId;
+        }
+
+        @Override
+        @JsonProperty("orderId")
+        public String orderId() {
+            return orderId;
+        }
+    }
+
+    static final class PhoneIntake extends Intake {
+        @JsonCreator
+        PhoneIntake(@JsonProperty("eventId") String eventId, @JsonProperty("orderId") String orderId) {
+            super(eventId, orderId);
+        }
+    }
+
+    static final class WebIntake extends Intake {
+        @JsonCreator
+        WebIntake(@JsonProperty("eventId") String eventId, @JsonProperty("orderId") String orderId) {
+            super(eventId, orderId);
+        }
+    }
+
+    /** A concrete class that has a subclass, so that a saga can start on a class that other events on the stream extend. Sealed for the same reason as {@link Intake}. */
+    static sealed class Booking implements OrderEvent permits Rebooking {
+        private final String eventId;
+        private final String orderId;
+
+        @JsonCreator
+        Booking(@JsonProperty("eventId") String eventId, @JsonProperty("orderId") String orderId) {
+            this.eventId = eventId;
+            this.orderId = orderId;
+        }
+
+        @Override
+        @JsonProperty("eventId")
+        public String eventId() {
+            return eventId;
+        }
+
+        @Override
+        @JsonProperty("orderId")
+        public String orderId() {
+            return orderId;
+        }
+    }
+
+    static final class Rebooking extends Booking {
+        @JsonCreator
+        Rebooking(@JsonProperty("eventId") String eventId, @JsonProperty("orderId") String orderId) {
+            super(eventId, orderId);
+        }
     }
 
     sealed interface OrderCommand permits OpenLedger, Reserve, Ship, Expire {
@@ -191,7 +267,11 @@ class SagaHeldEventTest {
     }
 
     private SagaExecution<OrderEvent, Order, OrderCommand> executionOf(Saga<OrderEvent, Order, OrderCommand> saga) {
-        return new SagaExecution<>("orders", saga, store, this::dispatch, converter, SagaRunnerConfig.defaults(), event -> true, now::get, holds);
+        return executionOf(saga, store);
+    }
+
+    private <S> SagaExecution<OrderEvent, S, OrderCommand> executionOf(Saga<OrderEvent, S, OrderCommand> saga, SagaStateStore<S> stateStore) {
+        return new SagaExecution<>("orders", saga, stateStore, this::dispatch, converter, SagaRunnerConfig.defaults(), event -> true, now::get, holds);
     }
 
     /** A saga whose payment starts an instance as well as the placement does, so that either can come first. */
@@ -217,7 +297,7 @@ class SagaHeldEventTest {
     }
 
     /** Delivers the event and moves the clock on a second, so that two events are never held at the same instant. */
-    private void deliver(SagaExecution<OrderEvent, Order, OrderCommand> execution, CloudEvent event) {
+    private void deliver(SagaExecution<OrderEvent, ?, OrderCommand> execution, CloudEvent event) {
         execution.onCloudEvent(event);
         now.updateAndGet(instant -> instant.plusSeconds(1));
     }
@@ -243,6 +323,22 @@ class SagaHeldEventTest {
 
     private CloudEvent paymentAt(String streamId, long streamVersion) {
         return streamKeyed(streamId, streamVersion, new PaymentReceived("payment-" + streamVersion, ORDER));
+    }
+
+    private CloudEvent phoneIntakeAt(long streamVersion) {
+        return streamKeyed(ORDER_STREAM, streamVersion, new PhoneIntake("phone-" + streamVersion, ORDER));
+    }
+
+    private CloudEvent webIntakeAt(long streamVersion) {
+        return streamKeyed(ORDER_STREAM, streamVersion, new WebIntake("web-" + streamVersion, ORDER));
+    }
+
+    private CloudEvent bookingAt(long streamVersion) {
+        return streamKeyed(ORDER_STREAM, streamVersion, new Booking("booking-" + streamVersion, ORDER));
+    }
+
+    private CloudEvent rebookingAt(long streamVersion) {
+        return streamKeyed(ORDER_STREAM, streamVersion, new Rebooking("rebooking-" + streamVersion, ORDER));
     }
 
     private CloudEvent unkeyedItem(String item) {
@@ -1632,9 +1728,107 @@ class SagaHeldEventTest {
     }
 
     /**
-     * The same limit by a different route. The one start event type the saga declares is a supertype of the placement
-     * and the payment, so a payment at version 3 can be the first event of the stream although the saga declares one type
-     * and takes the placement at 5, which it sees first, for the start.
+     * The same limit by a different route. The one start event type the saga declares is a concrete class that has a
+     * subclass, so a rebooking at version 3 can start the instance although the saga takes the booking at 5, which it sees
+     * first, for the start. An abstract class or an interface as the start event type has no such limit, because the saga
+     * does not skip an event below the start then.
+     */
+    @Nested
+    @DisplayName("when the one start event type is a concrete class that has a subclass on the stream")
+    class WhenTheOneStartEventTypeIsAConcreteClassWithASubclassOnTheStream {
+
+        /** The reaction of a booking names it, so that the rebooking at 3 can be told from the booking at 5. */
+        private Saga<OrderEvent, Order, OrderCommand> sagaStartingOnTheConcreteClassBooking() {
+            return Saga.<OrderEvent, Order, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(Booking.class)
+                    .evolve(Booking.class, (state, e) -> new Order(state == null ? List.of() : state.items(), false))
+                    .react(Booking.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.eventId()))))
+                    .evolve(ItemAdded.class, (state, e) -> state.withItem(e.item()))
+                    .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))))
+                    .build();
+        }
+
+        @Test
+        void the_saga_declares_one_start_event_type_although_a_subclass_of_it_can_start_the_instance() {
+            assertThat(sagaStartingOnTheConcreteClassBooking().startEventTypes()).containsExactly(Booking.class);
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_booking_comes_first_then_the_rebooking_then_the_item() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheConcreteClassBooking());
+
+            // When
+            deliver(execution, bookingAt(5));
+            deliver(execution, rebookingAt(3));
+            deliver(execution, itemAt(4, "book"));
+
+            // Then the rebooking runs as a late event of the start type, and the item is skipped
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "booking-5"), new Reserve(ORDER, "rebooking-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_booking_comes_first_then_the_item_then_the_rebooking() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheConcreteClassBooking());
+
+            // When
+            deliver(execution, bookingAt(5));
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, rebookingAt(3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "booking-5"), new Reserve(ORDER, "rebooking-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_item_is_held_before_the_booking_and_the_rebooking_comes_last() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheConcreteClassBooking());
+
+            // When
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, bookingAt(5));
+            deliver(execution, rebookingAt(3));
+
+            // Then the drain releases the held item as an event below the start
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "booking-5"), new Reserve(ORDER, "rebooking-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_stream_is_delivered_in_order() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheConcreteClassBooking());
+
+            // When
+            deliver(execution, rebookingAt(3));
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, bookingAt(5));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "rebooking-3"), new Reserve(ORDER, "book"), new Reserve(ORDER, "booking-5")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 3, null)));
+        }
+    }
+
+    /**
+     * One start event type that stands for several event types, here a sealed interface of the placement and the payment.
+     * The stream holds the payment at version 3, the item at 4 and the placement at 5. A saga that sees the placement
+     * first cannot know that the payment at 3 started the instance, so it does not take the item at 4 for an event that
+     * committed before the start, and runs its reaction in every order of delivery.
      */
     @Nested
     @DisplayName("when the one start event type is a supertype of two event types that are on the stream")
@@ -1660,7 +1854,7 @@ class SagaHeldEventTest {
         }
 
         @Test
-        void the_reaction_of_the_item_does_not_run_when_the_placement_comes_first_then_the_payment_then_the_item() {
+        void the_reaction_of_the_item_runs_when_the_placement_comes_first_then_the_payment_then_the_item() {
             // Given
             SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheSupertypeOfPlacedAndPayment());
 
@@ -1671,13 +1865,14 @@ class SagaHeldEventTest {
 
             // Then
             assertAll(
-                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "payment-3")),
-                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "payment-3"), new Reserve(ORDER, "book")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(heldKeys()).isEmpty(),
                     () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
         }
 
         @Test
-        void the_reaction_of_the_item_does_not_run_when_the_placement_comes_first_then_the_item_then_the_payment() {
+        void the_reaction_of_the_item_runs_when_the_placement_comes_first_then_the_item_then_the_payment() {
             // Given
             SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheSupertypeOfPlacedAndPayment());
 
@@ -1688,13 +1883,14 @@ class SagaHeldEventTest {
 
             // Then
             assertAll(
-                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "payment-3")),
-                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "book"), new Reserve(ORDER, "payment-3")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(heldKeys()).isEmpty(),
                     () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
         }
 
         @Test
-        void the_reaction_of_the_item_does_not_run_when_the_item_is_held_before_the_placement_and_the_payment_comes_last() {
+        void the_reaction_of_the_item_runs_when_the_item_is_held_before_the_placement_and_the_payment_comes_last() {
             // Given
             SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheSupertypeOfPlacedAndPayment());
 
@@ -1703,10 +1899,10 @@ class SagaHeldEventTest {
             deliver(execution, placedAt(5));
             deliver(execution, paymentAt(ORDER_STREAM, 3));
 
-            // Then
+            // Then the drain applies the held item instead of releasing it as an event below the start
             assertAll(
-                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "payment-3")),
-                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "book"), new Reserve(ORDER, "payment-3")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
                     () -> assertThat(heldKeys()).isEmpty(),
                     () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
         }
@@ -1726,6 +1922,157 @@ class SagaHeldEventTest {
                     () -> assertThat(issued).containsExactly(new Reserve(ORDER, "payment-3"), new Reserve(ORDER, "book"), new Reserve(ORDER, "placed-5")),
                     () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
                     () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 3, null)));
+        }
+    }
+
+    /**
+     * As the sealed interface above, with an abstract class as the one start event type. The stream holds the web intake
+     * at version 3, the item at 4 and the phone intake at 5, and the phone intake is delivered first.
+     */
+    @Nested
+    @DisplayName("when the one start event type is an abstract class of two event types that are on the stream")
+    class WhenTheOneStartEventTypeIsAnAbstractClassOfTwoEventTypesOnTheStream {
+
+        /** The reaction of an intake names it, so that the web intake at 3 can be told from the phone intake at 5. */
+        private Saga<OrderEvent, Order, OrderCommand> sagaStartingOnTheAbstractClassOfPhoneAndWebIntake() {
+            return Saga.<OrderEvent, Order, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(Intake.class)
+                    .evolve(PhoneIntake.class, (state, e) -> new Order(state == null ? List.of() : state.items(), false))
+                    .react(PhoneIntake.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.eventId()))))
+                    .evolve(WebIntake.class, (state, e) -> new Order(state == null ? List.of() : state.items(), false))
+                    .react(WebIntake.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.eventId()))))
+                    .evolve(ItemAdded.class, (state, e) -> state.withItem(e.item()))
+                    .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))))
+                    .build();
+        }
+
+        @Test
+        void the_saga_declares_one_start_event_type_although_two_event_types_can_start_it() {
+            assertThat(sagaStartingOnTheAbstractClassOfPhoneAndWebIntake().startEventTypes()).containsExactly(Intake.class);
+        }
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_phone_intake_comes_first_then_the_web_intake_then_the_item() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheAbstractClassOfPhoneAndWebIntake());
+
+            // When
+            deliver(execution, phoneIntakeAt(5));
+            deliver(execution, webIntakeAt(3));
+            deliver(execution, itemAt(4, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "phone-5"), new Reserve(ORDER, "web-3"), new Reserve(ORDER, "book")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+    }
+
+    /**
+     * A flow saga declares one start event type, so the skip of an event below the start applies to it as to any other
+     * saga with one. The stream holds the payment at version 3, the item at 4 and the placement at 5, and the flow reacts
+     * to the item with a command. The start reaction names the event that started the instance.
+     */
+    @Nested
+    @DisplayName("when a flow saga has one start event type")
+    class WhenAFlowSagaHasOneStartEventType {
+
+        private final InMemorySagaStateStore<FlowState<OrderEvent>> flowStore = new InMemorySagaStateStore<>();
+
+        private <T extends OrderEvent> Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> flowStartingOn(Class<T> startType) {
+            return FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .startsOn(startType, event -> List.of(new Reserve(event.orderId(), event.eventId())))
+                    .correlateAll(OrderEvent::orderId)
+                    .step("watching", step -> step
+                            .on(ItemAdded.class, Continuation.transitionTo("watching"), item -> List.of(new Reserve(item.orderId(), item.item()))))
+                    .build();
+        }
+
+        private SagaExecution<OrderEvent, FlowState<OrderEvent>, OrderCommand> flowExecutionStartingOn(Class<? extends OrderEvent> startType) {
+            return executionOf(flowStartingOn(startType), flowStore);
+        }
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_start_event_type_is_a_supertype_and_the_placement_comes_first_then_the_payment_then_the_item() {
+            // Given
+            SagaExecution<OrderEvent, FlowState<OrderEvent>, OrderCommand> execution = flowExecutionStartingOn(Opening.class);
+
+            // When
+            deliver(execution, placedAt(5));
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+            deliver(execution, itemAt(4, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "book")),
+                    () -> assertThat(flowStore.heldIndex(ORDER)).isEmpty(),
+                    () -> assertThat(flowStore.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_start_event_type_is_a_supertype_and_the_placement_comes_first_then_the_item_then_the_payment() {
+            // Given
+            SagaExecution<OrderEvent, FlowState<OrderEvent>, OrderCommand> execution = flowExecutionStartingOn(Opening.class);
+
+            // When
+            deliver(execution, placedAt(5));
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "book")),
+                    () -> assertThat(flowStore.heldIndex(ORDER)).isEmpty(),
+                    () -> assertThat(flowStore.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_start_event_type_is_a_supertype_and_the_item_is_held_before_the_placement() {
+            // Given
+            SagaExecution<OrderEvent, FlowState<OrderEvent>, OrderCommand> execution = flowExecutionStartingOn(Opening.class);
+
+            // When
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, placedAt(5));
+            deliver(execution, paymentAt(ORDER_STREAM, 3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "book")),
+                    () -> assertThat(flowStore.heldIndex(ORDER)).isEmpty(),
+                    () -> assertThat(flowStore.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_start_event_type_is_a_concrete_class_and_the_item_comes_after_a_start_at_a_higher_version() {
+            // Given
+            SagaExecution<OrderEvent, FlowState<OrderEvent>, OrderCommand> execution = flowExecutionStartingOn(OrderPlaced.class);
+
+            // When
+            deliver(execution, placedAt(5));
+            deliver(execution, itemAt(4, "book"));
+
+            // Then the item committed before the only event that can start the instance
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5")),
+                    () -> assertThat(flowStore.heldIndex(ORDER)).isEmpty(),
+                    () -> assertThat(flowStore.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
+        }
+
+        @Test
+        void the_reaction_of_the_item_runs_when_the_start_event_type_is_a_concrete_class_and_the_item_comes_after_a_start_at_a_lower_version() {
+            // Given
+            SagaExecution<OrderEvent, FlowState<OrderEvent>, OrderCommand> execution = flowExecutionStartingOn(OrderPlaced.class);
+
+            // When
+            deliver(execution, placedAt(3));
+            deliver(execution, itemAt(4, "book"));
+
+            // Then
+            assertThat(issued).containsExactly(new Reserve(ORDER, "placed-3"), new Reserve(ORDER, "book"));
         }
     }
 

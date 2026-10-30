@@ -45,8 +45,8 @@ these cases and skips it in the others:
 | Below it by the reorder window or more, and not pending | Skips it and logs a warning once per stream |
 | Pending, however far below it | Applies it and removes it from pending |
 
-A saga with one start event type skips an event of another type on the stream that started the instance when its
-version is below the start's, as ADR 158 decides. The table applies to everything else.
+A saga whose one start event type is a concrete class skips an event of another type on the stream that started the
+instance when its version is below the start's, as ADR 158 decides. The table applies to everything else.
 
 The shipped Kafka topology keeps one stream's events of one type in order, so with a mark per type it loses nothing. A
 mark per stream with a window would not be enough, because two types of one stream can be more than any window apart.

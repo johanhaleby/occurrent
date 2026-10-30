@@ -66,17 +66,47 @@ class SagaExecutionSupportHeldEventsTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
     private static final int WINDOW = 2;
 
-    sealed interface OrderEvent permits OrderPlaced, ItemAdded, PaymentReserved {
+    sealed interface OrderEvent permits Opening, ItemAdded, Intake {
         String orderId();
     }
 
-    record OrderPlaced(String orderId) implements OrderEvent {
+    /** The events that can open an order, so that a saga can declare the one type for both. */
+    sealed interface Opening extends OrderEvent permits OrderPlaced, PaymentReserved {
+    }
+
+    /** The intakes that can open an order, as an abstract class rather than an interface. It is sealed because a saga cannot derive its event types from an open hierarchy. */
+    abstract static sealed class Intake implements OrderEvent permits PhoneIntake, WebIntake {
+        private final String orderId;
+
+        Intake(String orderId) {
+            this.orderId = orderId;
+        }
+
+        @Override
+        public String orderId() {
+            return orderId;
+        }
+    }
+
+    static final class PhoneIntake extends Intake {
+        PhoneIntake(String orderId) {
+            super(orderId);
+        }
+    }
+
+    static final class WebIntake extends Intake {
+        WebIntake(String orderId) {
+            super(orderId);
+        }
+    }
+
+    record OrderPlaced(String orderId) implements Opening {
     }
 
     record ItemAdded(String orderId, String item) implements OrderEvent {
     }
 
-    record PaymentReserved(String orderId) implements OrderEvent {
+    record PaymentReserved(String orderId) implements Opening {
     }
 
     sealed interface OrderCommand permits OpenLedger, Reserve, Ship {
@@ -918,6 +948,34 @@ class SagaExecutionSupportHeldEventsTest {
                     .build();
         }
 
+        /** The one start event type is an interface of the placement and the payment, so it stands for two event types. */
+        private Saga<OrderEvent, OrderState, OrderCommand> sagaStartingOnTheInterfaceOfPlacedAndPayment() {
+            return Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(Opening.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new Open(0))
+                    .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new OpenLedger(e.orderId()))))
+                    .evolve(PaymentReserved.class, (state, e) -> new Open(state == null ? 0 : ((Open) state).items()))
+                    .react(PaymentReserved.class, (state, e) -> List.of(SagaEffect.issue(new Ship(e.orderId()))))
+                    .evolve(ItemAdded.class, (state, e) -> new Open(((Open) state).items() + 1))
+                    .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))))
+                    .build();
+        }
+
+        /** The one start event type is an abstract class with two concrete subclasses, so it stands for two event types. */
+        private Saga<OrderEvent, OrderState, OrderCommand> sagaStartingOnTheAbstractClassOfPhoneAndWebIntake() {
+            return Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(Intake.class)
+                    .evolve(PhoneIntake.class, (state, e) -> new Open(0))
+                    .react(PhoneIntake.class, (state, e) -> List.of(SagaEffect.issue(new OpenLedger(e.orderId()))))
+                    .evolve(WebIntake.class, (state, e) -> new Open(state == null ? 0 : ((Open) state).items()))
+                    .react(WebIntake.class, (state, e) -> List.of(SagaEffect.issue(new OpenLedger(e.orderId()))))
+                    .evolve(ItemAdded.class, (state, e) -> new Open(((Open) state).items() + 1))
+                    .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))))
+                    .build();
+        }
+
         private SagaInput<OrderEvent> paymentReserved() {
             return SagaInput.event(new PaymentReserved(SAGA_ID));
         }
@@ -940,7 +998,7 @@ class SagaExecutionSupportHeldEventsTest {
         }
 
         @Test
-        void an_event_of_another_type_than_a_start_type_is_before_the_start_when_the_saga_has_one_start_type() {
+        void an_event_of_another_type_than_a_start_type_is_before_the_start_when_the_saga_has_one_concrete_start_type() {
             assertThat(SagaExecutionSupport.isBeforeTheStart(orderSaga(), startedAtFive, paymentReserved(), paymentMetaAt(STREAM, 3))).isTrue();
         }
 
@@ -950,7 +1008,17 @@ class SagaExecutionSupportHeldEventsTest {
         }
 
         @Test
-        void an_event_of_a_start_type_is_not_before_the_start_when_the_saga_has_one_start_type() {
+        void an_event_of_another_type_than_a_start_type_is_not_before_the_start_when_the_one_start_type_is_an_interface() {
+            assertThat(SagaExecutionSupport.isBeforeTheStart(sagaStartingOnTheInterfaceOfPlacedAndPayment(), startedAtFive, itemAdded(), metaAt(STREAM, 3))).isFalse();
+        }
+
+        @Test
+        void an_event_of_another_type_than_a_start_type_is_not_before_the_start_when_the_one_start_type_is_an_abstract_class() {
+            assertThat(SagaExecutionSupport.isBeforeTheStart(sagaStartingOnTheAbstractClassOfPhoneAndWebIntake(), startedAtFive, itemAdded(), metaAt(STREAM, 3))).isFalse();
+        }
+
+        @Test
+        void an_event_of_a_start_type_is_not_before_the_start_when_the_saga_has_one_concrete_start_type() {
             // Given
             SagaInput<OrderEvent> startType = SagaInput.event(new OrderPlaced(SAGA_ID));
 
@@ -971,12 +1039,30 @@ class SagaExecutionSupportHeldEventsTest {
         }
 
         @Test
-        void a_held_copy_below_the_start_is_released_by_a_drain_when_the_saga_has_one_start_type() {
+        void a_held_copy_below_the_start_is_released_by_a_drain_when_the_saga_has_one_concrete_start_type() {
             // When
             HeldStep step = SagaExecutionSupport.drainStep(orderSaga(), startedAtFive, held(STREAM, 3), WINDOW);
 
             // Then
             assertThat(step).isEqualTo(HeldStep.RELEASE_BEFORE_START);
+        }
+
+        @Test
+        void a_held_copy_below_the_start_is_classified_by_a_drain_and_applied_as_new_when_the_one_start_type_is_an_interface() {
+            // When
+            HeldStep step = SagaExecutionSupport.drainStep(sagaStartingOnTheInterfaceOfPlacedAndPayment(), startedAtFive, held(STREAM, 3), WINDOW);
+
+            // Then
+            assertThat(step).isEqualTo(HeldStep.APPLY);
+        }
+
+        @Test
+        void a_held_copy_below_the_start_is_classified_by_a_drain_and_applied_as_new_when_the_one_start_type_is_an_abstract_class() {
+            // When
+            HeldStep step = SagaExecutionSupport.drainStep(sagaStartingOnTheAbstractClassOfPhoneAndWebIntake(), startedAtFive, held(STREAM, 3), WINDOW);
+
+            // Then
+            assertThat(step).isEqualTo(HeldStep.APPLY);
         }
 
         @Test

@@ -351,8 +351,8 @@ The saga keeps the highest applied version per stream and event type. For an eve
 | Below it by the reorder window or more, and not pending | Skips it and logs a warning once per stream |
 | Pending, however far below it | Applies it and removes it from pending |
 
-A saga with one start event type skips an event of another type on the stream that started the instance when its
-version is below the start's, because it committed before the start. The table applies to everything else.
+A saga whose one start event type is a concrete class skips an event of another type on the stream that started the
+instance when its version is below the start's, because it committed before the start. The table applies to everything else.
 
 A reaction that ran for a late event runs once. A redelivery of that event is skipped.
 

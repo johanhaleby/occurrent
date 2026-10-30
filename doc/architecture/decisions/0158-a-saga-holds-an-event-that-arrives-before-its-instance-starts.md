@@ -114,7 +114,7 @@ gone at fetch was released by another deliverer and is passed over. One pass in 
 | The copy | What the drain does |
 |---|---|
 | proven applied | release |
-| on the start's stream, below the start's version, on a saga with one start event type | release, DEBUG |
+| on the start's stream, below the start's version, on a saga whose one start event type is a concrete class | release, DEBUG |
 | its key is in `selfHeldKeys`, or the copy is marked `outstanding` | apply, however far behind the reorder window |
 | self-held, its key in neither set | plain classification, apply when new, otherwise leave it with a WARN |
 | behind the reorder window | leave it with a WARN. The lookup below applies it on its event's next delivery |
@@ -133,24 +133,26 @@ reaction to an event that committed before the start. That is the same cost a ho
 event delivered after the start, because classification compares versions and marks, not positions. Holding such a copy
 forever instead would keep its bytes and never run its reaction.
 
-**On a saga with one start event type, an event of another type on the start's own stream below the start's version is
-skipped.** A lower version of that stream committed before the start, so a delivery of such an event after the start is
-skipped with a DEBUG log, the same as the drain releases its copy. Classification alone would apply it, because ADR 154
-compares a version with the marks of its own type, and a type with no mark has nothing to compare with. An event of the
-start type itself is still classified.
+**On a saga whose one start event type is a concrete class, an event of another type on the start's own stream below
+the start's version is skipped.** A lower version of that stream committed before the start, so a delivery of such an
+event after the start is skipped with a DEBUG log, the same as the drain releases its copy. Classification alone would
+apply it, because ADR 154 compares a version with the marks of its own type, and a type with no mark has nothing to
+compare with. An event of the start type itself is still classified.
 
 **A saga with several start event types classifies an event below the start like any other, on both paths.**
 `startMark` is the first start event delivered, not the first one on the stream. With start types `A` and `B`, another
 type `C` and the stream `B@3`, `C@4`, `A@5`, an instance that receives `A@5` first starts there. `C@4` committed after
 the real first event, so skipping it would lose it, and classifying it costs at most one extra reaction to an event
-that committed before the start.
+that committed before the start. An abstract class or interface as the only start event type counts as several, because
+`startsOn(Opening.class)` lets every event type below it start the instance, and the `Class` that `startEventTypes()`
+returns says so without reading the stream.
 
-**A start event type that appears twice on one stream is a limit of this decision.** With one start type `A`, another
-type `C` and the stream `A@3`, `C@4`, `A@5`, an instance that receives `A@5` first starts there. `C@4` is then skipped
-when it is delivered after `A@5` and released by the drain when it was held before it, although it committed after
-`A@3`. `A@3` is applied, since it is of the start type. A single start type that is a supertype of two event types on
-the stream behaves the same. `SagaHeldEventTest` records both cases. Telling `C@4` from an event before the real start
-would mean reading the stream, which the saga does not do.
+**A concrete start event type that appears twice on one stream is a limit of this decision.** With one start type `A`,
+another type `C` and the stream `A@3`, `C@4`, `A@5`, an instance that receives `A@5` first starts there. `C@4` is then
+skipped when it is delivered after `A@5` and released by the drain when it was held before it, although it committed
+after `A@3`. `A@3` is applied, since it is of the start type. A concrete start class with a subclass on the stream
+behaves the same. `SagaHeldEventTest` records both cases. Telling `C@4` from an event before the real start would mean
+reading the stream, which the saga does not do.
 
 A held copy is applied through `process`, with its own meta and its own failure handling. When it fails, the driving
 input is refused as any failing input is, the failed version is listed pending or self-held as below, and REDELIVER
@@ -265,8 +267,8 @@ on proof or a pending entry.
   gives `delete` as a remedy for an instance parked in a renamed step. After `delete`, a later event of that id is held,
   not skipped. To abandon an instance on such a subscription, keep a terminal envelope and remove its held events, as
   the runbook shows.
-- **An event between two start events of one stream can be lost on a saga with one start event type**, when the later
-  start event reaches the instance first. The decision above describes the case, and closing it would mean reading the
+- **An event between two start events of one stream can be lost on a saga whose one start event type is a concrete
+  class**, when the later start event reaches the instance first. The decision above describes the case, and closing it would mean reading the
   stream.
 - **Every attempt of a keyed delivery reads the held collection once when the state store can hold.** That is the lookup above. It
   stays on a model that declares commit order, since a copy held before the saga moved to that model may still be

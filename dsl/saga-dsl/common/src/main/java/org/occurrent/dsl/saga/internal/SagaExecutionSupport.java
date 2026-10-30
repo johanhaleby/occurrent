@@ -25,6 +25,7 @@ import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Modifier;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -606,7 +607,7 @@ public final class SagaExecutionSupport {
     public enum HeldStep {
         /** The instance proves it applied the event, so the copy is released. */
         RELEASE_APPLIED,
-        /** An earlier version of the stream that started the instance, on a saga with one start event type, so the copy is released. */
+        /** An earlier version of the stream that started the instance, on a saga whose one start event type is a concrete class, so the copy is released. */
         RELEASE_BEFORE_START,
         /** Applied. */
         APPLY,
@@ -631,7 +632,7 @@ public final class SagaExecutionSupport {
         if (provesApplied(current, streamId, version, ref.key())) {
             return HeldStep.RELEASE_APPLIED;
         }
-        if (hasOneStartEventType(saga) && isBeforeTheStart(current.startMark(), streamId, version)) {
+        if (startsOnOneConcreteEventType(saga) && isBeforeTheStart(current.startMark(), streamId, version)) {
             return HeldStep.RELEASE_BEFORE_START;
         }
         if (current.selfHeldKeys().contains(ref.key()) || ref.outstanding()) {
@@ -654,20 +655,22 @@ public final class SagaExecutionSupport {
 
     /**
      * Whether the instance skips this delivery as committed before the start. That is an event of the stream that
-     * started {@code current}, below the start's version and not of a start event type, on a saga with one start event
-     * type. A drain releases the held copy of such an event in the same way. A saga with several start event types
-     * can start on the later of two of them, so everything it receives after the start is classified. An event below
-     * the start on a saga with one start event type can still have committed after an earlier event of that type on the
-     * same stream, which only reading the stream would show.
+     * started {@code current}, below the start's version and not of a start event type, on a saga whose one start event
+     * type is a concrete class. A drain releases the held copy of such an event in the same way. A saga with several
+     * start event types can start on the later of two of them, and an abstract class or interface as the start event
+     * type stands for several, so such a saga classifies everything it receives after the start. An event below the
+     * start can still have committed after an earlier event of the start event type on the same stream, which only
+     * reading the stream would show.
      */
     public static <E, S extends @Nullable Object, C> boolean isBeforeTheStart(Saga<E, S, C> saga, @Nullable SagaEnvelope<S> current, SagaInput<E> input, EventMeta meta) {
-        return hasOneStartEventType(saga) && current != null && meta.streamId() != null && meta.streamVersion() != null
+        return startsOnOneConcreteEventType(saga) && current != null && meta.streamId() != null && meta.streamVersion() != null
                && isBeforeTheStart(current.startMark(), meta.streamId(), meta.streamVersion())
                && input instanceof SagaInput.Event<E> ev && !isStartEvent(saga, ev.event());
     }
 
-    private static <E, S extends @Nullable Object, C> boolean hasOneStartEventType(Saga<E, S, C> saga) {
-        return saga.startEventTypes().size() == 1;
+    private static <E, S extends @Nullable Object, C> boolean startsOnOneConcreteEventType(Saga<E, S, C> saga) {
+        Set<Class<? extends E>> startTypes = saga.startEventTypes();
+        return startTypes.size() == 1 && !Modifier.isAbstract(startTypes.iterator().next().getModifiers());
     }
 
     /** The delivery metadata of the held event {@code ref} describes. */
