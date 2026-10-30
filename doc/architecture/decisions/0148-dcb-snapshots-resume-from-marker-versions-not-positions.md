@@ -103,8 +103,9 @@ below the version is still read.
 That fails in two ways. The first is that no margin is long enough. The deposit reserves 41 and its process stalls (a
 long GC pause, a network partition, a transaction stuck in its retries). 150 other appends commit meanwhile, and the
 withdraw saves its snapshot at 192. The next command resumes from 92. The deposit then commits at 41, and every later
-command misses it. The stores retry an append with the same block up to 15 times with backoff between 10 and 500 ms
-(`MongoEventStore.java:664-669`), and a paused process adds any amount of time on top.
+command misses it. The native store retries an append with the same block up to 15 times with backoff between 10 and 500 ms
+(`MongoEventStore.java:664-669`), the Spring stores for about two minutes (ADR 164), and a paused process adds any
+amount of time on top.
 
 The second is that the snapshot state doesn't record which events it already applied. Resuming from 92 reads the events
 at 93 to 192 again, and the decider applies them a second time. Fixing that needs a set of applied event ids in every

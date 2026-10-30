@@ -26,6 +26,7 @@ import org.springframework.transaction.reactive.TransactionSynchronizationManage
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
+import reactor.util.retry.RetryBackoffSpec;
 
 import java.time.Duration;
 
@@ -60,15 +61,22 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * transaction rather than opening its own, so it cannot retry a conflict itself: an aborted transaction can only
      * be started again by whoever owns it. Attempt count and backoff match the event store's own transient-conflict
      * retry, which this stands in for, and the blocking {@code SpringTransactionExecutor}, so retry behaviour is
-     * identical across the two stacks (ADR 0053). See ADR 0074.
+     * identical across the two stacks (ADR 0053). That is 320 retries, 321 attempts in all, about two minutes of
+     * waiting, since Reactor's jitter makes the average wait at the 500 ms cap 375 ms. An executor that uses this
+     * default also stops retrying 120 seconds after the subscription started, so attempts that are slow themselves,
+     * for example while MongoDB has no primary, don't stretch the budget to hours. A retry passed to a constructor is
+     * used as given, this default included. See ADR 0074.
      */
-    private static final Retry DEFAULT_CONFLICT_RETRY = Retry.backoff(15, Duration.ofMillis(10))
+    private static final RetryBackoffSpec DEFAULT_CONFLICT_RETRY = Retry.backoff(320, Duration.ofMillis(10))
             .maxBackoff(Duration.ofMillis(500))
             .filter(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException)
             .onRetryExhaustedThrow((spec, signal) -> signal.failure());
 
+    private static final Duration DEFAULT_CONFLICT_DEADLINE = Duration.ofSeconds(120);
+
     private final TransactionalOperator transactionalOperator;
     private final Retry conflictRetry;
+    private final boolean stopAfterDefaultDeadline;
 
     /**
      * Create an executor that runs work inside reactive transactions managed by the supplied
@@ -88,7 +96,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * @param transactionalOperator The transactional operator to run work through.
      */
     public SpringReactiveTransactionExecutor(TransactionalOperator transactionalOperator) {
-        this(transactionalOperator, DEFAULT_CONFLICT_RETRY);
+        this(transactionalOperator, DEFAULT_CONFLICT_RETRY, true);
     }
 
     /**
@@ -115,13 +123,20 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * @param conflictRetry         The retry spec to apply when this executor opens the transaction.
      */
     public SpringReactiveTransactionExecutor(TransactionalOperator transactionalOperator, Retry conflictRetry) {
+        this(transactionalOperator, conflictRetry, false);
+    }
+
+    private SpringReactiveTransactionExecutor(TransactionalOperator transactionalOperator, Retry conflictRetry, boolean stopAfterDefaultDeadline) {
+        this.stopAfterDefaultDeadline = stopAfterDefaultDeadline;
         this.transactionalOperator = Objects.requireNonNull(transactionalOperator, "transactionalOperator cannot be null");
         this.conflictRetry = Objects.requireNonNull(conflictRetry, "conflictRetry cannot be null");
     }
 
     /**
-     * The conflict-retry spec applied when this executor opens the transaction: 15 attempts with exponential backoff
-     * from 10ms to 500ms, matching the blocking executor and the event store's own transient-conflict retry.
+     * The conflict-retry spec applied when this executor opens the transaction: 320 retries with exponential backoff
+     * from 10ms to 500ms, about two minutes of waiting, matching the blocking executor and the event store's own
+     * transient-conflict retry. It counts retries only. An executor built without a retry of its own adds a
+     * 120 second deadline per subscription on top, which this spec does not include when you pass it to a constructor.
      *
      * @return The default retry spec.
      */
@@ -146,7 +161,12 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                         // A conflict aborts the whole transaction, which only its owner can start again, so run the
                         // action once and let the error reach that owner. See ADR 0074.
                         ? transaction
-                        : transaction.retryWhen(conflictRetry));
+                        : Mono.defer(() -> transaction.retryWhen(stopAfterDefaultDeadline ? withinDeadline() : conflictRetry)));
+    }
+
+    private static Retry withinDeadline() {
+        long deadlineNanos = System.nanoTime() + DEFAULT_CONFLICT_DEADLINE.toNanos();
+        return DEFAULT_CONFLICT_RETRY.modifyErrorFilter(isRetryable -> throwable -> isRetryable.test(throwable) && System.nanoTime() - deadlineNanos < 0);
     }
 
     /**

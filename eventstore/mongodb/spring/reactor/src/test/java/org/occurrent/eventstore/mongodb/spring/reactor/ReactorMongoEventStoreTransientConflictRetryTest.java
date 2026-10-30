@@ -56,8 +56,8 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.dcb.DcbCriteria.all;
 
 /**
- * A DCB append that loses a transaction conflict again and again gets 320 attempts, about two minutes of waiting
- * like a native {@code withTransaction} call, and not 15 times. The conflict is forced with a
+ * A DCB append that loses a transaction conflict again and again gets 321 attempts in all, about two minutes of waiting
+ * like a native {@code withTransaction} call, and not 15. The conflict is forced with a
  * {@code failCommand} fail point rather than by racing threads, so the number of failed attempts is exact.
  */
 @Testcontainers
@@ -66,7 +66,7 @@ class ReactorMongoEventStoreTransientConflictRetryTest {
 
     private static final URI SOURCE = URI.create("urn:test");
     private static final int WRITE_CONFLICT = 112;
-    // One more than the 15 attempts the store used to make, so an append that gives up at 15 never gets to succeed.
+    // One more than the 15 attempts the store used to make in all, so an append that gives up at 15 never gets to succeed.
     private static final int FAILED_ATTEMPTS = 16;
 
     // enableTestCommands is what lets the server accept configureFailPoint. withCommand replaces the whole command

@@ -89,6 +89,7 @@ import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
+import reactor.util.retry.RetryBackoffSpec;
 
 import java.net.URI;
 import java.time.Duration;
@@ -136,13 +137,30 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     // About two minutes of waiting, the 120 seconds one withTransaction call gives the native store, with the time
     // each attempt takes on top. The reactive driver has no withTransaction and
-    // ReactiveMongoTransactionManager retries nothing, so these attempts are the whole budget. Reactor's default
-    // jitter makes each wait between 250 and 500 ms once the backoff reaches its 500 ms cap, 375 ms on average, which
-    // takes 320 attempts to reach 120 s.
-    private static final Retry TRANSIENT_CONFLICT_RETRY = Retry.backoff(320, Duration.ofMillis(10))
+    // ReactiveMongoTransactionManager retries no transient transaction error, so these retries are the whole budget.
+    // Reactor's default jitter makes each wait between 250 and 500 ms once the backoff reaches its 500 ms cap, 375 ms on
+    // average, so 320 retries (321 attempts in all) take about 120 s. transientConflictRetryWithDeadline() also stops
+    // them 120 s after the append started, so attempts that are slow themselves don't stretch the budget to hours.
+    static final RetryBackoffSpec TRANSIENT_CONFLICT_RETRY = Retry.backoff(320, Duration.ofMillis(10))
             .maxBackoff(Duration.ofMillis(500))
             .filter(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
             .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+
+    private static final Duration TRANSIENT_CONFLICT_DEADLINE = Duration.ofSeconds(120);
+
+    /**
+     * {@link #TRANSIENT_CONFLICT_RETRY} for one append, which also stops retrying once {@link #TRANSIENT_CONFLICT_DEADLINE}
+     * has passed since this was called. The retry count bounds it while each attempt is quick, and the deadline bounds it
+     * when each one is slow, like the 30 seconds a transaction can wait to find a primary.
+     */
+    private static Retry transientConflictRetryWithDeadline() {
+        return transientConflictRetryWithDeadline(TRANSIENT_CONFLICT_DEADLINE);
+    }
+
+    static Retry transientConflictRetryWithDeadline(Duration deadline) {
+        long deadlineNanos = System.nanoTime() + deadline.toNanos();
+        return TRANSIENT_CONFLICT_RETRY.modifyErrorFilter(isRetryable -> throwable -> isRetryable.test(throwable) && System.nanoTime() - deadlineNanos < 0);
+    }
 
     private static final Retry COLD_START_COUNTER_RETRY = Retry.fixedDelay(5, Duration.ofMillis(20))
             .filter(ReactorMongoEventStore::isDuplicateKeyError);
@@ -151,8 +169,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // is retried rather than surfaced. Applied only when the condition really is any-version, since a caller who asked
     // for a specific version wants to hear about the conflict. Bounded with backoff rather than the blocking stores'
     // unbounded RetryStrategy.retry() default, because retrying a reactive pipeline with neither a delay nor a limit
-    // spins a scheduler thread. Fifteen attempts over a rising delay settle any contention a single stream can produce.
-    private static final Retry ANY_STREAM_VERSION_CONFLICT_RETRY = Retry.backoff(15, Duration.ofMillis(10))
+    // spins a scheduler thread. The same 320 retries as TRANSIENT_CONFLICT_RETRY, about two minutes of waiting. 15
+    // retries were not enough: 64 writers appending 20 unconditional events each to one stream lost 7 of 1280 writes.
+    static final Retry ANY_STREAM_VERSION_CONFLICT_RETRY = Retry.backoff(320, Duration.ofMillis(10))
             .maxBackoff(Duration.ofMillis(500))
             .filter(throwable -> throwable instanceof WriteConditionNotFulfilledException)
             .onRetryExhaustedThrow((spec, signal) -> signal.failure());
@@ -572,7 +591,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 // The driver does not auto-retry a transient transaction conflict reactively, so retry it here, plus a
                 // DuplicateKeyException from two transactions first-creating the same conflict marker at once. A
                 // DcbAppendConditionNotFulfilledException and a DuplicateCloudEventException are deliberately not retried.
-                return retryOnlyWhenThisStoreOwnsTheTransaction(transaction, TRANSIENT_CONFLICT_RETRY);
+                return Mono.defer(() -> retryOnlyWhenThisStoreOwnsTheTransaction(transaction, transientConflictRetryWithDeadline()));
             });
         });
     }

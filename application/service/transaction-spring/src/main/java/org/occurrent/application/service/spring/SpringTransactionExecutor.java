@@ -27,6 +27,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /**
@@ -56,21 +58,29 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * <p>
      * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
      * stands in for exactly that retry once the store has to give it up. Every append increments one global position
-     * counter, so under concurrency the last writer can need to wait out all the others, and a smaller budget is not
-     * enough. Five attempts, borrowed from the unrelated append-condition retry, failed a six-way contention test.
+     * counter, and appends that share a marker document commit one at a time, so under concurrency the last writer can
+     * need to wait out all the others, and a smaller budget is not enough. 240 attempts is about two minutes of
+     * waiting, like the 120 seconds a native {@code withTransaction} call gives the native store. Five attempts,
+     * borrowed from the unrelated append-condition retry, failed a six-way contention test. An executor that uses this
+     * default also stops retrying 120 seconds after the call started, so attempts that are slow themselves, for
+     * example while MongoDB has no primary, don't stretch the budget to hours. A retry passed to a constructor is
+     * used as given, this default included.
      * <p>
      * {@link DataIntegrityViolationException} is matched as well as {@link TransientDataAccessException} because
      * MongoDB labels a WriteConflict transient while Spring translates it to the non-transient type, so the obvious
      * predicate would miss the most common conflict there is. A genuine integrity violation is therefore retried too,
      * which is wasteful rather than wrong since it fails the same way every attempt.
      */
-    private static final RetryStrategy DEFAULT_CONFLICT_RETRY = RetryStrategy
+    private static final RetryStrategy.Retry DEFAULT_CONFLICT_RETRY = RetryStrategy
             .exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
-            .maxAttempts(15)
+            .maxAttempts(240)
             .retryIf(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException);
+
+    private static final Duration DEFAULT_CONFLICT_DEADLINE = Duration.ofSeconds(120);
 
     private final TransactionTemplate transactionTemplate;
     private final RetryStrategy conflictRetry;
+    private final boolean stopAfterDefaultDeadline;
 
     /**
      * Create an executor that runs work inside transactions managed by the supplied
@@ -89,7 +99,7 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * @param transactionTemplate The transaction template to run work through.
      */
     public SpringTransactionExecutor(TransactionTemplate transactionTemplate) {
-        this(transactionTemplate, DEFAULT_CONFLICT_RETRY);
+        this(transactionTemplate, DEFAULT_CONFLICT_RETRY, true);
     }
 
     /**
@@ -116,13 +126,20 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * @param conflictRetry       The retry policy to apply when this executor opens the transaction.
      */
     public SpringTransactionExecutor(TransactionTemplate transactionTemplate, RetryStrategy conflictRetry) {
+        this(transactionTemplate, conflictRetry, false);
+    }
+
+    private SpringTransactionExecutor(TransactionTemplate transactionTemplate, RetryStrategy conflictRetry, boolean stopAfterDefaultDeadline) {
+        this.stopAfterDefaultDeadline = stopAfterDefaultDeadline;
         this.transactionTemplate = Objects.requireNonNull(transactionTemplate, "transactionTemplate cannot be null");
         this.conflictRetry = Objects.requireNonNull(conflictRetry, "conflictRetry cannot be null");
     }
 
     /**
-     * The conflict-retry policy applied when this executor opens the transaction: 15 attempts with exponential
-     * backoff from 10ms to 500ms, matching the event store's own transient-conflict retry.
+     * The conflict-retry policy applied when this executor opens the transaction: 240 attempts in total with
+     * exponential backoff from 10ms to 500ms, about two minutes of waiting, matching the event store's own
+     * transient-conflict retry. It counts attempts only. An executor built without a retry of its own adds a
+     * 120 second deadline per call on top, which this policy does not include when you pass it to a constructor.
      *
      * @return The default retry policy.
      */
@@ -139,7 +156,13 @@ public class SpringTransactionExecutor implements TransactionExecutor {
             // error reach that owner. See ADR 0074.
             return transactionTemplate.execute(status -> action.get());
         }
-        return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.get()));
+        RetryStrategy retry = stopAfterDefaultDeadline ? DEFAULT_CONFLICT_RETRY.mapRetryPredicate(withinDeadline()) : conflictRetry;
+        return retry.execute(() -> transactionTemplate.execute(status -> action.get()));
+    }
+
+    private static Function<Predicate<Throwable>, Predicate<Throwable>> withinDeadline() {
+        long deadlineNanos = System.nanoTime() + DEFAULT_CONFLICT_DEADLINE.toNanos();
+        return retryable -> throwable -> retryable.test(throwable) && System.nanoTime() - deadlineNanos < 0;
     }
 
     /**

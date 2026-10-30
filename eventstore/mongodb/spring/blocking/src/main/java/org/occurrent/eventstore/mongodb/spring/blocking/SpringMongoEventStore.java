@@ -716,7 +716,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // is minted unconditionally, unlike the stream write path.
         AppendId appendId = AppendId.mint();
 
-        return retryOnlyWhenThisStoreOwnsTheTransaction(TRANSIENT_CONFLICT_RETRY,
+        return retryOnlyWhenThisStoreOwnsTheTransaction(transientConflictRetryWithDeadline(),
                 () -> appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition, appendId));
     }
 
@@ -759,21 +759,39 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * because Spring wraps the {@link MongoException}. {@link DcbAppendConditionNotFulfilledException} is deliberately
      * NOT retried here: it propagates to the application service, which re-reads and retries the whole command.
      * <p>
-     * Exponential backoff from 10 ms up to 500 ms over 240 attempts, which is about two minutes of waiting with the
-     * time each attempt takes on top. That matches the 120 seconds that each
-     * {@code ClientSession.withTransaction} call gives the native store, so a command that contends on one marker
-     * document is not failed sooner here than there. {@code MongoTransactionManager} retries
-     * nothing itself, so these attempts are the whole budget. Appends that write one marker document, or that land in
+     * Exponential backoff from 10 ms up to 500 ms over 240 attempts in total, which is about two minutes of waiting
+     * with the time each attempt takes on top. That is the 120 seconds that each {@code ClientSession.withTransaction}
+     * call gives the native store, which wraps that call in a retry of its own, so the native store can wait longer
+     * overall. {@code MongoTransactionManager} retries no transient transaction error itself, so these attempts are the
+     * whole budget. {@link #transientConflictRetryWithDeadline()} also stops them 120 seconds after the append
+     * started, so attempts that are slow themselves, for example while MongoDB has no primary, do not stretch the
+     * budget to hours. Appends that write one marker document, or that end up in
      * the same partition stream and serialize on stream_version, commit one at a time, so the last writer can need to
      * retry past all the others. A DuplicateKeyException is retried too: it is either two transactions
      * first-creating the same conflict marker at once, or two disjoint DCB boundaries hashing to the same partition
      * stream and losing on the unique streamid+streamversion index, and both are safe to rerun. A genuine duplicate
      * CloudEvent is translated to a domain exception in insertAllDcb and never reaches here.
      */
-    private static final RetryStrategy TRANSIENT_CONFLICT_RETRY = RetryStrategy
+    static final RetryStrategy.Retry TRANSIENT_CONFLICT_RETRY = RetryStrategy
             .exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
             .maxAttempts(240)
             .retryIf(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable));
+
+    private static final Duration TRANSIENT_CONFLICT_DEADLINE = Duration.ofSeconds(120);
+
+    /**
+     * {@link #TRANSIENT_CONFLICT_RETRY} for one append, which also stops retrying once {@link #TRANSIENT_CONFLICT_DEADLINE}
+     * has passed since this was called. The attempt count bounds the retry while each attempt is quick, and the
+     * deadline bounds it when each one is slow, like the 30 seconds a transaction can wait to find a primary.
+     */
+    private static RetryStrategy transientConflictRetryWithDeadline() {
+        return transientConflictRetryWithDeadline(TRANSIENT_CONFLICT_DEADLINE);
+    }
+
+    static RetryStrategy.Retry transientConflictRetryWithDeadline(Duration deadline) {
+        long deadlineNanos = System.nanoTime() + deadline.toNanos();
+        return TRANSIENT_CONFLICT_RETRY.mapRetryPredicate(retryable -> throwable -> retryable.test(throwable) && System.nanoTime() - deadlineNanos < 0);
+    }
 
     private static final RetryStrategy COLD_START_COUNTER_RETRY = RetryStrategy.retry()
             .backoff(Backoff.fixed(20))
