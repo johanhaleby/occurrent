@@ -882,8 +882,8 @@ resumes the whole replay from where it started.
 To rewind a read model to a point you know is good, keep the checkpoint of the event at that point, and start the
 subscription from it.
 
-The string means something only to a catch-up subscription. A MongoDB subscription model with no catch-up wrapping it
-refuses the checkpoint of a replayed event, in a `StartAt` that names it or as a position a `StartAt.dynamic(..)`
+The checkpoint of a replayed event means something only to a catch-up subscription. A MongoDB subscription model with
+no catch-up wrapping it refuses that checkpoint, in a `StartAt` that names it or as a position a `StartAt.dynamic(..)`
 returns before its change stream has opened, as
 [A MongoDB subscription model refuses a catch-up's checkpoint](#a-mongodb-subscription-model-refuses-a-catch-ups-checkpoint)
 describes.
@@ -1156,7 +1156,8 @@ the exception can stop the application from starting.
 ### A record pattern over `NativeMongoSubscription` stops compiling
 
 The `Subscription` that `NativeMongoSubscriptionModel.subscribe(..)` returns is a `NativeMongoSubscription`, and it
-now holds the failure that `waitUntilStarted(..)` throws, as a third record component called `startFailure`. A record
+now holds a supplier of the failure that `waitUntilStarted(..)` throws, as a third record component called
+`startFailure`. A record
 pattern has to name every component of the canonical constructor:
 
 ```java
