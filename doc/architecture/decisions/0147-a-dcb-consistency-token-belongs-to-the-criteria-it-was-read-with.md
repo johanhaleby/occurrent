@@ -12,6 +12,8 @@ Accepted. Decides [#1228](https://github.com/johanhaleby/occurrent/issues/1228) 
 [ADR 88](0088-what-a-dcb-append-condition-guarantees.md).
 
 The second part of #1229 and [#1231](https://github.com/johanhaleby/occurrent/issues/1231) are not decided here.
+[ADR 162](0162-a-dcb-type-marker-is-split-into-stripes.md) decides the first and
+[ADR 149](0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md) the second.
 
 ## Context
 
@@ -125,9 +127,9 @@ because the stores live in other modules than the token, and a `DcbEventStore` o
 
 This change adds nothing on disk. The marker documents and their ids stay the same, so it doesn't stop 0.34 and 0.35
 nodes appending to the same store. An item with tags no longer adds its type markers to what a conditional append from
-a 0.35 node increments. A conditional append from a 0.34 node still increments type markers that 0.35 doesn't read for
-criteria with tags. An append only ever raises a marker version, so an extra increment can make a check refuse an append
-and the command retry, and it can't make a check let one through. This change doesn't stop you going back to 0.34
+a 0.35 node increments. A conditional append from a 0.34 node also increments type markers. 0.35 doesn't read those for
+criteria with tags, so they make no such check refuse, and an increment only ever raises a version, so it can't make a
+check let an append through. This change doesn't stop you going back to 0.34
 either. The upgrade guide says what else in 0.35 limits a rolling upgrade or a rollback.
 
 A token value saved under 0.34 isn't valid on 0.35. For a criteria item with both types and tags it is a sum over tag
