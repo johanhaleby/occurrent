@@ -351,6 +351,30 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
+    void a_dynamic_position_answering_a_catchup_position_is_refused_when_the_model_falls_back_to_the_change_stream_of_spring_while_it_subscribes() {
+        // Given a model whose driver cursor turns out unreadable on the first subscription, and a dynamic position that answers the present first and a global checkpoint when it is asked again
+        subscriptionModel.shutdown();
+        subscriptionModel = modelOver(templateWithoutBatchCursors(), configuration());
+        AtomicInteger asked = new AtomicInteger();
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        GlobalCheckpoint answered = GlobalCheckpoint.of(0);
+        StartAt startAt = StartAt.dynamic(ctx -> asked.incrementAndGet() == 1 ? StartAt.now() : StartAt.checkpoint(answered));
+
+        // When it subscribes
+        Subscription subscription = subscriptionModel.subscribe("refused-after-falling-back", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
+
+        // Then the subscription stops with the refusal, after the handle has answered that it started, since the driver's cursor was asked to open before the position was asked again
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning("refused-after-falling-back")).isFalse());
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(10)).block()).as("subscription started").isTrue();
+        assertThat(asked).as("times the position was asked").hasValue(2);
+        assertThat(modelLog.list).filteredOn(event -> event.getLevel() == Level.ERROR && event.getThrowableProxy() != null)
+                .extracting(event -> event.getThrowableProxy().getClassName())
+                .as("exceptions logged as errors").containsOnly(UnsupportedStartAtException.class.getName());
+        assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions").isFalse();
+        assertThat(delivered).isEmpty();
+    }
+
+    @Test
     void a_model_that_cannot_read_the_cursor_of_the_driver_warns_once_however_many_subscriptions_fall_back() {
         // Given
         subscriptionModel.shutdown();
