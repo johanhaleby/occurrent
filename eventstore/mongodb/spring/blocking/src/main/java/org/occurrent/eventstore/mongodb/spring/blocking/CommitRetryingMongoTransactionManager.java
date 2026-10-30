@@ -39,7 +39,7 @@ import static java.util.Objects.requireNonNull;
  * error ({@code MongoExecutionTimeoutException}) is not retried, and a write concern error with that code is, which is
  * also what the driver does. When the time is up, the last error is thrown from the commit as usual.
  * <p>
- * Use it for the {@link EventStoreConfig.Builder#transactionConfig(org.springframework.transaction.PlatformTransactionManager) event store's}
+ * Use it for the {@link EventStoreConfig.Builder#transactionConfig(MongoTransactionManager) event store's}
  * transaction manager. The Occurrent Spring Boot starter creates one unless the application defines its own
  * {@code MongoTransactionManager}. A {@link SpringMongoEventStore} built on any other transaction manager logs a warning
  * when it is created.
