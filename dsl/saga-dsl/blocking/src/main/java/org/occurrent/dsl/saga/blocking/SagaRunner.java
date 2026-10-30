@@ -84,7 +84,8 @@ import static java.util.Objects.requireNonNull;
  * consumer with several messages in flight, or a catch-up handing over to its live feed. The saga then holds the event
  * in the state store and applies it once the instance starts. On a subscription model that declares through
  * {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()} that it delivers every subscription in commit
- * order, nothing arrives before its start, and such an event is skipped as in 0.34.0. A model that does not declare it
+ * order, only an event that came before its start in that order arrives before the start, and such an event is skipped
+ * as in 0.34.0. A model that does not declare it
  * needs a store that implements
  * {@link SagaHeldEvents}, which {@code SagaStateStore.inMemory()} and {@code SpringMongoSagaStateStore} both do, and
  * {@code run} refuses any other store with an {@link IllegalStateException}. An event whose start never arrives stays
@@ -370,12 +371,12 @@ public final class SagaRunner<E, C> {
     }
 
     // A wrapper is not unwrapped for commit order, so a declaration below it goes unused, which costs held copies of
-    // early events rather than losing anything
+    // early events rather than losing anything. A model below that answers false declares nothing to hide.
     private void warnIfAWrapperHidesCommitOrder(String subscriptionId) {
         SubscriptionModelCapability model = subscriptionModel;
         while (model instanceof SubscriptionModelWrapper wrapper) {
             model = wrapper.getWrappedSubscriptionModel();
-            if (model instanceof CommitOrderedSubscriptions) {
+            if (model instanceof CommitOrderedSubscriptions ordered && ordered.deliversEveryEventInCommitOrder()) {
                 log.warn("Saga subscription '{}' runs on {}, which does not declare commit order, although the model it wraps, {}, does. A wrapper can break commit order, so a declaration below it is not used, and the saga holds every event that arrives before its instance's start instead of skipping it. A wrapper that keeps commit order declares it by implementing {}.",
                         subscriptionId, subscriptionModel.getClass().getName(), model.getClass().getName(), CommitOrderedSubscriptions.class.getName());
                 return;

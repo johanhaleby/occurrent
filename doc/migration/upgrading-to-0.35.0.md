@@ -445,9 +445,9 @@ report is [#1317](https://github.com/johanhaleby/occurrent/issues/1317).
 
 ### Who is affected
 
-A saga whose subscription model does not declare, through the new `CommitOrderedSubscriptions` capability, that it
-delivers in commit order. None of the subscription models in Occurrent declares it yet, so that is every saga until one
-does. A saga on a model that declares it holds nothing and keeps the 0.34.0 behaviour.
+A saga whose subscription model does not answer true to `deliversEveryEventInCommitOrder()`, on the new
+`CommitOrderedSubscriptions` capability. None of the subscription models in Occurrent answers true yet, so that is every
+saga until one does. A saga on a model that answers true holds nothing and keeps the 0.34.0 behaviour.
 
 ### What changes
 
@@ -499,7 +499,7 @@ A saga instance document gains four fields, all written only by 0.35.0:
 | Field | What it holds | A document without it |
 | --- | --- | --- |
 | `heldEventsChecked` | true once the instance has applied what was held for it | reads as false, so the next input drains |
-| `drainedHeldKeys` | the held events the last drain applied, kept until that drain ends | reads as empty |
+| `drainedHeldKeys` | the held events that were applied and may not be released yet, until a drain ends | reads as empty |
 | `selfHeldKeys` | failed events the instance keeps outstanding until they apply | reads as empty |
 | `startMark` | the start event's stream id, stream version and position | reads as no start recorded |
 

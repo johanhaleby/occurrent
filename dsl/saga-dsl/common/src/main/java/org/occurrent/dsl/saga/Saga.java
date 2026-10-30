@@ -42,8 +42,8 @@ import static java.util.Objects.requireNonNull;
  * <ul>
  *   <li>An event with a {@code null} {@link #sagaId(Object)} belongs to no instance and is skipped.</li>
  *   <li>A correlated event whose type is not in {@link #startEventTypes()} and whose instance has not started is held
- *       and applied once the instance starts. On a subscription that delivers in commit order it cannot arrive before
- *       the start, so it is skipped instead.</li>
+ *       and applied once the instance starts. On a subscription that delivers in commit order only an event that came
+ *       before the start in that order arrives before it, so it is skipped instead.</li>
  *   <li>For each input the executor computes {@code s' = evolve(state, input)}, then {@code react(s', input)}: react sees
  *       the state <em>after</em> the fold. Replay only ever folds {@link #evolve}, so it produces no effects.</li>
  *   <li>{@link #onStart(Object, Object)} runs exactly once, when a start event creates the instance, after the first

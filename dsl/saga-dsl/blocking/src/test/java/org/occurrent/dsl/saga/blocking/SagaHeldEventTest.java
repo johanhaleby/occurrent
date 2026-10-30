@@ -584,6 +584,35 @@ class SagaHeldEventTest {
     }
 
     @Nested
+    @DisplayName("when the start of the event's own stream is delivered between the read of an absent instance and the hold of an event that committed before it")
+    class WhenTheStartOfTheEventsOwnStreamIsDeliveredBeforeTheHold {
+
+        private ScriptedStore racing;
+        private SagaExecution<OrderEvent, Order, OrderCommand> execution;
+
+        @BeforeEach
+        void readAnAbsentInstanceThenLetTheStartBeDelivered() {
+            racing = new ScriptedStore(store);
+            execution = execution(racing, SagaRunnerConfig.defaults());
+            racing.nextFindMissesTheInstance();
+            racing.beforeNextHold(() -> deliver(execution, placedAt(5)));
+        }
+
+        @Test
+        void the_event_is_released_and_not_applied_because_it_committed_before_the_start() {
+            // When
+            Throwable thrown = catchThrowable(() -> deliver(execution, itemAt(3, "book")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER)),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+    }
+
+    @Nested
     @DisplayName("when an event without a stream key finds its instance started after it was held")
     class WhenAnEventWithoutAStreamKeyFindsTheInstanceStartedAfterItWasHeld {
 
@@ -710,8 +739,45 @@ class SagaHeldEventTest {
                     () -> assertThat(heldKeys()).isEmpty());
         }
 
+        @Test
+        void the_instance_keeps_no_key_of_the_copy_once_its_own_delivery_has_applied_and_released_it() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionWithACopyLeftBehind();
+
+            // When
+            deliver(execution, itemAt(2, "two"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "two")),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().drainedHeldKeys()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().heldEventsChecked()).isTrue());
+        }
+
+        @Test
+        void a_later_delivery_of_the_event_does_not_apply_it_twice_and_the_copy_ends_up_released_when_the_release_after_its_own_save_failed() {
+            // Given
+            ScriptedStore failing = new ScriptedStore(store);
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionWithACopyLeftBehind(failing);
+            failing.failNextRelease(new IllegalStateException("cannot release"));
+            catchThrowable(() -> deliver(execution, itemAt(2, "two")));
+
+            // When
+            deliver(execution, itemAt(2, "two"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "two")),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+
         private SagaExecution<OrderEvent, Order, OrderCommand> executionWithACopyLeftBehind() {
-            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(store, SagaRunnerConfig.defaults().withReorderWindow(1));
+            return executionWithACopyLeftBehind(store);
+        }
+
+        private SagaExecution<OrderEvent, Order, OrderCommand> executionWithACopyLeftBehind(SagaStateStore<Order> stateStore) {
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(stateStore, SagaRunnerConfig.defaults().withReorderWindow(1));
             deliver(execution, placedAt(1));
             deliver(execution, itemAt(3, "three"));
             deliver(execution, itemAt(4, "four"));
@@ -1060,7 +1126,8 @@ class SagaHeldEventTest {
      * An in-memory store whose next read of the instance by {@code find} answers that there is none, as a read that
      * happened before another delivery wrote it would, and that can run something just before the next hold, as a
      * delivery that paused between its read and its hold would let other deliveries do. Every other read, and every
-     * write, sees the instance. It records the drained held keys of every instance it saves.
+     * write, sees the instance. It records the drained held keys of every instance it saves, and it can make the next
+     * release throw.
      */
     private static final class ScriptedStore implements SagaStateStore<Order>, SagaHeldEvents<Order> {
 
@@ -1068,9 +1135,15 @@ class SagaHeldEventTest {
         private final AtomicBoolean missNextFind = new AtomicBoolean();
         private final AtomicReference<@Nullable Runnable> beforeNextHold = new AtomicReference<>();
         private final List<Set<String>> drainedHeldKeysOfEverySave = new CopyOnWriteArrayList<>();
+        private final AtomicReference<@Nullable RuntimeException> failureOnNextRelease = new AtomicReference<>();
 
         ScriptedStore(InMemorySagaStateStore<Order> delegate) {
             this.delegate = delegate;
+        }
+
+        /** Makes the next release throw, once, and leave the copy held. */
+        void failNextRelease(RuntimeException failure) {
+            failureOnNextRelease.set(failure);
         }
 
         void nextFindMissesTheInstance() {
@@ -1148,6 +1221,10 @@ class SagaHeldEventTest {
 
         @Override
         public void release(String sagaId, String key) {
+            RuntimeException failure = failureOnNextRelease.getAndSet(null);
+            if (failure != null) {
+                throw failure;
+            }
             delegate.release(sagaId, key);
         }
     }

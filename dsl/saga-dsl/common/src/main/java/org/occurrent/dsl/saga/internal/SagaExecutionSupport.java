@@ -330,8 +330,9 @@ public final class SagaExecutionSupport {
                 failureAfter(current, meta, terminal),
                 streamMarks,
                 // A save that starts the instance marks a drain as due and records where the start sits, so the drain can
-                // tell a held event that came before the start from one that came after.
-                !starting && (held.endsDrain() || current.heldEventsChecked()),
+                // tell a held event that came before the start from one that came after. So does a save outside a drain
+                // that applies a held copy or a self-held version, so a drain's ending save forgets the key it adds.
+                !starting && !addsAKeyOutsideADrain(current, meta, held) && (held.endsDrain() || current.heldEventsChecked()),
                 drainedHeldKeysAfter(current, meta, held),
                 // Completion empties them. A key with no copy that completion overtakes belongs to an event its source
                 // still has, which then skips on the completed instance.
@@ -556,6 +557,12 @@ public final class SagaExecutionSupport {
         return selfHeld;
     }
 
+    // Whether this save adds a key to drainedHeldKeys and does not end a drain, since only the ending save of a drain
+    // forgets one. A save inside a drain finds a drain due already.
+    private static <S extends @Nullable Object> boolean addsAKeyOutsideADrain(SagaEnvelope<S> current, EventMeta meta, HeldContext held) {
+        return !held.endsDrain() && (held.heldCopyKey() != null || isSelfHeld(current, meta));
+    }
+
     // A save that applies a held copy or a self-held version adds its key, and a save that ends a drain forgets the keys
     // the drain applied, since the copies are released by then. When one save does both, it keeps the keys it applies.
     // A save inside a drain forgets the keys whose copies the drain has released, so the set holds only the keys whose
@@ -620,8 +627,7 @@ public final class SagaExecutionSupport {
         if (provesApplied(current, streamId, version, ref.key())) {
             return HeldStep.RELEASE_APPLIED;
         }
-        SagaEnvelope.StartMark start = current.startMark();
-        if (start != null && start.streamId().equals(streamId) && version < start.version()) {
+        if (isBeforeTheStart(current.startMark(), streamId, version)) {
             return HeldStep.RELEASE_BEFORE_START;
         }
         if (current.selfHeldKeys().contains(ref.key()) || ref.outstanding()) {
@@ -636,6 +642,19 @@ public final class SagaExecutionSupport {
         }
         // Not proven applied, so a redelivery here is the floor of an instance stored before 0.35.0.
         return delivery == Delivery.BEHIND_WINDOW ? HeldStep.LEAVE_BEHIND_WINDOW : HeldStep.APPLY_FROM_THE_FLOOR;
+    }
+
+    private static boolean isBeforeTheStart(SagaEnvelope.@Nullable StartMark start, String streamId, long version) {
+        return start != null && start.streamId().equals(streamId) && version < start.version();
+    }
+
+    /**
+     * Whether {@code meta} is an event of the stream that started {@code current}, below the start's version, so it
+     * committed before the start. A drain releases the held copy of such an event without applying it.
+     */
+    public static <S extends @Nullable Object> boolean isBeforeTheStart(@Nullable SagaEnvelope<S> current, EventMeta meta) {
+        return current != null && meta.streamId() != null && meta.streamVersion() != null
+               && isBeforeTheStart(current.startMark(), meta.streamId(), meta.streamVersion());
     }
 
     /** The delivery metadata of the held event {@code ref} describes. */
@@ -854,6 +873,11 @@ public final class SagaExecutionSupport {
         }
         // Already pending classifies as NEW too, so it is told apart here and there is nothing to write for it.
         if (current != null && (classify(current, meta, reorderWindow) != Delivery.NEW || isPending(current.streamMarks().get(meta.streamId()), meta))) {
+            return null;
+        }
+        // At the cap nothing more is listed, and the executor keeps the version another way, so the write would change
+        // nothing but the version.
+        if (current != null && isAtPendingCap(current) && !isOutstanding(current.streamMarks().get(meta.streamId()), meta)) {
             return null;
         }
         return failureRecord(saga, sagaId, current, current == null ? null : current.failure(), currentStatus(current), now, false, meta, null, reorderWindow);

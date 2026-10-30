@@ -44,15 +44,16 @@ version the instance cannot list is self-held, and whether `run` refuses a state
 Commit order here means what the `CommitOrderedSubscriptions` contract says. No event is delivered before every earlier
 event matching the subscription was delivered and its listener returned normally, where an event is earlier when it
 committed earlier or was written earlier in the same commit. A delivery whose listener throws is retried in place before
-anything after it. On such a feed an event cannot arrive before its start, also when both were written in one commit, so
-nothing is held, and an event before the start is still skipped as in 0.34.0. A model that answers true and breaks that
+anything after it. On such a feed only an event that came before its start in that order can arrive before the start,
+also when both were written in one commit. Nothing is held, and that event is skipped as in 0.34.0. A model that answers true and breaks that
 contract is that model's defect, and the ERROR of cause 5 below is where it shows.
 
 The capability is not on `SubscriptionModelCapability`'s unwrap list, so a wrapper declares commit order only by
 implementing it. Any wrapper can break commit order, with a thread pool, a catch-up handover or a parking listener, and
 a wrapper that inherited a "yes" from the model below it would skip on a feed that reorders. An undeclared wrapper is
 treated as holding, which costs storage, never an event. When the model below a wrapper declares commit order and the
-wrapper does not, `run` logs one WARN naming both classes.
+wrapper does not, `run` logs one WARN naming both classes. A model below that implements the capability and answers
+false declares nothing, so it gets no WARN.
 
 **`run` refuses a store that cannot hold.** When `holds` is true and the state store does not implement
 `SagaHeldEvents`, `run` throws an `IllegalStateException` naming the subscription, the model and the store, and saying
@@ -75,7 +76,9 @@ the executor:
      delivery with a redelivery key then runs again on the started instance, which drains the held events and looks up
      its own copy. Other deliveries can move the instance past the event's reorder window before the hold, and a drain
      does not apply such a copy but waits for the next delivery of its event, which this delivery is. A delivery without a redelivery key
-     only drains, since running it again would apply the event a second time beside its copy.
+     only drains, since running it again would apply the event a second time beside its copy. So does a delivery of the
+     start's own stream below the start's version, since the drain releases its copy as committed before the start and
+     a run would then classify the event new.
    - When it is completed, the copy is released with a WARN, which is what 0.34.0 does with an event that arrives after
      completion.
    - When it is quarantined, the copy stays and the event is acknowledged.
@@ -101,7 +104,10 @@ of a type mark of its stream, or its key is in `drainedHeldKeys`. A save that ap
 `drainedHeldKeys` before the copy is released, so the proof survives a crash between the two. Each later save in the
 same drain drops the keys whose copies the drain has released since, so the set holds the keys whose release has not
 happened yet rather than every key the drain applied, and a drain of many copies does not grow the instance towards the
-store's document limit. The drain's ending save empties the set, except for the keys it applied itself.
+store's document limit. The drain's ending save empties the set, except for the keys it applied itself. A save outside
+a drain that adds a key, the lookup below applying a copy or a redelivery applying a self-held version, marks a drain
+due, and that drain runs right after the save and its ending save forgets the key. A key stays only while that drain has
+not ended, which is when the proof is still needed.
 
 **The whole set.** The drain reads `heldIndex(sagaId)`, every held copy without its body, orders it by `heldAt` with
 each stream's versions sorted within that stream's slots, and fetches the bodies in pages of `timerBatchLimit`. A body
@@ -126,7 +132,11 @@ the start from one that committed after needs positions that become visible in c
 reserves a position block before its transaction starts, so a lower position can commit after a higher one, and
 comparing positions would release an event that committed after the start. Applying the copy instead costs at most one
 reaction to an event that committed before the start. That is the same cost a holding feed already pays for such an
-event delivered after the start, because classification compares versions and marks, not positions. The asymmetry is
+event delivered after the start, because classification compares versions and marks, not positions. The start's own
+stream is no exception for a delivery that comes after the start. Classification compares the event's version with
+the marks of its own type, not with the start's version, so a lower version of a type with no mark is applied, although
+the drain would have released its copy. ADR 154 chose per-type marks so a feed that reorders across types does not lose
+such an event, and whether an event that committed before the start should be skipped instead is open. The asymmetry is
 deliberate. Holding the copy forever would keep its bytes and never run its reaction.
 
 A held copy is applied through `process`, with its own meta and its own failure handling. When it fails, the driving
@@ -139,7 +149,7 @@ held copy applies. A held copy whose conversion or `evolve` throws while the dra
 is applied at once, so that failure is its own as well.
 
 **The lookup on every keyed delivery.** Whenever the state store can hold, every keyed delivery to a started instance
-reads the held copy with its own key once, after the drain and before classifying the delivery, whatever `holds` is. A
+reads the held copy with its own key on each attempt, after the drain and before classifying the delivery, whatever `holds` is. So a lost compare-and-set reads it again, and so does the run after a hold. A
 copy held while the saga ran on a model that reorders is then still found when its event comes back on a model that
 declares commit order, as after a deploy that moves the saga to another model. A self-held copy not marked
 `outstanding` is left to the drain. Any other copy is released when the delivery applies the event or classifies it a
@@ -242,7 +252,7 @@ on proof or a pending entry.
   gives `delete` as a remedy for an instance parked in a renamed step. After `delete`, a later event of that id is held,
   not skipped. To abandon an instance on such a subscription, keep a terminal envelope and remove its held events, as
   the runbook shows.
-- **Every keyed delivery reads the held collection once when the state store can hold.** That is the lookup above. It
+- **Every attempt of a keyed delivery reads the held collection once when the state store can hold.** That is the lookup above. It
   stays on a model that declares commit order, since a copy held before the saga moved to that model may still be
   waiting for its event.
 - The MongoDB store creates one new collection per saga, named after the saga's collection with `-held-events`, keyed

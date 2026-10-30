@@ -344,7 +344,7 @@ class SagaCommitOrderFeedRuleTest {
         @Test
         void one_warning_names_the_nearest_declaring_model_when_two_models_in_the_chain_declare_commit_order() {
             // Given
-            CommitOrderStubSubscriptionModel inner = CommitOrderStubSubscriptionModel.inCommitOrderForNow();
+            CommitOrderStubSubscriptionModel inner = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
 
             // When
             run(new TopWrapper(new DeclaringWrapper(inner)));
