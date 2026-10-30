@@ -51,8 +51,9 @@ Moving the stores to `ClientSession.withTransaction` was considered and rejected
   attempt still gets the last failure. In the case #1379 measured that was a `DataIntegrityViolationException`, and
   `GenericDcbApplicationService` does not retry that exception.
 - A command that used to fail after about 5 seconds under heavy contention now waits about two minutes between its
-  attempts before it fails, plus the time the attempts themselves take, and the deadline stops it 120 seconds after
-  the append started. The native store's 120 seconds applies to each `withTransaction` call, and its append runs that
+  attempts before it fails, plus the time the attempts themselves take. No new attempt starts once 120 seconds have
+  passed since the append started, but an attempt that is already running is not interrupted and ends on the driver's
+  own timeouts, as it does in a native `withTransaction` call. The native store's 120 seconds applies to each `withTransaction` call, and its append runs that
   call inside a retry of 15 attempts, so the native store can wait longer overall. A caller with a shorter deadline of
   its own sees that deadline first.
 - A genuine integrity violation, such as a duplicate key that MongoDB does not label transient, is retried like a

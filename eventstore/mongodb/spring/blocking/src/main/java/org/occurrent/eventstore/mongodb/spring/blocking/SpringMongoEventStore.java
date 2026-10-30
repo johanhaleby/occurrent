@@ -763,9 +763,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * with the time each attempt takes on top. That is the 120 seconds that each {@code ClientSession.withTransaction}
      * call gives the native store, which wraps that call in a retry of its own, so the native store can wait longer
      * overall. {@code MongoTransactionManager} retries no transient transaction error itself, so these attempts are the
-     * whole budget. {@link #transientConflictRetryWithDeadline()} also stops them 120 seconds after the append
-     * started, so attempts that are slow themselves, for example while MongoDB has no primary, do not stretch the
-     * budget to hours. Appends that write one marker document, or that end up in
+     * whole budget. {@link #transientConflictRetryWithDeadline()} also starts no new attempt once 120 seconds have
+     * passed since the append started, so attempts that are slow themselves, for example while MongoDB has no primary,
+     * do not stretch the budget to hours. Appends that write one marker document, or that end up in
      * the same partition stream and serialize on stream_version, commit one at a time, so the last writer can need to
      * retry past all the others. A DuplicateKeyException is retried too: it is either two transactions
      * first-creating the same conflict marker at once, or two disjoint DCB boundaries hashing to the same partition
