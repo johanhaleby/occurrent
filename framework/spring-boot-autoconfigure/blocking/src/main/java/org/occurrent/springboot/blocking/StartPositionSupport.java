@@ -91,7 +91,7 @@ class StartPositionSupport {
             return replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(startAtGlobalPosition)), resumeBehavior);
         }
         return switch (startPosition) {
-            case NOW -> StartAt.now();
+            case NOW -> nowThenResume(resumeBehavior);
             case DEFAULT -> StartAt.dynamic(ctx -> {
                 // Do not let the catch-up model run its default (replay from the beginning); delegate to the parent
                 // live subscription instead by returning null to the catch-up layer.
@@ -120,6 +120,31 @@ class StartPositionSupport {
         };
     }
 
+    // NOW is where the subscription starts the first time. Under DEFAULT a restart continues from the stored position,
+    // which a plain StartAt.now() leaves to the durable layer. Under SAME_AS_START_AT every start is NOW, so the
+    // competing consumer and durable layers are told to stay out, as replayThenResumeAgnostic does for a replay start.
+    private StartAt nowThenResume(ResumeBehavior resumeBehavior) {
+        return switch (resumeBehavior) {
+            case DEFAULT -> StartAt.now();
+            case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
+                boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                return isCompetingConsumerSubscription || isDurableSubscription ? null : StartAt.now();
+            });
+        };
+    }
+
+    private DcbStartAt dcbNowThenResume(ResumeBehavior resumeBehavior) {
+        return switch (resumeBehavior) {
+            case DEFAULT -> DcbStartAt.now();
+            case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> {
+                boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                return isCompetingConsumerSubscription || isDurableSubscription ? null : DcbStartAt.now();
+            });
+        };
+    }
+
     void applyStartupWorkarounds() {
         // These are workarounds for https://github.com/spring-projects/spring-framework/issues/32904
         // Each store starter contributes the beans its own stack has to force into existence, this module knows none.
@@ -142,7 +167,7 @@ class StartPositionSupport {
             return replayThenResume(subscriptionId, DcbStartAt.afterPosition(startAtDcbPosition), resumeBehavior);
         }
         return switch (startPosition) {
-            case NOW -> DcbStartAt.now();
+            case NOW -> dcbNowThenResume(resumeBehavior);
             case DEFAULT -> DcbStartAt.subscriptionModelDefault();
             case BEGINNING -> replayThenResume(subscriptionId, DcbStartAt.beginning(), resumeBehavior);
         };
@@ -249,7 +274,7 @@ class StartPositionSupport {
                         }
                     }
                 };
-                case NOW -> StartAt.now();
+                case NOW -> nowThenResume(resumeBehavior);
                 case DEFAULT -> StartAt.dynamic(ctx -> {
                     // By default, we don't want to run the "default" behavior of the CatchupSubscriptionModel, which is to
                     // start streaming from the beginning of time. We want to instruct the CatchupSubscriptionModel to simply
