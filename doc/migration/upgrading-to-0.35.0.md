@@ -103,7 +103,7 @@ The compiler finds those for you. The other sections compile fine and behave dif
   subscription, which is every subscription by default. Compiles unchanged.
 - [A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`](#a-restart-follows-resumebehavior-for-startat--beginning_of_time-and-startat--now).
   On the reactive stack a restart no longer replays the history of a `BEGINNING_OF_TIME` `@StreamSubscription`, and a
-  `NOW` one no longer misses the events written while the application was down. On the blocking stack `NOW` with
+  `NOW` subscription no longer misses the events written while the application was down. On the blocking stack `NOW` with
   `SAME_AS_START_AT` starts at the present on every restart and no longer competes with the other instances, so every
   instance is delivered every event. Compiles unchanged.
 
@@ -1102,11 +1102,13 @@ reactor `Flux` saves no position, and its position moves only when it reads an e
 
 ## A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`
 
-Two subscriptions did not start where `resumeBehavior` says on a restart. On the reactive Spring Boot starter, a
+Some subscriptions did not start where `resumeBehavior` says on a restart. On the reactive Spring Boot starter, a
 `@StreamSubscription` ignored `resumeBehavior`. With `startAt = BEGINNING_OF_TIME` it started at position 0 on every
-restart, and with `startAt = NOW` it started at the present on every restart. On the blocking starter, `startAt = NOW`
-with `resumeBehavior = SAME_AS_START_AT` continued from the checkpoint the subscription had stored, where the
-documentation says it starts at the present again. Both starters now do what the javadoc and the documentation say.
+restart, and with `startAt = NOW` it started at the present on every restart. A reactive `@Subscription`,
+`@DcbSubscription`, `@Projection` or `@Snapshot` with `startAt = NOW` did the same, while their replay starts already
+followed `resumeBehavior`. On the blocking starter, `startAt = NOW` with `resumeBehavior = SAME_AS_START_AT` continued
+from the checkpoint the subscription had stored, where the documentation says it starts at the present again. Both
+starters now do what the javadoc and the documentation say.
 
 ### Who is affected
 
@@ -1114,6 +1116,9 @@ documentation says it starts at the present again. Both starters now do what the
   `NOW`. That includes one that sets `resumeBehavior = DEFAULT` explicitly. A `@StreamSubscription` that does not set
   `startAt` is not affected, and neither is one that sets `resumeBehavior = SAME_AS_START_AT`, except that
   `BEGINNING_OF_TIME` no longer stores a checkpoint.
+- Every application on the reactive starter with a `@Subscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`
+  that sets `startAt = NOW`, including one that sets `resumeBehavior = DEFAULT` explicitly. One that does not set
+  `startAt`, or sets `resumeBehavior = SAME_AS_START_AT`, is not affected.
 - Every application on the blocking starter with `startAt = NOW` and `resumeBehavior = SAME_AS_START_AT` on a
   `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection`, `@Saga` or `@Snapshot`.
 
