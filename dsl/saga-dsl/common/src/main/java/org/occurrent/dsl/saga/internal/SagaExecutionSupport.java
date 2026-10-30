@@ -795,6 +795,29 @@ public final class SagaExecutionSupport {
         return failureRecord(saga, sagaId, current, current == null ? null : current.failure(), currentStatus(current), now, false, meta, null, reorderWindow);
     }
 
+    /**
+     * {@link #pendingRecord} for an event refused because a held copy failed. Its own reaction has not failed, so nothing
+     * says when it first failed, and its first failure of its own starts its clock.
+     */
+    public static <E, S extends @Nullable Object, C> @Nullable FailureRecord<S> pendingRecordWithoutAClock(Saga<E, S, C> saga, String sagaId,
+                                                                                                            @Nullable SagaEnvelope<S> current,
+                                                                                                            EventMeta meta, Instant now,
+                                                                                                            int reorderWindow) {
+        FailureRecord<S> record = pendingRecord(saga, sagaId, current, meta, now, reorderWindow);
+        if (record == null) {
+            return null;
+        }
+        SagaEnvelope<S> listed = record.envelope();
+        Map<String, StreamMarks> streamMarks = new LinkedHashMap<>(listed.streamMarks());
+        StreamMarks marks = Objects.requireNonNull(streamMarks.get(meta.streamId()));
+        Map<Long, Instant> pendingSince = new LinkedHashMap<>(marks.pendingSince());
+        pendingSince.remove(meta.streamVersion());
+        streamMarks.put(Objects.requireNonNull(meta.streamId()), new StreamMarks(marks.floor(), marks.byType(), marks.pending(), marks.legacyFailed(), pendingSince));
+        return new FailureRecord<>(new SagaEnvelope<>(listed.sagaId(), listed.state(), listed.status(), listed.version(), listed.timers(),
+                listed.streamWatermarks(), null, listed.createdAt(), listed.updatedAt(), listed.completedAt(),
+                listed.currentStep(), listed.started(), listed.failure(), streamMarks, listed.startMark()), record.expectedVersion(), record.quarantined());
+    }
+
     // Pending, or a failure recorded before pending existed. Either says the version was handed to the saga and failed.
     private static boolean isOutstanding(@Nullable StreamMarks marks, EventMeta meta) {
         return isPending(marks, meta) || marks != null && meta.streamVersion() != null && marks.legacyFailed().contains(meta.streamVersion());

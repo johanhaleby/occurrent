@@ -143,7 +143,9 @@ down to it, and that save lists the held copies, so the waiting copies above it 
 the table. That is right for an event that committed before the real start, which is what a version below the start
 usually is. The instance can't tell the two apart, because telling them apart means reading the stream.
 
-On a feed in commit order, an event below the start is skipped with a DEBUG log, as in 0.34.0. Nothing is stored.
+On a feed in commit order, an event below the start is skipped with a DEBUG log, as in 0.34.0. Nothing is stored, and
+a store failure on the way to that skip lists nothing as pending and charges no budget, since no later delivery would
+apply the entry or clear the failure.
 
 **A copy from another stream than the start's is applied, wherever it committed.** Telling a copy that committed before
 the start from one that committed after needs positions that become visible in commit order. The MongoDB event store
@@ -177,8 +179,10 @@ own while it fails.
 
 **The delivery that drove the sweep is held before it is refused**, so a delivery is never refused for another event's
 failure with nothing keeping it. A delivery that isn't itself the copy that failed, and that the instance doesn't already
-count as handled, is held as a plain copy, and the next sweep applies it. When that hold itself fails, a WARN says so, the instance lists the
-delivery as pending as it would any failed input, so a redelivery applies it, and the delivery is refused. When the listing
+count as handled, is held as a plain copy, and the next sweep applies it. A read that fails on the way there leaves the
+attempt's own read to answer, since marks only move forward. When that hold itself fails, a WARN says so, the instance lists the
+delivery as pending as it would any failed input, so a redelivery applies it, and the delivery is refused. The entry starts no
+budget clock, because nothing of the delivery's own has failed. When the listing
 can't be made either, it takes the path of the next section, and an ERROR names the event and the store failure when
 nothing keeps it.
 
@@ -189,7 +193,8 @@ index again first, and quarantines nothing when the copy is gone or the marks pr
 marks, so a save of it whose response was lost counts as the failure it looks like. A failed release starts no clock
 and quarantines nothing, since it says nothing about the reaction. A copy with no key whose save returned and whose
 release then failed is applied again by the next attempt, because nothing records that save, so its reaction runs again.
-A store that can never remove a copy refuses every delivery to that instance until it can, and holds each of them. A timer's attempt that fails on a copy
+A store that can never remove a copy refuses every delivery to that instance until it can, and holds each one the
+instance doesn't already count as handled. A timer's attempt that fails on a copy
 charges the same clock, and the timer stays due. [ADR 157](0157-a-sagas-quarantine-budget-runs-per-input.md) has the budget
 per input, and the copy's clock is how a held event takes part in it.
 
@@ -223,14 +228,16 @@ ignored, and that it has not yet seen applied by a save that returned true. Caus
 event's key is in that set. An event that has a held copy is not kept there, because that copy going from the list means
 it applied. A delivery whose first successful read already finds the version behind the window has an
 empty set, so it is an arrival behind the window, ADR 154's own row, and gets no copy. A read that fails on the failure
-path can't tell, so the copy is written.
+path can't tell, so a delivery that holds writes the copy.
 
 Where the delivery does not hold, causes 1 to 4 rethrow as in 0.34.0, since the source retries in place and the event is
-still new when it does. Cause 5 is different, because the redelivery would be skipped, so it writes the copy too when the
-store has held events. A copy held before the subscription declared commit order is how that happens on one thread, since
-it can apply and pass the version. Where the store has no held events, cause 5 logs an ERROR naming the key and the
-instance, then rethrows. No copy can pass a version there, so a window can pass one only after some deliverer applied it,
-and that ERROR shows a model that broke the commit-order contract.
+still new when it does. Cause 5 writes a copy there only when the attempt that found the version overtaken had held
+copies to decide, because those copies can have passed it unapplied and its redelivery would be skipped. A copy held
+before the subscription declared commit order is how that happens on one thread. With no copies to decide, cause 5 logs
+an ERROR naming the key and the instance, then rethrows and the redelivery is skipped, as in 0.34.0. On a model that keeps
+the commit-order contract, a window then passes a version only after some deliverer applied it, so a copy would run its
+reaction again. Otherwise that ERROR shows a model that broke the contract. The first item under "What this does not close" is the one
+exception.
 
 ### Completion, quarantine and delete
 
@@ -282,6 +289,12 @@ and that ERROR shows a model that broke the commit-order contract.
 
 ### What this does not close
 
+- **An event a parallel deliverer's sweep passes on a feed in commit order.** It takes copies held before the subscription
+  declared commit order and two deliverers on one instance. A delivery reads the version as new and loses its save, and the
+  other deliverer's sweep passes the version and releases the last copy before this delivery's next attempt lists them. That
+  attempt has no copies to decide, so the delivery gets the ERROR above and its redelivery is skipped, and the reaction
+  never runs. A load that fails on that attempt ends the same way. Holding every overtaken version would close it, and would
+  also run the reaction again for every version another deliverer applied, which 0.34.0 doesn't do.
 - **An event overtaken in flight whose copy can't be written.** Take window 2, where `I2` fails, `I5` applies in flight
   and the plain-copy hold throws. The delivery is refused with an ERROR naming the event and the store failure, and its
   redelivery is then skipped as behind the window, so its reaction never runs. It takes two faults at once, a failing
@@ -294,7 +307,8 @@ and that ERROR shows a model that broke the commit-order contract.
   release. That is at-least-once, as a crash in a dispatch already is. A hold that loses to a release can insert a copy again after the event applied, which the next sweep releases while the marks still prove
   it, and applies once more when a reorder window has passed it. And the plain copy of a version that applied and was then
   passed by a full reorder window while this delivery of it was being handled applies again, and the WARN above says so.
-  A replay of a version the marks have forgotten applies again when its reads fail on the failure path too, because
-  nothing then says it is behind the window, and there is no WARN.
+  Where the delivery holds, that can't be told from a version passed unapplied, and the other answer is a loss. A replay of
+  a version the marks have forgotten applies again when its reads fail on the failure path of a delivery that holds,
+  because nothing then says it is behind the window, and there is no WARN.
 - **A copy left on a completed instance is storage only.** It can never apply. The next input to that instance releases
   it, and `delete` removes it. A TTL on the instance collection doesn't remove it, and the runbook's query finds it.

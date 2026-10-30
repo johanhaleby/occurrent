@@ -57,9 +57,9 @@ import static org.slf4j.LoggerFactory.getLogger;
 /**
  * What a failed version costs on a feed that delivers in commit order and on one that does not. A feed in commit order
  * redelivers a failed event in place, so a version the instance cannot list as pending is logged at ERROR and not
- * kept, except where the store holds events and the version was overtaken in flight, which is kept as a plain copy
- * because a redelivery of it would be skipped. A held copy that failed is kept on any feed, because the copy exists
- * only if some delivery held it. The window of two puts version 2 behind it once versions 3 to 8 are applied.
+ * kept, except where the attempt that found the version overtaken in flight had held copies to decide, which is kept
+ * as a plain copy because a redelivery of it would be skipped. A held copy that failed is kept on any feed, because
+ * the copy exists only if some delivery held it. The window of two puts version 2 behind it once versions 3 to 8 are applied.
  */
 @DisplayName("SagaCommitOrderFailure")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -202,7 +202,7 @@ class SagaCommitOrderFailureTest {
     class WhenAWindowOfTheFailedEventsTypeIsAppliedBeforeTheFailureIsKept {
 
         @Test
-        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_held_as_a_plain_copy_and_its_failure_is_rethrown() {
+        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_not_held_and_its_failure_is_rethrown() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
@@ -216,35 +216,25 @@ class SagaCommitOrderFailureTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(dispatcher.failure),
-                    () -> assertThat(onlyHeldRef()).satisfies(ref -> assertAll(
-                            () -> assertThat(ref.key()).isEqualTo(KEY_OF_TWO),
-                            () -> assertThat(ref.startEvent()).isFalse(),
-                            () -> assertThat(ref.failingSince()).isNull())),
+                    () -> assertThat(heldIndex()).isEmpty(),
                     () -> assertThat(pending()).isEmpty()
             );
         }
 
         @Test
-        void an_event_that_failed_after_its_delivery_saw_it_as_new_logs_no_error_and_reacts_once_when_it_is_delivered_again() {
+        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_logged_at_error() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
             model.deliver(ID, placedAt(1));
             dispatcher.failReservationOf("two");
             dispatcher.beforeReservationOf("two", () -> deliverItems(model, 3, 8));
-            catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
-            dispatcher.stopFailingReservationOf("two");
 
             // When
-            Throwable redelivery = catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
+            catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
 
             // Then
-            assertAll(
-                    () -> assertThat(errors()).isEmpty(),
-                    () -> assertThat(redelivery).isNull(),
-                    () -> assertThat(dispatcher.issued()).containsOnlyOnce(reserve("two")),
-                    () -> assertThat(heldIndex()).isEmpty()
-            );
+            assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("saw as new").contains(KEY_OF_TWO));
         }
 
         @Test
@@ -271,7 +261,7 @@ class SagaCommitOrderFailureTest {
         }
 
         @Test
-        void an_event_whose_first_save_lost_to_a_window_is_held_as_a_plain_copy_and_the_overtaken_delivery_is_rethrown() {
+        void an_event_whose_first_save_lost_to_a_window_is_not_held_and_the_overtaken_delivery_is_rethrown() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
@@ -284,33 +274,24 @@ class SagaCommitOrderFailureTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isNotNull().hasMessageContaining(KEY_OF_TWO),
-                    () -> assertThat(onlyHeldRef()).satisfies(ref -> assertAll(
-                            () -> assertThat(ref.key()).isEqualTo(KEY_OF_TWO),
-                            () -> assertThat(ref.startEvent()).isFalse(),
-                            () -> assertThat(ref.failingSince()).isNull())),
+                    () -> assertThat(heldIndex()).isEmpty(),
                     () -> assertThat(pending()).isEmpty()
             );
         }
 
         @Test
-        void an_event_whose_first_save_lost_to_a_window_logs_no_error_and_is_applied_once_when_it_is_delivered_again() {
+        void an_event_whose_first_save_lost_to_a_window_is_logged_at_error() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
             model.deliver(ID, placedAt(1));
             store.beforeNextCompareAndSave(() -> deliverItems(model, 3, 8));
-            catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
 
             // When
-            Throwable redelivery = catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
+            catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
 
             // Then
-            assertAll(
-                    () -> assertThat(errors()).isEmpty(),
-                    () -> assertThat(redelivery).isNull(),
-                    () -> assertThat(stored().state().items()).containsOnlyOnce("two"),
-                    () -> assertThat(heldIndex()).isEmpty()
-            );
+            assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("saw as new").contains(KEY_OF_TWO));
         }
 
         @Test
