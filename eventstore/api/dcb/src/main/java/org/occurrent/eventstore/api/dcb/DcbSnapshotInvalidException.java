@@ -100,9 +100,9 @@ public class DcbSnapshotInvalidException extends RuntimeException {
 
     /**
      * This refusal, marked as thrown by the read of an application service's attempt, with {@code this} as its cause.
-     * The default retry strategies start a later attempt only after an append failed its condition, so nothing was
-     * appended when this is thrown. A retry strategy that also retries after a committed append runs the command again
-     * by itself.
+     * That attempt has appended nothing. The mark says nothing about an earlier attempt of the same execute, which has
+     * committed if the retry strategy retried after a committed append. Without a transaction, a synchronous subscription
+     * that throws what the retry strategy retries on does that.
      *
      * @return the marked exception to throw
      */
@@ -123,8 +123,9 @@ public class DcbSnapshotInvalidException extends RuntimeException {
 
     /**
      * Whether an application service marked this refusal with {@link #beforeAppend()}. A caller can then read in full
-     * and decide again without running a command twice, even when an earlier attempt of the same execute already decided.
-     * A refusal without the mark can come from a synchronous subscription, after the append committed.
+     * and decide again, since the attempt that threw it appended nothing. It can't tell whether an earlier attempt of the
+     * same execute committed, see {@link #beforeAppend()}. A refusal without the mark can come from a synchronous
+     * subscription, after the append committed.
      */
     public boolean isBeforeAppend() {
         return beforeAppend;

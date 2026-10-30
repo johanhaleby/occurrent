@@ -778,7 +778,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - When the store reported no versions, or didn't confirm the append, the snapshot isn't saved. The first skip for each
   reason logs a warning, and later ones log at debug.
 - A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot and logs a warning at start, since a read of every event
-  has no marker versions.
+  has no marker versions. A decider over `DcbCriteria.all()` saves no snapshot either, so every command reads every
+  event of the store, and the first skip logs a warning.
 - Inside a transaction of yours a read reports no versions, so a decider that runs in one reads the whole
   boundary and saves no snapshot.
 - The same holds on an application service with synchronous subscriptions, since it runs every execute in its
@@ -811,6 +812,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   To process every event, resume a catch-up subscription from the checkpoint it stores.
 - A record pattern over `Snapshot` with three bindings stops compiling. `UpgradeToOccurrent_0_35` adds
   `var markerVersions, var highestFoldedPosition`.
+- A `SnapshotPolicy` of your own that reads `SnapshotDecision.newVersion()` gets 0 from a DCB decider, where 0.34.0 gave
+  it the position of the append. Use `eventsSinceSnapshot()`.
 
 ## A catch-up needs the event store itself
 

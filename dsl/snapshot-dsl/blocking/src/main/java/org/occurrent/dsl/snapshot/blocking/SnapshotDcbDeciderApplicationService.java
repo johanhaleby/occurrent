@@ -169,7 +169,7 @@ public final class SnapshotDcbDeciderApplicationService<E> {
         } catch (DcbSnapshotInvalidException e) {
             // After a decision the append may have committed, for example when a synchronous subscription throws this
             // without a transaction, and reading in full would run the command twice. A refusal marked as before the
-            // append is the read of a retry, and the default retry strategy retries only a failed append condition
+            // append comes from a read, so the attempt that threw it appended nothing
             if (base.markerVersions().isEmpty() || (decided.get() && !e.isBeforeAppend())) {
                 throw e;
             }

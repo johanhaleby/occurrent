@@ -37,10 +37,9 @@ import java.util.Optional;
 /**
  * A {@link SnapshotStore} backed by MongoDB. Each snapshot is stored as one document in the store's collection, keyed
  * by the snapshot key, carrying the folded {@code state}, the {@code version} it was folded up to, and the {@code
- * schemaVersion}. A DCB snapshot stores its {@code markerVersions} and {@code highestFoldedPosition} instead of a {@code version}, and a
- * document with marker versions but no position is treated as unreadable. The state is
- * serialized with the same {@code MongoConverter} the rest of the application uses, so any type Spring Data can map is
- * supported.
+ * schemaVersion}. A DCB snapshot stores its {@code markerVersions} and {@code highestFoldedPosition} instead of a
+ * {@code version}, and a document with marker versions but no position is treated as unreadable. The state is serialized
+ * with the same {@code MongoConverter} the rest of the application uses, so any type Spring Data can map is supported.
  *
  * @param <S> The snapshot state type.
  */

@@ -189,8 +189,8 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
                         return executeFrom(base, criteria, commands, dcbDecider, refuseNullState, decided)
                             .onErrorResume(DcbSnapshotInvalidException.class, e -> {
                                 // After a decision the append may have committed, and reading in full would run the
-                                // command twice. A refusal marked as before the append is the read of a retry, and
-                                // the default retry strategy retries only a failed append condition
+                                // command twice. A refusal marked as before the append comes from a read, so the
+                                // attempt that threw it appended nothing
                                 if (base.markerVersions().isEmpty() || (decided.get() && !e.isBeforeAppend())) {
                                     return Mono.error(e);
                                 }

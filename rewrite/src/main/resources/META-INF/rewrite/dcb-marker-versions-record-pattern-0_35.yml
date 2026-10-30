@@ -22,7 +22,7 @@ description: >-
   components for marker versions (ADR 148), so a record pattern naming only the original components stops compiling. Rewrites a
   four-binding DcbAppendResult pattern and a three-binding DcbEventStream pattern by appending var markerVersions,
   a four-binding DcbReadOptions pattern by appending var versionsRequested and var afterVersions, and a
-  three-binding Snapshot pattern by appending var markerVersions, in a switch
+  three-binding Snapshot pattern by appending var markerVersions and var highestFoldedPosition, in a switch
   case or an instanceof pattern alike. A pattern of any other arity is left alone. This is unconditional, since a
   record pattern's arity is a compiler-enforced fact rather than a judgement call. See
   doc/migration/upgrading-to-0.35.0.md.

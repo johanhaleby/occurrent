@@ -36,11 +36,11 @@ public final class SkippedSaves {
         /**
          * The event store reported no marker versions to save at.
          */
-        NO_MARKER_VERSIONS("the event store reported no marker versions to save the snapshot at. That happens inside a transaction, on a store that doesn't report them, and when a marker was removed and created again between the read and the append"),
+        NO_MARKER_VERSIONS("the event store reported no marker versions to save the snapshot at. That happens on a boundary with no markers yet, over DcbCriteria.all(), inside a transaction, on a store that doesn't report them, and when a marker was removed and created again between the read and the append"),
         /**
          * The append wasn't confirmed as durably committed.
          */
-        UNCONFIRMED("the append isn't confirmed as committed. That happens inside a transaction the caller owns, when the append isn't majority-committed yet, and on a store that doesn't implement DcbAppendConfirmation");
+        UNCONFIRMED("the append isn't confirmed as committed. That happens when the append isn't majority-committed yet, and on a store that doesn't implement DcbAppendConfirmation");
 
         private final String description;
 
