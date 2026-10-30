@@ -16,6 +16,8 @@
 
 package org.occurrent.eventstore.mongodb.dcb.internal;
 
+import com.mongodb.MongoCommandException;
+import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken.MarkerObservation;
@@ -28,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * The check of a conditional append with a consistency token on the MongoDB stores (ADR 149). It compares what the read
@@ -36,6 +39,8 @@ import java.util.Set;
  */
 @NullMarked
 public final class DcbAppendConditionCheck {
+
+    private static final int COMMAND_NOT_FOUND = 59;
 
     private DcbAppendConditionCheck() {
     }
@@ -53,7 +58,7 @@ public final class DcbAppendConditionCheck {
     }
 
     /**
-     * The markers can't rule out a matching event committed after the read, and the events can't be asked.
+     * The markers can't rule out a matching event committed after the read, and the events can't settle it.
      */
     public record Refuse() implements Outcome {
     }
@@ -63,7 +68,7 @@ public final class DcbAppendConditionCheck {
      *
      * @param items the criteria items the markers didn't settle
      */
-    public record Query(List<ItemQuery> items) implements Outcome {
+    public record QueryEvents(List<ItemQuery> items) implements Outcome {
     }
 
     /**
@@ -87,10 +92,11 @@ public final class DcbAppendConditionCheck {
      * @param token    the token of the condition
      * @param criteria the criteria of the condition
      * @param current  the marker observation of every marker key of {@code criteria}
+     * @param queryAllowed whether the store may query the events, see {@link #queryAllowed(Function)}
      * @throws IllegalArgumentException if the token doesn't hold exactly the marker keys of {@code criteria}, which means
      *                                  this store's read didn't create it
      */
-    public static Outcome check(DcbConsistencyToken token, DcbCriteria criteria, Map<String, MarkerObservation> current) {
+    public static Outcome check(DcbConsistencyToken token, DcbCriteria criteria, Map<String, MarkerObservation> current, boolean queryAllowed) {
         Set<String> keys = DcbMarkerVersionsSupport.queryMarkerKeys(criteria);
         Map<String, MarkerObservation> read = token.markers();
         if (!read.keySet().equals(keys)) {
@@ -125,7 +131,37 @@ public final class DcbAppendConditionCheck {
             List<String> selectionKeys = item.tags().isEmpty() ? movedKeys : DcbMarkerVersionsSupport.selectionKeys(item);
             items.add(new ItemQuery(item, selectionKeys.stream().map(key -> new KeySelection(key, read.get(key).version())).toList()));
         }
-        return items.isEmpty() ? new Pass() : new Query(items);
+        if (items.isEmpty()) {
+            return new Pass();
+        }
+        return queryAllowed ? new QueryEvents(items) : new Refuse();
+    }
+
+    /**
+     * Whether a transaction reads the markers and the events from one snapshot on this deployment, so the store may query
+     * the events (ADR 149). It's true for a replica set, and false for a mongos, a load balancer in front of one and
+     * anything else that doesn't answer like a replica set. Every failure except a server that doesn't know {@code hello}
+     * propagates.
+     *
+     * @param runCommand runs a command against the store's database, outside any transaction
+     */
+    public static boolean queryAllowed(Function<Document, Document> runCommand) {
+        Document answer = Objects.requireNonNull(helloOrIsMaster(runCommand), "The server sent no answer to hello or isMaster");
+        return answer.get("setName") != null && !"isdbgrid".equals(answer.get("msg"));
+    }
+
+    // MongoDB 4.2.0 to 4.2.9 don't know hello. The Spring templates wrap the driver's exception, so the causes are walked.
+    private static Document helloOrIsMaster(Function<Document, Document> runCommand) {
+        try {
+            return runCommand.apply(new Document("hello", 1));
+        } catch (RuntimeException e) {
+            for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+                if (cause instanceof MongoCommandException commandException && commandException.getErrorCode() == COMMAND_NOT_FOUND) {
+                    return runCommand.apply(new Document("isMaster", 1));
+                }
+            }
+            throw e;
+        }
     }
 
     private static boolean saw(MarkerObservation atRead) {

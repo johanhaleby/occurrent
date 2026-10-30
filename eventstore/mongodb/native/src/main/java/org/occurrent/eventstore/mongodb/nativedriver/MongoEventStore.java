@@ -122,6 +122,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final boolean streamPositionEnabled;
     private final boolean requireBackfilledPosition;
     private final boolean resumeFromMarkerVersions;
+    private final boolean appendCheckMayQueryEvents;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
@@ -173,6 +174,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
+        this.appendCheckMayQueryEvents = dcbEnabled && DcbAppendConditionCheck.queryAllowed(database::runCommand);
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -701,11 +703,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (expectedToken.isPresent()) {
             // The condition carries the consistency token the command observed when it read the query
             // (DcbEventStream.consistencyToken()). The check compares each of the query's markers with what the read
-            // saw of it (ADR 0149). This is immune to read-watermark overshoot, unlike a position-based check, because
-            // marker versions bump inside the append transaction at commit, not when positions are reserved. The check
-            // can't yet ask the events, so an item the markers don't settle refuses the append.
-            Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), queryMarkers(clientSession, condition.criteria()));
-            conflict = !(DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current) instanceof DcbAppendConditionCheck.Pass);
+            // saw of it, and then queries the events above those versions for an item that needs it (ADR 0149). This is
+            // immune to read-watermark overshoot, unlike a position-based check, because marker versions bump inside the
+            // append transaction at commit, not when positions are reserved.
+            Map<String, Document> markers = queryMarkers(clientSession, condition.criteria());
+            Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
+            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, appendCheckMayQueryEvents)) {
+                case DcbAppendConditionCheck.Pass ignored -> false;
+                case DcbAppendConditionCheck.Refuse ignored -> true;
+                case DcbAppendConditionCheck.QueryEvents query -> eventCollection.find(clientSession, or(query.items().stream()
+                        .map(item -> and(toBsonFilter(item.item()), DcbMarkerVersionsDocuments.selectionFilter(DcbMarkerVersionsDocuments.selections(item, markers))))
+                        .toList())).projection(Projections.include(ID)).limit(1).first() != null;
+            };
         } else {
             // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than
             // marker versions, so it means "currently exists" (surviving deletes and marker pruning) rather than

@@ -30,11 +30,13 @@ import static java.util.Objects.requireNonNull;
  * event was committed after the read that returned the token (see {@link DcbEventStream#consistencyToken()}). On the
  * MongoDB stores, a tag-scoped or type-scoped append committed after a read with {@link DcbCriteria#all()} doesn't make
  * it fail (see {@link #wholeStoreLock(DcbConsistencyToken)}). A store may also make it fail when no matching event was
- * committed. The MongoDB stores can do that, for example when an event committed after the read shares a tag with
- * {@code criteria} but doesn't match it, or when another conditional append on the same criteria committed after the
- * read, whatever events it appended. The MongoDB stores rely on a marker document being deleted only in a transaction
- * that also finds no event with its tag or type, at read concern snapshot on a sharded cluster, and not while a 0.34 node
- * can still append, since 0.34 recreates a deleted marker with no epoch and restarts its version at 1.
+ * committed. The MongoDB stores can do that on a replica set, for example when a marker document was deleted after the
+ * read or a 0.34 node appended after it. On anything else, such as a sharded cluster, they can also do that when an
+ * event committed after the read has every tag of a criteria item but doesn't match it, or when another conditional
+ * append on the same criteria committed after the read, whatever events it appended. The MongoDB stores rely on a
+ * marker document being deleted only in a transaction that also finds no event with its tag or type, at read concern
+ * snapshot on a sharded cluster, and not while a 0.34 node can still append, since 0.34 recreates a deleted marker with
+ * no epoch and restarts its version at 1.
  * <p>
  * A token belongs to the criteria it was read with, so the constructor throws {@link IllegalArgumentException} when the
  * token's criteria aren't the same as {@code criteria}. Every factory goes through the constructor, so this happens
