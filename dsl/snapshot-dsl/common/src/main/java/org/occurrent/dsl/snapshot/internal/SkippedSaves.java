@@ -40,7 +40,7 @@ public final class SkippedSaves {
         /**
          * The append wasn't confirmed as durably committed.
          */
-        UNCONFIRMED("the append isn't confirmed as committed. That happens when the append isn't majority-committed yet, and on a store that doesn't implement DcbAppendConfirmation");
+        UNCONFIRMED("the append isn't confirmed as committed. That happens, for example, when the append isn't majority-committed yet, when the store's check of it fails, and on a store that doesn't implement DcbAppendConfirmation");
 
         private final String description;
 
