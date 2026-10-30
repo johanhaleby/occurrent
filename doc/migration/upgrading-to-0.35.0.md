@@ -1127,8 +1127,9 @@ that subscription to `DEFAULT` later continues from the checkpoint it stored.
 
 The checkpoint is the one the starter's durable subscription model stores. An application that supplies its own
 `FluxSubscriptionModel` or `Subscribable` gets no durable model from the starter. A `RegisteringSubscribable`, such as
-`SynchronousSubscriptionModel`, does not count. With its own model, `NOW` with `DEFAULT` starts where that model's default start does, and `BEGINNING_OF_TIME` with `DEFAULT`
-replays the history again after every restart, because nothing stores a checkpoint.
+`SynchronousSubscriptionModel`, does not count. With its own model, the restart behaviour above is that model's: `NOW`
+with `DEFAULT` starts where its default start does, and whether `BEGINNING_OF_TIME` with `DEFAULT` continues or replays
+again depends on whether it stores a checkpoint.
 
 A subscription that handled an event before the upgrade normally has a checkpoint stored already, because the old start
 stored one after each event too. The first restart after the upgrade continues from it, and `startAt` is not looked at
