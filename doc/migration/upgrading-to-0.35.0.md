@@ -22,6 +22,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
   `DcbStartAt` without a `default`.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
+- [A record pattern over `NativeMongoSubscription` stops compiling](#a-record-pattern-over-nativemongosubscription-stops-compiling).
+  `NativeMongoSubscription` gains a third record component. **Breaks the build** if you use a record pattern over it.
 
 ### Sagas
 
@@ -74,7 +76,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
   throws `UnsupportedStartAtException`. Compiles unchanged.
 - [A MongoDB subscription model refuses a catch-up's checkpoint](#a-mongodb-subscription-model-refuses-a-catch-ups-checkpoint).
   A subscribe at a `GlobalCheckpoint` or a `CatchupTimeCheckpoint`, or at a dynamic start that returns one, is refused
-  with `UnsupportedStartAtException` instead of opening at the present. Compiles unchanged.
+  with `UnsupportedStartAtException` instead of opening at the present. Compiles unchanged, except a record pattern
+  over `NativeMongoSubscription`.
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   Every subscription a catch-up subscription runs on MongoDB, which in Spring Boot is every subscription by default.
   Compiles unchanged.
@@ -126,6 +129,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - `org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35` adds the new bindings to a record pattern over
   `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`. See
   [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions).
+- `org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35` adds the new binding to a record pattern over
+  `NativeMongoSubscription`. See
+  [A record pattern over `NativeMongoSubscription` stops compiling](#a-record-pattern-over-nativemongosubscription-stops-compiling).
 
 ## A global position is no longer a saga redelivery key
 
@@ -943,6 +949,24 @@ Subscribe through the catch-up subscription model that stored the checkpoint. Fo
 returns `DcbStartAt.beginning()`, subscribe through a model composed with `DcbCatchupSubscriptionModel` or
 `ReactorDcbCatchupSubscriptionModel`, which replays the history before going live, or return `DcbStartAt.now()` when
 the subscription doesn't need the history.
+
+### A record pattern over `NativeMongoSubscription` stops compiling
+
+The `Subscription` that `NativeMongoSubscriptionModel.subscribe(..)` returns is a `NativeMongoSubscription`, and it
+now holds the failure that `waitUntilStarted(..)` throws, as a third record component called `startFailure`. A record
+pattern has to name every component of the canonical constructor:
+
+```java
+// Before, stops compiling
+case NativeMongoSubscription(var id, var latch) -> ...
+
+// After
+case NativeMongoSubscription(var id, var latch, var startFailure) -> ...
+```
+
+`org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35`, which `UpgradeToOccurrent_0_35` runs, adds the
+binding to a `switch` case and an `instanceof` pattern alike. Constructor calls aren't affected. The two-argument
+constructor stays, and `waitUntilStarted(..)` on an instance built with it only waits.
 
 ## A subscription whose resume token is gone stops instead of restarting from now
 

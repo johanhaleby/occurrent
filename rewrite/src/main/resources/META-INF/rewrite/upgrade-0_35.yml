@@ -22,3 +22,4 @@ description: >-
   the release changes.
 recipeList:
   - org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35
+  - org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35
