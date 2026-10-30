@@ -23,22 +23,31 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.occurrent.annotation.DcbSubscription;
+import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
+import org.springframework.data.annotation.Id;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -47,10 +56,13 @@ import tools.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -68,6 +80,13 @@ import static org.awaitility.Awaitility.await;
  * Both boots share one MongoDB replica set but use isolated collections per scenario (see {@code bootArgs}), so the
  * three scenarios below can run against the same container without interfering with each other despite the fixed,
  * compile-time-constant annotation attributes forcing one subscriber class per scenario.
+ * <p>
+ * The {@code NOW} scenarios boot a separate application, {@link NowRestartApplication}, and cover both
+ * {@link DcbSubscription} and a DCB {@link Projection}, which share the DCB start-position computation. Each boot
+ * writes the events named by {@code test.before-subscribe} before any subscription registers and, from an
+ * {@link ApplicationRunner}, the events named by {@code test.after-start}. The last of those is a marker: it is
+ * written after everything else, so once an annotation has handled it, whatever it was going to handle for the events
+ * before it has arrived and the whole handled list can be asserted.
  */
 @DisplayName("DcbSubscription resumeBehavior across an application restart")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -129,6 +148,69 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         } finally {
             ctx2.close();
         }
+    }
+
+    enum NowAnnotated {
+        DCB_SUBSCRIPTION(DcbSubscriptionNowDefault.class, DcbSubscriptionNowSameAsStartAt.class),
+        DCB_PROJECTION(DcbProjectionNowDefault.class, DcbProjectionNowSameAsStartAt.class);
+
+        final Class<? extends Handled> withDefault;
+        final Class<? extends Handled> withSameAsStartAt;
+
+        NowAnnotated(Class<? extends Handled> withDefault, Class<? extends Handled> withSameAsStartAt) {
+            this.withDefault = withDefault;
+            this.withSameAsStartAt = withSameAsStartAt;
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(NowAnnotated.class)
+    void now_with_default_resume_behavior_ignores_history_on_first_boot_and_handles_events_written_while_down_after_restart(NowAnnotated annotated) {
+        restartNow("dcb-now-default-" + annotated.name().toLowerCase(), annotated.withDefault,
+                List.of("live-1"),
+                List.of("while-down-1", "live-2"));
+    }
+
+    @ParameterizedTest
+    @EnumSource(NowAnnotated.class)
+    void now_with_same_as_start_at_starts_at_the_present_again_after_restart_and_misses_events_written_while_down(NowAnnotated annotated) {
+        restartNow("dcb-now-same-as-start-at-" + annotated.name().toLowerCase(), annotated.withSameAsStartAt,
+                List.of("live-1"),
+                List.of("live-2"));
+    }
+
+    private static void restartNow(String databaseName, Class<? extends Handled> handlerType,
+                                   List<String> expectedFirstBoot, List<String> expectedSecondBoot) {
+        ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
+                nowBootArgs(databaseName, "historic-1,historic-2", "live-1"));
+        try {
+            Handled handler = firstBoot.getBean(handlerType);
+            awaitHandled(handler, "live-1");
+            assertThat(handler.names()).containsExactlyElementsOf(expectedFirstBoot);
+        } finally {
+            firstBoot.close();
+        }
+
+        ConfigurableApplicationContext secondBoot = SpringApplication.run(NowRestartApplication.class,
+                nowBootArgs(databaseName, "while-down-1", "live-2"));
+        try {
+            Handled handler = secondBoot.getBean(handlerType);
+            awaitHandled(handler, "live-2");
+            assertThat(handler.names()).containsExactlyElementsOf(expectedSecondBoot);
+        } finally {
+            secondBoot.close();
+        }
+    }
+
+    private static void awaitHandled(Handled handler, String marker) {
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(handler.names()).contains(marker));
+    }
+
+    private static String[] nowBootArgs(String databaseName, String beforeSubscribe, String afterStart) {
+        return Stream.concat(Arrays.stream(bootArgs(databaseName)), Stream.of(
+                "--test.before-subscribe=" + beforeSubscribe,
+                "--test.after-start=" + afterStart)).toArray(String[]::new);
     }
 
     private static String[] bootArgs(String databaseName) {
@@ -220,6 +302,48 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         }
     }
 
+    @SpringBootApplication
+    @EnableOccurrent
+    static class NowRestartApplication {
+
+        @Bean
+        CloudEventTypeMapper<TestEvent> testEventCloudEventTypeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter(CloudEventTypeMapper<TestEvent> typeMapper) {
+            return newConverter(typeMapper);
+        }
+
+        @Bean
+        NowEventWriter nowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter,
+                                      @Value("${test.before-subscribe}") String beforeSubscribe,
+                                      @Value("${test.after-start}") String afterStart) {
+            return new NowEventWriter(dcbEventStore, cloudEventConverter, beforeSubscribe, afterStart);
+        }
+
+        @Bean
+        DcbSubscriptionNowDefault dcbSubscriptionNowDefault() {
+            return new DcbSubscriptionNowDefault();
+        }
+
+        @Bean
+        DcbSubscriptionNowSameAsStartAt dcbSubscriptionNowSameAsStartAt() {
+            return new DcbSubscriptionNowSameAsStartAt();
+        }
+
+        @Bean
+        DcbProjectionNowDefault dcbProjectionNowDefault() {
+            return new DcbProjectionNowDefault();
+        }
+
+        @Bean
+        DcbProjectionNowSameAsStartAt dcbProjectionNowSameAsStartAt() {
+            return new DcbProjectionNowSameAsStartAt();
+        }
+    }
+
     private static CloudEventConverter<TestEvent> newConverter(CloudEventTypeMapper<TestEvent> typeMapper) {
         return new JacksonCloudEventConverter.Builder<TestEvent>(new ObjectMapper(), URI.create("urn:occurrent:dcb-resume-behavior"))
                 .typeMapper(typeMapper)
@@ -257,6 +381,38 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         @PostConstruct
         void appendWhileDown() {
             append(dcbEventStore, cloudEventConverter, new TestEvent("while-down-1"));
+        }
+    }
+
+    static class NowEventWriter implements ApplicationRunner {
+        private final DcbEventStore dcbEventStore;
+        private final CloudEventConverter<TestEvent> cloudEventConverter;
+        private final List<String> beforeSubscribe;
+        private final List<String> afterStart;
+
+        NowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter, String beforeSubscribe, String afterStart) {
+            this.dcbEventStore = dcbEventStore;
+            this.cloudEventConverter = cloudEventConverter;
+            this.beforeSubscribe = List.of(beforeSubscribe.split(","));
+            this.afterStart = List.of(afterStart.split(","));
+        }
+
+        // Subscriptions register once every singleton exists, so these are written before any of them starts. A
+        // subscription starting at the present can still receive what the same MongoClient wrote up to a second
+        // earlier, so the pause keeps them out of reach of the NOW subscribers.
+        @PostConstruct
+        void writeBeforeSubscribe() throws InterruptedException {
+            beforeSubscribe.forEach(this::write);
+            Thread.sleep(1500);
+        }
+
+        @Override
+        public void run(ApplicationArguments args) {
+            afterStart.forEach(this::write);
+        }
+
+        private void write(String name) {
+            append(dcbEventStore, cloudEventConverter, new TestEvent(name));
         }
     }
 
@@ -307,6 +463,65 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         List<TestEvent> received() {
             return received;
         }
+    }
+
+    interface Handled {
+        List<String> names();
+    }
+
+    abstract static class Recording implements Handled {
+        private final CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+
+        void record(String name) {
+            handled.add(name);
+        }
+
+        @Override
+        public List<String> names() {
+            return List.copyOf(handled);
+        }
+    }
+
+    static class DcbSubscriptionNowDefault extends Recording {
+        @DcbSubscription(id = "dcb-now-sub-default", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.DEFAULT)
+        void onEvent(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class DcbSubscriptionNowSameAsStartAt extends Recording {
+        @DcbSubscription(id = "dcb-now-sub-same", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        void onEvent(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class DcbProjectionNowDefault extends Recording {
+        @Projection(id = "dcb-now-projection-default", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.DEFAULT)
+        DcbProjection<Seen, TestEvent, String> projection() {
+            return recordingProjection(this::record);
+        }
+    }
+
+    static class DcbProjectionNowSameAsStartAt extends Recording {
+        @Projection(id = "dcb-now-projection-same", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        DcbProjection<Seen, TestEvent, String> projection() {
+            return recordingProjection(this::record);
+        }
+    }
+
+    private static DcbProjection<Seen, TestEvent, String> recordingProjection(Consumer<String> onEvent) {
+        var projection = org.occurrent.dsl.projection.Projection.<Seen, TestEvent, String>builder(new Seen("none"))
+                .id(TestEvent::name)
+                .on(TestEvent.class, (state, event) -> {
+                    onEvent.accept(event.name());
+                    return new Seen(event.name());
+                })
+                .build();
+        return new DcbProjection<>(projection, DcbCriteria.tags(Tag.parse("test:resume-behavior")));
+    }
+
+    record Seen(@Id String id) {
     }
 
     record TestEvent(String eventId, Date timestamp, String name) {
