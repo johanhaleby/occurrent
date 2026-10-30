@@ -504,8 +504,8 @@ class LateRegistrationOnANonBlockingThreadTest {
         });
     }
 
-    // A NOW start under the default resume behavior is where the durable model would start without one, so it reads
-    // storage and the feed position first and hands over to the wrapped model after the bean is returned.
+    // A NOW start under the default resume behavior is where the durable model would start without one. It reads storage
+    // and the feed position first, and the bean does not wait for the hand-over to the wrapped model.
     @Test
     void a_lazy_subscription_starting_now_with_the_default_resume_behavior_on_the_durable_model_resolved_on_a_parallel_thread_subscribes_from_the_feed_position() {
         runner.withUserConfiguration(DurableModelConfiguration.class, LazyStartPositionsConfiguration.class).run(context -> {
