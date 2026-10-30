@@ -710,6 +710,45 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
+        void an_answer_that_throws_the_refusal_type_naming_the_present_after_a_cursor_opened_restarts_the_subscription_and_delivers_later_events() throws Exception {
+            // Given a dynamic position that answers a live checkpoint, then throws the refusal type naming the present, then answers a live checkpoint
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint live = liveStart();
+            AtomicInteger answers = new AtomicInteger();
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            // And a listener the model asks only once the cursor has opened, and which delivers no event
+            CountDownLatch cursorOpened = new CountDownLatch(1);
+            subscription.addQuietPositionListener(id -> {
+                if (id.equals(subscriptionId)) {
+                    cursorOpened.countDown();
+                }
+                return Mono.empty();
+            });
+            subscription.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
+                if (answers.incrementAndGet() == 2) {
+                    throw new UnsupportedStartAtException(StartAt.now(), "thrown by the answer");
+                }
+                return StartAt.checkpoint(live);
+            }), cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent)));
+            assertThat(cursorOpened.await(10, SECONDS)).as("the cursor opened").isTrue();
+
+            // When it is paused and resumed, so the position is asked again after a cursor has opened
+            subscription.pauseSubscription(subscriptionId);
+            subscription.resumeSubscription(subscriptionId);
+
+            // Then the throw restarts the subscription like any other failure, so the position is asked again
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(answers).as("answers").hasValueGreaterThanOrEqualTo(3));
+            assertThat(subscription.isRunning(subscriptionId)).isTrue();
+
+            // And it delivers an event written afterwards
+            NameDefined written = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(written)).block();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(delivered).extracting(CloudEvent::getId).contains(written.eventId()));
+        }
+
+        @Test
         void a_resume_after_the_cursor_opened_is_not_refused_when_the_position_answers_a_catchup_position() throws Exception {
             // Given a dynamic position that answers the present first and a global checkpoint after, and a listener the model asks only once the cursor has opened
             String subscriptionId = UUID.randomUUID().toString();

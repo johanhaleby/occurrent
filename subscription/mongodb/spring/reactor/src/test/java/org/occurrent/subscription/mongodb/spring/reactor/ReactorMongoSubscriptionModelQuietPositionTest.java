@@ -71,6 +71,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -364,23 +365,33 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
     }
 
     @Test
-    void a_quiet_position_listener_that_fails_before_reading_with_the_refusal_type_naming_a_catchup_position_is_asked_again_and_the_subscription_keeps_running() {
-        // Given a listener that fails the first time it is asked before reading
+    void a_quiet_position_listener_that_fails_before_reading_with_the_refusal_type_naming_a_catchup_position_is_asked_again_and_the_change_stream_opens_at_the_same_position() {
+        // Given a listener whose first answer fails with the refusal type once an event has been written, so the event is written after the change stream opened and before the model reads
         AtomicInteger asked = new AtomicInteger();
+        CompletableFuture<Void> written = new CompletableFuture<>();
         subscriptionModel.addQuietPositionListener(subscriptionId -> asked.incrementAndGet() == 1
-                ? Mono.error(new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown before reading"))
+                ? Mono.fromFuture(written).then(Mono.<Function<Checkpoint, Mono<Void>>>error(new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown before reading")))
                 : Mono.just(quietPosition -> Mono.empty()));
         CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
-
-        // When it subscribes
         subscriptionModel.subscribe("refusing-before-reading", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event)));
-
-        // Then the listener is asked again, and the subscription keeps delivering
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(asked).as("times the listener was asked").hasValueGreaterThanOrEqualTo(2));
-        assertThat(subscriptionModel.isRunning("refusing-before-reading")).isTrue();
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(asked).as("times the listener was asked").hasValue(1));
         NameDefined matched = nameDefined();
         write(matched);
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));
+        // A later second than the first change stream opened at, so a reopen at the present is told apart from one at that position
+        await().pollDelay(Duration.ofSeconds(2)).until(() -> true);
+
+        // When the listener fails
+        written.complete(null);
+
+        // Then the listener is asked again, and the change stream opens at the operation time the first one opened at
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
+        assertThat(commands.changeStreamsOpened().getLast().changeStreamStage().get("startAtOperationTime")).as("operation time the second change stream opens at")
+                .isEqualTo(commands.changeStreamsOpened().getFirst().changeStreamStage().get("startAtOperationTime"));
+        assertThat(asked.get()).as("times the listener was asked").isGreaterThanOrEqualTo(2);
+
+        // And the event written before the reopen is delivered once, while the subscription keeps running
+        await().atMost(10, SECONDS).during(Duration.ofSeconds(1)).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));
+        assertThat(subscriptionModel.isRunning("refusing-before-reading")).isTrue();
     }
 
     @Test
