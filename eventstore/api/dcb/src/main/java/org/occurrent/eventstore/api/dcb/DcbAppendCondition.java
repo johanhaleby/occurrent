@@ -27,9 +27,11 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * {@code criteria} describes the events that would conflict with the append. When {@code consistencyToken} is empty,
  * the append fails if any existing event matches {@code criteria}. When it's present, the append fails if a matching
- * event was committed after the read that returned the token (see {@link DcbEventStream#consistencyToken()}). A store
- * may also make it fail when no matching event was committed. The MongoDB stores can do that when an event committed
- * after the read shares a type or a tag with {@code criteria} but doesn't match it.
+ * event was committed after the read that returned the token (see {@link DcbEventStream#consistencyToken()}). On the
+ * MongoDB stores, a tag-scoped or type-scoped append committed after a read with {@link DcbCriteria#all()} doesn't make
+ * it fail (see {@link #wholeStoreLock(DcbConsistencyToken)}). A store may also make it fail when no matching event was
+ * committed. The MongoDB stores can do that when an event committed after the read shares a type or a tag with
+ * {@code criteria} but doesn't match it.
  * <p>
  * A token belongs to the criteria it was read with, so the constructor throws {@link IllegalArgumentException} when the
  * token's criteria aren't the same as {@code criteria}. Every factory goes through the constructor, so this happens
