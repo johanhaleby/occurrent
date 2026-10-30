@@ -34,6 +34,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.annotation.Saga;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
+import org.occurrent.dsl.saga.SagaHeldEvents;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.springboot.common.OccurrentProperties;
@@ -53,6 +54,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 /**
  * {@code occurrent.saga.quarantine-after} reaches the runner of an {@code @Saga} at startup. A positive value turns
@@ -172,7 +174,7 @@ class SagaQuarantineBudgetStartupTest {
         @SuppressWarnings("unchecked")
         @Bean
         SagaStateStore<TestState> sagaStateStore() {
-            return mock(SagaStateStore.class);
+            return mock(SagaStateStore.class, withSettings().extraInterfaces(SagaHeldEvents.class));
         }
 
         @Bean
