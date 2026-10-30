@@ -9,7 +9,7 @@ The compiler finds those for you. The other sections compile fine and behave dif
 ### Changes that can break the build
 
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
-  `SagaEnvelope` gains its 14th to 18th record components and `SagaRunnerConfig` a 6th. **Breaks the build** if you
+  `SagaEnvelope` gains its 14th and 15th record components and `SagaRunnerConfig` a 6th. **Breaks the build** if you
   use a record pattern over either.
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). `DomainEventFeed` and
   `CatchupProjectionFeed` lose both `accept(..)` overloads, on the blocking and the reactor stack. **Breaks the build**
@@ -363,7 +363,7 @@ exception reaches the subscription, whether or not quarantine is on, so a broker
 not lose it. An operator who replays the parked event after the instance has applied more than a window of later
 versions still gets it applied, once. An instance keeps every pending version until it applies, up to 10 000 in all,
 and logs a warning naming the stream and type once one stream's pending versions of one type outnumber the window. A
-failed version it cannot list is held instead, as
+failed version it cannot list is held instead on a subscription that doesn't declare commit order, as
 [A saga holds an event that arrives before its instance starts](#a-saga-holds-an-event-that-arrives-before-its-instance-starts)
 describes.
 
@@ -465,7 +465,9 @@ saga until one does. A saga on a model that answers true holds nothing and keeps
   stores one copy per event until then.
 - A failed event that the instance cannot list as pending is held too, and the next input applies it. That covers an
   instance at its limit of 10 000 pending versions, a pending write that keeps losing its compare-and-set or fails in the
-  store, and an event that another delivery passed by a whole reorder window while it was failing.
+  store, and an event that another delivery passed by a whole reorder window while it was failing. A subscription in
+  commit order holds such an event only when the delivery met a held copy of its own stream. Otherwise the exception
+  reaches the source, which retries it in place.
 - When a held event fails while it is applied, the delivery that was handling it is kept as a held event of its own, and
   the held event has its own quarantine clock. The delivery is refused, unless that clock has run out and quarantines the
   instance, which acknowledges it.
@@ -482,7 +484,8 @@ A saga on one of the shipped stores needs no code change. The MongoDB store crea
 after the saga's collection with `-held-events`, with an index on `sagaId` and `heldAt`. A deployment whose database
 role cannot create collections or indexes has to create it before the saga starts, or grant that.
 
-A `SagaStateStore` implemented outside this repository has to implement `SagaHeldEvents` as well, or `run` refuses it.
+A `SagaStateStore` implemented outside this repository has to implement `SagaHeldEvents` as well, or `run` refuses it,
+unless the subscription model declares that it delivers every subscription in commit order.
 It also has to persist the new `startMark` component of `SagaEnvelope`, described under
 [Stored saga state](#stored-saga-state-for-held-events) below.
 
@@ -544,8 +547,8 @@ replaying a parked event on an instance with quarantine on.
 
 ### Stored saga state
 
-A pending version whose own reaction failed records when it first failed, in a `pendingSince` list beside `pending` in
-`streamMarks`. A version with no entry there falls back to the failure record's `firstFailedAt` for the event the record
+A `pendingSince` list beside `pending` in `streamMarks` records when a pending version first failed. A version with no
+entry there falls back to the failure record's `firstFailedAt` for the event the record
 names, and any other event starts its clock on its next failure.
 
 ## The deprecated `accept(..)` on the projection feeds is removed
