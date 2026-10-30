@@ -135,13 +135,28 @@ class StartPositionSupportResumePointsTest {
     void with_a_bean_that_answers_null_a_now_start_resolves_to_now_and_the_bean_is_asked(Annotation annotation) {
         // Given
         StartPositionSupport support = supportAnswering(null);
-        Object start = withResumePoint(annotation, support, built(annotation, support, StartPosition.NOW, ResumeBehavior.DEFAULT));
+        Object start = withResumePoint(annotation, support, built(annotation, support, StartPosition.NOW, ResumeBehavior.SAME_AS_START_AT));
 
         // When
         List<@Nullable StartAt> resolved = resolveForEveryModel(start);
 
         // Then
         assertThat(resolved).hasSize(2).allSatisfy(startAt -> assertThat(startAt).isNotNull().matches(StartAt::isNow));
+        assertThat(asked).containsExactly(ID, ID);
+    }
+
+    @ParameterizedTest
+    @EnumSource(Annotation.class)
+    void with_a_bean_that_answers_null_a_now_start_that_resumes_the_default_way_resolves_to_the_subscription_model_default_and_the_bean_is_asked(Annotation annotation) {
+        // Given
+        StartPositionSupport support = supportAnswering(null);
+        Object start = withResumePoint(annotation, support, built(annotation, support, StartPosition.NOW, ResumeBehavior.DEFAULT));
+
+        // When
+        List<@Nullable StartAt> resolved = resolveForEveryModel(start);
+
+        // Then
+        assertThat(resolved).hasSize(2).allSatisfy(startAt -> assertThat(startAt).isNotNull().matches(StartAt::isDefault));
         assertThat(asked).containsExactly(ID, ID);
     }
 

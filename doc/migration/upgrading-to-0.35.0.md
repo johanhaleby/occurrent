@@ -1136,6 +1136,12 @@ On the reactive starter:
 `NOW` with `SAME_AS_START_AT` still stores a checkpoint after each event, as before, and ignores it on restart. Changing
 that subscription to `DEFAULT` later continues from the checkpoint it stored.
 
+`NOW` with `DEFAULT` also records where the feed is when the subscription registers, the way any start from the model
+default does. If the durable model cannot read that position, it refuses the registration and the application does not
+start, where `NOW` used to start anyway. Setting `occurrent.subscription.start-when-no-start-position-can-be-recorded=true`
+starts it regardless, see
+[section 7 of the 0.34.0 guide](upgrading-to-0.34.0.md#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
+
 The checkpoint is the one the starter's durable subscription model stores. An application that supplies its own
 `FluxSubscriptionModel` or `Subscribable` gets no durable model from the starter. A `RegisteringSubscribable`, such as
 `SynchronousSubscriptionModel`, does not count. With its own model, the restart behaviour above is that model's: `NOW`

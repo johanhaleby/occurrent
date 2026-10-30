@@ -128,7 +128,6 @@ class StartPositionSupport {
     }
 
     // The DCB counterpart of nowThenResume.
-    @SuppressWarnings("removal")
     private DcbStartAt dcbNowThenResume(ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case SAME_AS_START_AT -> DcbStartAt.now();
@@ -137,8 +136,8 @@ class StartPositionSupport {
     }
 
     // Build the neutral StartAt over the unified global position. BEGINNING replays from global position 0,
-    // startAtGlobalPosition replays after a specific position, both applying the same replay-then-resume logic. NOW goes
-    // live through nowThenResume and DEFAULT goes straight to live.
+    // startAtGlobalPosition replays after a specific position, both applying the same replay-then-resume logic. NOW
+    // starts through nowThenResume, so under DEFAULT it resumes like the model default does.
     StartAt generateAgnosticStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtGlobalPosition, ResumeBehavior resumeBehavior) {
         if (startAtGlobalPosition >= 0) {
             return replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(startAtGlobalPosition)), resumeBehavior);

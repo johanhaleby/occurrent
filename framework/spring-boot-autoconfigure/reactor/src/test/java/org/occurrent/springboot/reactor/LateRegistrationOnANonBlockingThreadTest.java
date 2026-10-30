@@ -26,6 +26,7 @@ import org.occurrent.annotation.Capability;
 import org.occurrent.annotation.Catchup;
 import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.Projection;
+import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.Snapshot;
 import org.occurrent.annotation.Source;
 import org.occurrent.annotation.StartPosition;
@@ -488,7 +489,8 @@ class LateRegistrationOnANonBlockingThreadTest {
         });
     }
 
-    // A NOW start subscribes on the calling thread, and the durable model hands it to the wrapped model before it returns.
+    // A NOW start that stays NOW on a resume subscribes on the calling thread, and the durable model hands it to the
+    // wrapped model before it returns.
     @Test
     void a_lazy_subscription_starting_now_on_the_durable_model_resolved_on_a_parallel_thread_subscribes_before_the_bean_is_returned() {
         runner.withUserConfiguration(DurableModelConfiguration.class, LazyStartPositionsConfiguration.class).run(context -> {
@@ -499,6 +501,21 @@ class LateRegistrationOnANonBlockingThreadTest {
 
             assertThat(delegate.isSubscribed("late-now")).isTrue();
             assertThat(delegate.startedAt.get("late-now").isNow()).isTrue();
+        });
+    }
+
+    // A NOW start under the default resume behavior is where the durable model would start without one, so it reads
+    // storage and the feed position first and hands over to the wrapped model after the bean is returned.
+    @Test
+    void a_lazy_subscription_starting_now_with_the_default_resume_behavior_on_the_durable_model_resolved_on_a_parallel_thread_subscribes_from_the_feed_position() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, LazyStartPositionsConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            RecordingDelegate delegate = delegate(context);
+
+            assertThat(resolvedOnAParallelThread(context, "nowResumingHolder")).isInstanceOf(NowResumingHolder.class);
+            awaitUntil(() -> delegate.isSubscribed("late-now-resuming"));
+
+            assertThat(delegate.startedAt.get("late-now-resuming")).hasToString(GlobalCheckpoint.of(1).asString());
         });
     }
 
@@ -1591,6 +1608,12 @@ class LateRegistrationOnANonBlockingThreadTest {
 
         @Lazy
         @Bean
+        Marker nowResumingHolder() {
+            return new NowResumingHolder();
+        }
+
+        @Lazy
+        @Bean
         Marker dcbSubscriptionHolder(List<String> handled) {
             return new DcbSubscriptionHolder(handled);
         }
@@ -1631,7 +1654,7 @@ class LateRegistrationOnANonBlockingThreadTest {
             return Mono.empty();
         }
 
-        @org.occurrent.annotation.Subscription(id = "late-mixed-now", startAt = StartPosition.NOW)
+        @org.occurrent.annotation.Subscription(id = "late-mixed-now", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
         Mono<Void> fromNow(TestEvent event) {
             return Mono.empty();
         }
@@ -1657,7 +1680,14 @@ class LateRegistrationOnANonBlockingThreadTest {
     }
 
     static class NowHolder implements Marker {
-        @org.occurrent.annotation.Subscription(id = "late-now", startAt = StartPosition.NOW)
+        @org.occurrent.annotation.Subscription(id = "late-now", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        Mono<Void> on(TestEvent event) {
+            return Mono.empty();
+        }
+    }
+
+    static class NowResumingHolder implements Marker {
+        @org.occurrent.annotation.Subscription(id = "late-now-resuming", startAt = StartPosition.NOW)
         Mono<Void> on(TestEvent event) {
             return Mono.empty();
         }
