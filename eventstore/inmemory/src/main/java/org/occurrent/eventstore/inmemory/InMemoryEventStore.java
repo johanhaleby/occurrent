@@ -332,12 +332,12 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             // highWatermark (the store head) is the consistency boundary and is deliberately independent of the
             // direction, skip, and limit selection, so a partial read still protects an append from later matches.
             if (!options.versionsRequested()) {
-                return new DcbEventStream(applySelection(matchingEvents, options), highWatermark);
+                return new DcbEventStream(applySelection(matchingEvents, options), highWatermark, DcbConsistencyToken.of(criteria, highWatermark));
             }
             Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
             if (criteria instanceof DcbCriteria.MatchAll) {
                 afterVersions.ifPresent(saved -> DcbMarkerVersionsSupport.requireResumable(criteria, saved, Map.of()));
-                return new DcbEventStream(applySelection(matchingEvents, options), highWatermark);
+                return new DcbEventStream(applySelection(matchingEvents, options), highWatermark, DcbConsistencyToken.of(criteria, highWatermark));
             }
             Set<String> markerKeys = DcbMarkerVersionsSupport.queryMarkerKeys(criteria);
             Map<String, DcbMarkerVersionsSupport.ObservedMarker> observed = observedMarkers(markerKeys);
@@ -346,7 +346,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 matchingEvents = matchingEvents.stream().filter(event -> appendedAfter(event, criteria, afterVersions.get())).toList();
             }
             Optional<DcbMarkerVersions> reported = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(markerKeys, observed) : Optional.empty();
-            return new DcbEventStream(applySelection(matchingEvents, options), highWatermark, DcbConsistencyToken.of(highWatermark), reported);
+            return new DcbEventStream(applySelection(matchingEvents, options), highWatermark, DcbConsistencyToken.of(criteria, highWatermark), reported);
         }
     }
 
@@ -501,8 +501,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         synchronized (state) {
             if (condition != null) {
                 // Positions are assigned and committed atomically under the lock, so the read head is a sound
-                // concurrency boundary. The token value is simply the position observed at read time.
-                long afterPosition = condition.consistencyToken().map(DcbConsistencyToken::value).orElse(0L);
+                // concurrency boundary. The token's version is the position observed at read time.
+                long afterPosition = condition.consistencyToken().map(DcbConsistencyToken::version).orElse(0L);
                 boolean fulfilled = allEvents()
                         .filter(event -> position(event) > afterPosition)
                         .noneMatch(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, condition.criteria()));
