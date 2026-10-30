@@ -712,8 +712,8 @@ describes it.
 
 ### What stays the same
 
-- A conditional append is still refused when an event that matches its criteria committed after the read, since such
-  an event has every tag of the item it matches.
+- A conditional append on criteria with tags is still refused when an event that matches them committed after the
+  read, since such an event has every tag of the item it matches.
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
 - Nothing changes on disk, so 0.34.0 and 0.35.0 nodes can append to the same store. A conditional append from a 0.34.0
