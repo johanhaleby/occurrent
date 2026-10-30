@@ -144,7 +144,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
             // The read and the decision run outside the transaction, since a store reports no marker versions inside one.
-            // A conflict in the append with this read's token comes back here and starts over from a fresh read.
+            // The append's condition holds this read's token, so a decision on events that changed fails it and starts over here.
             final DcbEventStream eventStream;
             try {
                 eventStream = readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions);

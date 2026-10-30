@@ -802,8 +802,11 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   dispatch run in that transaction. Your domain function no longer runs in it, so when the executor opens the
   transaction, a write your domain function makes is no longer part of it. An exception from it no longer marks a
   transaction you own rollback-only, so if you catch it and continue, that transaction commits. The executor's conflict
-  retry re-runs only the append, with the token of the first read. When the condition then fails, the service's retry
-  strategy reads and decides again.
+  retry re-runs the append, the re-read and the dispatch, with the token of the first read, and not the read or your
+  domain function. A handler can run again on such a retry, as it could before. When the condition then fails, the
+  service's retry strategy reads and decides again. By default the service allows 5 attempts and the Spring executors
+  about 15, so a command on a contended boundary can fail sooner, with the same budget a service without synchronous
+  subscriptions has.
 
 ### Stored snapshots
 

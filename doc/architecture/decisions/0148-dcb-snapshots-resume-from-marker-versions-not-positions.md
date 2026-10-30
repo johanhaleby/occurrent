@@ -624,11 +624,14 @@ is the order the service has without synchronous subscriptions, and these are th
 
 - The append's condition holds the token of the read, so a transaction around the read adds nothing to the check. A
   command that would have seen another append's events fails its condition and starts over.
-- The executor's own conflict retry from [ADR 74](0074-retry-only-where-the-transaction-is-owned.md) re-runs only the
-  append, with that same token. When the conflicting append matched the boundary the condition now fails, and the
+- The executor's own conflict retry from [ADR 74](0074-retry-only-where-the-transaction-is-owned.md) re-runs the
+  append, the re-read and the dispatch, with that same token, and not the read or the decision. A handler can run again
+  on such a retry, as it could before. When the conflicting append matched the boundary the condition now fails, and the
   service's retry strategy reads and decides again. Otherwise the append goes through on the decision it already made.
-  So the decision still runs against the current events, and a conflict that only the condition can see spends an
-  attempt of the service's retry strategy instead of one of the executor's.
+  So the decision still runs against the current events of its boundary, and a conflict that only the condition can see
+  spends an attempt of the service's retry strategy instead of one of the executor's. By default the service allows 5
+  attempts and the Spring executors about 15, so a command on a contended boundary can fail sooner, with the same budget
+  a service without synchronous subscriptions has.
 - The domain function no longer runs in the executor's transaction, and a decision with no new events no longer opens
   one. An exception from the domain function doesn't pass through the executor either, so in a transaction the caller
   owns it no longer marks that transaction rollback-only. A caller that catches it and continues now commits.
@@ -645,7 +648,7 @@ versions.
 ### The decider confirms its append before it saves
 
 The snapshot decider saves after `applicationService.execute` returns. The store reads the events and their versions in a transaction of its
-own, so the state the decider saves is complete. That holds with synchronous subscriptions too, as the next section
+own, so the state the decider saves is complete. That holds with synchronous subscriptions too, as the previous section
 explains. The seventh review's first blocker came from building the watermark after commit, and this
 design never does that.
 
@@ -1004,7 +1007,8 @@ the store unchanged.
   upgrade, because its markers don't exist yet or have no epoch yet. Its append gives them one, and the next command
   can save.
 - On a DCB application service with synchronous subscriptions the domain function no longer runs in the executor's
-  transaction, and the executor's conflict retry re-runs only the append, with the token of the first read.
+  transaction. The executor's conflict retry re-runs the append, the re-read and the dispatch, with the token of the
+  first read, and not the read or the domain function.
 - A decider inside a transaction the caller owns never saves a snapshot. Saving after that transaction commits isn't in
   0.35.0, and this is a known limitation, tracked in #1307. The warning lists a transaction the caller owns as one of
   the causes.
