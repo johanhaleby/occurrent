@@ -38,8 +38,9 @@ import static org.mockito.Mockito.mock;
  * when the subscribe runs, NOW or the subscription model default, has to be subscribed where it is, or whatever is
  * written between getting the bean and the subscribe is skipped. So the start that
  * {@code startAt = NOW} produces must never be classified as fixed, whatever the {@code resumeBehavior}. A replay
- * start, {@code startAt = BEGINNING_OF_TIME} on a model that supports history replay, is the same whenever it runs, so
- * it is fixed whatever the {@code resumeBehavior}.
+ * start, {@code startAt = BEGINNING_OF_TIME} on a model that supports history replay, is stable whenever it runs, so
+ * it is fixed whatever the {@code resumeBehavior}. Under {@code DEFAULT} it reads the checkpoint storage when it runs,
+ * but the result is either a replay from the start or a resume from the stored position, never a start at the present.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class StreamSubscriptionStartDependingOnWhenItSubscribesTest {

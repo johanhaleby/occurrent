@@ -94,7 +94,8 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
     void beginning_of_time_with_same_as_start_at_replays_the_whole_history_again_after_restart() {
         restart("reactive-resume-bot-same", BeginningOfTimeSameAsStartAt.class, FirstBootEnds.WHEN_THE_MARKER_IS_DELIVERED,
                 List.of("historic-1", "historic-2", "live-1"),
-                List.of("historic-1", "historic-2", "live-1", "while-down-1", "live-2"));
+                List.of("historic-1", "historic-2", "live-1", "while-down-1", "live-2"),
+                Checkpoints.NONE_STORED);
     }
 
     @Test
@@ -125,6 +126,13 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
                 List.of("while-down-1", "live-2"));
     }
 
+    // Whether a boot also asserts that the subscription has no checkpoint stored. Only a start that is dynamic for the
+    // durable layer, BEGINNING_OF_TIME with SAME_AS_START_AT, stores none. A NOW start does store its first position.
+    private enum Checkpoints {
+        NOT_ASSERTED,
+        NONE_STORED
+    }
+
     // What has to have happened before the first boot is closed. A subscription that resumes from a stored position
     // resumes from whatever was stored when the context closed, and the position of an event is stored after its
     // handler returned, so closing on the delivery alone races the store.
@@ -141,6 +149,12 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
     // The subscription id doubles as the name of the database, so each scenario starts from an empty one.
     private static <S extends RecordingSubscriber> void restart(String subscriptionId, Class<S> subscriberType, FirstBootEnds firstBootEnds,
                                                                 List<String> expectedFirstBoot, List<String> expectedSecondBoot) {
+        restart(subscriptionId, subscriberType, firstBootEnds, expectedFirstBoot, expectedSecondBoot, Checkpoints.NOT_ASSERTED);
+    }
+
+    private static <S extends RecordingSubscriber> void restart(String subscriptionId, Class<S> subscriberType, FirstBootEnds firstBootEnds,
+                                                                List<String> expectedFirstBoot, List<String> expectedSecondBoot,
+                                                                Checkpoints checkpoints) {
         String firstBootAfterStart = firstBootEnds == FirstBootEnds.WHEN_THE_INITIAL_CHECKPOINT_IS_STORED ? "" : "live-1";
         ConfigurableApplicationContext firstBoot = SpringApplication.run(RestartApplication.class,
                 bootArgs(subscriptionId, "historic-1,historic-2", firstBootAfterStart));
@@ -155,6 +169,9 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
                 case WHEN_THE_INITIAL_CHECKPOINT_IS_STORED -> awaitInitialCheckpoint(firstBoot, subscriptionId);
             }
             assertThat(subscriber.names()).containsExactlyElementsOf(expectedFirstBoot);
+            if (checkpoints == Checkpoints.NONE_STORED) {
+                assertNoCheckpointStored(firstBoot, subscriptionId, "live-1");
+            }
         } finally {
             firstBoot.close();
         }
@@ -165,6 +182,9 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
             S subscriber = secondBoot.getBean(subscriberType);
             awaitDelivered(subscriber, "live-2");
             assertThat(subscriber.names()).containsExactlyElementsOf(expectedSecondBoot);
+            if (checkpoints == Checkpoints.NONE_STORED) {
+                assertNoCheckpointStored(secondBoot, subscriptionId, "live-2");
+            }
         } finally {
             secondBoot.close();
         }
@@ -190,6 +210,20 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
         assertThat(markerCheckpoint).describedAs("the checkpoint %s was delivered with", marker).isNotNull();
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(storage.read(subscriptionId).blockOptional().map(Checkpoint::asString)).contains(markerCheckpoint));
+    }
+
+    // A negative assertion passes just as well when nothing has been stored yet, so it has to be made after a store would
+    // have happened. Every subscriber bean runs in every context against the same database, and the control one,
+    // BEGINNING_OF_TIME with DEFAULT, receives the same marker and does store the position of it. Once that checkpoint
+    // is there the checkpoint storage has demonstrably been written for this marker, and the absence is not a missed race.
+    private static void assertNoCheckpointStored(ConfigurableApplicationContext context, String subscriptionId, String marker) {
+        BeginningOfTimeDefault control = context.getBean(BeginningOfTimeDefault.class);
+        awaitDelivered(control, marker);
+        awaitCheckpointed(context, "reactive-resume-bot-default", control, marker);
+        CheckpointStorage storage = context.getBean(CheckpointStorage.class);
+        assertThat(storage.read(subscriptionId).blockOptional())
+                .describedAs("the checkpoint stored for %s, a start that is dynamic for the durable layer stores none", subscriptionId)
+                .isEmpty();
     }
 
     // Booted with SpringApplication.run rather than @SpringBootTest, so there is no @ServiceConnection and the url is
