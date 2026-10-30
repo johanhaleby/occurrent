@@ -93,8 +93,8 @@ compare-and-set, which a lost save retries from the first read.
 doesn't show applied was not forgotten by that read. A save can only forget a version by trimming it from the marks, and
 the attempt that makes the save has swept on the instance it read, or its compare-and-set fails because that instance
 changed. So a copy is released before the marks that prove it can go. A release that fails in the sweep fails the
-attempt and its input isn't saved. An apply save the sweep already made stands, and the next attempt releases the copy
-on the marks.
+attempt and its input isn't saved. The failure counts as the copy's, so the delivery is kept and not blamed. An apply
+save the sweep already made stands, and the next attempt releases the copy on the marks.
 
 A copy can apply behind the reorder window, and the marks don't remember a version behind the window. So the save that
 applies a version keeps it in `applied`, even behind the window, until the next save of its type. That next save's
@@ -183,7 +183,8 @@ failure, and the delivery is refused.
 Then the failure is rethrown, and the subscription's retry or parking runs as for any failing input. When quarantine is on
 and the copy's clock has run past `quarantineAfter`, the instance is quarantined with the copy's key on its failure
 record and the delivery is acknowledged, unless the delivery could not be held. That charge reads the instance and the
-index again first, and quarantines nothing when the copy is gone or the marks prove it applied. A timer's attempt that fails on a copy
+index again first, and quarantines nothing when the copy is gone or the marks prove it applied. A copy with no key has no
+marks, so a save of it whose response was lost counts as the failure it looks like. A timer's attempt that fails on a copy
 charges the same clock, and the timer stays due. [ADR 157](0157-a-sagas-quarantine-budget-runs-per-input.md) has the budget
 per input, and the copy's clock is how a held event takes part in it.
 
@@ -214,13 +215,17 @@ move the instance past the version, and the same exception takes the failure pat
 The evidence for cause 5 is per delivery and keyed. Each call of `onCloudEvent` keeps the keys it classified new by
 position alone, meaning a classification that would still say new with every marker that keeps a version outstanding
 ignored, and that it has not yet seen applied by a save that returned true. Cause 5 applies only when the failing
-event's key is in that set. A delivery whose first successful read already finds the version behind the window has an
+event's key is in that set. An event that has a held copy is not kept there, because that copy going from the list means
+it applied. A delivery whose first successful read already finds the version behind the window has an
 empty set, so it is an arrival behind the window, ADR 154's own row, and gets no copy. A read that fails on the failure
 path can't tell, so the copy is written.
 
 Where the delivery does not hold, causes 1 to 4 rethrow as in 0.34.0, and cause 5 logs an ERROR naming the key and the
 instance, then rethrows. On a feed that keeps the commit-order contract, a window can pass a version only after some
-deliverer applied it, so that ERROR shows a model that broke the contract.
+deliverer applied it, so that ERROR shows a model that broke the contract. The exception is a copy held before the
+subscription declared commit order, which can apply and pass the version. That event is then lost, with that ERROR. It
+takes a deploy that changes the subscription's order while copies are still held, and the runbook's query finds them
+first.
 
 ### Completion, quarantine and delete
 

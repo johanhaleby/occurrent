@@ -1072,7 +1072,7 @@ class SagaHeldEventTest {
 
             // Then
             assertAll(
-                    () -> assertThat(refused).hasMessageContaining("could not apply the held event '" + ORDER_STREAM + "@2'"),
+                    () -> assertThat(refused).hasMessageContaining("could not apply or release the held event '" + ORDER_STREAM + "@2'"),
                     () -> assertThat(refused).hasCause(reservationFailure));
         }
 
@@ -1147,7 +1147,7 @@ class SagaHeldEventTest {
 
             // Then
             assertAll(
-                    () -> assertThat(refused).hasMessageContaining("could not apply the held event '" + ORDER_STREAM + "@2'"),
+                    () -> assertThat(refused).hasMessageContaining("could not apply or release the held event '" + ORDER_STREAM + "@2'"),
                     () -> assertThat(refused).hasCause(evolveFailure),
                     () -> assertThat(failingSinceOfTheCopy()).isEqualTo(firstFailure),
                     () -> assertThat(store.find(ORDER).orElseThrow().failure()).isNull(),
@@ -1269,7 +1269,7 @@ class SagaHeldEventTest {
 
             // Then
             assertAll(
-                    () -> assertThat(refused).hasMessageContaining("could not apply the held event '" + OTHER_STREAM + "@1'").hasRootCauseMessage("cannot read held"),
+                    () -> assertThat(refused).hasMessageContaining("could not apply or release the held event '" + OTHER_STREAM + "@1'").hasRootCauseMessage("cannot read held"),
                     () -> assertThat(failingSinceOf(OTHER_STREAM + "@1")).as("the clock of the copy").isEqualTo(firstFailure),
                     () -> assertThat(failingSinceOf(ORDER_STREAM + "@2")).as("the clock of the driver").isNull(),
                     () -> assertThat(unreadable.heldIndex(ORDER).stream().map(HeldEventRef::key)).as("the copy and the driver").containsExactlyInAnyOrder(OTHER_STREAM + "@1", ORDER_STREAM + "@2"),
@@ -1691,7 +1691,7 @@ class SagaHeldEventTest {
             holdWithoutMarkingADrain(9, itemAt(9, "nine"));
             failing.failNextRelease(new IllegalStateException("cannot release"));
             Throwable refused = catchThrowable(() -> execution.onCloudEvent(itemAt(9, "nine")));
-            assertThat(refused).as("the release fails after the save").hasMessage("cannot release");
+            assertThat(refused).as("the release fails after the save").hasMessageContaining("could not apply or release the held event '" + ORDER_STREAM + "@9'");
             assertThat(issuedReservationsOf("nine")).as("the first delivery applied the copy").hasSize(1);
             for (long version = 11; version <= 16; version++) {
                 deliver(execution, itemAt(version, "later-" + version));

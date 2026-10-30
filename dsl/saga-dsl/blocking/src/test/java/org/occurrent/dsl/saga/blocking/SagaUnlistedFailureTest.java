@@ -329,7 +329,7 @@ class SagaUnlistedFailureTest {
 
             // Then
             assertAll(
-                    () -> assertThat(thrown).hasMessageContaining("could not apply the held event '" + KEY_OF_TWO + "'"),
+                    () -> assertThat(thrown).hasMessageContaining("could not apply or release the held event '" + KEY_OF_TWO + "'"),
                     () -> assertThat(thrown).hasCause(handlerFailure),
                     () -> assertThat(store.delegate.heldIndex(BASKET)).extracting(HeldEventRef::key).containsExactly(KEY_OF_TWO),
                     () -> assertThat(store.delegate.heldIndex(BASKET)).hasSize(1)
