@@ -55,6 +55,11 @@ Moving the stores to `ClientSession.withTransaction` was considered and rejected
   the append started. The native store's 120 seconds applies to each `withTransaction` call, and its append runs that
   call inside a retry of 15 attempts, so the native store can wait longer overall. A caller with a shorter deadline of
   its own sees that deadline first.
+- A genuine integrity violation, such as a duplicate key that MongoDB does not label transient, is retried like a
+  conflict by the default executors, because Spring translates a WriteConflict to the same exception type. It fails
+  the same way every attempt, so the transaction callback runs again for up to two minutes and any side effect it
+  has outside the transaction repeats. Narrowing the predicate would miss an unlabelled collision that a retry does
+  resolve, and ADR 74 already chose it.
 - A reserved position block is still abandoned when an append exhausts its retries, so `dcbposition` can still have
   gaps, as ADR 21 says.
 - The reactive stream write retries a lost version race for an append with `StreamVersionWriteCondition.any()`. That is a

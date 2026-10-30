@@ -68,8 +68,9 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * <p>
      * {@link DataIntegrityViolationException} is matched as well as {@link TransientDataAccessException} because
      * MongoDB labels a WriteConflict transient while Spring translates it to the non-transient type, so the obvious
-     * predicate would miss the most common conflict there is. A genuine integrity violation is therefore retried too,
-     * which is wasteful rather than wrong since it fails the same way every attempt.
+     * predicate would miss the most common conflict there is. A genuine integrity violation is therefore retried too.
+     * It fails the same way every attempt, so the transaction callback runs again until the budget runs out, and any
+     * side effect it has outside the transaction repeats with it.
      */
     private static final RetryStrategy.Retry DEFAULT_CONFLICT_RETRY = RetryStrategy
             .exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
