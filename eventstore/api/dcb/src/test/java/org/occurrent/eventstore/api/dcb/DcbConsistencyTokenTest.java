@@ -99,6 +99,16 @@ class DcbConsistencyTokenTest {
     }
 
     @Test
+    void any_of_with_a_duplicated_alternative_is_the_same_criteria_as_any_of_without_it() {
+        DcbConsistencyToken withDuplicate = DcbConsistencyToken.of(DcbCriteria.anyOf(A, B, B), 3);
+        DcbConsistencyToken withoutDuplicate = DcbConsistencyToken.of(DcbCriteria.anyOf(A, B), 3);
+
+        assertThat(withDuplicate).isEqualTo(withoutDuplicate);
+        assertThat(withoutDuplicate).isEqualTo(withDuplicate);
+        assertThat(withDuplicate).hasSameHashCodeAs(withoutDuplicate);
+    }
+
+    @Test
     void types_is_not_the_same_criteria_as_any_of_the_single_types() {
         DcbConsistencyToken types = DcbConsistencyToken.of(DcbCriteria.types("A", "B"), 3);
         DcbConsistencyToken anyOfTypes = DcbConsistencyToken.of(DcbCriteria.anyOf(DcbCriteria.type("A"), DcbCriteria.type("B")), 3);

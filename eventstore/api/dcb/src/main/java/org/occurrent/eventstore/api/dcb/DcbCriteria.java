@@ -65,10 +65,10 @@ public sealed interface DcbCriteria permits DcbCriteria.MatchAll, DcbCriteria.It
      * Creates a criteria that matches every DCB event.
      * <p>
      * As a read criteria it matches everything. Take care using it as a {@link DcbAppendCondition} boundary. It's a
-     * whole-store optimistic lock that conflicts with other whole-store conditions but not with a concurrent tag-scoped
-     * or type-scoped append, so on a store taking concurrent scoped writes it can let through an append it should have
-     * refused (see ADR 30). It's correct for single-writer operations, and for a bootstrap append that only an empty
-     * store should accept.
+     * whole-store optimistic lock that conflicts with other whole-store conditions. On the MongoDB stores it doesn't
+     * conflict with a concurrent tag-scoped or type-scoped append, so a MongoDB store taking concurrent scoped writes can
+     * let through an append it should have refused (see ADR 30). It's correct for single-writer operations, and for a
+     * bootstrap append that only an empty store should accept.
      * <p>
      * When building an append condition, use {@link DcbAppendCondition#wholeStoreLock()} or
      * {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} instead of passing {@code all()} to

@@ -30,8 +30,9 @@ import static java.util.Objects.requireNonNull;
  * event was committed after the read that returned the token (see {@link DcbEventStream#consistencyToken()}). On the
  * MongoDB stores, a tag-scoped or type-scoped append committed after a read with {@link DcbCriteria#all()} doesn't make
  * it fail (see {@link #wholeStoreLock(DcbConsistencyToken)}). A store may also make it fail when no matching event was
- * committed. The MongoDB stores can do that when an event committed after the read shares a type or a tag with
- * {@code criteria} but doesn't match it.
+ * committed. The MongoDB stores can do that, for example when an event committed after the read shares a tag with
+ * {@code criteria} but doesn't match it, or when another conditional append on the same criteria committed after the
+ * read, whatever events it appended.
  * <p>
  * A token belongs to the criteria it was read with, so the constructor throws {@link IllegalArgumentException} when the
  * token's criteria aren't the same as {@code criteria}. Every factory goes through the constructor, so this happens
@@ -57,11 +58,11 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
     /**
      * Creates a condition that fails if any existing event matches {@code criteria}.
      * <p>
-     * With {@link DcbCriteria#all()} this is a whole-store optimistic lock that doesn't conflict with a concurrent
-     * tag-scoped or type-scoped append, so use it only for single-writer operations or for an append that only an empty
-     * store should accept (see ADR 30). Use scoped {@code criteria} for a consistency boundary on a store with several
-     * writers. Use {@link #wholeStoreLock()} instead of {@code failIfEventsMatch(DcbCriteria.all())}, so the call site says it's a
-     * whole-store lock and doesn't read like a read-everything query.
+     * With {@link DcbCriteria#all()} this is a whole-store optimistic lock. On the MongoDB stores it doesn't conflict
+     * with a concurrent tag-scoped or type-scoped append, so use it only for single-writer operations or for an append
+     * that only an empty store should accept (see ADR 30). Use scoped {@code criteria} for a consistency boundary on a
+     * store with several writers. Use {@link #wholeStoreLock()} instead of {@code failIfEventsMatch(DcbCriteria.all())},
+     * so the call site says it's a whole-store lock and doesn't read like a read-everything query.
      */
     public static DcbAppendCondition failIfEventsMatch(DcbCriteria criteria) {
         return new DcbAppendCondition(criteria, Optional.empty());
@@ -71,8 +72,8 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
      * Creates a condition that fails if an event matching the read's criteria was committed after the read that
      * returned {@code consistencyToken}. The condition's criteria are the ones the token was read with, so pass the
      * token from {@link DcbEventStream#consistencyToken()} unchanged. For a token read with {@link DcbCriteria#all()},
-     * this is the same condition as {@link #wholeStoreLock(DcbConsistencyToken)}, so on the
-     * MongoDB stores a tag-scoped or type-scoped append committed after the read doesn't make it fail.
+     * this is the same condition as {@link #wholeStoreLock(DcbConsistencyToken)}, so on the MongoDB stores a tag-scoped
+     * or type-scoped append committed after the read doesn't make it fail.
      */
     public static DcbAppendCondition failIfEventsMatch(DcbConsistencyToken consistencyToken) {
         requireNonNull(consistencyToken, "Consistency token cannot be null");
@@ -88,7 +89,7 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
      * @deprecated Use {@link #failIfEventsMatch(DcbConsistencyToken)}, which takes the criteria from the token. This
      * form still works, and it throws the same way when the criteria aren't the same.
      */
-    @Deprecated
+    @Deprecated(since = "0.35.0")
     public static DcbAppendCondition failIfEventsMatch(DcbCriteria criteria, DcbConsistencyToken consistencyToken) {
         requireNonNull(consistencyToken, "Consistency token cannot be null");
         return new DcbAppendCondition(criteria, Optional.of(consistencyToken));
@@ -99,8 +100,8 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
      * condition as {@code failIfEventsMatch(DcbCriteria.all())}, spelled out so it can't be mistaken for a
      * read-everything query at the call site.
      * <p>
-     * It doesn't conflict with a concurrent tag-scoped or type-scoped append (see ADR 30), so it's correct only for
-     * single-writer operations, or for a bootstrap append that only an empty store should accept.
+     * On the MongoDB stores it doesn't conflict with a concurrent tag-scoped or type-scoped append (see ADR 30), so it's
+     * correct only for single-writer operations, or for a bootstrap append that only an empty store should accept.
      */
     public static DcbAppendCondition wholeStoreLock() {
         return failIfEventsMatch(DcbCriteria.all());

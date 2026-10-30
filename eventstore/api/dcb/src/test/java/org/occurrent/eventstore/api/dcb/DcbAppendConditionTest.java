@@ -140,6 +140,18 @@ class DcbAppendConditionTest {
     }
 
     @Test
+    void the_deprecated_two_argument_fail_if_events_match_accepts_a_token_read_with_a_repeated_criterion_when_the_condition_has_that_criterion_once() {
+        DcbConsistencyToken tokenReadWithAorA = DcbConsistencyToken.of(DcbCriteria.anyOf(A, A), 3);
+
+        DcbAppendCondition condition = DcbAppendCondition.failIfEventsMatch(A, tokenReadWithAorA);
+
+        assertAll(
+                () -> assertThat(condition.criteria()).isSameAs(A),
+                () -> assertThat(condition.consistencyToken()).containsSame(tokenReadWithAorA)
+        );
+    }
+
+    @Test
     void the_constructor_accepts_a_criterion_and_an_items_holding_only_that_criterion() {
         DcbConsistencyToken tokenReadWithA = DcbConsistencyToken.of(A, 3);
 
