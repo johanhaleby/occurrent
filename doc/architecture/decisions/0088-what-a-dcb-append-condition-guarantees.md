@@ -7,9 +7,8 @@ Date: 2026-08-02
 Accepted. Part of #394, TCK phase 4.
 
 Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md). A condition can't be created with a token that holds other criteria than its own, and throws
-`IllegalArgumentException` before any store is called. On the MongoDB stores, an append that only shares a type with
-criteria that have tags no longer makes the check refuse a later append on them, so the check gives the same answer as
-in memory there.
+`IllegalArgumentException` before any store is called. On the MongoDB stores, sharing a type with a criteria item that
+has tags is no longer a reason for the check to refuse, as in memory.
 
 ## Context
 

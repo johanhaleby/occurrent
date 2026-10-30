@@ -111,7 +111,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
                     .as("A conditional append with a consistency token must report the versions its criteria ended at")
                     .isPresent();
             assertThat(result.markerVersions().orElseThrow().keys())
-                    .as("One entry per marker key of the criteria, a tag key per tag and a type key per type")
+                    .as("One entry per marker key of the criteria, a tag key per tag for an item with tags and a type key per type for an item without tags")
                     .containsExactly(KEY_A, KEY_DEPOSITED);
         }
 
@@ -125,6 +125,19 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
 
             assertThat(result.markerVersions().orElseThrow().keys())
                     .as("The events carry a region tag and a type, but the criteria names only the account tag")
+                    .containsExactly(KEY_A);
+        }
+
+        @Test
+        void reports_only_the_tag_key_for_a_criterion_with_both_a_type_and_a_tag() {
+            DcbCriteria criteria = DcbCriteria.type(DEPOSITED).tags(tag(ACCOUNT_A));
+            DcbEventStream decidedOn = dcbEventStore().read(criteria);
+
+            DcbAppendResult result = dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)),
+                    failIfEventsMatch(decidedOn.consistencyToken()));
+
+            assertThat(result.markerVersions().orElseThrow().keys())
+                    .as("Every event the criterion matches has the tag, so the tag key stands for it and the type key is left out")
                     .containsExactly(KEY_A);
         }
 
@@ -195,6 +208,19 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
 
             assertThat(read.markerVersions()).as("A full forward read that asks must report versions").isPresent();
             assertThat(read.markerVersions().orElseThrow().keys()).containsExactly(KEY_A, KEY_DEPOSITED);
+        }
+
+        @Test
+        void reports_only_the_tag_key_for_a_criterion_with_both_a_type_and_a_tag() {
+            DcbCriteria criteria = DcbCriteria.type(DEPOSITED).tags(tag(ACCOUNT_A));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
+
+            DcbEventStream read = dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions());
+
+            assertThat(read.events()).as("The read must have found the event, or it proves nothing").hasSize(1);
+            assertThat(read.markerVersions().orElseThrow().keys())
+                    .as("Every event the criterion matches has the tag, so the tag key stands for it and the type key is left out")
+                    .containsExactly(KEY_A);
         }
 
         @Test

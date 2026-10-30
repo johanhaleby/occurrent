@@ -49,6 +49,8 @@ other sections compile fine and behave differently, so read them first.
   token value saved under 0.34.0 isn't valid. **Breaks the build** if you create a token, call
   `new DcbEventStream(events, head)` or `new DcbDomainEventStream(events, head)`, or call `value()`, which a
   `DcbEventStore` of your own usually does.
+- [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, sharing a type
+  with a criteria item that has tags is no longer a reason for a condition to refuse.
 
 ### Subscriptions and catch-up
 
@@ -561,7 +563,9 @@ What is new:
 - `read(criteria, DcbReadOptions.afterVersions(saved))` returns every matching event appended after `saved`, including
   one that committed late below a position an earlier read saw. When the store can't compare `saved` with its own
   markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
-  full.
+  full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
+  always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
+  which returns only what comes after them, with no exception.
 - `DcbAppendConfirmation.isConfirmed(result)` answers whether an append is committed at majority, read outside any
   transaction of yours. The MongoDB stores and `InMemoryEventStore` implement it.
 
@@ -694,6 +698,56 @@ A recipe could rewrite `value()` to `version()`. That rename would compile, and 
 needs the criteria the read was given, and a recipe can't tell from the call site which criteria those were. Rewriting
 `failIfEventsMatch(criteria, token)` to `failIfEventsMatch(token)` would compile too, but a condition that used other
 criteria than its read would then append on the read's criteria instead of throwing.
+
+## Criteria with tags conflict on their tags
+
+On the MongoDB stores, the check of a conditional append with a token reads only the tag markers of an item with tags,
+and no longer the markers of its types. Sharing a type with such an item is then no longer a reason for the check to
+refuse. Such an item also no longer adds its type markers to what a conditional append increments.
+Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
+`SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
+`DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
+example. The MongoDB stores can still refuse an append the in-memory store accepts, for example after an event that has
+only one of the criteria's tags. With a token, an item without tags is checked against its type markers as before. The change is the
+first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
+[ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
+describes it.
+
+### What stays the same
+
+- A conditional append on criteria with tags is still refused when an event that matches them committed after the
+  read, unless the markers were pruned in between ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)).
+- Every append still increments a marker for each type and each tag of its events, so two appends of one type still
+  can't commit at the same time on MongoDB, whatever their tags.
+- This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the
+  limits in [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). A conditional
+  append from a 0.34.0 node still increments the type markers of its criteria, also for an item with tags. A conditional
+  append from a 0.35.0 node doesn't add them for such an item. A 0.35.0 check reads a type marker only for an item
+  without tags, so a 0.34.0 increment can make that check refuse an append and the command retry, and it can't let an
+  append through. This change doesn't stop you going back to 0.34.0 either, within the same limits.
+
+### Who is affected
+
+- **Code that counted on the refusal.** A command whose conditional append failed because an event of the same type
+  with other tags was appended can now succeed. If the decision depends on every event of that type, read with criteria
+  that hold only the type. A conditional append on `type("X").tags(a)` that appends an event of another type also no
+  longer makes an append with a token read on `type("X")` alone refuse, since it no longer increments that type marker.
+  When many commands append one type with different tags, an append that used to be refused can now wait for seconds in
+  the store's retries of a write conflict. When those retries run out, it fails with the store's write conflict exception,
+  `DataIntegrityViolationException` on the Spring stores, and not with `DcbAppendConditionNotFulfilledException`, so the
+  default retry of `GenericDcbApplicationService` doesn't retry it.
+- **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
+  `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
+  succeed, so a store that still reads the type marker for an item with tags fails the case.
+- **Code that saved a token value.** For an item with both types and tags, a 0.34.0 token value is a sum over its tag
+  and type markers, and 0.35.0 no longer counts the type markers of that item. An old value can then let an append through
+  that should have been refused. Read again instead, as
+  [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
+  says.
+- **Code or an operator that prunes markers.** For an item with both types and tags, a token no longer counts the type
+  markers, so a prune between the read and the append can let through a conflicting append that 0.34.0 refused, until
+  [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. Prune only when no command holds a token it
+  can still append with.
 
 ## A catch-up needs the event store itself
 

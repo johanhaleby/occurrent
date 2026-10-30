@@ -666,10 +666,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (condition != null) {
             markers = enforceAppendCondition(clientSession, condition, eventsToAppend, lastPosition);
         } else {
-            // An unconditional append still increments its events' markers, so a concurrent conditional append
-            // on an overlapping tag or type shares a marker, serializes against it, and its consistency-token
-            // check observes it. Without this, nothing forces a write-write conflict and a concurrent
-            // conditional append's snapshot could miss this append (write skew). See ADR 0021.
+            // An unconditional append still increments its events' markers, so a concurrent conditional append whose
+            // criteria match one of these events, other than DcbCriteria.all() (ADR 0030), shares a marker with it,
+            // serializes against it, and its check observes it. Without this, nothing forces a write-write conflict
+            // and a concurrent conditional append's snapshot could miss this append (write skew). See ADR 0021.
             markers = incrementConflictMarkers(clientSession, DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
         }
 
@@ -700,8 +700,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         final boolean conflict;
         if (expectedToken.isPresent()) {
             // The condition carries the consistency token the command observed when it read the query
-            // (DcbEventStream.consistencyToken()). If the query's markers have advanced since, a matching append
-            // committed after the read, so the condition fails. This is immune to read-watermark overshoot,
+            // (DcbEventStream.consistencyToken()). If the query's markers have advanced since, an append that shares
+            // one of them committed after the read, so the condition fails, also when that append's events don't
+            // match the query. This is immune to read-watermark overshoot,
             // unlike a position-based check, because marker versions bump inside the append transaction at
             // commit, not when positions are reserved (ADR 0021).
             conflict = consistencyToken(clientSession, condition.criteria()) != expectedToken.get().version();
@@ -718,20 +719,25 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // Increment a marker per key for the union of the query's keys and the appended events' keys. The increment
         // forces a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs
         // this check against the winner's committed increment. The query's markers are always incremented, so a
-        // concurrent matching append is serialized even when this append's own events do not match the query.
+        // concurrent append whose events match the query is serialized even when this append's own events do not
+        // match it. A query with DcbCriteria.all() is the exception, since no event has the match-all key among its
+        // own keys (ADR 0030).
         TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.criteria()));
         markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
         return incrementConflictMarkers(clientSession, markerKeys, lastPosition);
     }
 
-    // Increment a conflict marker per key. Two appends that can match a common event share at least one marker
-    // (ADR 0021), so the in-transaction increment forces a MongoDB write-write conflict and they serialize. The
-    // monotonically increasing version is also the optimistic-concurrency token (see consistencyToken): a reader
-    // snapshots a query's marker versions, and an append fails if any changed since. The stored lastPosition is
-    // informational.
+    // Increment a conflict marker per key. An event that matches a condition has at least one of the condition's
+    // query keys among its own keys (ADR 0021), so appending that event and the conditional append increment a
+    // common marker. A condition with DcbCriteria.all() is the exception, since no event has the match-all key
+    // among its own keys (ADR 0030). The in-transaction increment forces a MongoDB write-write conflict and they
+    // serialize. The version is also the optimistic-concurrency token (see
+    // consistencyToken): a reader snapshots a query's marker versions, and an append fails if any changed since. The
+    // stored lastPosition is informational.
     // The marker collection holds one document per distinct tag and type that has taken part in an append, and
     // nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection
-    // without bound. An operator can prune markers during quiescence, a later append recreates any it still needs.
+    // without bound. An operator can prune markers when no command holds a token it can still append with, and a later
+    // append recreates any it still needs.
     // Returns the incremented markers as this transaction left them, keyed by marker key, so the append stamps its
     // events with the versions it gave them (ADR 148).
     private Map<String, Document> incrementConflictMarkers(ClientSession clientSession, Set<String> markerKeys, long lastPosition) {
@@ -750,9 +756,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return DcbMarkerVersionsDocuments.markersByKey(dcbCheckpointCollection.find(clientSession, DcbMarkerVersionsDocuments.markersFilter(markerKeys)));
     }
 
-    // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. The sum is
-    // monotonically increasing (every append increments at least one marker), so it changes if and only if some
-    // append touched one of the query's markers since the reader observed it. Because versions bump inside the
+    // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. While the markers
+    // exist the sum only grows, so it changes when an append touches one of the query's markers after the reader
+    // observed it. A prune can bring the sum back to a value a reader holds (#1300). Because versions bump inside the
     // append transaction, not when positions are reserved, this token reflects only committed appends and is
     // immune to the read-watermark overshoot a position-based check suffers (ADR 0021).
     private long consistencyToken(@Nullable ClientSession clientSession, DcbCriteria criteria) {

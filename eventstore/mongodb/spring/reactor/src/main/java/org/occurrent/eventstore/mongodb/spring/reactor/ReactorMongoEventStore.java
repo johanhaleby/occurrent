@@ -551,9 +551,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                             if (condition != null) {
                                 conditionAndMarkers = enforceAppendCondition(condition, eventsToAppend, lastPosition);
                             } else {
-                                // An unconditional append still increments its events' markers, so a concurrent conditional
-                                // append on an overlapping tag or type shares a marker, serializes against it, and its
-                                // consistency-token check observes it. Without this, nothing forces a write-write conflict
+                                // An unconditional append still increments its events' markers, so a concurrent conditional append whose
+                                // criteria match one of these events, other than DcbCriteria.all() (ADR 0030), shares a marker with it,
+                                // serializes against it, and its check observes it. Without this, nothing forces a write-write conflict
                                 // and a concurrent conditional append's snapshot could miss this append (write skew). See ADR 0021.
                                 conditionAndMarkers = incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
                             }
@@ -577,8 +577,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         final Mono<Boolean> conflictMono;
         if (expectedToken.isPresent()) {
             // The condition carries the consistency token the command observed when it read the query. If the
-            // query's markers have advanced since, a matching append committed after the read, so the condition
-            // fails. Immune to read-watermark overshoot because marker versions bump inside the append
+            // query's markers have advanced since, an append that shares one of them committed after the read, so
+            // the condition fails, also when that append's events don't match the query. Immune to read-watermark
+            // overshoot because marker versions bump inside the append
             // transaction (ADR 0021).
             conflictMono = consistencyToken(condition.criteria(), mongoTemplate).map(actual -> actual != expectedToken.get().version());
         } else {
@@ -591,8 +592,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 return currentPosition().flatMap(position -> Mono.<Map<String, Document>>error(new DcbAppendConditionNotFulfilledException(condition, position)));
             }
             // Increment a marker per key for the union of the query's keys and the appended events' keys. Always
-            // increment the query's markers so a concurrent matching append is serialized even when this append's own
-            // events do not match the query.
+            // increment the query's markers so a concurrent append whose events match the query is serialized even
+            // when this append's own events do not match it. A query with DcbCriteria.all() is the exception, since no
+            // event has the match-all key among its own keys (ADR 0030).
             TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.criteria()));
             markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
             return incrementConflictMarkers(markerKeys, lastPosition);

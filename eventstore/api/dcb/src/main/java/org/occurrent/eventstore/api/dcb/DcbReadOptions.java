@@ -205,6 +205,10 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * The read throws {@link DcbSnapshotInvalidException} when the store can't compare the versions with its own, for
      * example after its markers were pruned or when resuming from versions is turned off. Read the boundary in full
      * with {@link #withVersions()} then. Combining this with a position bound throws {@link IllegalArgumentException}.
+     * <p>
+     * Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't always
+     * refuse versions from other criteria. Versions from a read on {@code type("X").tags(a)} pass on a read on
+     * {@code tags(a)}, which returns only what comes after them, with no exception.
      */
     public static DcbReadOptions afterVersions(DcbMarkerVersions markerVersions) {
         requireNonNull(markerVersions, "Marker versions cannot be null");
