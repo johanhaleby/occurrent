@@ -657,9 +657,12 @@ eventStore.append(newEvents, DcbAppendCondition.failIfEventsMatch(stream.consist
 ```
 
 Where you passed the criteria and the token separately, drop the criteria. If the append really needs other criteria
-than the read, read again with those criteria and use that token.
+than the read, read with those criteria before you decide, and decide from that read. A token read after the decision
+can hide an event committed in between, so don't swap in a fresh token for the one the decision was made with.
 
-Don't save a token value to use later. Read again when the command runs.
+Don't save a token value to use later. Read again when the command runs, and decide from that read. That includes a
+client's ETag. Replacing a stale ETag with a fresh token makes the append check against a read the client's decision
+wasn't made from.
 
 ### Why there is no recipe
 

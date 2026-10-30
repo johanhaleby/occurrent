@@ -26,7 +26,9 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * {@link DcbEventStore#read(DcbCriteria, DcbReadOptions)} returns a token on {@link DcbEventStream#consistencyToken()}.
  * Pass it to {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)}, and the store refuses the append when an
- * event matching the read's criteria was committed after the read.
+ * event matching the read's criteria was committed after the read. For a token read with
+ * {@link DcbCriteria#all()}, the MongoDB stores don't refuse the append when a tag-scoped or type-scoped event was
+ * committed after the read, which {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} describes.
  * <p>
  * The token holds the {@link #criteria() criteria} it was read with. An append condition with other criteria throws
  * {@link IllegalArgumentException} when it's created, on every store, so code that reads with one criteria and appends

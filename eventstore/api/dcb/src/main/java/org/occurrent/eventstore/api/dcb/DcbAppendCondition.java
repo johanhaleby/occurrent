@@ -67,7 +67,8 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
      * Creates a condition that fails if an event matching the read's criteria was committed after the read that
      * returned {@code consistencyToken}. The condition's criteria are the ones the token was read with, so pass the
      * token from {@link DcbEventStream#consistencyToken()} unchanged. For a token read with {@link DcbCriteria#all()},
-     * this is the same condition as {@link #wholeStoreLock(DcbConsistencyToken)}.
+     * this is the same condition as {@link #wholeStoreLock(DcbConsistencyToken)}, so on the
+     * MongoDB stores a tag-scoped or type-scoped append committed after the read doesn't make it fail.
      */
     public static DcbAppendCondition failIfEventsMatch(DcbConsistencyToken consistencyToken) {
         requireNonNull(consistencyToken, "Consistency token cannot be null");
@@ -76,7 +77,8 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
 
     /**
      * Creates a condition that fails if an event matching {@code criteria} was committed after the read that returned
-     * {@code consistencyToken}.
+     * {@code consistencyToken}. With {@link DcbCriteria#all()} it has the limit that
+     * {@link #wholeStoreLock(DcbConsistencyToken)} describes.
      *
      * @throws IllegalArgumentException if {@code criteria} isn't the same as the criteria the token was read with
      * @deprecated Use {@link #failIfEventsMatch(DcbConsistencyToken)}, which takes the criteria from the token. This
@@ -118,11 +120,15 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
     private static String tokenReadWithOtherCriteria(DcbCriteria conditionCriteria, DcbCriteria tokenCriteria) {
         if (conditionCriteria instanceof DcbCriteria.MatchAll) {
             return "A whole-store lock needs a consistency token read with DcbCriteria.all(), but the token was read with "
-                    + tokenCriteria + ". Read with DcbCriteria.all() to lock the whole store, or use"
-                    + " DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken) to append on the criteria the token was read with.";
+                    + tokenCriteria + ". To lock the whole store, read with DcbCriteria.all() before you decide, and decide from"
+                    + " that read. To append on the criteria the token was read with, use"
+                    + " DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken). On the MongoDB stores a whole-store lock"
+                    + " doesn't conflict with a tag-scoped or type-scoped append.";
         }
         return "The consistency token was read with " + tokenCriteria + ", which isn't the same criteria as the append"
                 + " condition's " + conditionCriteria + ". Use DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken),"
-                + " which takes the criteria from the token, or read again with the condition's criteria.";
+                + " which takes the criteria from the token. If the append needs the condition's criteria, read with them"
+                + " before you decide, and decide from that read. A token read after the decision can hide an event"
+                + " committed in between.";
     }
 }

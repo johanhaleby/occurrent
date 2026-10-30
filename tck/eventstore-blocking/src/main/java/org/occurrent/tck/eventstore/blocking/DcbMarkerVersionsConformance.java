@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
@@ -277,6 +278,49 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
                     .as("A read that may have stopped early, or started after an event that commits late, must not "
                             + "report versions it did not read up to")
                     .isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("the consistency token of a read with versions")
+    class TheConsistencyTokenOfAReadWithVersions {
+
+        @Test
+        void holds_the_criteria_of_a_read_with_versions_and_conflicts_on_a_matching_append_committed_after_it() {
+            DcbCriteria boundary = DcbCriteria.anyOf(DcbCriteria.tags(tag(ACCOUNT_A)), DcbCriteria.tags(tag(ACCOUNT_B)));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
+            DcbEventStream read = dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions());
+
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_B)));
+
+            Throwable thrown = catchThrowable(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)), failIfEventsMatch(read.consistencyToken())));
+            assertThat(read.consistencyToken().criteria())
+                    .as("The token of a read that asked for versions holds the criteria the read was given, both alternatives")
+                    .isEqualTo(boundary);
+            assertThat(thrown)
+                    .as("An event of the second alternative committed after the read must reject the append")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
+        void holds_the_criteria_of_a_read_after_versions_and_conflicts_on_a_matching_append_committed_after_it() {
+            DcbCriteria boundary = DcbCriteria.anyOf(DcbCriteria.tags(tag(ACCOUNT_A)), DcbCriteria.tags(tag(ACCOUNT_B)));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A), taggedEvent(DEPOSITED, ACCOUNT_B)));
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions()));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
+            DcbEventStream resumed = dcbEventStore().read(boundary, DcbReadOptions.afterVersions(saved));
+
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_B)));
+
+            Throwable thrown = catchThrowable(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)), failIfEventsMatch(resumed.consistencyToken())));
+            assertThat(resumed.consistencyToken().criteria())
+                    .as("The token of a resumed read holds the criteria the read was given, not only the part it resumed")
+                    .isEqualTo(boundary);
+            assertThat(thrown)
+                    .as("An event of the second alternative committed after the resumed read must reject the append")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
         }
     }
 

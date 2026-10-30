@@ -41,7 +41,10 @@ import static java.util.Objects.requireNonNull;
  * @param consistencyToken     the token a conditional append is checked against. It holds the criteria the read was
  *                             given, so pass it unchanged to
  *                             {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)} and the append is
- *                             refused if an event matching those criteria was committed after this read. Unlike
+ *                             refused if an event matching those criteria was committed after this read. For a token read with
+ *                             {@link DcbCriteria#all()}, the MongoDB stores don't refuse the append when a tag-scoped
+ *                             or type-scoped event was committed after the read, which
+ *                             {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} describes. Unlike
  *                             {@code lastSequencePosition}, it protects an append while other appends are still
  *                             committing, because the store derives it from data a reader can only see once it's
  *                             committed. Use it only with the store that returned it.
