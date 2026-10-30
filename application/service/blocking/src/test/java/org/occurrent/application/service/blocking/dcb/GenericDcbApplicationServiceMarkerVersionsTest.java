@@ -279,6 +279,24 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Test
+        void a_refusal_marked_by_another_service_and_thrown_by_the_synchronous_dispatch_reaches_the_caller_unmarked_and_rolls_the_transaction_back() {
+            var store = new ScriptedStore(Optional.empty(), Optional.empty());
+            var executor = new RecordingExecutor();
+            var markedByAnotherService = new DcbSnapshotInvalidException(CRITERIA, versions("epoch-1", 2), "refused by another service").beforeAppend();
+            var dispatcher = new RecordingDispatcher();
+            dispatcher.failure = markedByAnotherService;
+
+            Throwable thrown = catchThrowable(() -> transactionalService(store, executor, dispatcher).execute(CRITERIA, events -> List.of(new DomainEvent("Changed", "name:1"))));
+
+            assertAll(
+                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the refusal of the other service").isSameAs(markedByAnotherService), () -> assertThat(refused.isBeforeAppend()).as("marked as before the append").isFalse())),
+                    () -> assertThat(store.appendCalls).as("appends made before the rollback").isEqualTo(1),
+                    () -> assertThat(executor.threw).as("transactions that saw the exception").isEqualTo(1),
+                    () -> assertThat(executor.returned).as("transactions that returned normally").isZero()
+            );
+        }
+
+        @Test
         void a_refusal_from_an_earlier_run_of_the_action_is_not_thrown_when_the_executor_runs_it_again() {
             var store = new ScriptedStore(Optional.empty(), Optional.empty()).refusingTheFirstReads(1);
             var dispatcher = new RecordingDispatcher();

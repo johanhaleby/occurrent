@@ -111,6 +111,17 @@ public class DcbSnapshotInvalidException extends RuntimeException {
     }
 
     /**
+     * This refusal without the mark of {@link #beforeAppend()}, for an application service whose append has succeeded.
+     * A synchronous subscription can call another application service and let its marked refusal through, and that mark
+     * says nothing about the append of the service that dispatched to the subscription.
+     *
+     * @return the unmarked exception to throw
+     */
+    public DcbSnapshotInvalidException afterAppend() {
+        return beforeAppend ? new DcbSnapshotInvalidException(criteria, afterVersions, String.valueOf(getMessage()), this, false) : this;
+    }
+
+    /**
      * Whether an application service marked this refusal with {@link #beforeAppend()}. A caller can then read in full
      * and decide again without running a command twice, even when an earlier attempt of the same execute already decided.
      * A refusal without the mark can come from a synchronous subscription, after the append committed.

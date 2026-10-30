@@ -80,4 +80,45 @@ class DcbSnapshotInvalidExceptionTest {
                 () -> assertThat(marked).hasCause(original)
         );
     }
+
+    @Test
+    void a_marked_refusal_after_the_append_is_unmarked_and_has_the_marked_one_as_its_cause() {
+        DcbSnapshotInvalidException marked = DcbSnapshotInvalidException.eventBelowFoldedPosition(CRITERIA, AFTER, 42).beforeAppend();
+
+        DcbSnapshotInvalidException afterAppend = marked.afterAppend();
+
+        assertAll(
+                () -> assertThat(afterAppend).isNotSameAs(marked),
+                () -> assertThat(afterAppend.isBeforeAppend()).as("the copy is marked").isFalse(),
+                () -> assertThat(marked.isBeforeAppend()).as("the original is marked").isTrue(),
+                () -> assertThat(afterAppend).hasCause(marked)
+        );
+    }
+
+    @Test
+    void an_unmarked_copy_after_the_append_keeps_the_criteria_the_versions_and_the_message() {
+        DcbSnapshotInvalidException marked = DcbSnapshotInvalidException.eventBelowFoldedPosition(CRITERIA, AFTER, 42).beforeAppend();
+
+        DcbSnapshotInvalidException afterAppend = marked.afterAppend();
+
+        assertAll(
+                () -> assertThat(afterAppend.criteria()).isEqualTo(CRITERIA),
+                () -> assertThat(afterAppend.afterVersions()).isEqualTo(AFTER),
+                () -> assertThat(afterAppend).hasMessage(marked.getMessage())
+        );
+    }
+
+    @Test
+    void an_unmarked_refusal_after_the_append_is_returned_as_it_is() {
+        DcbSnapshotInvalidException unmarked = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused");
+
+        assertThat(unmarked.afterAppend()).isSameAs(unmarked);
+    }
+
+    @Test
+    void a_refusal_unmarked_after_the_append_can_be_marked_again_by_the_service_that_reads() {
+        DcbSnapshotInvalidException afterAppend = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused").beforeAppend().afterAppend();
+
+        assertThat(afterAppend.beforeAppend().isBeforeAppend()).isTrue();
+    }
 }
