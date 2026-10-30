@@ -93,7 +93,8 @@ compare-and-set, which a lost save retries from the first read.
 doesn't show applied was not forgotten by that read. A save can only forget a version by trimming it from the marks, and
 the attempt that makes the save has swept on the instance it read, or its compare-and-set fails because that instance
 changed. So a copy is released before the marks that prove it can go. A release that fails in the sweep fails the
-attempt, and nothing is saved.
+attempt and its input isn't saved. An apply save the sweep already made stands, and the next attempt releases the copy
+on the marks.
 
 A copy can apply behind the reorder window, and the marks don't remember a version behind the window. So the save that
 applies a version keeps it in `applied`, even behind the window, until the next save of its type. That next save's
@@ -117,11 +118,12 @@ The fence is the order of the two writes on each side. The hold reads after its 
 held copies do lists them after the save. That is the save that starts an instance, the one that lowers its start and
 the one that completes it. A hold whose read comes before that save inserted before the list, so the list finds it. A
 hold whose read comes after sees what the save wrote and sweeps itself. Both reads go to the primary. A save's list that
-loses a compare-and-set while applying a copy leaves the rest to the next input, and logs at DEBUG.
+loses a compare-and-set while applying a copy leaves the rest to the next input, and logs at DEBUG. The write that won
+can be an input's failure write, which reads no held events, so those copies wait for the next input.
 
 ### An event below the start on the start's own stream waits
 
-The save that starts an instance records `startMark`, the stream id, version and position of the start. `startMark` is
+The save that starts an instance records `startMark`, the stream id and version of the start. `startMark` is
 the lowest start event applied on that stream, not the first one delivered. A start with no stream key leaves no
 `startMark`, so nothing waits on that instance.
 
@@ -180,7 +182,8 @@ failure, and the delivery is refused.
 
 Then the failure is rethrown, and the subscription's retry or parking runs as for any failing input. When quarantine is on
 and the copy's clock has run past `quarantineAfter`, the instance is quarantined with the copy's key on its failure
-record and the delivery is acknowledged, unless the delivery could not be held. A timer's attempt that fails on a copy
+record and the delivery is acknowledged, unless the delivery could not be held. That charge reads the instance and the
+index again first, and quarantines nothing when the copy is gone or the marks prove it applied. A timer's attempt that fails on a copy
 charges the same clock, and the timer stays due. [ADR 157](0157-a-sagas-quarantine-budget-runs-per-input.md) has the budget
 per input, and the copy's clock is how a held event takes part in it.
 
@@ -201,17 +204,19 @@ proves the version applied or lists it pending, no copy is written. An instance 
 longer active, gets none either. A copy kept while the instance has the version behind the window logs a WARN, since
 nothing proves it applied, and if it did, its reaction runs again.
 
-Cause 5 has two entrances. The failure path's own read is one. A later compare-and-set attempt of the same delivery is
-the other. There, attempt 1 classifies the version new, dispatches and loses its save, and attempt 2 finds the version
+Cause 5 has three entrances. The failure path's own read is the first. A later compare-and-set attempt of the same
+delivery is the second. There, attempt 1 classifies the version new, dispatches and loses its save, and attempt 2 finds the version
 behind the window. 0.34.0 skips and acknowledges it there, and the executor now throws `OvertakenInFlight`, which takes
-the failure path. Both entrances need deliverers that run in parallel to apply a window of the version's stream and type
-in that gap.
+the failure path. The first two need deliverers that run in parallel to apply a window of the version's stream and type
+in that gap. The third is the delivery's own sweep. The attempt's read classifies the version new, the copies it applies
+move the instance past the version, and the same exception takes the failure path, on one thread.
 
 The evidence for cause 5 is per delivery and keyed. Each call of `onCloudEvent` keeps the keys it classified new by
 position alone, meaning a classification that would still say new with every marker that keeps a version outstanding
 ignored, and that it has not yet seen applied by a save that returned true. Cause 5 applies only when the failing
 event's key is in that set. A delivery whose first successful read already finds the version behind the window has an
-empty set, so it is an arrival behind the window, ADR 154's own row.
+empty set, so it is an arrival behind the window, ADR 154's own row, and gets no copy. A read that fails on the failure
+path can't tell, so the copy is written.
 
 Where the delivery does not hold, causes 1 to 4 rethrow as in 0.34.0, and cause 5 logs an ERROR naming the key and the
 instance, then rethrows. On a feed that keeps the commit-order contract, a window can pass a version only after some
@@ -222,6 +227,9 @@ deliverer applied it, so that ERROR shows a model that broke the contract.
 - The save that completes an instance lists the held copies after it, and each is released with a WARN. A copy inserted
   after that list, or one whose release failed, stays as storage until a later input reaches the completed instance,
   whose sweep releases it, or until the instance is deleted. See the last consequence below.
+- A delivery whose sweep applies the copy that completes the instance is then skipped with no log, as one that arrives
+  just after completion is. Its reaction doesn't run, where the same event held a moment earlier would have run before
+  the completing copy.
 - A quarantined instance skips everything, the sweep included, and keeps every held copy.
 - `SagaStateStore.delete(sagaId)`, on a store that also implements `SagaHeldEvents`, removes the instance's held events
   first and then the instance. A hold written between the two is applied if a start ever arrives for that id.
@@ -271,10 +279,12 @@ deliverer applied it, so that ERROR shows a model that broke the contract.
   count, because the hold is still attempted. A crash between classifying a version new and writing its copy is followed
   by a redelivery whose first read finds it behind the window, which is ADR 154's row for an arrival behind the window and
   [#1320](https://github.com/johanhaleby/occurrent/issues/1320)'s.
-- **A copy can apply twice in three cases.** A copy with no redelivery key has no marks to prove it, so a crash between its
-  apply save and its release runs it again. That is at-least-once, as a crash in a dispatch already is. A hold that loses
-  to a release can insert a copy again after the event applied, which the next sweep releases while the marks still prove
+- **A copy can apply twice.** A copy with no redelivery key has no marks to prove it, so it applies again
+  when a crash falls between its apply save and its release, and when another input lists it between that save and that
+  release. That is at-least-once, as a crash in a dispatch already is. A hold that loses to a release can insert a copy again after the event applied, which the next sweep releases while the marks still prove
   it, and applies once more when a reorder window has passed it. And the plain copy of a version that applied and was then
-  passed by a full reorder window while its own failure was handled applies again, and the WARN above says so.
+  passed by a full reorder window while this delivery of it was being handled applies again, and the WARN above says so.
+  A replay of a version the marks have forgotten applies again when its reads fail on the failure path too, because
+  nothing then says it is behind the window, and there is no WARN.
 - **A copy left on a completed instance is storage only.** It can never apply. The next input to that instance releases
   it, and `delete` removes it. A TTL on the instance collection doesn't remove it, and the runbook's query finds it.

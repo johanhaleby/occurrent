@@ -242,7 +242,7 @@ class SagaUnlistedFailureTest {
         List<Long> versions = LongStream.rangeClosed(1, count).boxed().toList();
         StreamMarks otherStream = new StreamMarks(Long.MIN_VALUE, java.util.Map.of(), java.util.Map.of("other.Type", versions));
         SagaEnvelope<Basket> instance = new SagaEnvelope<>(BASKET, new Basket(0), SagaStatus.ACTIVE, 1, List.of(), java.util.Map.of(), null, NOW, NOW, null, null,
-                true, null, java.util.Map.of("other-stream", otherStream), new StartMark(STREAM, 1, null));
+                true, null, java.util.Map.of("other-stream", otherStream), new StartMark(STREAM, 1));
         assertThat(store.delegate.compareAndSave(BASKET, instance, 0)).isTrue();
     }
 

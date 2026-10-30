@@ -46,7 +46,7 @@ class InMemorySagaHeldEventsTest {
 
     private static SagaEnvelope<String> envelope(long version, SagaStatus status, boolean started) {
         return new SagaEnvelope<>(SAGA_ID, "state", status, version, List.of(), Map.of(), null, NOW, NOW, null, null, started, null,
-                Map.of(), new SagaEnvelope.StartMark("orders", 1, 10L));
+                Map.of(), new SagaEnvelope.StartMark("orders", 1));
     }
 
     private void saveActiveStartedInstance() {
@@ -414,7 +414,7 @@ class InMemorySagaHeldEventsTest {
     @DisplayName("when the held events are listed without those waiting for a lower start")
     class WhenTheHeldEventsAreListedWithoutThoseWaitingForALowerStart {
 
-        private final SagaEnvelope.StartMark start = new SagaEnvelope.StartMark("orders", 5, null);
+        private final SagaEnvelope.StartMark start = new SagaEnvelope.StartMark("orders", 5);
 
         @BeforeEach
         void holdOneCopyOfEachKind() {

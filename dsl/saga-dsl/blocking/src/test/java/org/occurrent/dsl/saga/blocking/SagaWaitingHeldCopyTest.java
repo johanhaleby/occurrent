@@ -77,6 +77,7 @@ class SagaWaitingHeldCopyTest {
     private static final String OTHER_STREAM = "other-stream";
     private static final String BOOK = "book";
     private static final String DONE = "done";
+    private static final String THIRD_STREAM = "third-stream";
 
     private final ScriptedStore<Order> store = new ScriptedStore<>();
     private final RecordingDispatcher dispatcher = new RecordingDispatcher();
@@ -311,6 +312,64 @@ class SagaWaitingHeldCopyTest {
                     () -> assertThat(heldKeys()).as("the held index after the start").isEmpty()
             );
         }
+
+        @Test
+        void a_start_below_the_waiting_copies_that_races_a_lower_start_leaves_the_lowest_start_and_applies_each_copy_once() {
+            // Given
+            start(SagaRunnerConfig.defaults());
+            deliver(placedAt(5));
+            deliver(itemAt(4, "c4"));
+            deliver(itemAt(2, "c2"));
+            AtomicBoolean raced = new AtomicBoolean();
+            AtomicReference<Throwable> hookFailure = new AtomicReference<>();
+            // The start at 1 has read the instance, and the start at 3 commits before the start at 1 saves.
+            store.once(ScriptedStore.Point.AFTER_INSTANCE_READ, () -> {
+                raced.set(true);
+                hookFailure.set(catchThrowable(() -> execution.onCloudEvent(placedAt(3))));
+            });
+
+            // When
+            Throwable lowest = deliver(placedAt(1));
+
+            // Then
+            assertAll(
+                    () -> assertThat(raced).as("the start at 3 committed between the read and the save of the start at 1").isTrue(),
+                    () -> assertThat(hookFailure.get()).as("the start at 3 was acknowledged").isNull(),
+                    () -> assertThat(lowest).as("the start at 1 is acknowledged").isNull(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark().version()).as("the start of the instance").isEqualTo(1),
+                    () -> assertThat(reactionsTo("c4")).as("the reaction of the copy at 4").isEqualTo(1),
+                    () -> assertThat(reactionsTo("c2")).as("the reaction of the copy at 2").isEqualTo(1),
+                    () -> assertThat(heldKeys()).as("the held index").isEmpty()
+            );
+        }
+
+        @Test
+        void a_delivery_on_another_stream_that_read_the_start_before_a_lower_start_applied_the_waiting_copy_does_not_run_the_copy_again() {
+            // Given
+            start(SagaRunnerConfig.defaults());
+            deliver(placedAt(5));
+            deliver(itemAt(4, "c4"));
+            AtomicBoolean raced = new AtomicBoolean();
+            AtomicReference<Throwable> hookFailure = new AtomicReference<>();
+            // The delivery has read the start at 5, and the start at 3 commits and applies the copy before it saves.
+            store.once(ScriptedStore.Point.AFTER_INSTANCE_READ, () -> {
+                raced.set(true);
+                hookFailure.set(catchThrowable(() -> execution.onCloudEvent(placedAt(3))));
+            });
+
+            // When
+            Throwable other = deliver(itemOn(OTHER_STREAM, 1, "other"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(raced).as("the start at 3 committed between the read and the save of the delivery").isTrue(),
+                    () -> assertThat(hookFailure.get()).as("the start at 3 was acknowledged").isNull(),
+                    () -> assertThat(other).as("the delivery is acknowledged").isNull(),
+                    () -> assertThat(reactionsTo("c4")).as("the reaction of the copy at 4").isEqualTo(1),
+                    () -> assertThat(reactionsTo("other")).as("the reaction of the delivery, which dispatches again when its save is lost").isGreaterThanOrEqualTo(1),
+                    () -> assertThat(heldKeys()).as("the held index").isEmpty()
+            );
+        }
     }
 
     @Nested
@@ -376,6 +435,41 @@ class SagaWaitingHeldCopyTest {
                     () -> assertThat(heldKeys()).as("the held index").isEmpty(),
                     () -> assertThat(reactionsTo(BOOK)).as("the reaction of the copy").isEqualTo(1),
                     () -> assertThat(reactionsTo(FAR)).as("the reaction of the delivery beyond the small window").isEqualTo(1)
+            );
+        }
+
+        @Test
+        void a_copy_applied_behind_the_window_whose_release_keeps_stopping_is_not_applied_again_and_does_not_hold_back_the_deliveries_after_it() {
+            // Given
+            start(SagaRunnerConfig.defaults().withReorderWindow(2));
+            deliver(placedAt(1));
+            for (long version = 5; version <= 8; version++) {
+                deliver(itemOn(OTHER_STREAM, version, "t" + version));
+            }
+            CloudEvent old = itemOn(OTHER_STREAM, 1, "old");
+            store.delegate.hold(ORDER, new HeldEvent(ORDER, new HeldEventRef(OTHER_STREAM + "@1", OTHER_STREAM, 1L, null, old.getType(), clock.get(), false, null), old));
+            store.failNextRelease();
+            store.failNextRelease();
+
+            // When
+            Throwable firstRelease = deliver(itemAt(2, "item2"));
+            long reactionsToOldAfterTheFirst = reactionsTo("old");
+            Throwable secondRelease = deliver(itemOn(OTHER_STREAM, 9, "t9"));
+            long reactionsToT9AfterTheSecond = reactionsTo("t9");
+            Throwable redelivered = deliver(itemOn(OTHER_STREAM, 9, "t9"));
+            Throwable next = deliver(itemOn(OTHER_STREAM, 10, "t10"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(firstRelease).as("the first release stopped, so the delivery is refused").isNotNull(),
+                    () -> assertThat(reactionsToOldAfterTheFirst).as("the copy was applied by the save before the release").isEqualTo(1),
+                    () -> assertThat(secondRelease).as("the second release stopped, so the delivery is refused").isNotNull(),
+                    () -> assertThat(reactionsToT9AfterTheSecond).as("nothing of the delivery ran while the release stops").isZero(),
+                    () -> assertThat(redelivered).as("the redelivery is acknowledged").isNull(),
+                    () -> assertThat(next).as("the next delivery is acknowledged").isNull(),
+                    () -> assertThat(reactionsTo("old")).as("the reaction of the copy after the releases").isEqualTo(1),
+                    () -> assertThat(reactionsTo("t9")).as("the reaction of the refused delivery").isEqualTo(1),
+                    () -> assertThat(heldKeys()).as("the held index").isEmpty()
             );
         }
     }
@@ -602,6 +696,30 @@ class SagaWaitingHeldCopyTest {
                     () -> assertThat(statusOfTheInstance()).as("the instance status").isEqualTo(SagaStatus.QUARANTINED)
             );
         }
+
+        @Test
+        void a_copy_that_another_delivery_applied_while_the_sweep_was_failing_on_it_does_not_quarantine_the_instance_past_the_budget() {
+            // Given
+            instanceWithAFailingCopyOfAnotherStream(SagaRunnerConfig.defaults());
+            passes(budget.plusSeconds(1));
+            // While the sweep of the second delivery reacts to the copy, another delivery's sweep applies it.
+            dispatcher.beforeReservationOf(T1, () -> {
+                dispatcher.stopFailingReservationOf(T1);
+                deliver(itemAt(2, "item2"));
+                dispatcher.failReservationOf(T1);
+            });
+
+            // When
+            deliver(itemAt(3, "item3"));
+
+            // Then
+            SagaEnvelope<Order> instance = store.find(ORDER).orElseThrow();
+            assertAll(
+                    () -> assertThat(reactionsTo(T1)).as("the reaction of the copy the other delivery applied").isEqualTo(1),
+                    () -> assertThat(instance.status()).as("the instance status").isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(instance.failure()).as("the failure record").isNull()
+            );
+        }
     }
 
     @Nested
@@ -752,6 +870,26 @@ class SagaWaitingHeldCopyTest {
                     () -> assertThat(heldKeys()).as("the held index").containsExactly(STREAM + "@4")
             );
         }
+
+        @Test
+        void an_event_below_the_start_is_refused_and_not_held_while_a_copy_left_from_before_the_deploy_keeps_failing() {
+            // Given
+            start(SagaRunnerConfig.defaults());
+            dispatcher.failReservationOf("x");
+            deliver(itemOn(OTHER_STREAM, 1, "x"));
+            deliver(placedAt(5));
+            startOnAFeedInCommitOrder(SagaRunnerConfig.defaults());
+
+            // When
+            Throwable refusedBelowTheStart = deliver(itemAt(4, "c4"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(refusedBelowTheStart).as("the delivery is refused for the copy that fails").isNotNull().hasRootCause(dispatcher.failure),
+                    () -> assertThat(heldKeys()).as("the held index, with nothing stored for the event below the start").doesNotContain(STREAM + "@4"),
+                    () -> assertThat(reactionsTo("c4")).as("the reaction of the event below the start").isZero()
+            );
+        }
     }
 
     /**
@@ -837,7 +975,7 @@ class SagaWaitingHeldCopyTest {
             assertAll(
                     () -> assertThat(redelivered).as("the redelivery is acknowledged").isNull(),
                     () -> assertThat(reactionsAfterTheRedelivery).as("the item reaction after the redelivery").isEqualTo(1),
-                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).as("the start mark").isEqualTo(new SagaEnvelope.StartMark(STREAM, 4, null)),
+                    () -> assertThat(store.find(ORDER).orElseThrow().startMark()).as("the start mark").isEqualTo(new SagaEnvelope.StartMark(STREAM, 4)),
                     () -> assertThat(heldKeys()).as("the held index").isEmpty(),
                     () -> assertThat(reactionsTo(BOOK)).as("the item reaction after one more redelivery and one more event").isEqualTo(1)
             );
@@ -1021,6 +1159,49 @@ class SagaWaitingHeldCopyTest {
                     () -> assertThat(redelivered).as("the redelivery is acknowledged").isNull(),
                     () -> assertThat(reactionsTo(BOOK)).as("the item reaction").isZero(),
                     () -> assertThat(heldKeys()).as("the held index").containsExactly(STREAM + "@4")
+            );
+        }
+
+        @Test
+        void a_delivery_whose_own_sweep_applies_a_copy_that_completes_the_instance_is_acknowledged_and_its_reaction_does_not_run() {
+            // Given
+            start(sagaCompletingOnDone(), SagaRunnerConfig.defaults().disableQuarantine());
+            dispatcher.failReservationOf(DONE);
+            deliver(itemOn(OTHER_STREAM, 1, DONE));
+            deliver(placedAt(5));
+            dispatcher.stopFailingReservationOf(DONE);
+
+            // When
+            Throwable delivered = deliver(itemOn(THIRD_STREAM, 1, BOOK));
+
+            // Then
+            assertAll(
+                    () -> assertThat(delivered).as("the delivery is acknowledged").isNull(),
+                    () -> assertThat(statusOfTheInstance()).as("the instance status").isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(reactionsTo(DONE)).as("the reaction of the copy that completes the instance").isEqualTo(1),
+                    () -> assertThat(reactionsTo(BOOK)).as("the reaction of the delivery the copy completed the instance before").isZero()
+            );
+        }
+
+        @Test
+        void an_event_held_before_the_start_runs_before_the_copy_that_completes_the_instance_in_the_same_sweep() {
+            // Given
+            start(sagaCompletingOnDone(), SagaRunnerConfig.defaults().disableQuarantine());
+            dispatcher.failReservationOf(DONE);
+            deliver(itemOn(OTHER_STREAM, 1, DONE));
+            deliver(itemOn(THIRD_STREAM, 1, BOOK));
+            deliver(placedAt(5));
+            dispatcher.stopFailingReservationOf(DONE);
+
+            // When
+            Throwable next = deliver(itemOn(THIRD_STREAM, 2, "next"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(next).as("the delivery is acknowledged").isNull(),
+                    () -> assertThat(reactionsTo(BOOK)).as("the reaction of the event that was held").isEqualTo(1),
+                    () -> assertThat(reactionsTo(DONE)).as("the reaction of the copy that completes the instance").isEqualTo(1),
+                    () -> assertThat(statusOfTheInstance()).as("the instance status").isEqualTo(SagaStatus.COMPLETED)
             );
         }
     }

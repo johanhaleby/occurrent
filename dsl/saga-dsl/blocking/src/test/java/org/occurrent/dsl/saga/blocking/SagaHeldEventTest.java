@@ -1236,6 +1236,96 @@ class SagaHeldEventTest {
     }
 
     @Nested
+    @DisplayName("when the body of a held event cannot be read")
+    class WhenTheBodyOfAHeldEventCannotBeRead {
+
+        private static final String OTHER_STREAM = "other-stream";
+        private final FaultInjectingStore<Order> unreadable = new FaultInjectingStore<>();
+
+        private SagaExecution<OrderEvent, Order, OrderCommand> executionOverTheStore() {
+            return execution(unreadable, SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET));
+        }
+
+        private void holdACopyWhoseBodyCannotBeRead() {
+            CloudEvent copy = itemAt(OTHER_STREAM, 1, "unreadable");
+            unreadable.d.hold(ORDER, new HeldEvent(ORDER, new HeldEventRef(OTHER_STREAM + "@1", OTHER_STREAM, 1L, null, copy.getType(), now.get(), false, null), copy));
+            unreadable.failHeldRead.set(100);
+        }
+
+        private @Nullable Instant failingSinceOf(String key) {
+            return unreadable.heldIndex(ORDER).stream().filter(ref -> ref.key().equals(key)).findFirst().orElseThrow().failingSince();
+        }
+
+        @Test
+        void the_copy_gets_a_clock_and_the_driver_is_held_and_not_blamed() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOverTheStore();
+            holdACopyWhoseBodyCannotBeRead();
+            Instant firstFailure = now.get();
+            deliverRefused(execution, placedAt(1));
+
+            // When
+            Throwable refused = deliverRefused(execution, itemAt(2, "driver"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(refused).hasMessageContaining("could not apply the held event '" + OTHER_STREAM + "@1'").hasRootCauseMessage("cannot read held"),
+                    () -> assertThat(failingSinceOf(OTHER_STREAM + "@1")).as("the clock of the copy").isEqualTo(firstFailure),
+                    () -> assertThat(failingSinceOf(ORDER_STREAM + "@2")).as("the clock of the driver").isNull(),
+                    () -> assertThat(unreadable.heldIndex(ORDER).stream().map(HeldEventRef::key)).as("the copy and the driver").containsExactlyInAnyOrder(OTHER_STREAM + "@1", ORDER_STREAM + "@2"),
+                    () -> assertThat(unreadable.d.find(ORDER).orElseThrow().failure()).as("the failure record of the instance").isNull(),
+                    () -> assertThat(unreadable.d.find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(issuedReservationsOf("driver")).as("the reaction of the driver while the copy cannot be read").isEmpty());
+        }
+
+        @Test
+        void a_due_timer_charges_the_copy_and_stays_due() {
+            // Given
+            startsAnExpiryTimer = true;
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOverTheStore();
+            deliver(execution, placedAt(1));
+            holdACopyWhoseBodyCannotBeRead();
+            now.updateAndGet(instant -> instant.plus(EXPIRY).plusSeconds(1));
+            Instant firstFailure = now.get();
+
+            // When
+            execution.pollTimers();
+
+            // Then
+            assertAll(
+                    () -> assertThat(failingSinceOf(OTHER_STREAM + "@1")).as("the clock of the copy").isEqualTo(firstFailure),
+                    () -> assertThat(unreadable.d.find(ORDER).orElseThrow().timers().stream().map(TimerEntry::name)).as("the timer").containsExactly(EXPIRY_TIMER),
+                    () -> assertThat(unreadable.d.find(ORDER).orElseThrow().failure()).as("the failure record of the instance").isNull(),
+                    () -> assertThat(unreadable.d.find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER)));
+        }
+
+        @Test
+        void the_budget_of_the_copy_quarantines_the_instance_when_a_due_timer_meets_it_after_quarantine_after() {
+            // Given
+            startsAnExpiryTimer = true;
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOverTheStore();
+            deliver(execution, placedAt(1));
+            holdACopyWhoseBodyCannotBeRead();
+            now.updateAndGet(instant -> instant.plus(EXPIRY).plusSeconds(1));
+            execution.pollTimers();
+            Instant firstFailure = now.get();
+            now.updateAndGet(instant -> instant.plus(BUDGET).plusSeconds(1));
+
+            // When
+            execution.pollTimers();
+
+            // Then
+            SagaEnvelope<Order> instance = unreadable.d.find(ORDER).orElseThrow();
+            assertAll(
+                    () -> assertThat(instance.status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(instance.failure()).isNotNull().satisfies(failure -> assertThat(failure.input()).isEqualTo(OTHER_STREAM + "@1")),
+                    () -> assertThat(instance.failure().firstFailedAt()).as("the record is dated at the clock of the copy").isEqualTo(firstFailure),
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER)));
+        }
+    }
+
+    @Nested
     @DisplayName("when the failure of a held event is past its budget")
     class WhenTheFailureOfAHeldEventIsPastItsBudget {
 

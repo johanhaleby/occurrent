@@ -207,9 +207,8 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      *
      * @param streamId the stream the start was written to
      * @param version  the start's stream version
-     * @param position the start's global position, or {@code null} when it carried none
      */
-    public record StartMark(String streamId, long version, @Nullable Long position) {
+    public record StartMark(String streamId, long version) {
         public StartMark {
             requireNonNull(streamId, "streamId cannot be null");
         }

@@ -122,7 +122,6 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String START_MARK = "startMark";
     private static final String START_MARK_STREAM_ID = "streamId";
     private static final String START_MARK_VERSION = "version";
-    private static final String START_MARK_POSITION = "position";
     // Fields of a held event's document, in the held collection named after the saga collection.
     private static final String HELD_COLLECTION_SUFFIX = "-held-events";
     private static final String HELD_SAGA_ID = "sagaId";
@@ -494,11 +493,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // Written only when there is one, so an instance stored before 0.35.0 reads as having none.
         StartMark startMark = envelope.startMark();
         if (startMark != null) {
-            Document mark = new Document(START_MARK_STREAM_ID, startMark.streamId()).append(START_MARK_VERSION, startMark.version());
-            if (startMark.position() != null) {
-                mark.append(START_MARK_POSITION, startMark.position());
-            }
-            document.append(START_MARK, mark);
+            document.append(START_MARK, new Document(START_MARK_STREAM_ID, startMark.streamId()).append(START_MARK_VERSION, startMark.version()));
         }
         SagaFailure failure = envelope.failure();
         if (failure != null) {
@@ -642,9 +637,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (mark == null) {
             return null;
         }
-        Object position = mark.get(START_MARK_POSITION);
-        return new StartMark(mark.getString(START_MARK_STREAM_ID), ((Number) mark.get(START_MARK_VERSION)).longValue(),
-                position == null ? null : ((Number) position).longValue());
+        return new StartMark(mark.getString(START_MARK_STREAM_ID), ((Number) mark.get(START_MARK_VERSION)).longValue());
     }
 
     @Override

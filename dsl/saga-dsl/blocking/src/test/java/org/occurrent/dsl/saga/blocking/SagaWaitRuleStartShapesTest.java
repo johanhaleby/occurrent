@@ -201,7 +201,7 @@ class SagaWaitRuleStartShapesTest {
                 () -> assertThat(refused).as("every delivery was acknowledged").isEmpty(),
                 () -> assertThat(reactions()).as("the reactions").containsExactlyInAnyOrder(shape.higherId(5), shape.lowerId(3), ITEM),
                 () -> assertThat(heldKeys()).as("the held index").isEmpty(),
-                () -> assertThat(store.find(ORDER).orElseThrow().startMark()).as("the start mark").isEqualTo(new StartMark(STREAM, 3, null))
+                () -> assertThat(store.find(ORDER).orElseThrow().startMark()).as("the start mark").isEqualTo(new StartMark(STREAM, 3))
         );
     }
 
@@ -288,7 +288,7 @@ class SagaWaitRuleStartShapesTest {
                 () -> assertThat(reactions()).as("the reactions").contains(shape.lowerId(3), ITEM, FAILING),
                 () -> assertThat(reactions().stream().filter(ITEM::equals).count()).as("the item at 4 and the item at 6 are the same item").isEqualTo(2),
                 () -> assertThat(heldKeys()).as("the held index").isEmpty(),
-                () -> assertThat(store.find(ORDER).orElseThrow().startMark()).as("the start mark").isEqualTo(new StartMark(STREAM, 3, null))
+                () -> assertThat(store.find(ORDER).orElseThrow().startMark()).as("the start mark").isEqualTo(new StartMark(STREAM, 3))
         );
     }
 }

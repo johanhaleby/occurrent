@@ -504,8 +504,8 @@ still held.
 
 ### Stored saga state for held events
 
-A saga instance document gains one field, `startMark`, written only by 0.35.0. It holds the stream id, stream version and
-position of the lowest start event applied on that stream. A document without it reads as no start recorded, and then
+A saga instance document gains one field, `startMark`, written only by 0.35.0. It holds the stream id and stream version
+of the lowest start event applied on that stream. A document without it reads as no start recorded, and then
 nothing waits. An instance stored before 0.35.0 has none.
 
 A held document has an `_id` of the saga id and the event's key, the `sagaId` again for the index, the stream id, stream

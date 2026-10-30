@@ -670,7 +670,7 @@ class SpringMongoSagaHeldEventsTest {
     @DisplayName("when the envelope carries a start mark")
     class WhenTheEnvelopeCarriesAStartMark {
 
-        private final SagaEnvelope<String> withStartMark = envelope("state", 1, SagaStatus.ACTIVE, true, new StartMark("orders", 3, 30L));
+        private final SagaEnvelope<String> withStartMark = envelope("state", 1, SagaStatus.ACTIVE, true, new StartMark("orders", 3));
 
         @Test
         void find_reads_back_the_start_mark_a_compareAndSave_wrote() {
@@ -681,32 +681,32 @@ class SpringMongoSagaHeldEventsTest {
             SagaEnvelope<String> read = store.find(SAGA_ID).orElseThrow();
 
             // Then
-            assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L));
+            assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3));
         }
 
         @Test
-        void find_reads_back_a_start_mark_without_a_position() {
+        void the_stored_start_mark_has_only_the_stream_id_and_the_version() {
             // Given
-            store.compareAndSave(SAGA_ID, envelope("state", 1, SagaStatus.ACTIVE, true, new StartMark("orders", 3, null)), 0);
+            store.compareAndSave(SAGA_ID, withStartMark, 0);
 
             // When
-            SagaEnvelope<String> read = store.find(SAGA_ID).orElseThrow();
+            Document stored = rawInstance().get("startMark", Document.class);
 
             // Then
-            assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, null));
+            assertThat(stored).isEqualTo(new Document("streamId", "orders").append("version", 3L));
         }
 
         @Test
         void find_reads_back_the_start_mark_a_compareAndSave_update_wrote() {
             // Given
             store.compareAndSave(SAGA_ID, envelope("state", 1, SagaStatus.ACTIVE, true, null), 0);
-            store.compareAndSave(SAGA_ID, envelope("state", 2, SagaStatus.ACTIVE, true, new StartMark("orders", 3, 30L)), 1);
+            store.compareAndSave(SAGA_ID, envelope("state", 2, SagaStatus.ACTIVE, true, new StartMark("orders", 3)), 1);
 
             // When
             SagaEnvelope<String> read = store.find(SAGA_ID).orElseThrow();
 
             // Then
-            assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L));
+            assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3));
         }
 
         @Test
@@ -718,14 +718,14 @@ class SpringMongoSagaHeldEventsTest {
             SagaEnvelope<String> read = store.findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
-            assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L));
+            assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3));
         }
 
         @Test
         void compareAndSaveWithoutState_writes_the_start_mark_and_leaves_the_stored_state_alone() {
             // Given
             store.compareAndSave(SAGA_ID, envelope("stored state", 1, SagaStatus.ACTIVE, true, null), 0);
-            SagaEnvelope<String> update = envelope("ignored state", 2, SagaStatus.ACTIVE, true, new StartMark("orders", 3, 30L));
+            SagaEnvelope<String> update = envelope("ignored state", 2, SagaStatus.ACTIVE, true, new StartMark("orders", 3));
 
             // When
             boolean saved = store.compareAndSaveWithoutState(SAGA_ID, update, 1);
@@ -735,7 +735,7 @@ class SpringMongoSagaHeldEventsTest {
             assertAll(
                     () -> assertThat(saved).isTrue(),
                     () -> assertThat(read.state()).isEqualTo("stored state"),
-                    () -> assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L))
+                    () -> assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3))
             );
         }
 
@@ -801,7 +801,7 @@ class SpringMongoSagaHeldEventsTest {
     @DisplayName("when the held events are listed without those waiting for a lower start")
     class WhenTheHeldEventsAreListedWithoutThoseWaitingForALowerStart {
 
-        private final SagaEnvelope.StartMark start = new SagaEnvelope.StartMark("orders", 5, null);
+        private final SagaEnvelope.StartMark start = new SagaEnvelope.StartMark("orders", 5);
 
         @BeforeEach
         void holdOneCopyOfEachKind() {

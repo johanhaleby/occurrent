@@ -376,7 +376,7 @@ class SagaExecutionSupportHeldEventsTest {
     @DisplayName("when an attempt decides what to do with a held copy")
     class WhenAnAttemptDecidesWhatToDoWithAHeldCopy {
 
-        private final SagaEnvelope<OrderState> startedAtTen = started(Map.of(), Map.of(), new StartMark(STREAM, 10, null));
+        private final SagaEnvelope<OrderState> startedAtTen = started(Map.of(), Map.of(), new StartMark(STREAM, 10));
 
         @Test
         void the_copy_is_released_when_the_mark_of_its_type_is_its_version() {
@@ -405,7 +405,7 @@ class SagaExecutionSupportHeldEventsTest {
         @Test
         void a_copy_the_marks_prove_applied_is_released_even_though_it_sits_below_the_start_and_is_not_a_start_event() {
             // Given
-            SagaEnvelope<OrderState> instance = started(Map.of(), marksUpTo(4), new StartMark(STREAM, 10, null));
+            SagaEnvelope<OrderState> instance = started(Map.of(), marksUpTo(4), new StartMark(STREAM, 10));
 
             // When
             HeldCopyStep step = SagaExecutionSupport.heldCopyStep(instance, held(STREAM, 4));
@@ -643,7 +643,7 @@ class SagaExecutionSupportHeldEventsTest {
         @Test
         void a_copy_below_the_start_is_applied_without_being_held_again() {
             // Given
-            SagaEnvelope<OrderState> instance = started(Map.of(), Map.of(), new StartMark(STREAM, 5, null));
+            SagaEnvelope<OrderState> instance = started(Map.of(), Map.of(), new StartMark(STREAM, 5));
             HeldContext heldCopy = new HeldContext(true, STREAM + "@3");
 
             // When
@@ -662,13 +662,13 @@ class SagaExecutionSupportHeldEventsTest {
     class WhenAnInputStartsTheInstance {
 
         @Test
-        void the_save_records_the_stream_version_and_position_of_the_start_so_an_event_below_it_can_wait() {
+        void the_save_records_the_stream_version_of_the_start_so_an_event_below_it_can_wait() {
             // When
             Outcome<OrderState, OrderCommand> outcome = process(null, SagaInput.event(new OrderPlaced(SAGA_ID)),
                     new EventMeta(STREAM, 3L, 17L, OrderPlaced.class.getName()), new HeldContext(true, null));
 
             // Then
-            assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3, 17L));
+            assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3));
         }
 
         @Test
@@ -691,19 +691,19 @@ class SagaExecutionSupportHeldEventsTest {
             // Then
             assertAll(
                     () -> assertThat(outcome.processed()).isTrue(),
-                    () -> assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3, null)));
+                    () -> assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3)));
         }
 
         @Test
         void a_later_save_keeps_the_start_mark_of_the_start() {
             // Given
-            SagaEnvelope<OrderState> instance = started(Map.of(), marksUpTo(10), new StartMark(STREAM, 3, 17L));
+            SagaEnvelope<OrderState> instance = started(Map.of(), marksUpTo(10), new StartMark(STREAM, 3));
 
             // When
             Outcome<OrderState, OrderCommand> outcome = process(instance, itemAdded(), metaAt(STREAM, 11), HeldContext.NONE);
 
             // Then
-            assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3, 17L));
+            assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3));
         }
     }
 
@@ -711,7 +711,7 @@ class SagaExecutionSupportHeldEventsTest {
     @DisplayName("when an event of the stream that started the instance sits below the start")
     class WhenAnEventOfTheStreamThatStartedTheInstanceSitsBelowTheStart {
 
-        private final SagaEnvelope<OrderState> startedAtFive = started(Map.of(), Map.of(), new StartMark(STREAM, 5, null));
+        private final SagaEnvelope<OrderState> startedAtFive = started(Map.of(), Map.of(), new StartMark(STREAM, 5));
 
         private final HeldContext holds = new HeldContext(true, null);
 
@@ -901,7 +901,7 @@ class SagaExecutionSupportHeldEventsTest {
         @Test
         void a_held_copy_below_the_start_that_the_instance_has_already_applied_is_released_as_applied() {
             // Given the item type applied up to version 3 of the stream
-            SagaEnvelope<OrderState> applied = started(Map.of(), marksUpTo(3), new StartMark(STREAM, 5, null));
+            SagaEnvelope<OrderState> applied = started(Map.of(), marksUpTo(3), new StartMark(STREAM, 5));
 
             // When
             HeldCopyStep step = SagaExecutionSupport.heldCopyStep(applied, held(STREAM, 3));
@@ -920,7 +920,7 @@ class SagaExecutionSupportHeldEventsTest {
             assertAll(
                     () -> assertThat(outcome.processed()).isTrue(),
                     () -> assertThat(outcome.commands()).containsExactly(new Reserve(SAGA_ID, "book")),
-                    () -> assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3, 21L)));
+                    () -> assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3)));
         }
 
         @Test
@@ -932,7 +932,7 @@ class SagaExecutionSupportHeldEventsTest {
             // Then
             assertAll(
                     () -> assertThat(outcome.processed()).isTrue(),
-                    () -> assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3, null)));
+                    () -> assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3)));
         }
 
         @Test
@@ -942,7 +942,7 @@ class SagaExecutionSupportHeldEventsTest {
                     itemAdded(), metaAt(STREAM, 7), NOW, WINDOW, HeldContext.NONE);
 
             // Then
-            assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 5, null));
+            assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 5));
         }
 
         @Test
@@ -954,7 +954,7 @@ class SagaExecutionSupportHeldEventsTest {
             // Then
             assertAll(
                     () -> assertThat(outcome.processed()).isTrue(),
-                    () -> assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 5, null)));
+                    () -> assertThat(outcome.envelope().startMark()).isEqualTo(new StartMark(STREAM, 5)));
         }
 
         @Test
@@ -1076,7 +1076,7 @@ class SagaExecutionSupportHeldEventsTest {
         @Test
         void the_state_the_start_mark_and_the_watermarks_are_carried_over() {
             // Given
-            SagaEnvelope<OrderState> instance = started(Map.of(STREAM, 4L), marksUpTo(10), new StartMark(STREAM, 3, 17L));
+            SagaEnvelope<OrderState> instance = started(Map.of(STREAM, 4L), marksUpTo(10), new StartMark(STREAM, 3));
 
             // When
             FailureRecord<OrderState> record = SagaExecutionSupport.quarantinedOnHeldCopy(instance, held(STREAM, 12), new IllegalStateException("x"), firstFailedAt, now);
@@ -1084,7 +1084,7 @@ class SagaExecutionSupportHeldEventsTest {
             // Then
             assertAll(
                     () -> assertThat(record.envelope().state()).isEqualTo(instance.state()),
-                    () -> assertThat(record.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3, 17L)),
+                    () -> assertThat(record.envelope().startMark()).isEqualTo(new StartMark(STREAM, 3)),
                     () -> assertThat(record.envelope().streamWatermarks()).isEqualTo(instance.streamWatermarks()));
         }
     }

@@ -607,7 +607,7 @@ public final class SagaExecutionSupport {
     }
 
     private static SagaEnvelope.@Nullable StartMark startMark(EventMeta meta) {
-        return meta.streamId() == null || meta.streamVersion() == null ? null : new SagaEnvelope.StartMark(meta.streamId(), meta.streamVersion(), meta.position());
+        return meta.streamId() == null || meta.streamVersion() == null ? null : new SagaEnvelope.StartMark(meta.streamId(), meta.streamVersion());
     }
 
     // The stream marks after the version meta describes has failed. It is listed as pending among the versions of its

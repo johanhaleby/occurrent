@@ -70,7 +70,7 @@ class SagaBeforeTheStartKotlinTest {
         private fun <S> theEventAtThreeIsBelowTheStart(saga: Saga<OrderEvent, S, OrderCommand>, state: S, event: OrderEvent): Boolean {
             val startedAtFive = SagaEnvelope(
                 SAGA_ID, state, SagaStatus.ACTIVE, 3L, emptyList(), emptyMap(), null, NOW, NOW, null, null, true, null,
-                emptyMap(), StartMark(STREAM, 5L, null)
+                emptyMap(), StartMark(STREAM, 5L)
             )
             return SagaExecutionSupport.isBelowTheStart(saga, startedAtFive, SagaInput.event(event), EventMeta(STREAM, 3L, null, event::class.java.name))
         }
