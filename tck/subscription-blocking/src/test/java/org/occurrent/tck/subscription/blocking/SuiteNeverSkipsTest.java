@@ -29,6 +29,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.tck.latecommit.LateCommits;
 
 import java.time.Duration;
 import java.util.List;
@@ -136,6 +137,22 @@ class SuiteNeverSkipsTest {
         // because a suite whose second branch is only ever exercised elsewhere is a suite nothing in this module can
         // prove is satisfiable.
         assertEveryTestPasses(StartingAtThePresentRestartConformance.class, "subscription model");
+    }
+
+    @Test
+    void the_restart_suite_fails_before_its_first_assertion_against_a_fixture_that_has_no_lateCommits() {
+        Events tests = EngineTestKit.engine("junit-jupiter")
+                .selectors(selectClass(DeclinesLateCommitsRestartConformance.class))
+                .execute()
+                .testEvents();
+
+        assertThat(tests.started().count()).isPositive();
+        assertThat(tests.succeeded().count()).isZero();
+        assertThat(tests.failed().stream())
+                .describedAs("every test must fail on the missing lateCommits() and nothing else")
+                .allSatisfy(event -> assertThat(event.getRequiredPayload(TestExecutionResult.class).getThrowable().orElseThrow())
+                        .isInstanceOf(UnsupportedOperationException.class)
+                        .hasMessageContaining("lateCommits"));
     }
 
     @Test
@@ -426,6 +443,14 @@ class SuiteNeverSkipsTest {
         }
     }
 
+    static class DeclinesLateCommitsRestartConformance extends RestartConformance {
+
+        @Override
+        protected RestartableSubscriptionModelFixture createFixture() {
+            return new FixtureWithoutLateCommits();
+        }
+    }
+
     private static class NoopSubscriptionModelFixture implements SubscriptionModelFixture {
 
         @Override
@@ -467,6 +492,35 @@ class SuiteNeverSkipsTest {
         @Override
         public boolean resumesAfterARestart() {
             // Never reached: the model throws from subscribe long before the suite asks which branch to assert.
+            return true;
+        }
+
+        @Override
+        public LateCommits lateCommits() {
+            // Answered, so the suite fails on the model that honours nothing and not on a missing declaration.
+            return LateCommits.inPositionOrder();
+        }
+
+        @Override
+        public boolean honoursAGlobalPosition() {
+            return false;
+        }
+    }
+
+    /**
+     * A restartable fixture that never overrides {@link RestartableSubscriptionModelFixture#lateCommits()}. The suite
+     * touches it in setup, so every test fails there with the default's message.
+     */
+    private static class FixtureWithoutLateCommits extends NoopSubscriptionModelFixture
+            implements RestartableSubscriptionModelFixture {
+
+        @Override
+        public SubscriptionModel restart() {
+            return NoopSubscriptionModel.INSTANCE;
+        }
+
+        @Override
+        public boolean resumesAfterARestart() {
             return true;
         }
     }
@@ -541,6 +595,20 @@ class SuiteNeverSkipsTest {
 
         @Override
         public boolean resumesAfterARestart() {
+            return resumesAfterARestart;
+        }
+
+        @Override
+        public LateCommits lateCommits() {
+            // The log appends and delivers as one step under one lock, so a lower position is never visible after a
+            // higher one.
+            return LateCommits.inPositionOrder();
+        }
+
+        @Override
+        public boolean honoursAGlobalPosition() {
+            // Nothing is held, so the later event was delivered to the first subscription and the position changes
+            // nothing, whichever answer is declared. Follows the model's own start so both branches get a green run.
             return resumesAfterARestart;
         }
 
