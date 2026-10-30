@@ -175,6 +175,12 @@ catch that.
   [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. After a prune of only the tag marker, no type
   marker is left in the sum to refuse the append. After a prune of both, matching appends can bring the tag marker
   back to the version the token holds.
+- A read with `afterVersions` can't tell versions saved from other criteria when the marker keys are the same. Versions
+  from a read on `type("X").tags(a)` have the key `tag:a`, like a read on `tags(a)`, so that read no longer throws
+  `DcbSnapshotInvalidException` and returns only what comes after the versions, with no exception. The javadoc and the
+  guide say to pass versions only to a read on the same criteria, and nothing enforces that. A criteria-derived snapshot
+  key (ADR 61) gives a changed criteria another snapshot, so a decider with such a key doesn't pass versions from the old
+  criteria.
 - `DcbConsistencyToken` becomes a class and the two stream constructors are removed, which breaks store
   implementations and code that creates tokens or streams. The refusal breaks code that appends with other criteria
   than it read with. There is no OpenRewrite recipe for either, because the replacement needs the read criteria,

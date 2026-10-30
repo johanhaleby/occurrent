@@ -279,9 +279,9 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
 
             // Write skew across a type and a tag together. The first writer reads type X with tag A and appends type Y
             // with tag B. The second reads type Y with tag B and appends type X with tag A. Each event falls inside the
-            // other writer's condition and outside its own. The two events share neither a type nor a tag, so nothing
-            // common serialises them whatever the condition covers. The committed read is the union of both
-            // conditions, since each one alone misses the other event.
+            // other writer's condition and outside its own. The two events share neither a type nor a tag, so only the
+            // conditions' tag markers can serialise them, since each writer increments both tag A and tag B. The
+            // committed read is the union of both conditions, since each one alone misses the other event.
             DcbCriteria readByFirst = DcbCriteria.type(typeX).tags(tag(tagA));
             DcbCriteria readBySecond = DcbCriteria.type(typeY).tags(tag(tagB));
             DcbAppendCondition onFirst = failIfEventsMatch(dcbEventStore().read(readByFirst).consistencyToken());

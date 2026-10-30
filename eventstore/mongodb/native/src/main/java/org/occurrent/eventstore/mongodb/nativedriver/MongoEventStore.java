@@ -736,7 +736,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // stored lastPosition is informational.
     // The marker collection holds one document per distinct tag and type that has taken part in an append, and
     // nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection
-    // without bound. An operator can prune markers during quiescence, a later append recreates any it still needs.
+    // without bound. An operator can prune markers when no command holds a token it can still append with, and a later
+    // append recreates any it still needs.
     // Returns the incremented markers as this transaction left them, keyed by marker key, so the append stamps its
     // events with the versions it gave them (ADR 148).
     private Map<String, Document> incrementConflictMarkers(ClientSession clientSession, Set<String> markerKeys, long lastPosition) {

@@ -563,7 +563,9 @@ What is new:
 - `read(criteria, DcbReadOptions.afterVersions(saved))` returns every matching event appended after `saved`, including
   one that committed late below a position an earlier read saw. When the store can't compare `saved` with its own
   markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
-  full.
+  full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
+  always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
+  which returns only what comes after them, with no exception.
 - `DcbAppendConfirmation.isConfirmed(result)` answers whether an append is committed at majority, read outside any
   transaction of yours. The MongoDB stores and `InMemoryEventStore` implement it.
 
@@ -730,6 +732,10 @@ describes it.
   with other tags was appended can now succeed. If the decision depends on every event of that type, read with criteria
   that hold only the type. A conditional append on `type("X").tags(a)` that appends an event of another type also no
   longer makes an append with a token read on `type("X")` alone refuse, since it no longer increments that type marker.
+  When many commands append one type with different tags, an append that used to be refused can now wait for seconds in
+  the store's retries of a write conflict. When those retries run out, it fails with the store's write conflict exception,
+  `DataIntegrityViolationException` on the Spring stores, and not with `DcbAppendConditionNotFulfilledException`, so the
+  default retry of `GenericDcbApplicationService` doesn't retry it.
 - **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
   succeed, so a store that still reads the type marker for an item with tags fails the case.
