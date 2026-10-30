@@ -46,6 +46,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,13 +55,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * A subscribe that goes straight to live calls the wrapped model's {@code subscribe(..)}, which can call the caller's
  * dynamic {@link StartAt} again on the calling thread. That call holds no lock of the catch-up model, so the function
  * can cancel another subscription through the catch-up, and a cancel of an id whose subscribe is under way returns
- * without waiting for it. A thread that never returns fails its test at the deadline rather than hanging the build.
+ * without waiting for it. Code on the thread of the wrapped subscribe is neither refused nor made to wait for it. A thread
+ * that never returns fails its test at the deadline rather than hanging the build.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorDcbCatchupSubscribeUnderWayTest {
 
     private static final Duration STARTUP = Duration.ofSeconds(60);
     private static final Duration DEADLINE = Duration.ofSeconds(15);
+    private static final Duration BLOCKED = Duration.ofSeconds(5);
     private static final DcbSubscriptionFilter FILTER = DcbSubscriptionFilter.filter(DcbCriteria.all());
 
     @Test
@@ -127,6 +130,35 @@ class ReactorDcbCatchupSubscribeUnderWayTest {
         assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("subscribed:x", "cancelled:x");
         assertThat(wrapped.isRunning("x")).as("whether the wrapped model runs x").isFalse();
         assertThat(wrapped.isPaused("x")).as("whether the wrapped model holds x paused").isFalse();
+    }
+
+    @Test
+    void a_dynamic_start_that_blocks_on_a_cancel_of_its_own_id_returns_since_the_wrapped_model_is_cancelled_at_once() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.registersBeforeTheStart = true;
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(wrapped, new UnusedDcbEventStore());
+        loadClassesOfASubscribeAndACancel(catchup);
+        wrapped.events.clear();
+        AtomicReference<Throwable> blockFailure = new AtomicReference<>();
+        AtomicReference<List<String>> toldWhenTheBlockReturned = new AtomicReference<>();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, StartAt.dynamic(context -> {
+            if (context.hasSubscriptionModelType(ReactorDcbCatchupSubscriptionModel.class)) {
+                return null;
+            }
+            try {
+                catchup.cancelSubscription("x").block(BLOCKED);
+                toldWhenTheBlockReturned.set(List.copyOf(wrapped.events));
+            } catch (Throwable t) {
+                blockFailure.set(t);
+            }
+            return StartAt.now();
+        }), cloudEvent -> Mono.empty())).start();
+
+        await(subscribeOfX, "The subscribe of x did not return");
+        assertThat(blockFailure.get()).as("what the block on a cancel of x inside the start of x threw").isNull();
+        assertThat(toldWhenTheBlockReturned.get()).as("what the wrapped model had been told when the block returned").containsExactly("subscribed:x", "cancelled:x");
+        assertThat(wrapped.isRunning("x")).as("whether the wrapped model runs x").isFalse();
     }
 
     // Keeps the time the threads of a test take to load these classes out of what the deadline measures
@@ -202,6 +234,8 @@ class ReactorDcbCatchupSubscribeUnderWayTest {
         final List<String> events = new CopyOnWriteArrayList<>();
         final Set<String> subscribed = ConcurrentHashMap.newKeySet();
         final Set<String> paused = ConcurrentHashMap.newKeySet();
+        // Holds the id from before it evaluates the start, as ReactorMongoSubscriptionModel does
+        volatile boolean registersBeforeTheStart;
 
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
@@ -220,10 +254,19 @@ class ReactorDcbCatchupSubscribeUnderWayTest {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            if (registersBeforeTheStart) {
+                register(subscriptionId);
+            }
             startAt.get(new SubscriptionModelContext(ReactorMongoSubscriptionModel.class));
+            if (!registersBeforeTheStart) {
+                register(subscriptionId);
+            }
+            return handle(subscriptionId);
+        }
+
+        private void register(String subscriptionId) {
             subscribed.add(subscriptionId);
             events.add("subscribed:" + subscriptionId);
-            return handle(subscriptionId);
         }
 
         @Override

@@ -20,6 +20,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -27,6 +28,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
+import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
@@ -35,14 +39,18 @@ import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptio
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -52,14 +60,17 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * A straight-to-live subscribe on top of {@link ReactorMongoSubscriptionModel}, which calls the caller's dynamic
  * {@link StartAt} again on the thread that subscribed. Two subscriptions whose functions each cancel the other through
- * the catch-up model, without blocking on the cancel, must neither deadlock nor leave either one running.
+ * the catch-up model, without blocking on the cancel, must neither deadlock nor leave either one running. Code on the
+ * thread that subscribed can block on a cancel of the id it is subscribing, and the Mongo model then no longer runs it.
  */
 @Timeout(120)
 @Testcontainers
@@ -68,6 +79,7 @@ class ReactorStreamCatchupDynamicStartCancelMongoTest {
 
     private static final Duration STARTUP = Duration.ofSeconds(60);
     private static final Duration DEADLINE = Duration.ofSeconds(30);
+    private static final Duration BLOCKED = Duration.ofSeconds(5);
     private static final StreamSubscriptionFilter FILTER = StreamSubscriptionFilter.filter(Filter.all());
 
     @Container
@@ -77,6 +89,8 @@ class ReactorStreamCatchupDynamicStartCancelMongoTest {
     OccurrentMongoFlush flush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer, "dynamicstartcancel"));
 
     private MongoClient mongoClient;
+    private ReactiveMongoTemplate template;
+    private String database;
     private ReactorStreamCatchupSubscriptionModel catchup;
 
     @AfterEach
@@ -115,6 +129,96 @@ class ReactorStreamCatchupDynamicStartCancelMongoTest {
         assertThat(evaluatedOn).as("threads the Mongo model evaluated the start on").containsEntry("x", "subscribe-x").containsEntry("y", "subscribe-y");
         assertThat(subscriptions.isRunning("x") || subscriptions.isPaused("x")).as("whether the Mongo model holds x").isFalse();
         assertThat(subscriptions.isRunning("y") || subscriptions.isPaused("y")).as("whether the Mongo model holds y").isFalse();
+    }
+
+    @Test
+    void a_dynamic_start_that_blocks_on_a_cancel_of_its_own_id_returns_and_the_mongo_model_no_longer_runs_the_id() {
+        ReactorMongoSubscriptionModel subscriptions = connect();
+        loadClassesOfASubscribeAndACancel();
+        AtomicBoolean cancelled = new AtomicBoolean();
+        AtomicReference<Throwable> blockFailure = new AtomicReference<>();
+        AtomicBoolean mongoRunsXWhenTheBlockReturned = new AtomicBoolean(true);
+        AtomicBoolean catchupRunsXWhenTheBlockReturned = new AtomicBoolean(true);
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, StartAt.dynamic(context -> {
+            if (!context.hasSubscriptionModelType(ReactorMongoSubscriptionModel.class)) {
+                return null;
+            }
+            if (cancelled.compareAndSet(false, true)) {
+                try {
+                    catchup.cancelSubscription("x").block(BLOCKED);
+                    mongoRunsXWhenTheBlockReturned.set(subscriptions.isRunning("x"));
+                    catchupRunsXWhenTheBlockReturned.set(catchup.isRunning("x"));
+                } catch (Throwable t) {
+                    blockFailure.set(t);
+                }
+            }
+            return StartAt.now();
+        }), cloudEvent -> Mono.empty())).start();
+
+        await(subscribeOfX, "The subscribe of x did not return");
+        assertThat(blockFailure.get()).as("what the block on a cancel of x inside the start of x threw").isNull();
+        assertThat(mongoRunsXWhenTheBlockReturned.get()).as("whether the Mongo model runs x when the block returned").isFalse();
+        assertThat(catchupRunsXWhenTheBlockReturned.get()).as("whether the catch-up model runs x when the block returned").isFalse();
+    }
+
+    @Test
+    void a_subscribe_returns_when_its_dynamic_start_cancels_another_subscription_whose_cancel_hook_blocks_on_a_cancel_of_the_subscription_under_way() {
+        connect();
+        loadClassesOfASubscribeAndACancel();
+        CountDownLatch bInAction = new CountDownLatch(1);
+        CountDownLatch hookDone = new CountDownLatch(1);
+        AtomicReference<Throwable> hookFailure = new AtomicReference<>();
+        AtomicReference<String> hookRanOn = new AtomicReference<>();
+        catchup.subscribe("b", FILTER, StartAt.now(), cloudEvent -> {
+            bInAction.countDown();
+            return Mono.<Void>never().doOnCancel(() -> {
+                hookRanOn.set(Thread.currentThread().getName());
+                try {
+                    catchup.cancelSubscription("a").block(BLOCKED);
+                } catch (Throwable t) {
+                    hookFailure.set(t);
+                } finally {
+                    hookDone.countDown();
+                }
+            });
+        }).waitUntilStarted().block(STARTUP);
+        writeAnEvent();
+        awaitLatch(bInAction, STARTUP, "The action of b never got the event");
+        AtomicBoolean cancelled = new AtomicBoolean();
+        CompletableFuture<Void> subscribeOfA = new CompletableFuture<>();
+        daemon("subscribe-a", subscribeOfA, () -> catchup.subscribe("a", FILTER, StartAt.dynamic(context -> {
+            if (!context.hasSubscriptionModelType(ReactorMongoSubscriptionModel.class)) {
+                return null;
+            }
+            if (cancelled.compareAndSet(false, true)) {
+                catchup.cancelSubscription("b").subscribe();
+            }
+            return StartAt.now();
+        }), cloudEvent -> Mono.empty())).start();
+
+        await(subscribeOfA, "The subscribe of a did not return");
+        awaitLatch(hookDone, DEADLINE, "The cancel hook of b did not finish");
+        assertThat(hookFailure.get()).as("what the block on a cancel of a inside the cancel hook of b threw").isNull();
+        assertThat(hookRanOn.get()).as("thread the cancel hook of b ran on").isEqualTo("subscribe-a");
+    }
+
+    private ReactorMongoSubscriptionModel connect() {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("dynamicstartcancel"));
+        mongoClient = MongoClients.create(connectionString);
+        database = requireNonNull(connectionString.getDatabase());
+        template = new ReactiveMongoTemplate(mongoClient, database);
+        ReactorMongoSubscriptionModel subscriptions = new ReactorMongoSubscriptionModel(template, "events", TimeRepresentation.RFC_3339_STRING);
+        catchup = new ReactorStreamCatchupSubscriptionModel(subscriptions, new UnusedReader());
+        return subscriptions;
+    }
+
+    private void writeAnEvent() {
+        ReactiveMongoTransactionManager transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, database));
+        ReactorMongoEventStore eventStore = new ReactorMongoEventStore(template, new EventStoreConfig.Builder().eventStoreCollectionName("events")
+                .transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).eventStoreCapabilities(STREAM).build());
+        CloudEvent event = CloudEventBuilder.v1().withId("e1").withSource(URI.create("urn:test")).withType("type").withTime(OffsetDateTime.now()).build();
+        eventStore.write("stream", WriteCondition.anyStreamVersion(), Flux.just(event)).block(STARTUP);
     }
 
     // Keeps the time the threads of a test take to load these classes out of what the deadline measures
