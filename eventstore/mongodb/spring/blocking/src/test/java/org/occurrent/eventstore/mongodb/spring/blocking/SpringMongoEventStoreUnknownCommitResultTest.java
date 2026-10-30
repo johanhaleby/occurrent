@@ -21,6 +21,9 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoException;
+import com.mongodb.ReadConcern;
+import com.mongodb.TransactionOptions;
+import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -45,11 +48,13 @@ import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.lang.reflect.Method;
 import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -184,6 +189,28 @@ class SpringMongoEventStoreUnknownCommitResultTest {
         assertThatThrownBy(() -> eventStore.write(STREAM_ID, List.of(event("NameDefined"))))
                 .isInstanceOf(TransactionSystemException.class);
         assertThat(eventStore.count(Filter.streamId(STREAM_ID))).isZero();
+    }
+
+    @Test
+    void the_transaction_options_the_manager_is_built_with_apply_to_its_transactions() {
+        CommitRetryingMongoTransactionManager transactionManager = new CommitRetryingMongoTransactionManager(
+                databaseFactory, TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).build());
+
+        // The session sits in a package-private holder in Spring Data MongoDB, so it is read through reflection.
+        ReadConcern readConcern = new TransactionTemplate(transactionManager).execute(status ->
+                sessionOf(TransactionSynchronizationManager.getResource(databaseFactory)).getTransactionOptions().getReadConcern());
+
+        assertThat(readConcern).isEqualTo(ReadConcern.SNAPSHOT);
+    }
+
+    private static ClientSession sessionOf(Object resourceHolder) {
+        try {
+            Method getRequiredSession = resourceHolder.getClass().getDeclaredMethod("getRequiredSession");
+            getRequiredSession.setAccessible(true);
+            return (ClientSession) getRequiredSession.invoke(resourceHolder);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

@@ -1123,7 +1123,8 @@ driver does.
 
 ### What to do
 
-Replace the manager and keep its other arguments:
+Replace the manager and keep its other arguments. Each new class has the constructors of the one it replaces that take a
+database factory, with transaction options or with an options resolver and default options:
 
 ```java
 // Before

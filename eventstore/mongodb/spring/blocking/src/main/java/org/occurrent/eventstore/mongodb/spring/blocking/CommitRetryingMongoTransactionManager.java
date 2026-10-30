@@ -24,6 +24,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.data.mongodb.MongoTransactionOptions;
+import org.springframework.data.mongodb.MongoTransactionOptionsResolver;
 
 import java.time.Duration;
 
@@ -35,7 +37,8 @@ import static java.util.Objects.requireNonNull;
  * A plain {@code MongoTransactionManager} reports such a commit as a failure, although the transaction may have been
  * saved, and retrying the append then either writes the events twice or is refused as a duplicate. This manager retries
  * the commit while the error carries the {@code UnknownTransactionCommitResult} label, for up to two minutes from the
- * first attempt, as {@code ClientSession.withTransaction} does for the native event store. A top-level {@code MaxTimeMSExpired}
+ * first commit, the limit that {@code ClientSession.withTransaction} gives the native event store. The driver counts its
+ * two minutes from the start of the {@code withTransaction} call instead. A top-level {@code MaxTimeMSExpired}
  * error ({@code MongoExecutionTimeoutException}) is not retried, and a write concern error with that code is, which is
  * also what the driver does. When the time is up, the last error is thrown from the commit as usual.
  * <p>
@@ -63,6 +66,15 @@ public class CommitRetryingMongoTransactionManager extends MongoTransactionManag
      */
     public CommitRetryingMongoTransactionManager(MongoDatabaseFactory databaseFactory, @Nullable TransactionOptions options) {
         this(databaseFactory, options, UnknownCommitResult.RETRY_LIMIT);
+    }
+
+    /**
+     * @see MongoTransactionManager#MongoTransactionManager(MongoDatabaseFactory, MongoTransactionOptionsResolver, MongoTransactionOptions)
+     */
+    public CommitRetryingMongoTransactionManager(MongoDatabaseFactory databaseFactory, MongoTransactionOptionsResolver transactionOptionsResolver,
+                                                 MongoTransactionOptions defaultTransactionOptions) {
+        super(databaseFactory, transactionOptionsResolver, defaultTransactionOptions);
+        this.retryLimit = UnknownCommitResult.RETRY_LIMIT;
     }
 
     // The limit is only a parameter so that a test can run out of time without waiting two minutes.

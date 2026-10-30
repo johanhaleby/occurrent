@@ -22,6 +22,9 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoException;
+import com.mongodb.ReadConcern;
+import com.mongodb.TransactionOptions;
+import com.mongodb.reactivestreams.client.ClientSession;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -47,6 +50,7 @@ import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.transaction.ReactiveTransactionManager;
 import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -55,6 +59,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
+import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -166,7 +171,7 @@ class ReactorMongoEventStoreUnknownCommitResultTest {
 
     @Test
     void a_commit_that_keeps_having_an_unknown_result_fails_with_that_error_when_the_time_is_up() {
-        ReactorMongoEventStore eventStore = storeOn(new CommitRetryingReactiveMongoTransactionManager(databaseFactory, Duration.ofMillis(300)));
+        ReactorMongoEventStore eventStore = storeOn(new CommitRetryingReactiveMongoTransactionManager(databaseFactory, null, Duration.ofMillis(300)));
         configureFailPoint(new Document("mode", "alwaysOn")
                 .append("data", new Document("failCommands", List.of("commitTransaction"))
                         .append("writeConcernError", new Document("code", WRITE_CONCERN_FAILED).append("errmsg", "the result of the commit is unknown"))));
@@ -188,6 +193,32 @@ class ReactorMongoEventStoreUnknownCommitResultTest {
         assertThatThrownBy(() -> eventStore.write(STREAM_ID, Flux.just(event("NameDefined"))).block())
                 .isInstanceOf(TransactionSystemException.class);
         assertThat(eventStore.count(Filter.streamId(STREAM_ID)).block()).isZero();
+    }
+
+    @Test
+    void the_transaction_options_the_manager_is_built_with_apply_to_its_transactions() {
+        CommitRetryingReactiveMongoTransactionManager transactionManager = new CommitRetryingReactiveMongoTransactionManager(
+                databaseFactory, TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).build());
+
+        // The session sits in a package-private holder in Spring Data MongoDB, so it is read through reflection.
+        ReadConcern readConcern = TransactionalOperator.create(transactionManager)
+                .execute(status -> TransactionSynchronizationManager.forCurrentTransaction()
+                        .map(synchronizationManager -> sessionOf(synchronizationManager.getResource(databaseFactory)))
+                        .map(session -> session.getTransactionOptions().getReadConcern()))
+                .single()
+                .block();
+
+        assertThat(readConcern).isEqualTo(ReadConcern.SNAPSHOT);
+    }
+
+    private static ClientSession sessionOf(Object resourceHolder) {
+        try {
+            Method getSession = resourceHolder.getClass().getDeclaredMethod("getSession");
+            getSession.setAccessible(true);
+            return (ClientSession) getSession.invoke(resourceHolder);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

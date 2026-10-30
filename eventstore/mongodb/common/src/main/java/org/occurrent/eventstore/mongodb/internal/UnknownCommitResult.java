@@ -29,7 +29,8 @@ import java.time.Duration;
 public final class UnknownCommitResult {
 
     /**
-     * How long the driver keeps retrying a commit, measured from when the first commit was sent.
+     * How long a commit is retried, measured from when the first commit was sent. This is the driver's limit, but the
+     * driver measures it from the start of its {@code withTransaction} call, so before the transaction body runs.
      */
     public static final Duration RETRY_LIMIT = Duration.ofMillis(120_000);
 
@@ -37,8 +38,8 @@ public final class UnknownCommitResult {
     }
 
     /**
-     * @return {@code true} if the failure is a {@link MongoException} that carries the {@code UnknownTransactionCommitResult}
-     * label, and is not a {@code MaxTimeMSExpired} ({@link MongoExecutionTimeoutException}) or a
+     * @return {@code true} if the first {@link MongoException} in the cause chain of the failure has the
+     * {@code UnknownTransactionCommitResult} label, and is not a {@code MaxTimeMSExpired} ({@link MongoExecutionTimeoutException}) or a
      * {@link MongoOperationTimeoutException}. The driver retries a commit that fails that way and no other.
      */
     public static boolean isRetryable(Throwable failure) {

@@ -16,10 +16,14 @@
 
 package org.occurrent.eventstore.mongodb.spring.reactor;
 
+import com.mongodb.TransactionOptions;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.mongodb.internal.UnknownCommitResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.mongodb.MongoTransactionOptions;
+import org.springframework.data.mongodb.MongoTransactionOptionsResolver;
 import org.springframework.data.mongodb.ReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.transaction.reactive.TransactionSynchronizationManager;
@@ -36,7 +40,8 @@ import static java.util.Objects.requireNonNull;
  * A plain {@code ReactiveMongoTransactionManager} reports such a commit as a failure, although the transaction may have
  * been saved, and retrying the append then either writes the events twice or is refused as a duplicate. This manager
  * retries the commit while the error carries the {@code UnknownTransactionCommitResult} label, for up to two minutes
- * from the first attempt, as the driver's {@code withTransaction} does for the native event store. A
+ * from the first commit, the limit that the driver's {@code withTransaction} gives the native event store. The driver
+ * counts its two minutes from the start of the {@code withTransaction} call instead. A
  * top-level {@code MaxTimeMSExpired} error ({@code MongoExecutionTimeoutException}) is not retried, and a write concern
  * error with that code is, which is also what the driver does. When the time is up, the last error is emitted from the
  * commit as usual.
@@ -57,12 +62,28 @@ public class CommitRetryingReactiveMongoTransactionManager extends ReactiveMongo
      * @see ReactiveMongoTransactionManager#ReactiveMongoTransactionManager(ReactiveMongoDatabaseFactory)
      */
     public CommitRetryingReactiveMongoTransactionManager(ReactiveMongoDatabaseFactory databaseFactory) {
-        this(databaseFactory, UnknownCommitResult.RETRY_LIMIT);
+        this(databaseFactory, (TransactionOptions) null);
+    }
+
+    /**
+     * @see ReactiveMongoTransactionManager#ReactiveMongoTransactionManager(ReactiveMongoDatabaseFactory, TransactionOptions)
+     */
+    public CommitRetryingReactiveMongoTransactionManager(ReactiveMongoDatabaseFactory databaseFactory, @Nullable TransactionOptions options) {
+        this(databaseFactory, options, UnknownCommitResult.RETRY_LIMIT);
+    }
+
+    /**
+     * @see ReactiveMongoTransactionManager#ReactiveMongoTransactionManager(ReactiveMongoDatabaseFactory, MongoTransactionOptionsResolver, MongoTransactionOptions)
+     */
+    public CommitRetryingReactiveMongoTransactionManager(ReactiveMongoDatabaseFactory databaseFactory, MongoTransactionOptionsResolver transactionOptionsResolver,
+                                                         MongoTransactionOptions defaultTransactionOptions) {
+        super(databaseFactory, transactionOptionsResolver, defaultTransactionOptions);
+        this.retryLimit = UnknownCommitResult.RETRY_LIMIT;
     }
 
     // The limit is only a parameter so that a test can run out of time without waiting two minutes.
-    CommitRetryingReactiveMongoTransactionManager(ReactiveMongoDatabaseFactory databaseFactory, Duration retryLimit) {
-        super(databaseFactory);
+    CommitRetryingReactiveMongoTransactionManager(ReactiveMongoDatabaseFactory databaseFactory, @Nullable TransactionOptions options, Duration retryLimit) {
+        super(databaseFactory, options);
         this.retryLimit = requireNonNull(retryLimit, "Retry limit cannot be null");
     }
 

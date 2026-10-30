@@ -29,13 +29,14 @@ Occurrent ships `CommitRetryingMongoTransactionManager` and `CommitRetryingReact
 extends Spring's manager and overrides the protected `doCommit`, which Spring documents as the place to retry a commit.
 The retry follows the driver's `withTransaction`:
 
-- It retries a commit that fails with the `UnknownTransactionCommitResult` label, found on the exception or on one of
-  its causes.
+- It retries a commit that fails with the `UnknownTransactionCommitResult` label, found on the first `MongoException`
+  in the cause chain of the failure.
 - It does not retry a top-level `MaxTimeMSExpired` error (`MongoExecutionTimeoutException`) or
   `MongoOperationTimeoutException`, which the driver does not retry either. It does retry a `MongoWriteConcernException`
   with the `MaxTimeMSExpired` code (50) when it has the label, as the driver does.
-- It stops retrying 120 seconds after the first commit was sent, the driver's `MAX_RETRY_TIME_LIMIT_MS`, and throws or
-  emits the last error. The caller sees the same failure it sees today, and the append may or may not be saved.
+- It stops retrying 120 seconds after the first commit was sent, and throws or emits the last error. The number is the
+  driver's `MAX_RETRY_TIME_LIMIT_MS`, but the driver counts it from the start of its `withTransaction` call, before the
+  transaction body runs, so the driver's window can be shorter than ours by the time the body takes. The caller sees the same failure it sees today, and the append may or may not be saved.
 - It sends the next commit at once, as the driver does.
 
 Both Spring Boot starters create these managers instead of the plain ones. They still back off when the application
@@ -45,12 +46,12 @@ majority read and write concern as transaction options.
 A `SpringMongoEventStore` whose transaction manager is not a `CommitRetryingMongoTransactionManager` logs one warning
 when it is created. The reactive store's `EventStoreConfig.Builder.transactionConfig(ReactiveTransactionManager)` does
 the same. `transactionConfig(TransactionalOperator)` can't, because a `TransactionalOperator` does not expose the
-manager it came from, so an application that passes an operator gets no warning, and the migration guide tells it to
-build the operator on the new manager.
+manager it came from, so an application that passes an operator gets no warning. The migration guide says so.
 
 The store does not retry the commit itself. By the time Spring has translated the failure, the store would have to run
-the whole append again, and an append that was in fact saved would be written twice. Retrying only the commit is
-correct because the transaction is already complete on the session.
+the whole append again, and an append that was in fact saved would be reported as a failure, because the same event
+ids are refused by the unique `(id, source)` index. Retrying only the commit is correct because the transaction is
+already complete on the session.
 
 Running the transaction through `ClientSession.withTransaction` was considered and rejected. It bypasses the
 `TransactionTemplate` the user configured, and the reactive driver has no such method.
