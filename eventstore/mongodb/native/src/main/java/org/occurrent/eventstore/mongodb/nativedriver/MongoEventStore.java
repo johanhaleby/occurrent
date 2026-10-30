@@ -667,8 +667,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             markers = enforceAppendCondition(clientSession, condition, eventsToAppend, lastPosition);
         } else {
             // An unconditional append still increments its events' markers, so a concurrent conditional append
-            // on an overlapping tag or type shares a marker, serializes against it, and its consistency-token
-            // check observes it. Without this, nothing forces a write-write conflict and a concurrent
+            // whose criteria match one of these events shares a marker with it, serializes against it, and its
+            // consistency-token check observes it. Without this, nothing forces a write-write conflict and a concurrent
             // conditional append's snapshot could miss this append (write skew). See ADR 0021.
             markers = incrementConflictMarkers(clientSession, DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
         }
