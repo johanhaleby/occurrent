@@ -31,7 +31,9 @@ import com.mongodb.event.CommandSucceededEvent;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.*;
+import org.awaitility.Awaitility;
 import org.awaitility.core.ConditionTimeoutException;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
@@ -68,12 +70,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -82,11 +86,13 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -1473,13 +1479,13 @@ public class SpringMongoSubscriptionModelTest {
 
         @Test
         void start_throws_the_refusal_of_a_subscription_made_while_stopped_whose_position_answers_a_global_checkpoint() {
-            // Given a stopped model whose resume holds its monitor until the run is gone, or for at most two seconds
+            // Given a stopped model whose resume holds its monitor until the run is gone
             String subscriptionId = UUID.randomUUID().toString();
             SpringMongoSubscriptionModel model = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, timeRepresentation, RetryStrategy.none()) {
                 @Override
                 public synchronized Subscription resumeSubscription(String id) {
                     Subscription resumed = super.resumeSubscription(id);
-                    pollForUpToTwoSecondsUntil(() -> !isRunning(id));
+                    await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(10, MILLIS)).until(() -> !isRunning(id));
                     return resumed;
                 }
             };
@@ -1491,7 +1497,7 @@ public class SpringMongoSubscriptionModelTest {
                 // When it starts and resumes the subscription
                 Throwable thrown = catchThrowable(() -> model.start(true));
 
-                // Then it waits for the run and throws the refusal, whether or not the run had been removed meanwhile
+                // Then the run was already gone when the resume returned, and start throws the refusal it recorded
                 assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
                         .hasMessageContaining("subscription \"" + subscriptionId + "\"");
             } finally {
@@ -1502,7 +1508,7 @@ public class SpringMongoSubscriptionModelTest {
         @Test
         void stop_does_not_throw_when_the_refusal_of_a_run_races_the_pause_of_it() throws Exception {
             // Given a refusal held between the check and the removal, and a model whose first pause releases it and
-            // holds for at most two seconds until the run is gone
+            // waits until the run is gone
             String subscriptionId = UUID.randomUUID().toString();
             HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
             ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
@@ -1512,7 +1518,7 @@ public class SpringMongoSubscriptionModelTest {
                 public void pauseSubscription(String id) {
                     if (firstPause.getAndSet(false)) {
                         holdsTheRefusal.release.countDown();
-                        pollForUpToTwoSecondsUntil(() -> !isRunning(id));
+                        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(10, MILLIS)).until(() -> !isRunning(id));
                     }
                     super.pauseSubscription(id);
                 }
@@ -1533,6 +1539,166 @@ public class SpringMongoSubscriptionModelTest {
                 modelLogger.detachAppender(holdsTheRefusal);
                 model.shutdown();
             }
+        }
+
+        @Test
+        void start_throws_the_refusal_of_a_subscription_made_while_stopped_when_the_resume_waits_for_the_handle_to_start() throws Exception {
+            // Given a stopped model whose resume waits for the subscription to start, while start holds the monitor
+            String subscriptionId = UUID.randomUUID().toString();
+            SpringMongoSubscriptionModel model = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, timeRepresentation, RetryStrategy.none()) {
+                @Override
+                public Subscription resumeSubscription(String id) {
+                    Subscription resumed = super.resumeSubscription(id);
+                    resumed.waitUntilStarted();
+                    return resumed;
+                }
+            };
+            ExecutorService starter = Executors.newSingleThreadExecutor();
+            try {
+                model.stop();
+                model.subscribePaused(subscriptionId, null, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), __ -> {
+                });
+
+                // When it starts and resumes the subscription, on a thread of its own so that a stall fails the assertion
+                Future<Throwable> started = starter.submit(() -> catchThrowable(() -> model.start(true)));
+
+                // Then start ends and throws the refusal
+                assertThat(started).succeedsWithin(Duration.ofSeconds(5))
+                        .asInstanceOf(InstanceOfAssertFactories.THROWABLE)
+                        .isExactlyInstanceOf(UnsupportedStartAtException.class)
+                        .hasMessageContaining("subscription \"" + subscriptionId + "\"");
+            } finally {
+                starter.shutdownNow();
+                starter.awaitTermination(5, SECONDS);
+                model.shutdown();
+            }
+        }
+
+        @Test
+        void waiting_for_a_refused_subscription_while_holding_the_monitor_of_the_model_throws_the_refusal() {
+            // Given a thread that holds the monitor of the model
+            String subscriptionId = UUID.randomUUID().toString();
+            Throwable thrown;
+            synchronized (subscriptionModel) {
+                // When it subscribes at a position that answers a global checkpoint and waits for the subscription
+                Subscription refused = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), __ -> {
+                });
+                thrown = catchThrowable(() -> refused.waitUntilStarted(Duration.ofSeconds(5)));
+            }
+
+            // Then the wait ends with the refusal before its bound, since the refusal needs no monitor
+            assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessageContaining("subscription \"" + subscriptionId + "\"");
+        }
+
+        @Test
+        void the_run_of_a_refused_subscription_ends_while_stop_holds_the_monitor_and_a_pause_waits_for_it() throws Exception {
+            // Given a refusal held between the check and the removal, and a model whose first pause releases it and
+            // waits for the run to end
+            String subscriptionId = UUID.randomUUID().toString();
+            HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
+            ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
+            AtomicBoolean firstPause = new AtomicBoolean(true);
+            AtomicBoolean runEndedDuringThePause = new AtomicBoolean();
+            SpringMongoSubscriptionModel model = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, timeRepresentation, RetryStrategy.none()) {
+                @Override
+                public void pauseSubscription(String id) {
+                    super.pauseSubscription(id);
+                    if (firstPause.getAndSet(false)) {
+                        holdsTheRefusal.release.countDown();
+                        runEndedDuringThePause.set(becomesTrueWithinFiveSeconds(() -> activeSubscriptionThreads(this) == 0));
+                    }
+                }
+            };
+            modelLogger.addAppender(holdsTheRefusal);
+            try {
+                model.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), __ -> {
+                });
+                assertThat(holdsTheRefusal.held.await(10, SECONDS)).isTrue();
+
+                // When the model is stopped
+                model.stop();
+
+                // Then the refusal let go of the run while the pause waited for it
+                assertThat(runEndedDuringThePause).isTrue();
+            } finally {
+                holdsTheRefusal.release.countDown();
+                modelLogger.detachAppender(holdsTheRefusal);
+                model.shutdown();
+            }
+        }
+
+        @Test
+        void start_throws_the_refusal_of_a_run_that_stops_restarting_after_start_found_it_running() {
+            // Given a stopped model whose resume makes the first check of whether the run stopped restarting wait for the
+            // position to answer and the refusal to end the run
+            String subscriptionId = UUID.randomUUID().toString();
+            CountDownLatch positionMayAnswer = new CountDownLatch(1);
+            SpringMongoSubscriptionModel model = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, timeRepresentation, RetryStrategy.none()) {
+                @Override
+                public synchronized Subscription resumeSubscription(String id) {
+                    Subscription resumed = super.resumeSubscription(id);
+                    replaceLatchOfTheRunOf(this, id, "stoppedRestartingLatch", own -> new RunsEndsBeforeTheFirstRead(own, positionMayAnswer));
+                    return resumed;
+                }
+            };
+            try {
+                model.stop();
+                model.subscribePaused(subscriptionId, null, StartAt.dynamic(ctx -> {
+                    awaitUpToTenSeconds(positionMayAnswer);
+                    return StartAt.checkpoint(GlobalCheckpoint.of(7));
+                }), __ -> {
+                });
+
+                // When it starts and resumes the subscription
+                Throwable thrown = catchThrowable(() -> model.start(true));
+
+                // Then it throws the refusal, though the run stopped restarting only after start had found it running
+                assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                        .hasMessageContaining("subscription \"" + subscriptionId + "\"");
+            } finally {
+                model.shutdown();
+            }
+        }
+
+        @Test
+        void a_refused_run_stays_known_until_its_failure_is_recorded() throws Exception {
+            // Given a run whose position waits to answer a global checkpoint, and a started latch that holds the thread
+            // recording the failure of the run until released
+            String subscriptionId = UUID.randomUUID().toString();
+            CountDownLatch positionAsked = new CountDownLatch(1);
+            CountDownLatch positionMayAnswer = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            AtomicReference<HoldsTheRecordingOfTheFailure> holdsTheRecording = new AtomicReference<>();
+            Subscription refused = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
+                positionAsked.countDown();
+                awaitUpToTenSeconds(positionMayAnswer);
+                return StartAt.checkpoint(GlobalCheckpoint.of(7));
+            }), __ -> {
+            });
+            try {
+                assertThat(positionAsked.await(10, SECONDS)).isTrue();
+                replaceLatchOfTheRunOf(subscriptionModel, subscriptionId, "startedLatch", own -> {
+                    holdsTheRecording.set(new HoldsTheRecordingOfTheFailure(own, release));
+                    return holdsTheRecording.get();
+                });
+
+                // When the refusal is recording the failure of the run
+                positionMayAnswer.countDown();
+                assertThat(holdsTheRecording.get().reached.await(10, SECONDS)).isTrue();
+
+                // Then the run is still known, so nobody reads it as gone before its failure can be read
+                assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+            } finally {
+                release.countDown();
+            }
+
+            // And once the failure is recorded, the handle throws the refusal and the id is gone
+            Throwable thrown = catchThrowable(() -> refused.waitUntilStarted(Duration.ofSeconds(5)));
+            assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessageContaining("subscription \"" + subscriptionId + "\"");
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(10, MILLIS)).until(() -> !subscriptionModel.isRunning(subscriptionId));
+            assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
         }
 
         private void assertSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint, boolean paused) {
@@ -1672,12 +1838,30 @@ public class SpringMongoSubscriptionModelTest {
             return ((ThreadPoolTaskExecutor) model.executor).getActiveCount();
         }
 
-        // Not an assertion. The bound gives another thread the time to act, and a thread that waits for a monitor this one holds can't
-        private static void pollForUpToTwoSecondsUntil(Callable<Boolean> condition) {
+        // False when the condition still doesn't hold after the bound
+        private static boolean becomesTrueWithinFiveSeconds(Callable<Boolean> condition) {
             try {
-                await().atMost(Duration.ofSeconds(2)).with().pollInterval(Duration.of(10, MILLIS)).until(condition);
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(10, MILLIS)).until(condition);
+                return true;
             } catch (ConditionTimeoutException bound) {
-                // The bound expired
+                return false;
+            }
+        }
+
+        // The run of a subscription can't be reached from a public method, so one of its latches is replaced through the private fields
+        private static void replaceLatchOfTheRunOf(SpringMongoSubscriptionModel model, String subscriptionId, String latchName, UnaryOperator<CountDownLatch> replacement) {
+            try {
+                Field subscriptionsField = SpringMongoSubscriptionModel.class.getDeclaredField("subscriptions");
+                subscriptionsField.setAccessible(true);
+                Object subscriptions = subscriptionsField.get(model);
+                Field runningField = subscriptions.getClass().getDeclaredField("runningSubscriptions");
+                runningField.setAccessible(true);
+                Object run = ((Map<?, ?>) runningField.get(subscriptions)).get(subscriptionId);
+                Field latchField = run.getClass().getDeclaredField(latchName);
+                latchField.setAccessible(true);
+                latchField.set(run, replacement.apply((CountDownLatch) latchField.get(run)));
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
             }
         }
 
@@ -2500,6 +2684,68 @@ public class SpringMongoSubscriptionModelTest {
                     .filter(Thread::isAlive)
                     .filter(thread -> thread.getName().startsWith(prefix))
                     .count();
+        }
+    }
+
+    // Replaces the latch whose count a run's start reads to learn whether the run stopped restarting. The first read lets
+    // the position answer, and returns once the run has ended
+    private static final class RunsEndsBeforeTheFirstRead extends CountDownLatch {
+        private final CountDownLatch own;
+        private final CountDownLatch positionMayAnswer;
+        private final AtomicBoolean first = new AtomicBoolean(true);
+
+        private RunsEndsBeforeTheFirstRead(CountDownLatch own, CountDownLatch positionMayAnswer) {
+            super(1);
+            this.own = own;
+            this.positionMayAnswer = positionMayAnswer;
+        }
+
+        @Override
+        public long getCount() {
+            if (first.getAndSet(false)) {
+                positionMayAnswer.countDown();
+                Awaitility.await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(10, MILLIS)).until(() -> own.getCount() == 0);
+            }
+            return own.getCount();
+        }
+
+        @Override
+        public void countDown() {
+            own.countDown();
+        }
+    }
+
+    // Replaces the latch a run counts down when it has started or failed to. Counting it down waits until released, which
+    // holds the thread that records the failure of a refused run
+    private static final class HoldsTheRecordingOfTheFailure extends CountDownLatch {
+        private final CountDownLatch own;
+        private final CountDownLatch release;
+        private final CountDownLatch reached = new CountDownLatch(1);
+
+        private HoldsTheRecordingOfTheFailure(CountDownLatch own, CountDownLatch release) {
+            super(1);
+            this.own = own;
+            this.release = release;
+        }
+
+        @Override
+        public void countDown() {
+            reached.countDown();
+            awaitUpToTenSeconds(release);
+            own.countDown();
+        }
+
+        @Override
+        public long getCount() {
+            return own.getCount();
+        }
+    }
+
+    private static void awaitUpToTenSeconds(CountDownLatch latch) {
+        try {
+            latch.await(10, SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

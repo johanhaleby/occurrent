@@ -931,18 +931,20 @@ blocking models, which also log it at `ERROR`, and `waitUntilStarted()` fails wi
 the handle `subscribe(..)` returns while the model is stopped, which never completes. See
 [#1371](https://github.com/johanhaleby/occurrent/issues/1371).
 
-The function is checked until a change stream of the subscription has opened, which on the reactor model means its
-`Flux` was subscribed to. An answer from an opening that a pause or a failure stopped doesn't count. A position the
-function returns after that isn't checked, so a change stream that opens again before the first event opens at the
-present for it.
+The function is checked until a change stream of the subscription has opened. On the blocking models that means its
+cursor opened, so an answer from an opening that a pause or a failure stopped doesn't end the check. On the reactor
+model it means its `Flux` was subscribed to, so a pause after that, or an answer the server rejects, ends it. A position
+the function returns after that isn't checked. When its earlier answer was a resume token or an operation time and a
+change stream opens again before the first event, one of these checkpoints from the function opens at the present.
 
 ### Who is affected
 
 Code that subscribes a MongoDB subscription model directly at a checkpoint a catch-up stored, or delivered with a
 replayed event, in a `StartAt` that names it or from a dynamic start that returns it. A
 resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, isn't refused. The blocking models go on
-from the position the subscription has read to. The reactor model opens at the moment of the resume, as it did in
-0.34.0, and skips what was written while the subscription was paused.
+from the position the subscription has read to. The reactor model opens at the moment of the resume, for such a
+checkpoint and for a dynamic position that returns one, as it did in 0.34.0, and skips what was written while the
+subscription was paused.
 
 A blocking `DurableSubscriptionModel` hands the MongoDB model a dynamic start that returns the checkpoint in its
 `CheckpointStorage`. A subscription whose storage holds a catch-up's checkpoint now stops in the same
@@ -950,9 +952,12 @@ way, where it skipped the history before. A Spring Boot starter subscription get
 before it went live and the subscription's start then changed to `DEFAULT`, as
 [#1346](https://github.com/johanhaleby/occurrent/issues/1346) describes.
 
+A `TimeBasedCheckpoint` isn't refused. A catch-up writes one when it can't get a global position, and reads it back. A
+`DurableSubscriptionModel` with no catch-up around it and one of these in its storage still opens at the present.
+
 A `CompetingConsumerSubscriptionModel` wrapping one of these models doesn't see a refusal of a dynamic start, since it
-comes after `subscribe(..)` has returned. The node keeps the lease and the subscription id until you cancel the
-subscription, and it delivers nothing.
+comes after `subscribe(..)` has returned. The node goes on holding the lease and the subscription id, and it delivers
+nothing. Cancel the subscription to free them.
 
 ### What to do
 

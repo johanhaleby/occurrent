@@ -545,12 +545,15 @@ public class MongoCommons {
     /**
      * {@code startAt} itself when it isn't dynamic. A dynamic one is wrapped, so that a position its function answers
      * before a change stream of the subscription has opened is refused when it is a position a catch-up subscription
-     * model stores, as {@link #refuseCatchupPosition(StartAt)} refuses a fixed one. An answer that was never opened at
-     * doesn't count, since a pause or a failure can stop an opening. The {@link UnsupportedStartAtException} is
-     * thrown where the subscription model resolves the position, as the change stream opens.
+     * model stores, as {@link #refuseCatchupPosition(StartAt)} refuses a fixed one. What counts as opened is up to the
+     * subscription model. A blocking one counts a cursor that opened, so an answer whose opening a pause or a failure
+     * stopped doesn't end the check. The reactor one counts a {@code Flux} that was subscribed to, so a pause after that,
+     * or an answer the server rejects, ends it. The {@link UnsupportedStartAtException} is thrown where the subscription
+     * model resolves the position, as the change stream opens.
      * <p>
-     * An answer after that isn't checked. The subscription model asks again when a change stream opens again before
-     * the first event, and such an answer opens at the present and skips what was written in between.
+     * An answer after that isn't checked. When the earlier answer was a position of its own rather than the present, the
+     * subscription model asks again as a change stream opens again before the first event, and such an answer opens at
+     * the present and skips what was written in between.
      *
      * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
      * @param opened         Whether a change stream of the subscription has opened, as the model's handle counts it

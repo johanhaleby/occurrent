@@ -478,13 +478,16 @@ public final class ChangeStreamSubscriptions {
                 // before the cursor exists, since an action can throw this type too and restarts like any other failure
                 log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, e);
                 // Whoever takes the run out of the map first decides. A pause or a cancel that got there first owns what
-                // happens next, and a resume asks the start again. Otherwise the id is free before a handle throws. Under
-                // the monitor, so start() sees the failure along with the removal and stop() never pauses a removed run
-                synchronized (monitor) {
-                    if (runningSubscriptions.remove(subscriptionId, internalSubscription)) {
-                        internalSubscription.failedToStart(unsupportedStartAt);
+                // happens next, and a resume asks the start again. Otherwise the id is free before a handle throws. Recorded
+                // inside the map's atomic update, so whoever reads the run as gone finds the failure, and without the model's
+                // monitor, since whoever holds it may be waiting for this handle
+                runningSubscriptions.computeIfPresent(subscriptionId, (__, current) -> {
+                    if (current != internalSubscription) {
+                        return current;
                     }
-                }
+                    internalSubscription.failedToStart(unsupportedStartAt);
+                    return null;
+                });
             } else if (isChangeStreamHistoryLost(e)) {
                 if (takenOverAfterHistoryLoss(subscriptionId, internalSubscription, openedAt, e)) {
                     return;
@@ -693,11 +696,9 @@ public final class ChangeStreamSubscriptions {
     }
 
     // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which
-    // has not lost anything. Under the model's monitor, so stop() never pauses a removed run.
+    // has not lost anything. Runs on the executor thread without the model's monitor.
     private void forget(String subscriptionId, InternalSubscription internalSubscription) {
-        synchronized (monitor) {
-            runningSubscriptions.remove(subscriptionId, internalSubscription);
-        }
+        runningSubscriptions.remove(subscriptionId, internalSubscription);
     }
 
     private @Nullable BsonTimestamp currentOperationTime() {
@@ -768,6 +769,11 @@ public final class ChangeStreamSubscriptions {
                 for (String subscriptionId : new ArrayList<>(runningSubscriptions.keySet())) {
                     try {
                         model.pauseSubscription(subscriptionId);
+                    } catch (UnknownSubscriptionException | SubscriptionNotRunningException e) {
+                        // The executor thread removes a run without the monitor, and such a run has nothing left to pause
+                        if (isKnown(subscriptionId)) {
+                            failures.add(e);
+                        }
                     } catch (RuntimeException e) {
                         failures.add(e);
                     }
@@ -808,11 +814,14 @@ public final class ChangeStreamSubscriptions {
                     }
                     try {
                         Subscription subscription = model.resumeSubscription(subscriptionId);
-                        // The executor thread removes a run under the monitor too, so this is the run the resume
-                        // started, or nothing when there is nothing to wait for
+                        // Only the executor thread writes to this map without the monitor, and it only removes a run
+                        // that lost its history or was refused, so this is the run the resume started, or nothing to
+                        // wait for. A refused run has recorded its failure by the time it's gone, which the handle throws
                         InternalSubscription run = runningSubscriptions.get(subscriptionId);
                         if (run != null) {
                             resumed.put(subscriptionId, new ResumedByStart(subscription, run));
+                        } else {
+                            subscription.waitUntilStarted(Duration.ZERO);
                         }
                     } catch (RuntimeException e) {
                         failures.add(e);
@@ -842,12 +851,9 @@ public final class ChangeStreamSubscriptions {
         Subscription subscription = resumedByStart.subscription();
         InternalSubscription internalSubscription = resumedByStart.run();
         while (!subscription.waitUntilStarted(Duration.ofMillis(100))) {
-            if (!isRunningOn(subscriptionId, internalSubscription)) {
-                // Asked once more, since a refusal that removed the run throws from here
+            if (shutdown || runningSubscriptions.get(subscriptionId) != internalSubscription || internalSubscription.hasStoppedRestarting()) {
+                // Asked once more, since a refused run has recorded its failure by then, which the handle throws
                 subscription.waitUntilStarted(Duration.ZERO);
-                return;
-            }
-            if (internalSubscription.hasStoppedRestarting()) {
                 return;
             }
         }
