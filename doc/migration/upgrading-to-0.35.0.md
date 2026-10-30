@@ -777,15 +777,19 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   late, and folding it last could give another state than a read in position order.
 - When the store reported no versions, or didn't confirm the append, the snapshot isn't saved. The first skip for each
   reason logs a warning, and later ones log at debug.
-- A boundary over several tags or types reports no versions until each of them has a marker, so a decider or view on it
-  reads the whole boundary and saves nothing until every one has had an event. 0.34.0 saved at a position there.
+- A boundary reports no versions until each tag of an item with tags, and each type of an item without tags, has a
+  marker. A decider reads the whole boundary and saves nothing on that command, and when it appends, that append creates
+  the missing markers, so its next command can save. A `@Snapshot` view never appends, so it reads the whole boundary
+  until other appends have created them. 0.34.0 saved at a position there.
 - A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot and logs a warning at start, since a read of every event
   has no marker versions. A snapshot 0.34.0 saved for it stays in the store and stops changing, so delete it or give the
-  view a boundary. `dcbSnapshotView { }` in Kotlin uses `DcbCriteria.all()` unless you set tags or criteria.
-- A custom key function on a decider should stay keyed on the criteria. If you widen the criteria and keep the key, the next
-  execute resumes after the saved versions and doesn't read the older events the wider criteria now matches, and nothing
-  reports it. A decider over `DcbCriteria.all()` saves no snapshot either, so every command reads every
-  event of the store, and the first skip logs a warning.
+  view a boundary. `dcbSnapshotView { }` in Kotlin uses `DcbCriteria.all()` unless you set tags or criteria. A decider over
+  `DcbCriteria.all()` saves no snapshot either, so every command reads every event of the store, and the first skip logs
+  a warning.
+- A custom key function on a decider should stay keyed on the criteria. If you widen the criteria and keep the key, and
+  the marker keys stay the same, for example when you change only the types of an item with tags, the next execute
+  resumes after the saved versions and doesn't read the older events the wider criteria now matches, and nothing reports
+  it. A widening that changes the marker keys is refused, and the decider reads the whole boundary.
 - Inside a transaction of yours a read reports no versions, so a decider that runs in one reads the whole
   boundary and saves no snapshot.
 - The same holds on an application service with synchronous subscriptions, since it runs every execute in its

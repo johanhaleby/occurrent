@@ -36,7 +36,7 @@ public final class SkippedSaves {
         /**
          * The event store reported no marker versions to save at.
          */
-        NO_MARKER_VERSIONS("the event store reported no marker versions to save the snapshot at. That happens on a boundary where any tag or type of the criteria has no marker yet, over DcbCriteria.all(), inside a transaction, on a store that doesn't report them, and when a marker was removed and created again between the read and the append"),
+        NO_MARKER_VERSIONS("the event store reported no marker versions to save the snapshot at. That happens on a boundary where a tag of an item with tags, or a type of an item without tags, has no marker yet, over DcbCriteria.all(), inside a transaction, on a store that doesn't report them, and when a marker was removed and created again between the read and the append"),
         /**
          * The append wasn't confirmed as durably committed.
          */

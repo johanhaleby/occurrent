@@ -580,7 +580,7 @@ The consumers, on both stacks:
 - `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot's versions as a
   `markerVersions` array of `{k, e, v, u}` elements, since a marker key can contain a dot, and write no `version` field
   for it. A 0.34 node that loads such a snapshot finds no version and reads the boundary in full. A DCB snapshot that
-  0.34 saved has no marker versions, so a 0.35 decider or view never uses it, and saves over it after a full read.
+  0.34 saved has no marker versions, so a 0.35 decider or view never uses it, and can save over it once its read reports versions.
 - `InMemoryEventStore` keeps a counter and an epoch per key under its existing lock and reports the same versions.
 
 `PositionBackfill` only gives positions to events that have none, and every DCB event gets its position when it is
@@ -939,9 +939,10 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
 
 ## Consequences
 
-A boundary over several tags or types reports versions only when each has a marker, so a decider or view on it saves
-nothing and reads in full until every one has had an event. 0.34 saved at a position there, so this is a cost I accept
-for not saving at a position. A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot, and one 0.34 saved stays in
+A boundary reports versions only when each tag of an item with tags, and each type of an item without tags, has a
+marker. A decider on it reads in full and saves nothing on that command, and when it appends, that append creates the
+missing markers, so its next command can save. A view never appends, so it reads in full until other appends have
+created them. 0.34 saved at a position there, so this is a cost I accept for not saving at a position. A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot, and one 0.34 saved stays in
 the store unchanged.
 
 - #1230 is fixed for the snapshot deciders and the `@Snapshot` view on every store in this repository, without a new
@@ -988,7 +989,8 @@ the store unchanged.
   instead of its `long` version, which is 0 for it. The stream snapshot keeps its version. The position entry points
   listed above are deprecated. The changelog, the migration guide and an OpenRewrite recipe for the record patterns
   cover it.
-- Existing DCB snapshots are ignored. The next command or delivery on their boundary reads in full and saves over them.
+- Existing DCB snapshots are ignored. A command or delivery on their boundary reads in full, and can save over them once
+  its read reports versions.
 - Criteria that are `MatchAll` get no DCB snapshot. A `@Snapshot` view over `MatchAll` logs a warning when it's
   registered and keeps no snapshot, so an application written against 0.34.0 still starts. Selecting by version would
   need a marker that every append increments, which ADR 21 already calls a whole-store lock.
