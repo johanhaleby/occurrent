@@ -4,7 +4,7 @@ Date: 2026-06-28
 
 ## Status
 
-Accepted
+Accepted. Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md). For a criteria item with at least one tag, the query reads and increments only its `tag:` markers.
 
 ## Context
 

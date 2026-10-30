@@ -7,6 +7,7 @@ Date: 2026-10-23
 Accepted. Decides [#1228](https://github.com/johanhaleby/occurrent/issues/1228) and the first part of
 [#1229](https://github.com/johanhaleby/occurrent/issues/1229). Amends
 [ADR 21](0021-dcb-write-path-query-scoped-concurrency.md),
+[ADR 30](0030-keep-matchall-dcb-append-condition-with-documented-limit.md),
 [ADR 31](0031-capture-dcb-consistency-token-in-a-single-read.md), [ADR 53](0053-dcb-api-freeze-consistency.md) and
 [ADR 88](0088-what-a-dcb-append-condition-guarantees.md).
 
@@ -77,7 +78,8 @@ in order. `DcbSnapshotKeys.canonicalKey` doesn't change either, so no stored sna
 `DcbAppendCondition`'s constructor throws `IllegalArgumentException` when the token's criteria aren't the same as the
 condition's criteria. Every factory goes through the constructor, so the refusal happens before any store is called.
 No store reserves positions or writes markers for it, and a `DcbEventStore` of your own gets the check without doing
-anything. `GenericDcbApplicationService` retries only `DcbAppendConditionNotFulfilledException` on both stacks, so the
+anything. With its default retry, `defaultRetryStrategy()` on the blocking stack and `defaultRetry()` on the reactor
+stack, `GenericDcbApplicationService` retries only `DcbAppendConditionNotFulfilledException`, so the
 `IllegalArgumentException` reaches the caller on the first attempt.
 
 - `DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken)` is added and takes its criteria from the token. Both
@@ -100,13 +102,12 @@ append still increments a marker for each tag and each type of its events.
 ADR 21's argument for the marker check still holds for an item with tags. An event matches the item only when it has all
 of the item's tags, so an append of a matching event increments every one of the item's `tag:` markers, and a token over
 those markers moves with it. A conditional append on the item increments the same markers from its query keys, so the
-two appends share a document and MongoDB lets only one of them commit. An item without tags keeps its type keys, and
-excluded types never had keys.
+two appends share a document and MongoDB doesn't let them commit at the same time. An item without tags keeps its type
+keys, and excluded types never had keys.
 
-For criteria with tags, an append that only shares a type with them no longer makes the check refuse a later append
-on those criteria. Two appends of the same type that run at the same time still conflict, whatever their tags. Every
-append still increments `type:X`, so both write the same marker document and MongoDB doesn't let them commit at the
-same time. That is the second part of #1229.
+Sharing a type with a criteria item that has tags is no longer a reason for the check to refuse. Two appends of the same
+type that run at the same time still conflict, whatever their tags. Every append still increments `type:X`, so both
+write the same marker document and MongoDB doesn't let them commit at the same time. That is the second part of #1229.
 
 ### Invariants
 
@@ -129,10 +130,10 @@ doesn't read for criteria with tags. An append only ever raises a marker version
 check refuse an append and the command retry, and it can't make a check let one through. Going back to 0.34 is safe
 for the data.
 
-A token value saved under 0.34 isn't valid on 0.35. For criteria with tags it is a sum over tag and type markers,
-while 0.35 sums the tag markers only, so an old value can let an append through that should have been refused. The
-migration guide tells anyone who saved a token value, in an ETag or a queued command for example, to read again
-instead. Occurrent itself doesn't save a token.
+A token value saved under 0.34 isn't valid on 0.35. For a criteria item with both types and tags it is a sum over tag
+and type markers, while 0.35 sums the tag markers only, so an old value can let an append through that should have been
+refused. The migration guide tells anyone who saved a token value, in an ETag or a queued command for example, to read
+again instead. Occurrent itself doesn't save a token.
 
 ## Alternatives considered
 
@@ -164,16 +165,18 @@ catch that.
 ## Consequences
 
 - A condition built from a read's token and other criteria than the read's throws, on every store.
-- On the MongoDB stores, an append that only shares a type with criteria that have tags no longer makes the check
-  refuse a later append on those criteria. The in-memory store already behaved this way, so the TCK asserts the same
-  answer for that case on every store. Appends of one type that run at the same time still write the same `type:X`
-  document on MongoDB, whatever their tags, and the TCK test below runs its appends one after another, so it doesn't
-  show that they stop conflicting.
+- On the MongoDB stores, sharing a type with a criteria item that has tags is no longer a reason for the check to
+  refuse. The in-memory store doesn't refuse for that either, so the TCK asserts the same answer on every store for an
+  unconditional append that only shares a type. Appends of one type that run at the same time still write the same
+  `type:X` document on MongoDB, whatever their tags, and the TCK test below runs its appends one after another, so it
+  doesn't show that they stop conflicting.
+- For a criteria item with both types and tags, a prune of only its tag marker between the read and the append can let
+  a conflicting append through until [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed.
 - `DcbConsistencyToken` becomes a class and the two stream constructors are removed, which breaks store
   implementations and code that creates tokens or streams. The refusal breaks code that appends with other criteria
   than it read with. There is no OpenRewrite recipe for either, because the replacement needs the read criteria,
   which the call site doesn't always have.
-- The deprecation warning shows up wherever a caller passes the criteria and the token separately.
+- The deprecation warning shows up on `failIfEventsMatch(criteria, token)`.
 - ADR 31 and ADR 53 decided that the token stays a `long`. This ADR reverses that, while ADR 31's single read stands.
 - The TCK gets tests for the refusal on every store. It also gets a test on every store that reads
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token, which succeeds. Its
