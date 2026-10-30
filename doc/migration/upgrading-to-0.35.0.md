@@ -4,7 +4,8 @@ Each section describes one 0.35.0 change, what the `UpgradeToOccurrent_0_35` Ope
 what you have to do by hand. Find the parts of Occurrent you use in the lists below and read those sections.
 
 The sections that can break the build are listed under "Changes that can break the build", and each bullet says when.
-The compiler finds those for you. The other sections compile fine and behave differently, so read them first.
+The compiler finds those breaks for you, but a section in that list can also describe a change that still compiles. The
+other sections compile fine and behave differently, so read them first.
 
 ### Changes that can break the build
 
@@ -24,8 +25,10 @@ The compiler finds those for you. The other sections compile fine and behave dif
   **Breaks the build** if you implement the interface yourself.
 - [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
   `DcbConsistencyToken` becomes a class, and `DcbEventStream(List, long)` and `DcbDomainEventStream(List, long)` are
-  removed. **Breaks the build** if you create a token or a stream, or call `value()`, which a `DcbEventStore` of your own
-  usually does.
+  removed. **Breaks the build** if you create a token, call one of those constructors or call `value()`, which a
+  `DcbEventStore` of your own usually does.
+- [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). **Breaks the build** if you
+  use a record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`, or call `new DcbEventStream(events, head)`.
 
 ### Sagas
 
@@ -40,11 +43,12 @@ The compiler finds those for you. The other sections compile fine and behave dif
 ### DCB
 
 - [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). **Breaks the build** if you
-  use a record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`.
+  use a record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`, or call `new DcbEventStream(events, head)`.
 - [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
   A `DcbAppendCondition` with a token read with other criteria throws `IllegalArgumentException`, on every store. A
-  token value saved under 0.34.0 isn't valid. **Breaks the build** if you create a token or a stream, or call `value()`,
-  which a `DcbEventStore` of your own usually does.
+  token value saved under 0.34.0 isn't valid. **Breaks the build** if you create a token, call
+  `new DcbEventStream(events, head)` or `new DcbDomainEventStream(events, head)`, or call `value()`, which a
+  `DcbEventStore` of your own usually does.
 
 ### Subscriptions and catch-up
 
@@ -630,13 +634,16 @@ stacks, so it isn't affected on a store that returns the criteria it was given.
 
 - **A `DcbEventStore` of your own.** It stops compiling where it calls `new DcbConsistencyToken(..)`,
   `DcbConsistencyToken.of(long)`, `value()` or `new DcbEventStream(events, head)`.
-- **Code that creates tokens or streams**, such as a test double that returns a `DcbEventStream` or a
-  `DcbDomainEventStream`. It stops compiling the same way. So does a call to `value()`, and a record pattern over
-  `DcbConsistencyToken`, since the token is no longer a record.
+- **Code that creates a token, or a stream with a two-argument constructor**, such as a test double that returns a
+  `DcbEventStream` or a `DcbDomainEventStream`. It stops compiling the same way. A stream created with a token you
+  already hold, `new DcbEventStream(events, head, token)`, still compiles. A call to `value()` stops compiling too, and
+  so does a record pattern over `DcbConsistencyToken`, since the token is no longer a record.
 - **A `DcbEventStore` decorator that rewrites criteria**, adding a tenant tag for example, and passes the inner store's
   token through. It compiles, but the token holds the rewritten criteria, so a condition on the caller's criteria throws
-  `IllegalArgumentException`. In `read`, return `DcbConsistencyToken.of(criteria, innerToken.version())`. In `append`,
-  rewrite the criteria the same way, and give the inner store a condition with
+  `IllegalArgumentException`. In `read`, return the inner stream with
+  `DcbConsistencyToken.of(criteria, innerToken.version())` as its token, and keep its `markerVersions`, which
+  `new DcbEventStream(events, head, token)` sets to empty. In `append`, rewrite the criteria the same way, and give the
+  inner store a condition with
   `DcbConsistencyToken.of(rewrittenCriteria, token.version())`. On MongoDB the added tag then counts in the check like
   any other tag, so appending any event with that tag can make the check refuse, whether or not the event matches.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
@@ -656,7 +663,8 @@ return new DcbEventStream(events, head, DcbConsistencyToken.of(criteria, version
 
 Compute the version the same way you computed the value for `DcbConsistencyToken.of(long)`. `DcbEventStream(List, long)`
 used the head as the token, so `new DcbEventStream(events, head, DcbConsistencyToken.of(criteria, head))` does what it
-did. For a `DcbDomainEventStream`, pass the token of the `DcbEventStream` it was built from.
+did. For a `DcbDomainEventStream`, pass the token of the `DcbEventStream` it was built from. A test double with no
+`DcbEventStream` behind it creates the token with `DcbConsistencyToken.of(criteria, version)`.
 
 Build a conditional append from the token alone:
 
