@@ -151,8 +151,8 @@ class SagaSelfHoldTest {
         return new SagaExecution<>("baskets", basketSaga(), store, this::dispatch, converter, config, event -> true, () -> NOW);
     }
 
-    private SagaExecution<BasketEvent, Basket, BasketCommand> executionThatMayNotHold(SagaRunnerConfig config) {
-        return new SagaExecution<>("baskets", basketSaga(), store, this::dispatch, converter, config, event -> true, () -> NOW, () -> false);
+    private SagaExecution<BasketEvent, Basket, BasketCommand> executionThatDoesNotHold(SagaRunnerConfig config) {
+        return new SagaExecution<>("baskets", basketSaga(), store, this::dispatch, converter, config, event -> true, () -> NOW, false);
     }
 
     private void dispatch(BasketCommand command) {
@@ -730,13 +730,13 @@ class SagaSelfHoldTest {
     }
 
     @Nested
-    @DisplayName("when the delivery may not hold events")
-    class WhenTheDeliveryMayNotHoldEvents {
+    @DisplayName("when the saga does not hold events")
+    class WhenTheSagaDoesNotHoldEvents {
 
         @Test
         void the_original_failure_is_rethrown_and_nothing_is_held() {
             // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = executionThatMayNotHold(WINDOW_OF_2);
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = executionThatDoesNotHold(WINDOW_OF_2);
             deliver(execution, openedAt(1));
             failingItems.add("two");
             store.losingEveryWriteWithoutState = true;
@@ -755,7 +755,7 @@ class SagaSelfHoldTest {
         @Test
         void the_version_that_could_not_be_listed_is_logged_at_error() {
             // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = executionThatMayNotHold(WINDOW_OF_2);
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = executionThatDoesNotHold(WINDOW_OF_2);
             deliver(execution, openedAt(1));
             failingItems.add("two");
             store.losingEveryWriteWithoutState = true;

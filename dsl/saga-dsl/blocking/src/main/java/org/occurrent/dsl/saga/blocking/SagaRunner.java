@@ -83,9 +83,9 @@ import static java.util.Objects.requireNonNull;
  * A subscription can deliver a non-start event before the event that starts its instance, for example a broker
  * consumer with several messages in flight, or a catch-up handing over to its live feed. The saga then holds the event
  * in the state store and applies it once the instance starts. On a subscription model that declares through
- * {@link CommitOrderedSubscriptions} that it delivers the subscription in commit order, nothing arrives before its
- * start, and such an event is skipped as in 0.34.0. A model that does not declare it for every subscription, with
- * {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()}, needs a store that implements
+ * {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()} that it delivers every subscription in commit
+ * order, nothing arrives before its start, and such an event is skipped as in 0.34.0. A model that does not declare it
+ * needs a store that implements
  * {@link SagaHeldEvents}, which {@code SagaStateStore.inMemory()} and {@code SpringMongoSagaStateStore} both do, and
  * {@code run} refuses any other store with an {@link IllegalStateException}. An event whose start never arrives stays
  * held until it is removed.
@@ -269,10 +269,10 @@ public final class SagaRunner<E, C> {
         requireNonNull(timersEnabled, "timersEnabled cannot be null");
 
         SagaRunnerConfig effectiveConfig = quarantineOnlyIfTheEventCanBeAskedForAgain(subscriptionId, config);
-        HoldRule holdRule = holdRuleFor(subscriptionId);
-        refuseAStoreThatCannotHold(subscriptionId, holdRule, stateStore);
+        boolean holds = holdsEarlyEvents(subscriptionId);
+        refuseAStoreThatCannotHold(subscriptionId, holds, stateStore);
         SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig,
-                retentionCheckFor(subscriptionId, effectiveConfig), Instant::now, holdRule.holds());
+                retentionCheckFor(subscriptionId, effectiveConfig), Instant::now, holds);
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
         Consumer<CloudEvent> action = execution::onCloudEvent;
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
@@ -357,28 +357,26 @@ public final class SagaRunner<E, C> {
         return config;
     }
 
-    // Whether this saga's feed can deliver an event before its instance's start, and whether the delivery in progress
-    // may, in which case the saga holds early events and keeps a failed one it cannot list. The only place that
-    // answers either, so nothing downstream asks the subscription model. A model that does not declare commit order
-    // holds, wrapped or not
-    private HoldRule holdRuleFor(String subscriptionId) {
+    // Whether this saga's feed can deliver an event before its instance's start, in which case the saga holds early
+    // events and keeps a failed one it cannot list. Read once from the model-wide answer, which is true only when the
+    // model delivers every subscription in commit order at every moment. The only place that asks, so nothing
+    // downstream asks the subscription model. A model that does not declare commit order holds, wrapped or not
+    private boolean holdsEarlyEvents(String subscriptionId) {
         Optional<CommitOrderedSubscriptions> ordered = CommitOrderedSubscriptions.findIn(subscriptionModel);
         if (ordered.isEmpty()) {
             warnIfAWrapperHidesCommitOrder(subscriptionId);
         }
-        boolean canHold = ordered.map(o -> !o.deliversEveryEventInCommitOrder()).orElse(true);
-        BooleanSupplier holds = ordered.<BooleanSupplier>map(o -> () -> !o.deliversInCommitOrder(subscriptionId)).orElse(() -> true);
-        return new HoldRule(canHold, holds);
+        return ordered.map(o -> !o.deliversEveryEventInCommitOrder()).orElse(true);
     }
 
-    // A wrapper is not unwrapped for commit order, so a declaration below it goes unused, which costs a held-events read
-    // on every keyed delivery rather than losing anything
+    // A wrapper is not unwrapped for commit order, so a declaration below it goes unused, which costs held copies of
+    // early events rather than losing anything
     private void warnIfAWrapperHidesCommitOrder(String subscriptionId) {
         SubscriptionModelCapability model = subscriptionModel;
         while (model instanceof SubscriptionModelWrapper wrapper) {
             model = wrapper.getWrappedSubscriptionModel();
             if (model instanceof CommitOrderedSubscriptions) {
-                log.warn("Saga subscription '{}' runs on {}, which does not declare commit order, although the model it wraps, {}, does. A wrapper can break commit order, so a declaration below it is not used, and the saga holds every event that arrives before its instance's start and reads the held events once for each delivery to a started instance. A wrapper that keeps commit order declares it by implementing {}.",
+                log.warn("Saga subscription '{}' runs on {}, which does not declare commit order, although the model it wraps, {}, does. A wrapper can break commit order, so a declaration below it is not used, and the saga holds every event that arrives before its instance's start instead of skipping it. A wrapper that keeps commit order declares it by implementing {}.",
                         subscriptionId, subscriptionModel.getClass().getName(), model.getClass().getName(), CommitOrderedSubscriptions.class.getName());
                 return;
             }
@@ -387,17 +385,14 @@ public final class SagaRunner<E, C> {
 
     // A feed that can deliver an event before its instance's start needs somewhere to keep the event until the start
     // arrives, and skipping it instead loses its reaction.
-    private void refuseAStoreThatCannotHold(String subscriptionId, HoldRule holdRule, SagaStateStore<?> stateStore) {
-        if (holdRule.canHold() && !(stateStore instanceof SagaHeldEvents<?>)) {
+    private void refuseAStoreThatCannotHold(String subscriptionId, boolean holds, SagaStateStore<?> stateStore) {
+        if (holds && !(stateStore instanceof SagaHeldEvents<?>)) {
             throw new IllegalStateException("Saga subscription '" + subscriptionId + "' runs on " + subscriptionModel.getClass().getName()
                                             + ", which can deliver an event before the event that starts its instance, and the state store "
                                             + stateStore.getClass().getName() + " has nowhere to hold such an event until the start arrives. "
                                             + "Use a state store that implements " + SagaHeldEvents.class.getName()
                                             + ", as SagaStateStore.inMemory() and SpringMongoSagaStateStore do, or run the saga on a subscription model that delivers in commit order.");
         }
-    }
-
-    private record HoldRule(boolean canHold, BooleanSupplier holds) {
     }
 
     /**

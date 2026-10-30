@@ -26,24 +26,6 @@ import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
  */
 final class CommitOrderStubSubscriptionModel extends StubSubscriptionModel implements CommitOrderedSubscriptions {
 
-    /** The two ways a model can answer {@code true} for a subscription. */
-    enum InCommitOrder {
-        DECLARING_EVERY_EVENT {
-            @Override
-            CommitOrderStubSubscriptionModel create() {
-                return declaringEveryEventInCommitOrder();
-            }
-        },
-        ANSWERING_TRUE_FOR_NOW {
-            @Override
-            CommitOrderStubSubscriptionModel create() {
-                return inCommitOrderForNow();
-            }
-        };
-
-        abstract CommitOrderStubSubscriptionModel create();
-    }
-
     private final boolean declaresEveryEvent;
     private volatile boolean inCommitOrder;
 

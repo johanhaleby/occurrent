@@ -27,13 +27,10 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.occurrent.dsl.saga.HeldEventRef;
 import org.occurrent.dsl.saga.InMemorySagaStateStore;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaStateStore;
-import org.occurrent.dsl.saga.blocking.CommitOrderStubSubscriptionModel.InCommitOrder;
 import org.occurrent.dsl.saga.blocking.HeldOrderSaga.Order;
 import org.occurrent.dsl.saga.blocking.HeldOrderSaga.OrderCommand;
 import org.occurrent.dsl.saga.blocking.HeldOrderSaga.OrderEvent;
@@ -118,15 +115,13 @@ class SagaCommitOrderFeedRuleTest {
     }
 
     @Nested
-    @DisplayName("when a non-start event is delivered before its start on a model that answers true")
-    class WhenANonStartEventIsDeliveredBeforeItsStartOnAModelThatAnswersTrue {
+    @DisplayName("when a non-start event is delivered before its start on a model that declares every event in commit order")
+    class WhenANonStartEventIsDeliveredBeforeItsStartOnAModelThatDeclaresEveryEventInCommitOrder {
 
-        @ParameterizedTest
-        @EnumSource(InCommitOrder.class)
-        @DisplayName("the event is skipped and nothing is held")
-        void the_event_is_skipped_and_nothing_is_held(InCommitOrder kind) {
+        @Test
+        void the_event_is_skipped_and_nothing_is_held() {
             // Given
-            CommitOrderStubSubscriptionModel model = kind.create();
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
 
             // When
@@ -141,12 +136,10 @@ class SagaCommitOrderFeedRuleTest {
             );
         }
 
-        @ParameterizedTest
-        @EnumSource(InCommitOrder.class)
-        @DisplayName("the event is not applied when the start arrives")
-        void the_event_is_not_applied_when_the_start_arrives(InCommitOrder kind) {
+        @Test
+        void the_event_is_not_applied_when_the_start_arrives() {
             // Given
-            CommitOrderStubSubscriptionModel model = kind.create();
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
             model.deliver(ID, itemAt(2, "book"));
 
@@ -203,6 +196,42 @@ class SagaCommitOrderFeedRuleTest {
         }
 
         @Test
+        void a_model_that_answers_true_for_the_subscription_without_declaring_every_event_holds_the_event_without_running_its_reaction() {
+            // Given
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.inCommitOrderForNow();
+            run(model);
+
+            // When
+            Throwable thrown = catchThrowable(() -> model.deliver(ID, itemAt(2, "book")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(store.find(ORDER)).isEmpty(),
+                    () -> assertThat(heldKeys()).containsExactly(KEY_OF_TWO),
+                    () -> assertThat(dispatcher.issued()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_model_that_answers_true_for_the_subscription_without_declaring_every_event_applies_the_held_event_after_the_start() {
+            // Given
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.inCommitOrderForNow();
+            run(model);
+            model.deliver(ID, itemAt(2, "book"));
+
+            // When
+            model.deliver(ID, placedAt(1));
+
+            // Then
+            assertAll(
+                    () -> assertThat(dispatcher.issued()).containsExactly(new OpenLedger(ORDER), reserve("book")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(heldKeys()).isEmpty()
+            );
+        }
+
+        @Test
         void a_model_that_does_not_implement_the_capability_holds_the_event_without_running_its_reaction() {
             // Given
             StubSubscriptionModel model = new StubSubscriptionModel();
@@ -240,11 +269,11 @@ class SagaCommitOrderFeedRuleTest {
     }
 
     @Nested
-    @DisplayName("when the answer changes between two deliveries")
-    class WhenTheAnswerChangesBetweenTwoDeliveries {
+    @DisplayName("when the answer for the subscription changes between two deliveries")
+    class WhenTheAnswerForTheSubscriptionChangesBetweenTwoDeliveries {
 
         @Test
-        void an_event_is_held_or_skipped_by_the_answer_at_its_own_delivery() {
+        void every_event_is_held_because_only_the_answer_for_every_subscription_counts() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.notInCommitOrderForNow();
             run(model);
@@ -257,8 +286,8 @@ class SagaCommitOrderFeedRuleTest {
 
             // Then
             assertAll(
-                    () -> assertThat(dispatcher.issued()).containsExactly(new OpenLedger(ORDER), reserve("book")),
-                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book")
+                    () -> assertThat(dispatcher.issued()).containsExactly(new OpenLedger(ORDER), reserve("book"), reserve("pen")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book", "pen")
             );
         }
     }
@@ -343,7 +372,7 @@ class SagaCommitOrderFeedRuleTest {
         @Test
         void a_wrapper_that_declares_commit_order_itself_is_not_warned_about_and_its_answer_is_used() {
             // Given
-            CommitOrderStubSubscriptionModel inner = CommitOrderStubSubscriptionModel.inCommitOrderForNow();
+            CommitOrderStubSubscriptionModel inner = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(new DeclaringWrapper(inner));
 
             // When
@@ -468,6 +497,11 @@ class SagaCommitOrderFeedRuleTest {
         @Override
         public boolean deliversInCommitOrder(String subscriptionId) {
             return wrapped.deliversInCommitOrder(subscriptionId);
+        }
+
+        @Override
+        public boolean deliversEveryEventInCommitOrder() {
+            return wrapped.deliversEveryEventInCommitOrder();
         }
     }
 

@@ -39,7 +39,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -150,9 +149,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // Where a failed version the instance cannot list as pending is kept instead, absent for a store that cannot hold
     // events.
     private final @Nullable SagaHeldEvents<S> heldEvents;
-    // Whether the delivery in progress may hold events, asked on the delivering thread. SagaRunner decides it, and a
-    // feed that does not declare commit order holds.
-    private final BooleanSupplier holds;
+    // Whether the saga holds an event that arrives before its instance's start. SagaRunner decides it from the model-wide
+    // answer, and a feed that does not declare commit order holds.
+    private final boolean holds;
 
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
                   CloudEventConverter<E> converter, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable) {
@@ -162,12 +161,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
                   CloudEventConverter<E> converter, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable,
                   Supplier<Instant> clock) {
-        this(subscriptionId, saga, stateStore, dispatcher, converter, config, stillObtainable, clock, () -> true);
+        this(subscriptionId, saga, stateStore, dispatcher, converter, config, stillObtainable, clock, true);
     }
 
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
                   CloudEventConverter<E> converter, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable,
-                  Supplier<Instant> clock, BooleanSupplier holds) {
+                  Supplier<Instant> clock, boolean holds) {
         this.heldEvents = heldEventsOf(stateStore);
         this.holds = holds;
         this.stillObtainable = stillObtainable;
@@ -331,7 +330,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             failure.addSuppressed(storeFailure);
         }
         SagaHeldEvents<S> heldEvents = this.heldEvents;
-        if (heldEvents != null && (heldCopy || holds.getAsBoolean())) {
+        if (heldEvents != null && (heldCopy || holds)) {
             selfHold(heldEvents, sagaId, cloudEvent, meta, failure, heldCopy);
             return;
         }
@@ -471,16 +470,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     // The key a held copy is stored and found by. The redelivery key where the event has one, which ends in @ and a
-    // version. Otherwise the CloudEvent id, prefixed with its length so it cannot run into the source, and the source,
-    // followed by a suffix no redelivery key ends in. Two events held for one instance then share a key only when they
-    // are the same event.
+    // version. Otherwise the CloudEvent id and source, followed by a suffix no redelivery key ends in. A source is a URI
+    // and holds no space, so the last " from " is where it starts, and two events held for one instance share a key
+    // only when they are the same event.
     private static String heldKey(EventMeta meta, CloudEvent cloudEvent) {
         String redeliveryKey = meta.redeliveryKey();
-        if (redeliveryKey != null) {
-            return redeliveryKey;
-        }
-        String id = cloudEvent.getId();
-        return id.length() + ":" + id + " from " + cloudEvent.getSource() + " (no stream key)";
+        return redeliveryKey != null ? redeliveryKey : cloudEvent.getId() + " from " + cloudEvent.getSource() + " (no stream key)";
     }
 
     /**
@@ -765,9 +760,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return; // stale/superseded/rescheduled timer, or the instance completed: nothing to fire.
         }
         SagaHeldEvents<S> heldEvents = this.heldEvents;
-        // Asked per delivery, on the delivering thread, since a subscription can deliver in commit order at one moment
-        // and not at the next.
-        boolean holds = heldEvents != null && cloudEvent != null && this.holds.getAsBoolean();
+        boolean holds = heldEvents != null && cloudEvent != null && this.holds;
         boolean drained = false;
         boolean drainChangedSomething = false;
         if (heldEvents != null && SagaExecutionSupport.isDrainDue(current)) {
@@ -776,7 +769,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             drained = true;
             drainChangedSomething = result.changedSomething();
         }
-        HeldEventRef lookedUp = holds ? lookUpHeldCopy(heldEvents, current, meta) : null;
+        // Looked up whenever the store can hold, whatever the model answers, so a copy held while the saga ran on a model
+        // that reorders is still found when its event comes back on one that does not.
+        HeldEventRef lookedUp = heldEvents != null ? lookUpHeldCopy(heldEvents, current, meta) : null;
         String heldCopyKey = null;
         if (lookedUp != null) {
             Delivery delivery = SagaExecutionSupport.classify(Objects.requireNonNull(current), meta, config.reorderWindow());
@@ -910,8 +905,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
     }
 
-    // A held copy of this delivery's event, read once per keyed delivery to a started instance on a delivery that holds,
-    // or null. A self-held copy not marked outstanding is left to the drain.
+    // A held copy of this delivery's event, read once per keyed delivery to a started instance whenever the store can
+    // hold, or null. A self-held copy not marked outstanding is left to the drain.
     private @Nullable HeldEventRef lookUpHeldCopy(SagaHeldEvents<S> heldEvents, @Nullable SagaEnvelope<S> current, EventMeta meta) {
         String key = meta.redeliveryKey();
         if (key == null || current == null || !current.started() || current.status() != SagaStatus.ACTIVE) {

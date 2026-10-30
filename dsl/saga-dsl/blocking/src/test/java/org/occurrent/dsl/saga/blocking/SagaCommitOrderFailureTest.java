@@ -27,12 +27,9 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.occurrent.dsl.saga.HeldEventRef;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
-import org.occurrent.dsl.saga.blocking.CommitOrderStubSubscriptionModel.InCommitOrder;
 import org.occurrent.dsl.saga.blocking.HeldOrderSaga.Order;
 import org.occurrent.dsl.saga.blocking.HeldOrderSaga.OrderCommand;
 import org.occurrent.dsl.saga.blocking.HeldOrderSaga.OrderEvent;
@@ -122,18 +119,20 @@ class SagaCommitOrderFailureTest {
     }
 
     @Nested
-    @DisplayName("when a held copy fails in a drain on a node whose rule skips and its listing as pending fails")
-    class WhenAHeldCopyFailsInADrainOnANodeWhoseRuleSkipsAndItsListingAsPendingFails {
+    @DisplayName("when a held copy fails in a drain on a model in commit order and its listing as pending fails")
+    class WhenAHeldCopyFailsInADrainOnAModelInCommitOrderAndItsListingAsPendingFails {
 
         /**
-         * Version 2 arrives before the start while the model holds, so it is held. The model then answers true, and the
-         * start drives a drain whose held copy fails. The write that would list it as pending always loses.
+         * Version 2 arrives before the start while the model holds, so it is held. The saga then runs on a model that
+         * declares every event in commit order, and the start drives a drain whose held copy fails. The write that would
+         * list it as pending always loses.
          */
         private CopyFailed afterTheCopyFailedInTheDrainTheStartDrove() {
-            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.notInCommitOrderForNow();
+            CommitOrderStubSubscriptionModel holding = CommitOrderStubSubscriptionModel.notInCommitOrderForNow();
+            run(holding);
+            holding.deliver(ID, itemAt(2, "two"));
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
-            model.deliver(ID, itemAt(2, "two"));
-            model.answerInCommitOrder(true);
             dispatcher.failReservationOf("two");
             store.loseEveryWriteWithoutState(true);
             Throwable thrown = catchThrowable(() -> model.deliver(ID, placedAt(1)));
@@ -197,15 +196,13 @@ class SagaCommitOrderFailureTest {
     }
 
     @Nested
-    @DisplayName("when a window of the failed event's type is applied before the failure is kept, on a model in commit order")
+    @DisplayName("when a window of the failed event's type is applied before the failure is kept")
     class WhenAWindowOfTheFailedEventsTypeIsAppliedBeforeTheFailureIsKept {
 
-        @ParameterizedTest
-        @EnumSource(InCommitOrder.class)
-        @DisplayName("an event that failed after its delivery saw it as new is not held and its failure is rethrown")
-        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_not_held_and_its_failure_is_rethrown(InCommitOrder kind) {
+        @Test
+        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_not_held_and_its_failure_is_rethrown() {
             // Given
-            CommitOrderStubSubscriptionModel model = kind.create();
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
             model.deliver(ID, placedAt(1));
             dispatcher.failReservationOf("two");
@@ -223,12 +220,10 @@ class SagaCommitOrderFailureTest {
             );
         }
 
-        @ParameterizedTest
-        @EnumSource(InCommitOrder.class)
-        @DisplayName("an event that failed after its delivery saw it as new is logged at error")
-        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_logged_at_error(InCommitOrder kind) {
+        @Test
+        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_logged_at_error() {
             // Given
-            CommitOrderStubSubscriptionModel model = kind.create();
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
             model.deliver(ID, placedAt(1));
             dispatcher.failReservationOf("two");
@@ -262,12 +257,10 @@ class SagaCommitOrderFailureTest {
             );
         }
 
-        @ParameterizedTest
-        @EnumSource(InCommitOrder.class)
-        @DisplayName("an event whose first save lost to a window is not held and the overtaken delivery is rethrown")
-        void an_event_whose_first_save_lost_to_a_window_is_not_held_and_the_overtaken_delivery_is_rethrown(InCommitOrder kind) {
+        @Test
+        void an_event_whose_first_save_lost_to_a_window_is_not_held_and_the_overtaken_delivery_is_rethrown() {
             // Given
-            CommitOrderStubSubscriptionModel model = kind.create();
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
             model.deliver(ID, placedAt(1));
             store.beforeNextCompareAndSave(() -> deliverItems(model, 3, 8));
@@ -284,12 +277,10 @@ class SagaCommitOrderFailureTest {
             );
         }
 
-        @ParameterizedTest
-        @EnumSource(InCommitOrder.class)
-        @DisplayName("an event whose first save lost to a window is logged at error")
-        void an_event_whose_first_save_lost_to_a_window_is_logged_at_error(InCommitOrder kind) {
+        @Test
+        void an_event_whose_first_save_lost_to_a_window_is_logged_at_error() {
             // Given
-            CommitOrderStubSubscriptionModel model = kind.create();
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
             model.deliver(ID, placedAt(1));
             store.beforeNextCompareAndSave(() -> deliverItems(model, 3, 8));
@@ -323,29 +314,31 @@ class SagaCommitOrderFailureTest {
     }
 
     @Nested
-    @DisplayName("when the rule flips after the size fallback kept an event outstanding")
-    class WhenTheRuleFlipsAfterTheSizeFallbackKeptAnEventOutstanding {
+    @DisplayName("when the saga runs on a model in commit order after the size fallback kept an event outstanding")
+    class WhenTheSagaRunsOnAModelInCommitOrderAfterTheSizeFallbackKeptAnEventOutstanding {
 
         /**
          * Version 2 fails while the model holds and versions 3 to 8 overtake it. The instance is at the store's size
-         * limit, so the event is kept as an outstanding held copy and not as a key on the instance.
+         * limit, so the event is kept as an outstanding held copy and not as a key on the instance. The saga then runs on
+         * a model that declares every event in commit order, and the returned model is that one.
          */
         private CommitOrderStubSubscriptionModel afterTheSizeFallbackKeptVersionTwoOutstanding() {
-            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.notInCommitOrderForNow();
-            run(model);
-            model.deliver(ID, placedAt(1));
+            CommitOrderStubSubscriptionModel holding = CommitOrderStubSubscriptionModel.notInCommitOrderForNow();
+            run(holding);
+            holding.deliver(ID, placedAt(1));
             dispatcher.failReservationOf("two");
-            dispatcher.beforeReservationOf("two", () -> deliverItems(model, 3, 8));
+            dispatcher.beforeReservationOf("two", () -> deliverItems(holding, 3, 8));
             store.refuseMarksCarryingAKey(true);
-            Throwable thrown = catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
+            Throwable thrown = catchThrowable(() -> holding.deliver(ID, itemAt(2, "two")));
             assertThat(thrown).as("the delivery that failed").isSameAs(dispatcher.failure);
             dispatcher.stopFailingReservationOf("two");
-            model.answerInCommitOrder(true);
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
+            run(model);
             return model;
         }
 
         @Test
-        void the_event_is_kept_as_an_outstanding_held_copy_before_the_flip() {
+        void the_event_is_kept_as_an_outstanding_held_copy_before_the_saga_runs_on_the_model_in_commit_order() {
             // When
             afterTheSizeFallbackKeptVersionTwoOutstanding();
 

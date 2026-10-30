@@ -153,7 +153,7 @@ class SagaHeldEventTest {
     private volatile boolean startsAnExpiryTimer;
     private final List<OrderCommand> issued = new CopyOnWriteArrayList<>();
     private final AtomicReference<Instant> now = new AtomicReference<>(NOW);
-    private final AtomicBoolean holds = new AtomicBoolean(true);
+    private boolean holds = true;
     private CloudEventConverter<OrderEvent> converter;
     private InMemorySagaStateStore<Order> store;
 
@@ -172,7 +172,7 @@ class SagaHeldEventTest {
     }
 
     private SagaExecution<OrderEvent, Order, OrderCommand> execution(SagaStateStore<Order> stateStore, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable) {
-        return new SagaExecution<>("orders", orderSaga(), stateStore, this::dispatch, converter, config, stillObtainable, now::get, holds::get);
+        return new SagaExecution<>("orders", orderSaga(), stateStore, this::dispatch, converter, config, stillObtainable, now::get, holds);
     }
 
     private void dispatch(OrderCommand command) {
@@ -722,12 +722,64 @@ class SagaHeldEventTest {
             issued.clear();
             return execution;
         }
+    }
 
-        // What a hold that lands after the start's drain leaves behind, with the drain marked as due the way the hold marks it.
-        private void holdALateCopyOf(CloudEvent event) {
-            HeldEventRef ref = new HeldEventRef(ORDER_STREAM + "@2", ORDER_STREAM, 2L, null, event.getType(), now.get(), false, false);
-            store.hold(ORDER, new HeldEvent(ORDER, ref, event));
-            store.markHeldEvents(ORDER, null);
+    // What a hold that lands after the start's drain leaves behind, with the drain marked as due the way the hold marks it.
+    private void holdALateCopyOf(CloudEvent event) {
+        HeldEventRef ref = new HeldEventRef(ORDER_STREAM + "@2", ORDER_STREAM, 2L, null, event.getType(), now.get(), false, false);
+        store.hold(ORDER, new HeldEvent(ORDER, ref, event));
+        store.markHeldEvents(ORDER, null);
+    }
+
+    @Nested
+    @DisplayName("when a held copy is left behind the reorder window and the saga no longer holds")
+    class WhenAHeldCopyIsLeftBehindTheReorderWindowAndTheSagaNoLongerHolds {
+
+        @Test
+        void the_next_delivery_of_the_event_applies_its_held_copy_and_releases_it() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionThatNoLongerHoldsWithACopyLeftBehind();
+
+            // When
+            deliver(execution, itemAt(2, "two"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "two")),
+                    () -> assertThat(stateOfTheInstance().items()).contains("two"),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+
+        @Test
+        void a_second_delivery_of_the_event_does_not_apply_it_again() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionThatNoLongerHoldsWithACopyLeftBehind();
+            deliver(execution, itemAt(2, "two"));
+            issued.clear();
+
+            // When
+            deliver(execution, itemAt(2, "two"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+
+        // The copy was held while the saga ran on a model that reorders, and the saga now runs on one that does not.
+        private SagaExecution<OrderEvent, Order, OrderCommand> executionThatNoLongerHoldsWithACopyLeftBehind() {
+            SagaRunnerConfig config = SagaRunnerConfig.defaults().withReorderWindow(1);
+            SagaExecution<OrderEvent, Order, OrderCommand> whileItHeld = execution(store, config);
+            deliver(whileItHeld, placedAt(1));
+            deliver(whileItHeld, itemAt(3, "three"));
+            deliver(whileItHeld, itemAt(4, "four"));
+            deliver(whileItHeld, itemAt(5, "five"));
+            holdALateCopyOf(itemAt(2, "two"));
+            deliver(whileItHeld, itemAt(6, "six"));
+            assertThat(heldKeys()).as("the drain leaves the copy held").containsExactly(ORDER_STREAM + "@2");
+            holds = false;
+            issued.clear();
+            return execution(store, config);
         }
     }
 
@@ -954,13 +1006,13 @@ class SagaHeldEventTest {
     }
 
     @Nested
-    @DisplayName("when the delivery does not hold")
-    class WhenTheDeliveryDoesNotHold {
+    @DisplayName("when the saga does not hold")
+    class WhenTheSagaDoesNotHold {
 
         @Test
         void the_event_is_skipped_and_acknowledged_and_nothing_is_held() {
             // Given
-            holds.set(false);
+            holds = false;
             SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
 
             // When
@@ -977,7 +1029,7 @@ class SagaHeldEventTest {
         @Test
         void the_event_is_not_applied_when_the_start_arrives_afterwards() {
             // Given
-            holds.set(false);
+            holds = false;
             SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
             deliver(execution, itemAt(2, "book"));
 
@@ -993,7 +1045,7 @@ class SagaHeldEventTest {
         @Test
         void a_start_is_applied_as_it_always_was() {
             // Given
-            holds.set(false);
+            holds = false;
             SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
 
             // When

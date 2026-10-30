@@ -34,13 +34,12 @@ without stalling anything.
 
 ### Which subscriptions hold
 
-**A subscription holds unless it declares that it delivers in commit order.** The saga asks
-`CommitOrderedSubscriptions.findIn(subscriptionModel)` once at `run` and keeps the answer.
-
-- `canHold` is true unless the model answers `deliversEveryEventInCommitOrder()`. It decides one thing, whether `run`
-  refuses a state store that cannot hold.
-- `holds` is asked per delivery, on the delivering thread, as `!deliversInCommitOrder(subscriptionId)`. A model that
-  does not implement the capability holds.
+**A subscription holds unless its model declares that it delivers every subscription in commit order.** The saga
+asks `CommitOrderedSubscriptions.findIn(subscriptionModel)` once at `run` and keeps one answer, `holds`, which is true
+unless the model answers `deliversEveryEventInCommitOrder()`. That answer is true only when the model delivers every
+subscription in commit order at every moment, so reading it once is enough. A model that does not implement the
+capability holds. `holds` decides whether an event that arrives before its start is held or skipped, whether a failed
+version the instance cannot list is self-held, and whether `run` refuses a state store that cannot hold.
 
 Commit order here means what the `CommitOrderedSubscriptions` contract says. No event is delivered before every earlier
 event matching the subscription was delivered and its listener returned normally, where an event is earlier when it
@@ -52,10 +51,10 @@ contract is that model's defect, and the ERROR of cause 5 below is where it show
 The capability is not on `SubscriptionModelCapability`'s unwrap list, so a wrapper declares commit order only by
 implementing it. Any wrapper can break commit order, with a thread pool, a catch-up handover or a parking listener, and
 a wrapper that inherited a "yes" from the model below it would skip on a feed that reorders. An undeclared wrapper is
-treated as holding, which costs storage and a read per delivery, never an event. When the model below a wrapper
-declares commit order and the wrapper does not, `run` logs one WARN naming both classes.
+treated as holding, which costs storage, never an event. When the model below a wrapper declares commit order and the
+wrapper does not, `run` logs one WARN naming both classes.
 
-**`run` refuses a store that cannot hold.** When `canHold` is true and the state store does not implement
+**`run` refuses a store that cannot hold.** When `holds` is true and the state store does not implement
 `SagaHeldEvents`, `run` throws an `IllegalStateException` naming the subscription, the model and the store, and saying
 the store must implement `SagaHeldEvents` or the saga must run on a model that declares commit order. Both shipped
 stores, `InMemorySagaStateStore` and `SpringMongoSagaStateStore`, implement it.
@@ -67,8 +66,8 @@ A non-start event of an instance that has not started is held when `holds` is tr
 the executor:
 
 1. inserts a copy with `SagaHeldEvents.hold`. The key is the event's redelivery key, which ends in `@` and a version.
-   An event without one is keyed by the length of its CloudEvent id, the id and its source, followed by a suffix no
-   redelivery key ends in, so two held events share a key only when they are the same event. A duplicate key is a
+   An event without one is keyed by its CloudEvent id and source, followed by a suffix no redelivery key ends in. A
+   source is a URI and holds no space, so two held events share a key only when they are the same event. A duplicate key is a
    redelivery of an event already held.
 2. reads the instance from the primary.
    - When the instance is absent or not started, the event is acknowledged and the start's delivery applies it.
@@ -139,8 +138,10 @@ store. A held copy that fails in a drain a timer ran is kept and measured the sa
 held copy applies. A held copy whose conversion or `evolve` throws while the drain checks whether it ends the instance
 is applied at once, so that failure is its own as well.
 
-**The lookup on every keyed delivery.** Where the delivery holds, every keyed delivery to a started instance reads the
-held copy with its own key once, after the drain and before classifying the delivery. A self-held copy not marked
+**The lookup on every keyed delivery.** Whenever the state store can hold, every keyed delivery to a started instance
+reads the held copy with its own key once, after the drain and before classifying the delivery, whatever `holds` is. A
+copy held while the saga ran on a model that reorders is then still found when its event comes back on a model that
+declares commit order, as after a deploy that moves the saga to another model. A self-held copy not marked
 `outstanding` is left to the drain. Any other copy is released when the delivery applies the event or classifies it a
 redelivery from the marks. When the delivery would skip it as behind the window, or as a redelivery from the pre-0.35
 floor, the delivery applies it instead, adds its key to `drainedHeldKeys` and releases it. The floor case logs the same
@@ -241,8 +242,9 @@ on proof or a pending entry.
   gives `delete` as a remedy for an instance parked in a renamed step. After `delete`, a later event of that id is held,
   not skipped. To abandon an instance on such a subscription, keep a terminal envelope and remove its held events, as
   the runbook shows.
-- **Every keyed delivery on a holding subscription reads the held collection once.** That is the lookup above, and it
-  is the cost of a model that does not declare commit order.
+- **Every keyed delivery reads the held collection once when the state store can hold.** That is the lookup above. It
+  stays on a model that declares commit order, since a copy held before the saga moved to that model may still be
+  waiting for its event.
 - The MongoDB store creates one new collection per saga, named after the saga's collection with `-held-events`, keyed
   by saga id and key. Deployments with restricted roles need to allow that.
 - **Preconditions.** Held copies are written with the store's write concern and read from the primary, so the fence
