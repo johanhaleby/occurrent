@@ -30,9 +30,9 @@ import org.occurrent.filter.Filter
 import java.time.Instant
 
 /**
- * Whether an instance skips an event of the stream that started it, below the start, as committed before the start. A saga
- * whose one start event type stands for several event types cannot tell, so it does not skip. A Kotlin sealed class is
- * abstract, so a saga from either DSL that starts on one is such a saga, and a saga that starts on a final class is not.
+ * Whether an event of the stream that started an instance, below the start, waits held. It does when it is not a start
+ * event, however the start event type is declared. A Kotlin sealed class is abstract, and a saga from either DSL that starts
+ * on one, on an abstract class that is not sealed or on a final class shares that rule.
  */
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 class SagaBeforeTheStartKotlinTest {
@@ -66,15 +66,17 @@ class SagaBeforeTheStartKotlinTest {
         private const val STREAM = "order-stream"
         private val NOW = Instant.parse("2026-01-01T00:00:00Z")
 
-        /** An instance that started at version 5 of the stream, and the question of whether the note at version 3 is below its start. */
-        private fun <S> theNoteAtThreeIsBeforeTheStart(saga: Saga<OrderEvent, S, OrderCommand>, state: S): Boolean {
+        /** An instance that started at version 5 of the stream, and the question of whether the event at version 3 is below its start. */
+        private fun <S> theEventAtThreeIsBelowTheStart(saga: Saga<OrderEvent, S, OrderCommand>, state: S, event: OrderEvent): Boolean {
             val startedAtFive = SagaEnvelope(
                 SAGA_ID, state, SagaStatus.ACTIVE, 3L, emptyList(), emptyMap(), null, NOW, NOW, null, null, true, null,
-                emptyMap(), false, emptySet(), emptySet(), StartMark(STREAM, 5L, null)
+                emptyMap(), StartMark(STREAM, 5L, null)
             )
-            val note = Noted(SAGA_ID)
-            return SagaExecutionSupport.isBeforeTheStart(saga, startedAtFive, SagaInput.event(note), EventMeta(STREAM, 3L, null, Noted::class.java.name))
+            return SagaExecutionSupport.isBelowTheStart(saga, startedAtFive, SagaInput.event(event), EventMeta(STREAM, 3L, null, event::class.java.name))
         }
+
+        private fun <S> theNoteAtThreeIsBelowTheStart(saga: Saga<OrderEvent, S, OrderCommand>, state: S): Boolean =
+            theEventAtThreeIsBelowTheStart(saga, state, Noted(SAGA_ID))
 
         private fun sagaStartingOnTheSealedClass(): Saga<OrderEvent, String?, OrderCommand> =
             saga(initialState = null) {
@@ -137,24 +139,49 @@ class SagaBeforeTheStartKotlinTest {
     inner class SagaFromTheSagaDsl {
 
         @Test
-        fun `an event below the start is not before the start when the start event type is a sealed class`() {
+        fun `an event that is not a start event is below the start when the start event type is a sealed class`() {
             val saga = sagaStartingOnTheSealedClass()
 
-            assertThat(theNoteAtThreeIsBeforeTheStart(saga, "open")).isFalse()
+            assertThat(theNoteAtThreeIsBelowTheStart(saga, "open")).isTrue()
         }
 
         @Test
-        fun `an event below the start is not before the start when the start event type is an abstract class that is not sealed`() {
+        fun `an event that is not a start event is below the start when the start event type is an abstract class that is not sealed`() {
             val saga = sagaStartingOnTheAbstractClassThatIsNotSealed()
 
-            assertThat(theNoteAtThreeIsBeforeTheStart(saga, "open")).isFalse()
+            assertThat(theNoteAtThreeIsBelowTheStart(saga, "open")).isTrue()
         }
 
         @Test
-        fun `an event below the start is before the start when the start event type is a final class`() {
+        fun `an event that is not a start event is below the start when the start event type is a final class`() {
             val saga = sagaStartingOnTheFinalClass()
 
-            assertThat(theNoteAtThreeIsBeforeTheStart(saga, "open")).isTrue()
+            assertThat(theNoteAtThreeIsBelowTheStart(saga, "open")).isTrue()
+        }
+    }
+
+    @Nested
+    inner class AStartEventBelowTheStart {
+
+        @Test
+        fun `is not below the start for a saga from the saga dsl that starts on a sealed class`() {
+            val saga = sagaStartingOnTheSealedClass()
+
+            assertThat(theEventAtThreeIsBelowTheStart(saga, "open", PhoneIntake(SAGA_ID))).isFalse()
+        }
+
+        @Test
+        fun `is not below the start for a saga from the flow dsl that starts on a sealed class`() {
+            val saga = flowSagaStartingOnTheSealedClass()
+
+            assertThat(theEventAtThreeIsBelowTheStart(saga, saga.initialState(), WebIntake(SAGA_ID))).isFalse()
+        }
+
+        @Test
+        fun `is not below the start for a saga that starts on an abstract class that is not sealed`() {
+            val saga = sagaStartingOnTheAbstractClassThatIsNotSealed()
+
+            assertThat(theEventAtThreeIsBelowTheStart(saga, "open", PhoneLooseIntake(SAGA_ID))).isFalse()
         }
     }
 
@@ -162,24 +189,24 @@ class SagaBeforeTheStartKotlinTest {
     inner class SagaFromTheFlowDsl {
 
         @Test
-        fun `an event below the start is not before the start when the start event type is a sealed class`() {
+        fun `an event that is not a start event is below the start when the start event type is a sealed class`() {
             val saga = flowSagaStartingOnTheSealedClass()
 
-            assertThat(theNoteAtThreeIsBeforeTheStart(saga, saga.initialState())).isFalse()
+            assertThat(theNoteAtThreeIsBelowTheStart(saga, saga.initialState())).isTrue()
         }
 
         @Test
-        fun `an event below the start is not before the start when the start event type is an abstract class that is not sealed`() {
+        fun `an event that is not a start event is below the start when the start event type is an abstract class that is not sealed`() {
             val saga = flowSagaStartingOnTheAbstractClassThatIsNotSealed()
 
-            assertThat(theNoteAtThreeIsBeforeTheStart(saga, saga.initialState())).isFalse()
+            assertThat(theNoteAtThreeIsBelowTheStart(saga, saga.initialState())).isTrue()
         }
 
         @Test
-        fun `an event below the start is before the start when the start event type is a final class`() {
+        fun `an event that is not a start event is below the start when the start event type is a final class`() {
             val saga = flowSagaStartingOnTheFinalClass()
 
-            assertThat(theNoteAtThreeIsBeforeTheStart(saga, saga.initialState())).isTrue()
+            assertThat(theNoteAtThreeIsBelowTheStart(saga, saga.initialState())).isTrue()
         }
     }
 }

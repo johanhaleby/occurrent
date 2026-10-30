@@ -31,14 +31,12 @@ import java.util.Optional;
 
 /**
  * A store that holds events by delegating to the in-memory one, and that a test can make lose the writes a failure
- * path makes without the state, refuse the mark that adds a self-held key as the size limit of a document would, or
- * run something just before a compare-and-set that then loses.
+ * path makes without the state, or run something just before a compare-and-set that then loses.
  */
 final class ScriptableHeldEventsStore<S> implements SagaStateStore<S>, SagaHeldEvents<S> {
 
     private final InMemorySagaStateStore<S> delegate = new InMemorySagaStateStore<>();
     private volatile boolean losingEveryWriteWithoutState;
-    private volatile boolean refusingMarksCarryingAKey;
     private volatile @Nullable Runnable beforeNextCompareAndSave;
 
     InMemorySagaStateStore<S> delegate() {
@@ -47,10 +45,6 @@ final class ScriptableHeldEventsStore<S> implements SagaStateStore<S>, SagaHeldE
 
     void loseEveryWriteWithoutState(boolean losing) {
         this.losingEveryWriteWithoutState = losing;
-    }
-
-    void refuseMarksCarryingAKey(boolean refusing) {
-        this.refusingMarksCarryingAKey = refusing;
     }
 
     /** Runs once, just before the next compare-and-save, which then loses. */
@@ -103,21 +97,8 @@ final class ScriptableHeldEventsStore<S> implements SagaStateStore<S>, SagaHeldE
     }
 
     @Override
-    public boolean markOutstanding(String sagaId, String key) {
-        return delegate.markOutstanding(sagaId, key);
-    }
-
-    @Override
-    public Optional<SagaEnvelope<S>> markHeldEvents(String sagaId, @Nullable String selfHeldKey) {
-        if (selfHeldKey != null && refusingMarksCarryingAKey) {
-            throw new RefusedForSizeException("The instance is at the document limit", new IllegalStateException("document too large"));
-        }
-        return delegate.markHeldEvents(sagaId, selfHeldKey);
-    }
-
-    @Override
-    public void unmarkSelfHeld(String sagaId, String selfHeldKey) {
-        delegate.unmarkSelfHeld(sagaId, selfHeldKey);
+    public void failing(String sagaId, String key, Instant at) {
+        delegate.failing(sagaId, key, at);
     }
 
     @Override

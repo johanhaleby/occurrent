@@ -850,18 +850,8 @@ class SagaRunnerTest {
             }
 
             @Override
-            public boolean markOutstanding(String sagaId, String key) {
-                return delegate.markOutstanding(sagaId, key);
-            }
-
-            @Override
-            public Optional<SagaEnvelope<OrderState>> markHeldEvents(String sagaId, @Nullable String selfHeldKey) {
-                return delegate.markHeldEvents(sagaId, selfHeldKey);
-            }
-
-            @Override
-            public void unmarkSelfHeld(String sagaId, String selfHeldKey) {
-                delegate.unmarkSelfHeld(sagaId, selfHeldKey);
+            public void failing(String sagaId, String key, Instant at) {
+                delegate.failing(sagaId, key, at);
             }
 
             @Override

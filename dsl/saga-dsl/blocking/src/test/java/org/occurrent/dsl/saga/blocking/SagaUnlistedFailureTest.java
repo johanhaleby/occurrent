@@ -72,12 +72,12 @@ import static org.slf4j.LoggerFactory.getLogger;
  * A stream version that failed in the saga is listed as pending on its instance, so that it is applied when it arrives
  * again however far the instance has moved on. When the instance cannot list it, because it already lists as many as it
  * may, because the write kept losing or failing, or because the instance moved past the version while the delivery was in
- * flight, acknowledging the event would drop its reaction. The instance then holds the event itself, as a self-held key
- * on its envelope and a held copy beside it, and the original failure still reaches the source.
+ * flight, acknowledging the event would drop its reaction. The instance then keeps a plain held copy of the event, which
+ * the next attempt applies, and the original failure still reaches the source.
  */
-@DisplayName("A failed version the instance cannot list as pending")
+@DisplayName("A failed version the instance cannot list as pending is kept as a held copy")
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class SagaSelfHoldTest {
+class SagaUnlistedFailureTest {
 
     private static final String BASKET = "basket-1";
     private static final String STREAM = "basket-stream";
@@ -242,7 +242,7 @@ class SagaSelfHoldTest {
         List<Long> versions = LongStream.rangeClosed(1, count).boxed().toList();
         StreamMarks otherStream = new StreamMarks(Long.MIN_VALUE, java.util.Map.of(), java.util.Map.of("other.Type", versions));
         SagaEnvelope<Basket> instance = new SagaEnvelope<>(BASKET, new Basket(0), SagaStatus.ACTIVE, 1, List.of(), java.util.Map.of(), null, NOW, NOW, null, null,
-                true, null, java.util.Map.of("other-stream", otherStream), true, Set.of(), Set.of(), new StartMark(STREAM, 1, null));
+                true, null, java.util.Map.of("other-stream", otherStream), new StartMark(STREAM, 1, null));
         assertThat(store.delegate.compareAndSave(BASKET, instance, 0)).isTrue();
     }
 
@@ -270,7 +270,7 @@ class SagaSelfHoldTest {
         }
 
         @Test
-        void the_event_is_self_held_as_a_key_on_the_instance_and_a_held_copy() {
+        void the_event_is_kept_as_a_plain_held_copy() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
             store.losingEveryWriteWithoutState = true;
@@ -281,10 +281,9 @@ class SagaSelfHoldTest {
             // Then
             HeldEventRef ref = onlyHeldRef();
             assertAll(
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
                     () -> assertThat(ref.key()).isEqualTo(KEY_OF_TWO),
-                    () -> assertThat(ref.selfHeld()).isTrue(),
-                    () -> assertThat(ref.outstanding()).isFalse(),
+                    () -> assertThat(ref.startEvent()).as("the item is a start event of this saga").isTrue(),
+                    () -> assertThat(ref.failingSince()).isNull(),
                     () -> assertThat(ref.streamId()).isEqualTo(STREAM),
                     () -> assertThat(ref.version()).isEqualTo(2L),
                     () -> assertThat(ref.type()).isEqualTo(ITEM_ADDED_TYPE)
@@ -306,21 +305,6 @@ class SagaSelfHoldTest {
         }
 
         @Test
-        void the_instance_is_marked_as_having_events_to_drain() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
-            store.delegate.markHeldEvents(BASKET, null);
-            store.delegate.compareAndSave(BASKET, withHeldEventsChecked(stored()), stored().version());
-            store.losingEveryWriteWithoutState = true;
-
-            // When
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-
-            // Then
-            assertThat(stored().heldEventsChecked()).isFalse();
-        }
-
-        @Test
         void the_instance_does_not_list_the_version_as_pending() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
@@ -334,7 +318,7 @@ class SagaSelfHoldTest {
         }
 
         @Test
-        void a_second_failure_of_the_same_event_is_the_failure_of_its_held_copy_and_keeps_one_key_and_one_held_copy() {
+        void a_second_failure_of_the_same_event_is_the_failure_of_its_held_copy_and_keeps_one_held_copy() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
             store.losingEveryWriteWithoutState = true;
@@ -347,14 +331,9 @@ class SagaSelfHoldTest {
             assertAll(
                     () -> assertThat(thrown).hasMessageContaining("could not apply the held event '" + KEY_OF_TWO + "'"),
                     () -> assertThat(thrown).hasCause(handlerFailure),
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
+                    () -> assertThat(store.delegate.heldIndex(BASKET)).extracting(HeldEventRef::key).containsExactly(KEY_OF_TWO),
                     () -> assertThat(store.delegate.heldIndex(BASKET)).hasSize(1)
             );
-        }
-
-        private SagaEnvelope<Basket> withHeldEventsChecked(SagaEnvelope<Basket> instance) {
-            return new SagaEnvelope<>(instance.sagaId(), instance.state(), instance.status(), instance.version() + 1, instance.timers(), instance.streamWatermarks(),
-                    null, instance.createdAt(), instance.updatedAt(), null, null, true, null, instance.streamMarks(), true, Set.of(), Set.of(), instance.startMark());
         }
     }
 
@@ -381,7 +360,7 @@ class SagaSelfHoldTest {
         }
 
         @Test
-        void the_event_is_self_held() {
+        void the_event_is_kept_as_a_plain_held_copy() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
             store.failureOnWriteWithoutState = storeFailure;
@@ -391,8 +370,7 @@ class SagaSelfHoldTest {
 
             // Then
             assertAll(
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
-                    () -> assertThat(onlyHeldRef().selfHeld()).isTrue()
+                    () -> assertThat(onlyHeldRef().key()).isEqualTo(KEY_OF_TWO)
             );
         }
     }
@@ -402,7 +380,7 @@ class SagaSelfHoldTest {
     class WhenQuarantineIsConfiguredAndTheWriteOfTheFailureRecordThrows {
 
         @Test
-        void the_event_is_self_held_and_the_original_failure_is_rethrown() {
+        void the_event_is_kept_as_a_plain_held_copy_and_the_original_failure_is_rethrown() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2_WITH_QUARANTINE);
             store.failureOnWriteWithoutState = new IllegalArgumentException("write refused");
@@ -413,8 +391,7 @@ class SagaSelfHoldTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(handlerFailure),
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
-                    () -> assertThat(onlyHeldRef().selfHeld()).isTrue()
+                    () -> assertThat(onlyHeldRef().key()).isEqualTo(KEY_OF_TWO)
             );
         }
 
@@ -437,7 +414,7 @@ class SagaSelfHoldTest {
     class WhenTheInstanceAlreadyListsAsManyPendingVersionsAsItMay {
 
         @Test
-        void the_event_is_self_held_and_not_listed_as_pending() {
+        void the_event_is_kept_as_a_plain_held_copy_and_not_listed_as_pending() {
             // Given
             saveInstanceListingPendingVersions(SagaExecutionSupport.PENDING_CAP);
             failingItems.add("two");
@@ -449,14 +426,13 @@ class SagaSelfHoldTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(handlerFailure),
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
-                    () -> assertThat(onlyHeldRef().selfHeld()).isTrue(),
+                    () -> assertThat(onlyHeldRef().key()).isEqualTo(KEY_OF_TWO),
                     () -> assertThat(pending()).isEmpty()
             );
         }
 
         @Test
-        void a_version_below_the_cap_is_listed_as_pending_and_not_self_held() {
+        void a_version_below_the_cap_is_listed_as_pending_and_not_kept_as_a_held_copy() {
             // Given
             saveInstanceListingPendingVersions(SagaExecutionSupport.PENDING_CAP - 1);
             failingItems.add("two");
@@ -469,13 +445,12 @@ class SagaSelfHoldTest {
             assertAll(
                     () -> assertThat(thrown).isSameAs(handlerFailure),
                     () -> assertThat(pending()).containsExactly(2L),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
                     () -> assertThat(store.delegate.heldIndex(BASKET)).isEmpty()
             );
         }
 
         @Test
-        void the_first_failure_is_rethrown_and_self_held_and_a_failure_record_names_the_input_from_now() {
+        void the_first_failure_is_rethrown_and_kept_as_a_plain_held_copy_and_a_failure_record_names_the_input_from_now() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = atTheCapWithQuarantine();
 
@@ -485,14 +460,14 @@ class SagaSelfHoldTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(handlerFailure),
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
+                    () -> assertThat(store.delegate.heldIndex(BASKET)).extracting(HeldEventRef::key).containsExactly(KEY_OF_TWO),
                     () -> assertThat(pending()).isEmpty(),
                     () -> assertThat(stored().failure()).isNotNull().extracting(SagaFailure::input, SagaFailure::firstFailedAt).containsExactly(KEY_OF_TWO, NOW)
             );
         }
 
         @Test
-        void the_same_input_failing_again_inside_the_budget_writes_no_failure_record_and_keeps_the_instant_it_first_failed() {
+        void the_same_input_failing_again_is_the_failure_of_its_copy_whose_clock_starts_then_and_writes_no_failure_record() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = atTheCapWithQuarantine();
             catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
@@ -506,15 +481,17 @@ class SagaSelfHoldTest {
             assertAll(
                     () -> assertThat(thrown).hasCause(handlerFailure),
                     () -> assertThat(store.writesWithoutState.get()).isEqualTo(writesAfterTheFirstFailure),
+                    () -> assertThat(onlyHeldRef().failingSince()).isEqualTo(NOW.plus(Duration.ofMinutes(1))),
                     () -> assertThat(stored().failure()).isNotNull().extracting(SagaFailure::input, SagaFailure::firstFailedAt).containsExactly(KEY_OF_TWO, NOW),
                     () -> assertThat(stored().status()).isEqualTo(SagaStatus.ACTIVE)
             );
         }
 
         @Test
-        void the_same_input_failing_past_the_budget_quarantines_the_instance_and_keeps_the_held_copy_when_retention_confirms() {
+        void the_copy_failing_past_its_budget_quarantines_the_instance_and_keeps_the_held_copy() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = atTheCapWithQuarantine();
+            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
             catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
             passTime(BUDGET.plusMinutes(1));
 
@@ -525,15 +502,17 @@ class SagaSelfHoldTest {
             assertAll(
                     () -> assertThat(thrown).isNull(),
                     () -> assertThat(stored().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(stored().failure()).isNotNull().extracting(SagaFailure::input).isEqualTo(KEY_OF_TWO),
                     () -> assertThat(pendingOnTheOtherStream()).hasSize(SagaExecutionSupport.PENDING_CAP),
                     () -> assertThat(store.delegate.heldIndex(BASKET)).extracting(HeldEventRef::key).containsExactly(KEY_OF_TWO)
             );
         }
 
         @Test
-        void the_same_input_failing_past_the_budget_is_rethrown_and_stays_self_held_when_retention_is_refused() {
+        void the_copy_failing_past_its_budget_quarantines_the_instance_without_asking_whether_retention_confirms() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = atTheCapWithQuarantine();
+            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
             catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
             passTime(BUDGET.plusMinutes(1));
             retentionConfirms = false;
@@ -543,40 +522,9 @@ class SagaSelfHoldTest {
 
             // Then
             assertAll(
-                    () -> assertThat(thrown).hasCause(handlerFailure),
-                    () -> assertThat(stored().status()).isEqualTo(SagaStatus.ACTIVE),
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO)
-            );
-        }
-
-        @Test
-        void two_inputs_failing_in_turn_do_not_reset_each_others_clock_so_the_first_quarantines_past_its_own_budget() {
-            // Given
-            saveInstanceListingPendingVersions(SagaExecutionSupport.PENDING_CAP);
-            failingItems.add("two");
-            failingItems.add("three");
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = executionOnAControlledClock(WINDOW_OF_2_WITH_QUARANTINE);
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-            passTime(Duration.ofMinutes(1));
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(3, "three")));
-            passTime(Duration.ofMinutes(1));
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-            passTime(Duration.ofMinutes(1));
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(3, "three")));
-            SagaEnvelope<Basket> afterTheFourthFailure = stored();
-            passTime(Duration.ofMinutes(3));
-
-            // When
-            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-
-            // Then
-            assertAll(
-                    () -> assertThat(afterTheFourthFailure.status()).isEqualTo(SagaStatus.ACTIVE),
-                    () -> assertThat(afterTheFourthFailure.failure()).isNotNull().extracting(SagaFailure::input, SagaFailure::firstFailedAt).containsExactly(KEY_OF_TWO, NOW),
                     () -> assertThat(thrown).isNull(),
                     () -> assertThat(stored().status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(stored().failure()).isNotNull().extracting(SagaFailure::input).isEqualTo(KEY_OF_TWO),
-                    () -> assertThat(stored().streamMarks().values()).flatExtracting(StreamMarks::legacyFailed).isEmpty()
+                    () -> assertThat(store.delegate.heldIndex(BASKET)).extracting(HeldEventRef::key).containsExactly(KEY_OF_TWO)
             );
         }
 
@@ -600,7 +548,7 @@ class SagaSelfHoldTest {
     class WhenTheInstanceMovedPastItWhileTheDeliveryWasInFlight {
 
         @Test
-        void a_failure_after_the_delivery_saw_it_as_new_self_holds_it_and_rethrows_the_original() {
+        void a_failure_after_the_delivery_saw_it_as_new_keeps_a_plain_held_copy_and_rethrows_the_original() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
             whileDispatchingTwo = () -> deliverItems(execution, 3, 8);
@@ -611,8 +559,7 @@ class SagaSelfHoldTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(handlerFailure),
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
-                    () -> assertThat(onlyHeldRef().selfHeld()).isTrue()
+                    () -> assertThat(onlyHeldRef().key()).isEqualTo(KEY_OF_TWO)
             );
         }
 
@@ -643,7 +590,7 @@ class SagaSelfHoldTest {
         }
 
         @Test
-        void a_lost_first_save_followed_by_an_instance_that_moved_past_it_throws_and_self_holds_it() {
+        void a_lost_first_save_followed_by_an_instance_that_moved_past_it_throws_and_keeps_a_plain_held_copy() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = execution(WINDOW_OF_2);
             deliver(execution, openedAt(1));
@@ -655,8 +602,7 @@ class SagaSelfHoldTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isNotNull().hasMessageContaining(KEY_OF_TWO),
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
-                    () -> assertThat(onlyHeldRef().selfHeld()).isTrue()
+                    () -> assertThat(onlyHeldRef().key()).isEqualTo(KEY_OF_TWO)
             );
         }
 
@@ -674,56 +620,6 @@ class SagaSelfHoldTest {
             // Then
             assertAll(
                     () -> assertThat(stored().state()).isEqualTo(new Basket(1)),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
-                    () -> assertThat(store.delegate.heldIndex(BASKET)).isEmpty()
-            );
-        }
-    }
-
-    @Nested
-    @DisplayName("when the mark that self-holds it finds the event already settled")
-    class WhenTheMarkThatSelfHoldsItFindsTheEventAlreadySettled {
-
-        @Test
-        void an_event_that_was_applied_in_the_meantime_has_its_key_taken_off_and_nothing_is_held() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
-            store.losingEveryWriteWithoutState = true;
-            store.beforeNextMarkHeldEvents = () -> {
-                failingItems.remove("two");
-                deliver(execution, itemAddedAt(2, "two"));
-            };
-
-            // When
-            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-
-            // Then
-            assertAll(
-                    () -> assertThat(thrown).isSameAs(handlerFailure),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
-                    () -> assertThat(store.delegate.heldIndex(BASKET)).isEmpty(),
-                    () -> assertThat(stored().state()).isEqualTo(new Basket(1))
-            );
-        }
-
-        @Test
-        void an_event_that_was_listed_pending_in_the_meantime_has_its_key_taken_off_and_nothing_is_held() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
-            store.losingEveryWriteWithoutState = true;
-            store.beforeNextMarkHeldEvents = () -> {
-                store.losingEveryWriteWithoutState = false;
-                catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-            };
-
-            // When
-            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-
-            // Then
-            assertAll(
-                    () -> assertThat(thrown).isSameAs(handlerFailure),
-                    () -> assertThat(pending()).containsExactly(2L),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
                     () -> assertThat(store.delegate.heldIndex(BASKET)).isEmpty()
             );
         }
@@ -767,7 +663,7 @@ class SagaSelfHoldTest {
         }
 
         @Test
-        void a_self_hold_that_succeeds_logs_no_error() {
+        void a_hold_that_succeeds_logs_no_error() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
             store.losingEveryWriteWithoutState = true;
@@ -777,84 +673,6 @@ class SagaSelfHoldTest {
 
             // Then
             assertThat(errors()).isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("when the instance is at the state store's document limit")
-    class WhenTheInstanceIsAtTheStateStoresDocumentLimit {
-
-        private SagaExecution<BasketEvent, Basket, BasketCommand> openedWithVersionTwoFailingAndTheKeyRefused() {
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
-            store.losingEveryWriteWithoutState = true;
-            store.refusingMarksCarryingAKey = true;
-            return execution;
-        }
-
-        @Test
-        void the_event_is_kept_on_its_held_copy_marked_outstanding_and_not_on_the_instance() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailingAndTheKeyRefused();
-
-            // When
-            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-
-            // Then
-            HeldEventRef ref = onlyHeldRef();
-            assertAll(
-                    () -> assertThat(thrown).isSameAs(handlerFailure),
-                    () -> assertThat(ref.key()).isEqualTo(KEY_OF_TWO),
-                    () -> assertThat(ref.outstanding()).isTrue(),
-                    () -> assertThat(ref.selfHeld()).isFalse(),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty()
-            );
-        }
-
-        @Test
-        void the_instance_is_marked_again_after_the_held_copy_is_written() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailingAndTheKeyRefused();
-
-            // When
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-
-            // Then
-            assertAll(
-                    () -> assertThat(store.markedKeys).containsExactly(KEY_OF_TWO, null, null),
-                    () -> assertThat(stored().heldEventsChecked()).isFalse()
-            );
-        }
-
-        @Test
-        void one_error_says_the_instance_reached_the_document_limit() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailingAndTheKeyRefused();
-
-            // When
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-
-            // Then
-            assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("document size limit").contains(KEY_OF_TWO));
-        }
-
-        @Test
-        void a_held_copy_that_is_already_there_is_marked_outstanding_instead_of_held_again() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailingAndTheKeyRefused();
-            CloudEvent delivered = itemAddedAt(2, "two");
-            HeldEventRef alreadyThere = new HeldEventRef(KEY_OF_TWO, STREAM, 2L, null, ITEM_ADDED_TYPE, NOW.minusSeconds(60), false, false);
-            store.delegate.hold(BASKET, new HeldEvent(BASKET, alreadyThere, delivered));
-
-            // When
-            catchThrowable(() -> execution.onCloudEvent(delivered));
-
-            // Then
-            assertAll(
-                    () -> assertThat(store.delegate.heldIndex(BASKET)).singleElement().satisfies(ref -> {
-                        assertThat(ref.outstanding()).isTrue();
-                        assertThat(ref.heldAt()).isEqualTo(alreadyThere.heldAt());
-                    })
-            );
         }
     }
 
@@ -876,7 +694,6 @@ class SagaSelfHoldTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(handlerFailure),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
                     () -> assertThat(store.delegate.heldIndex(BASKET)).isEmpty()
             );
         }
@@ -898,10 +715,10 @@ class SagaSelfHoldTest {
     }
 
     @Nested
-    @DisplayName("when another input reaches the instance after the event was self-held")
-    class WhenAnotherInputReachesTheInstanceAfterTheEventWasSelfHeld {
+    @DisplayName("when another input reaches the instance after the event was kept")
+    class WhenAnotherInputReachesTheInstanceAfterTheEventWasPlainCopy {
 
-        private SagaExecution<BasketEvent, Basket, BasketCommand> afterVersionTwoWasSelfHeld() {
+        private SagaExecution<BasketEvent, Basket, BasketCommand> afterVersionTwoWasPlainCopy() {
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
             store.losingEveryWriteWithoutState = true;
             catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
@@ -913,7 +730,7 @@ class SagaSelfHoldTest {
         @Test
         void the_reaction_has_not_run_before_that_input_reaches_the_instance() {
             // When
-            afterVersionTwoWasSelfHeld();
+            afterVersionTwoWasPlainCopy();
 
             // Then
             assertThat(issued).doesNotContain(reserve("two"));
@@ -922,7 +739,7 @@ class SagaSelfHoldTest {
         @Test
         void that_input_applies_the_held_copy_before_it_applies_itself() {
             // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasSelfHeld();
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasPlainCopy();
 
             // When
             deliver(execution, itemAddedAt(3, "three"));
@@ -937,7 +754,7 @@ class SagaSelfHoldTest {
         @Test
         void it_is_applied_once_however_far_the_inputs_that_follow_it_move_the_window() {
             // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasSelfHeld();
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasPlainCopy();
 
             // When
             deliverItems(execution, 3, 8);
@@ -950,9 +767,9 @@ class SagaSelfHoldTest {
         }
 
         @Test
-        void its_key_leaves_the_self_held_keys_and_the_held_copy_is_released_and_no_applied_key_is_kept_once_the_drain_has_ended() {
+        void the_held_copy_is_released_once_the_next_input_has_applied_it() {
             // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasSelfHeld();
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasPlainCopy();
 
             // When
             deliver(execution, itemAddedAt(3, "three"));
@@ -960,9 +777,6 @@ class SagaSelfHoldTest {
             // Then
             SagaEnvelope<Basket> after = stored();
             assertAll(
-                    () -> assertThat(after.selfHeldKeys()).isEmpty(),
-                    () -> assertThat(after.drainedHeldKeys()).isEmpty(),
-                    () -> assertThat(after.heldEventsChecked()).isTrue(),
                     () -> assertThat(store.delegate.heldIndex(BASKET)).isEmpty()
             );
         }
@@ -970,7 +784,7 @@ class SagaSelfHoldTest {
         @Test
         void a_delivery_of_it_after_that_is_skipped_and_its_reaction_does_not_run_again() {
             // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasSelfHeld();
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasPlainCopy();
             deliverItems(execution, 3, 8);
 
             // When
@@ -981,222 +795,6 @@ class SagaSelfHoldTest {
                     () -> assertThat(issued).containsOnlyOnce(reserve("two")),
                     () -> assertThat(stored().state()).isEqualTo(new Basket(7))
             );
-        }
-    }
-
-    @Nested
-    @DisplayName("when a self-held event that has no held copy is delivered again")
-    class WhenASelfHeldEventThatHasNoHeldCopyIsDeliveredAgain {
-
-        /**
-         * Version 2 failed and its key was put on the instance, but the store failed while holding its copy, so no drain has anything
-         * to apply. Versions 3 to 8 then applied, which puts version 2 further behind the highest than the window of 2 allows.
-         */
-        private SagaExecution<BasketEvent, Basket, BasketCommand> afterVersionTwoWasSelfHeldWithoutACopyAndThreeToEightApplied() {
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
-            store.losingEveryWriteWithoutState = true;
-            store.failureOnHold = new IllegalArgumentException("hold refused");
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-            store.losingEveryWriteWithoutState = false;
-            store.failureOnHold = null;
-            failingItems.clear();
-            deliverItems(execution, 3, 8);
-            assertThat(store.delegate.heldIndex(BASKET)).as("there is no held copy for a drain to apply").isEmpty();
-            return execution;
-        }
-
-        @Test
-        void it_is_applied_once_however_far_behind_the_window_it_is() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasSelfHeldWithoutACopyAndThreeToEightApplied();
-
-            // When
-            deliver(execution, itemAddedAt(2, "two"));
-
-            // Then
-            assertAll(
-                    () -> assertThat(issued).containsOnlyOnce(reserve("two")),
-                    () -> assertThat(stored().state()).isEqualTo(new Basket(7))
-            );
-        }
-
-        @Test
-        void its_key_leaves_both_the_self_held_keys_and_the_drained_keys_once_the_drain_after_its_delivery_ends() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasSelfHeldWithoutACopyAndThreeToEightApplied();
-
-            // When
-            deliver(execution, itemAddedAt(2, "two"));
-
-            // Then
-            SagaEnvelope<Basket> after = stored();
-            assertAll(
-                    () -> assertThat(after.selfHeldKeys()).isEmpty(),
-                    () -> assertThat(after.drainedHeldKeys()).isEmpty(),
-                    () -> assertThat(after.heldEventsChecked()).isTrue()
-            );
-        }
-
-        @Test
-        void its_key_stays_in_the_drained_keys_and_a_drain_stays_due_when_the_drain_after_its_delivery_cannot_read_the_held_index() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasSelfHeldWithoutACopyAndThreeToEightApplied();
-            store.failureOnHeldIndex = new IllegalStateException("held index unreadable");
-
-            // When
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-            store.failureOnHeldIndex = null;
-
-            // Then
-            SagaEnvelope<Basket> after = stored();
-            assertAll(
-                    () -> assertThat(issued).containsOnlyOnce(reserve("two")),
-                    () -> assertThat(after.selfHeldKeys()).isEmpty(),
-                    () -> assertThat(after.drainedHeldKeys()).containsExactly(KEY_OF_TWO),
-                    () -> assertThat(after.heldEventsChecked()).isFalse()
-            );
-        }
-
-        @Test
-        void a_further_delivery_of_it_after_that_drain_failed_does_not_apply_it_again_and_ends_the_drain() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasSelfHeldWithoutACopyAndThreeToEightApplied();
-            store.failureOnHeldIndex = new IllegalStateException("held index unreadable");
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-            store.failureOnHeldIndex = null;
-
-            // When
-            deliver(execution, itemAddedAt(2, "two"));
-
-            // Then
-            SagaEnvelope<Basket> after = stored();
-            assertAll(
-                    () -> assertThat(issued).containsOnlyOnce(reserve("two")),
-                    () -> assertThat(after.drainedHeldKeys()).isEmpty(),
-                    () -> assertThat(after.heldEventsChecked()).isTrue()
-            );
-        }
-
-        @Test
-        void a_further_delivery_of_it_is_skipped_and_its_reaction_does_not_run_again() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionTwoWasSelfHeldWithoutACopyAndThreeToEightApplied();
-            deliver(execution, itemAddedAt(2, "two"));
-
-            // When
-            deliver(execution, itemAddedAt(2, "two"));
-
-            // Then
-            assertAll(
-                    () -> assertThat(issued).containsOnlyOnce(reserve("two")),
-                    () -> assertThat(stored().state()).isEqualTo(new Basket(7))
-            );
-        }
-
-        @Test
-        void the_reaction_has_not_run_before_it_is_delivered_again() {
-            // When
-            afterVersionTwoWasSelfHeldWithoutACopyAndThreeToEightApplied();
-
-            // Then
-            assertThat(issued).doesNotContain(reserve("two"));
-        }
-    }
-
-    @Nested
-    @DisplayName("when a drain ends between the mark that self-holds it and its held copy")
-    class WhenADrainEndsBetweenTheMarkThatSelfHoldsItAndItsHeldCopy {
-
-        private final AtomicBoolean drainHadEndedWhenTheCopyWasHeld = new AtomicBoolean();
-
-        /** Another delivery reaches the instance in that gap, finds nothing held, and its save records that no drain is due. */
-        private SagaExecution<BasketEvent, Basket, BasketCommand> selfHeldWhileAnotherDeliveryDrains() {
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
-            deliver(execution, itemAddedAt(3, "three"));
-            assertThat(stored().heldEventsChecked()).as("no drain is due before the failure").isTrue();
-            store.failureOnWriteWithoutState = new IllegalArgumentException("write refused");
-            store.beforeNextHold = () -> {
-                deliver(execution, itemAddedAt(4, "four"));
-                drainHadEndedWhenTheCopyWasHeld.set(stored().heldEventsChecked());
-            };
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-            return execution;
-        }
-
-        @Test
-        void the_instance_has_a_drain_due_for_the_held_copy() {
-            // When
-            selfHeldWhileAnotherDeliveryDrains();
-
-            // Then
-            assertAll(
-                    () -> assertThat(drainHadEndedWhenTheCopyWasHeld).as("the other delivery ended a drain before the copy was held").isTrue(),
-                    () -> assertThat(onlyHeldRef().key()).isEqualTo(KEY_OF_TWO),
-                    () -> assertThat(stored().heldEventsChecked()).as("a drain is due").isFalse()
-            );
-        }
-
-        @Test
-        void the_next_input_applies_the_held_copy_once() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = selfHeldWhileAnotherDeliveryDrains();
-            failingItems.clear();
-
-            // When
-            deliver(execution, itemAddedAt(5, "five"));
-
-            // Then
-            assertAll(
-                    () -> assertThat(issued).containsOnlyOnce(reserve("two")),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
-                    () -> assertThat(store.delegate.heldIndex(BASKET)).isEmpty()
-            );
-        }
-    }
-
-    @Nested
-    @DisplayName("when a held copy was applied by another delivery after it failed in a drain")
-    class WhenAHeldCopyWasAppliedByAnotherDeliveryAfterItFailedInADrain {
-
-        /**
-         * Version 2 is self-held, then the drain that version 3 drives fails on its held copy. While that failure is being kept, another
-         * delivery applies the copy and versions 4 to 8, which releases the copy, ends the drain and puts version 2 behind the window of 2.
-         */
-        private SagaExecution<BasketEvent, Basket, BasketCommand> afterTheCopyWasAppliedWhileItsFailureWasBeingKept() {
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
-            store.losingEveryWriteWithoutState = true;
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
-            store.beforeNextMarkHeldEvents = () -> {
-                failingItems.clear();
-                deliverItems(execution, 4, 8);
-            };
-            catchThrowable(() -> execution.onCloudEvent(itemAddedAt(3, "three")));
-            assertThat(issued).as("the other delivery applied the held copy").containsOnlyOnce(reserve("two"));
-            return execution;
-        }
-
-        @Test
-        void it_is_not_held_again() {
-            // When
-            afterTheCopyWasAppliedWhileItsFailureWasBeingKept();
-
-            // Then
-            assertAll(
-                    () -> assertThat(store.delegate.heldIndex(BASKET)).isEmpty(),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty()
-            );
-        }
-
-        @Test
-        void its_reaction_does_not_run_a_second_time_when_the_next_input_drains() {
-            // Given
-            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterTheCopyWasAppliedWhileItsFailureWasBeingKept();
-
-            // When
-            deliver(execution, itemAddedAt(9, "nine"));
-
-            // Then
-            assertThat(issued).containsOnlyOnce(reserve("two"));
         }
     }
 
@@ -1218,13 +816,12 @@ class SagaSelfHoldTest {
             // Then
             assertAll(
                     () -> assertThat(issued).containsOnlyOnce(reserve("two")),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
                     () -> assertThat(store.delegate.heldIndex(BASKET)).isEmpty()
             );
         }
 
         @Test
-        void a_listed_pending_version_that_another_delivery_applied_and_moved_past_in_flight_is_not_self_held() {
+        void a_listed_pending_version_that_another_delivery_applied_and_moved_past_in_flight_is_not_kept_as_a_held_copy() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = openedWithVersionTwoFailing(WINDOW_OF_2);
             catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
@@ -1241,7 +838,6 @@ class SagaSelfHoldTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(handlerFailure),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
                     () -> assertThat(store.delegate.heldIndex(BASKET)).isEmpty(),
                     () -> assertThat(pending()).isEmpty()
             );
@@ -1254,17 +850,13 @@ class SagaSelfHoldTest {
      */
     private static final class HoldingStore implements SagaStateStore<Basket>, SagaHeldEvents<Basket> {
         private final InMemorySagaStateStore<Basket> delegate = new InMemorySagaStateStore<>();
-        private final List<@Nullable String> markedKeys = new CopyOnWriteArrayList<>();
         private final AtomicInteger writesWithoutState = new AtomicInteger();
         private volatile boolean losingEveryWriteWithoutState;
-        private volatile boolean refusingMarksCarryingAKey;
         private volatile @Nullable RuntimeException failureOnWriteWithoutState;
         private volatile @Nullable RuntimeException failureOnHold;
         private volatile @Nullable RuntimeException failureOnHeldIndex;
         // Taken once, and when it is, the save it precedes loses.
         private volatile @Nullable Runnable beforeNextCompareAndSave;
-        // Taken once, and the mark it precedes then goes through.
-        private volatile @Nullable Runnable beforeNextMarkHeldEvents;
         // Taken once, and the hold it precedes then goes through.
         private volatile @Nullable Runnable beforeNextHold;
 
@@ -1327,27 +919,8 @@ class SagaSelfHoldTest {
         }
 
         @Override
-        public boolean markOutstanding(String sagaId, String key) {
-            return delegate.markOutstanding(sagaId, key);
-        }
-
-        @Override
-        public Optional<SagaEnvelope<Basket>> markHeldEvents(String sagaId, @Nullable String selfHeldKey) {
-            markedKeys.add(selfHeldKey);
-            Runnable before = beforeNextMarkHeldEvents;
-            if (before != null) {
-                beforeNextMarkHeldEvents = null;
-                before.run();
-            }
-            if (selfHeldKey != null && refusingMarksCarryingAKey) {
-                throw new RefusedForSizeException("The instance is at the document limit", new IllegalStateException("document too large"));
-            }
-            return delegate.markHeldEvents(sagaId, selfHeldKey);
-        }
-
-        @Override
-        public void unmarkSelfHeld(String sagaId, String selfHeldKey) {
-            delegate.unmarkSelfHeld(sagaId, selfHeldKey);
+        public void failing(String sagaId, String key, Instant at) {
+            delegate.failing(sagaId, key, at);
         }
 
         @Override

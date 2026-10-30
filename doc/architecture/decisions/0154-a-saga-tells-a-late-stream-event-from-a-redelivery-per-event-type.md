@@ -45,8 +45,9 @@ these cases and skips it in the others:
 | Below it by the reorder window or more, and not pending | Skips it and logs a warning once per stream |
 | Pending, however far below it | Applies it and removes it from pending |
 
-A saga whose one start event type is a class that is neither abstract nor sealed skips an event of another type on the stream that started the
-instance when its version is below the start's, as ADR 158 decides. The table applies to everything else.
+An event on the stream that started the instance, below the start's version, that is not a start event, is not classified
+by this table. It waits for a start event below it on a feed that can reorder and is skipped on a feed in commit order,
+as ADR 158 decides. The table applies to everything else.
 
 The shipped Kafka topology keeps one stream's events of one type in order, so with a mark per type it loses nothing. A
 mark per stream with a window would not be enough, because two types of one stream can be more than any window apart.
@@ -124,7 +125,7 @@ watermark and no marks. `streamWatermarks` is still written with the highest ver
 
 **Exactly-once holds when the feed keeps a stream's order to within the reorder window per event type, or when the event
 failed in the saga.** For a failed event that needs qualifying. On a feed that can deliver an event before its instance's
-start, a failed event is listed pending or kept as a self-held event (ADR 158) whatever the window did meanwhile, unless
+start, a failed event is listed pending or kept as a held copy (ADR 158) whatever the window did meanwhile, unless
 the store stays down through every retry. It can then be applied twice, in the one case the second row's warning names.
 On a feed that delivers in commit order it holds for a subscription model that keeps that contract, and an error names
 an event where the model did not. These are the cases that fall outside the precondition:
@@ -132,7 +133,7 @@ an event where the model did not. These are the cases that fall outside the prec
 | Case | What happens | Visible |
 |---|---|---|
 | The write that records a failed version fails because the store is down | The version is not pending and not kept. A replay is applied only while the instance is less than a window ahead of it | Error in the log, naming the event |
-| The compare-and-set that lists a failed version lost every attempt, or the failure path's read finds the version behind the window after this delivery saw it as new, or a retry of the delivery finds it there after an earlier attempt saw it as new | On a feed that can hold, the version is kept as self-held and applied by the next drain. It is applied twice only if it had applied and a whole window of its type was applied during its own failure handling. On a feed that delivers in commit order, an error names the event. A held event whose listing fails is kept as self-held on any feed | A warning when it is kept behind the window. The error on a commit-order feed |
+| The compare-and-set that lists a failed version lost every attempt, or the failure path's read finds the version behind the window after this delivery saw it as new, or a retry of the delivery finds it there after an earlier attempt saw it as new | On a feed that can hold, the version is kept as a held copy and the next input applies it. It is applied twice only if it had applied and a whole window of its type was applied during its own failure handling. On a feed that delivers in commit order, an error names the event | A warning when it is kept behind the window. The error on a commit-order feed |
 | An event the saga cannot route to an instance is parked | There is no instance to write on | Error, already logged |
 | An event arrives before the event that starts its instance | Held until the start arrives, unless the feed delivers in commit order, where it cannot happen (ADR 158) | One info line the first time a subscription holds on a node |
 | The instance is completed or quarantined | Inert by design | Quarantine logs |

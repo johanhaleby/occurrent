@@ -24,7 +24,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
-import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
@@ -66,20 +65,9 @@ import static java.util.Objects.requireNonNull;
  *                          of the same type, which a feed that reorders can deliver, be told from a redelivery. Empty
  *                          for an instance stored before 0.35.0, which reads as every type of a stream being applied up to
  *                          that stream's watermark
- * @param heldEventsChecked whether the instance has drained every event held for it. Only the save that ends a drain
- *                          writes {@code true}, and holding an event unsets it, so an input finding it {@code false} on a
- *                          started instance drains first. Absent reads as {@code false}, so an instance stored before
- *                          0.35.0 drains once
- * @param drainedHeldKeys   the keys of the held events this instance applied since its last completed drain. They prove
- *                          an apply whose release did not happen, for example because the process stopped in between
- * @param selfHeldKeys      the keys of versions that failed on this instance and are held because they could not be
- *                          listed as pending. A version whose key is here is applied when it arrives, however far
- *                          behind it is, and applying it removes the key
- * @param startMark         the event that started the instance, or {@code null} for one stored before 0.35.0. An event
- *                          of the start's stream with a lower version committed before the start. On a saga whose one
- *                          start event type is a class that is neither abstract nor sealed, such an event of another
- *                          type is skipped when it is delivered after the start, and the drain releases its held copy
- *                          without applying it, unless the instance lists an earlier event of the start's type below it
+ * @param startMark         the lowest start event the instance has applied on the stream it started on, or {@code null}
+ *                          for one stored before 0.35.0. An event of that stream below it that is not a start event waits
+ *                          held, because a start event below it may still arrive, and applying one moves this down to it
  * @param <S>               the user state type
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
@@ -96,9 +84,6 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        boolean started,
                                                        @Nullable SagaFailure failure,
                                                        Map<String, StreamMarks> streamMarks,
-                                                       boolean heldEventsChecked,
-                                                       Set<String> drainedHeldKeys,
-                                                       Set<String> selfHeldKeys,
                                                        @Nullable StartMark startMark) implements SagaInstance {
 
     public SagaEnvelope {
@@ -107,8 +92,6 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         timers = List.copyOf(timers);
         streamWatermarks = Map.copyOf(streamWatermarks);
         streamMarks = Map.copyOf(streamMarks);
-        drainedHeldKeys = Set.copyOf(drainedHeldKeys);
-        selfHeldKeys = Set.copyOf(selfHeldKeys);
         if (state != null) {
             // currentStep duplicates something state already knows, which is the kind of field that drifts. Re-derive it
             // here rather than trusting callers to keep the two aligned: a passed value is honoured only when there is no
@@ -118,14 +101,14 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     }
 
     /**
-     * An envelope with nothing held for it and no start mark, which reads as an instance with a drain due.
+     * An envelope with no start mark, which is every instance stored before 0.35.0.
      */
     public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
                         Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
                         @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep,
                         boolean started, @Nullable SagaFailure failure, Map<String, StreamMarks> streamMarks) {
         this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
-                completedAt, currentStep, started, failure, streamMarks, false, Set.of(), Set.of(), null);
+                completedAt, currentStep, started, failure, streamMarks, null);
     }
 
     /**

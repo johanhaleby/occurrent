@@ -382,6 +382,6 @@ class InMemorySagaStateStoreTest {
 
     private static HeldEvent heldEvent(String sagaId, String key) {
         CloudEvent cloudEvent = CloudEventBuilder.v1().withId(key).withSource(URI.create("urn:test")).withType("test.event").build();
-        return new HeldEvent(sagaId, new HeldEventRef(key, null, null, null, "test.event", NOW, false, false), cloudEvent);
+        return new HeldEvent(sagaId, new HeldEventRef(key, null, null, null, "test.event", NOW, false, null), cloudEvent);
     }
 }

@@ -56,9 +56,9 @@ narrows [#977](https://github.com/johanhaleby/occurrent/issues/977), where a los
 starting, without closing it, since the record itself is still not written.
 
 **At the pending cap the record is the clock.** An instance that lists 10 000 pending versions lists no more, and a
-version that fails then is self-held instead ([ADR 158](0158-a-saga-holds-an-event-that-arrives-before-its-instance-starts.md)).
+version that fails then is kept as a held copy instead ([ADR 158](0158-a-saga-holds-an-event-that-arrives-before-its-instance-starts.md)).
 It has no pending entry, so its clock is the record's `firstFailedAt`, and the record is still written after the
-self-hold, so the input reaches its budget.
+copy is kept, so the input reaches its budget.
 
 ## Consequences
 

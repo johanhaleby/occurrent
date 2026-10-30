@@ -1364,7 +1364,7 @@ class SagaExecutionSupportTest {
             }
 
             @Test
-            void the_input_the_record_named_is_behind_the_window_again_once_it_has_been_applied() {
+            void the_input_the_record_named_is_skipped_as_a_redelivery_once_it_has_been_applied() {
                 // Given
                 SagaEnvelope<OrderState> afterApplied = applyOrderPlaced(failingOn(STREAM + "@5", NOW), meta(TYPE_A, 5)).envelope();
 
@@ -1373,7 +1373,7 @@ class SagaExecutionSupportTest {
 
                 // Then
                 assertAll(
-                        () -> assertThat(SagaExecutionSupport.classify(afterApplied, meta(TYPE_A, 5), WINDOW)).isEqualTo(Delivery.BEHIND_WINDOW),
+                        () -> assertThat(SagaExecutionSupport.classify(afterApplied, meta(TYPE_A, 5), WINDOW)).isEqualTo(Delivery.REDELIVERY),
                         () -> assertThat(redelivery.processed()).isFalse(),
                         () -> assertThat(redelivery.commands()).isEmpty()
                 );
@@ -2002,7 +2002,9 @@ class SagaExecutionSupportTest {
                 StreamMarks after = outcome.envelope().streamMarks().get(STREAM);
                 assertAll(
                         () -> assertThat(after.floor()).isEqualTo(10L),
-                        () -> assertThat(after.byType()).isEqualTo(marked().streamMarks().get(STREAM).byType()),
+                        () -> assertThat(after.byType()).isEqualTo(Map.of(
+                                TYPE_A, new TypeMark(30, List.of(12L, 27L, 28L), 26),
+                                TYPE_B, marked().streamMarks().get(STREAM).byType().get(TYPE_B))),
                         () -> assertThat(outcome.envelope().streamWatermarks()).isEqualTo(Map.of(STREAM, 30L))
                 );
             }
@@ -2019,9 +2021,43 @@ class SagaExecutionSupportTest {
 
                 // Then
                 assertAll(
-                        () -> assertThat(SagaExecutionSupport.classify(first.envelope(), meta(TYPE_A, 12), WINDOW)).isEqualTo(Delivery.BEHIND_WINDOW),
+                        () -> assertThat(SagaExecutionSupport.classify(first.envelope(), meta(TYPE_A, 12), WINDOW)).isEqualTo(Delivery.REDELIVERY),
                         () -> assertThat(second.processed()).isFalse(),
                         () -> assertThat(second.commands()).isEmpty()
+                );
+            }
+
+            @Test
+            void the_applied_pending_version_is_forgotten_again_by_the_next_applying_save_of_its_type() {
+                // Given
+                Outcome<OrderState, OrderCommand> first = apply(markedWithPending(Map.of(TYPE_A, List.of(12L))), meta(TYPE_A, 12));
+                assertThat(first.processed()).isTrue();
+
+                // When
+                Outcome<OrderState, OrderCommand> next = apply(first.envelope(), meta(TYPE_A, 31));
+
+                // Then
+                assertAll(
+                        () -> assertThat(next.processed()).isTrue(),
+                        () -> assertThat(next.envelope().streamMarks().get(STREAM).byType().get(TYPE_A).applied()).as("the versions applied below the mark").containsExactly(28L, 30L),
+                        () -> assertThat(SagaExecutionSupport.classify(next.envelope(), meta(TYPE_A, 12), WINDOW)).isEqualTo(Delivery.BEHIND_WINDOW)
+                );
+            }
+
+            @Test
+            void the_applied_pending_version_stays_through_the_next_applying_save_of_another_type() {
+                // Given
+                Outcome<OrderState, OrderCommand> first = apply(markedWithPending(Map.of(TYPE_A, List.of(12L))), meta(TYPE_A, 12));
+                assertThat(first.processed()).isTrue();
+
+                // When
+                Outcome<OrderState, OrderCommand> next = apply(first.envelope(), meta(TYPE_B, 21));
+
+                // Then
+                assertAll(
+                        () -> assertThat(next.processed()).isTrue(),
+                        () -> assertThat(next.envelope().streamMarks().get(STREAM).byType().get(TYPE_A).applied()).as("the versions applied below the mark").containsExactly(12L, 27L, 28L),
+                        () -> assertThat(SagaExecutionSupport.classify(next.envelope(), meta(TYPE_A, 12), WINDOW)).isEqualTo(Delivery.REDELIVERY)
                 );
             }
 

@@ -24,7 +24,7 @@ import static java.util.Objects.requireNonNull;
  * One event a saga instance holds, with its body.
  *
  * @param sagaId     the instance the event belongs to
- * @param ref        what the drain reads about the event without its body
+ * @param ref        what an attempt reads about the event without its body
  * @param cloudEvent the event as it was delivered
  */
 public record HeldEvent(String sagaId, HeldEventRef ref, CloudEvent cloudEvent) {

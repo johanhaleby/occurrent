@@ -18,6 +18,8 @@ package org.occurrent.dsl.saga;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -29,8 +31,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -44,13 +44,13 @@ class InMemorySagaHeldEventsTest {
 
     private final InMemorySagaStateStore<String> store = new InMemorySagaStateStore<>();
 
-    private static SagaEnvelope<String> envelope(long version, SagaStatus status, boolean started, boolean heldEventsChecked, Set<String> selfHeldKeys) {
+    private static SagaEnvelope<String> envelope(long version, SagaStatus status, boolean started) {
         return new SagaEnvelope<>(SAGA_ID, "state", status, version, List.of(), Map.of(), null, NOW, NOW, null, null, started, null,
-                Map.of(), heldEventsChecked, Set.of("drained"), selfHeldKeys, new SagaEnvelope.StartMark("orders", 1, 10L));
+                Map.of(), new SagaEnvelope.StartMark("orders", 1, 10L));
     }
 
-    private void saveActiveStartedInstance(boolean heldEventsChecked, Set<String> selfHeldKeys) {
-        assertThat(store.compareAndSave(SAGA_ID, envelope(1, SagaStatus.ACTIVE, true, heldEventsChecked, selfHeldKeys), 0)).isTrue();
+    private void saveActiveStartedInstance() {
+        assertThat(store.compareAndSave(SAGA_ID, envelope(1, SagaStatus.ACTIVE, true), 0)).isTrue();
     }
 
     private static CloudEvent cloudEvent(String id, String data) {
@@ -59,11 +59,11 @@ class InMemorySagaHeldEventsTest {
     }
 
     private static HeldEvent heldEvent(String key) {
-        return heldEvent(key, false, false);
+        return heldEvent(key, false, null);
     }
 
-    private static HeldEvent heldEvent(String key, boolean selfHeld, boolean outstanding) {
-        return new HeldEvent(SAGA_ID, new HeldEventRef(key, "orders", 5L, 50L, "test.Event", NOW, selfHeld, outstanding), cloudEvent("id-" + key, "{\"key\":\"" + key + "\"}"));
+    private static HeldEvent heldEvent(String key, boolean startEvent, @Nullable Instant failingSince) {
+        return new HeldEvent(SAGA_ID, new HeldEventRef(key, "orders", 5L, 50L, "test.Event", NOW, startEvent, failingSince), cloudEvent("id-" + key, "{\"key\":\"" + key + "\"}"));
     }
 
     @Nested
@@ -94,11 +94,11 @@ class InMemorySagaHeldEventsTest {
         @Test
         void a_second_hold_of_the_same_key_leaves_the_first_copy_in_place() {
             // Given
-            HeldEvent first = heldEvent("orders@5", true, false);
+            HeldEvent first = heldEvent("orders@5", true, NOW);
             store.hold(SAGA_ID, first);
 
             // When
-            store.hold(SAGA_ID, heldEvent("orders@5", false, true));
+            store.hold(SAGA_ID, heldEvent("orders@5", false, null));
 
             // Then
             assertThat(store.held(SAGA_ID, List.of("orders@5"))).containsExactly(first);
@@ -120,7 +120,7 @@ class InMemorySagaHeldEventsTest {
         void heldIndex_lists_the_reference_of_every_event_held_for_the_instance() {
             // Given
             HeldEvent first = heldEvent("orders@5");
-            HeldEvent second = heldEvent("orders@6", true, false);
+            HeldEvent second = heldEvent("orders@6", true, NOW.plusSeconds(1));
             store.hold(SAGA_ID, first);
             store.hold(SAGA_ID, second);
             store.hold("another-instance", heldEvent("orders@7"));
@@ -238,283 +238,143 @@ class InMemorySagaHeldEventsTest {
     }
 
     @Nested
-    @DisplayName("when an event is marked outstanding")
-    class WhenAnEventIsMarkedOutstanding {
+    @DisplayName("when a held event is recorded as failing")
+    class WhenAHeldEventIsRecordedAsFailing {
+
+        private final Instant firstFailure = NOW.plusSeconds(10);
 
         @Test
-        void markOutstanding_answers_true_and_sets_the_flag_on_a_held_event() {
-            // Given
-            store.hold(SAGA_ID, heldEvent("orders@5", true, false));
-
-            // When
-            boolean marked = store.markOutstanding(SAGA_ID, "orders@5");
-
-            // Then
-            assertAll(
-                    () -> assertThat(marked).isTrue(),
-                    () -> assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.outstanding()).isTrue())
-            );
-        }
-
-        @Test
-        void markOutstanding_changes_nothing_but_the_flag() {
-            // Given
-            HeldEvent held = heldEvent("orders@5", true, false);
-            store.hold(SAGA_ID, held);
-
-            // When
-            store.markOutstanding(SAGA_ID, "orders@5");
-
-            // Then
-            HeldEvent after = store.held(SAGA_ID, List.of("orders@5")).get(0);
-            HeldEventRef ref = held.ref();
-            assertThat(after).isEqualTo(new HeldEvent(SAGA_ID, new HeldEventRef(ref.key(), ref.streamId(), ref.version(), ref.position(), ref.type(), ref.heldAt(), true, true), held.cloudEvent()));
-        }
-
-        @Test
-        void markOutstanding_answers_false_for_a_key_that_is_not_held() {
+        void failing_sets_the_instant_on_a_held_event_that_has_none() {
             // Given
             store.hold(SAGA_ID, heldEvent("orders@5"));
 
             // When
-            boolean marked = store.markOutstanding(SAGA_ID, "orders@99");
+            store.failing(SAGA_ID, "orders@5", firstFailure);
 
             // Then
             assertAll(
-                    () -> assertThat(marked).isFalse(),
-                    () -> assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.outstanding()).isFalse())
-            );
+                    () -> assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isEqualTo(firstFailure)),
+                    () -> assertThat(store.held(SAGA_ID, List.of("orders@5"))).singleElement().satisfies(held -> assertThat(held.ref().failingSince()).isEqualTo(firstFailure)));
         }
 
         @Test
-        void markOutstanding_does_not_insert_an_event_for_an_instance_that_holds_nothing() {
+        void a_second_call_does_not_move_the_instant() {
+            // Given
+            store.hold(SAGA_ID, heldEvent("orders@5"));
+            store.failing(SAGA_ID, "orders@5", firstFailure);
+
             // When
-            boolean marked = store.markOutstanding(SAGA_ID, "orders@5");
+            store.failing(SAGA_ID, "orders@5", firstFailure.plusSeconds(30));
+
+            // Then
+            assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isEqualTo(firstFailure));
+        }
+
+        @Test
+        void a_copy_held_with_an_instant_keeps_it_when_failing_is_called() {
+            // Given
+            store.hold(SAGA_ID, heldEvent("orders@5", false, NOW));
+
+            // When
+            store.failing(SAGA_ID, "orders@5", firstFailure);
+
+            // Then
+            assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isEqualTo(NOW));
+        }
+
+        @Test
+        void failing_changes_nothing_but_the_instant() {
+            // Given
+            HeldEvent held = heldEvent("orders@5", true, null);
+            store.hold(SAGA_ID, held);
+
+            // When
+            store.failing(SAGA_ID, "orders@5", firstFailure);
+
+            // Then
+            HeldEvent after = store.held(SAGA_ID, List.of("orders@5")).get(0);
+            HeldEventRef ref = held.ref();
+            assertThat(after).isEqualTo(new HeldEvent(SAGA_ID, new HeldEventRef(ref.key(), ref.streamId(), ref.version(), ref.position(), ref.type(), ref.heldAt(), true, firstFailure), held.cloudEvent()));
+        }
+
+        @Test
+        void failing_leaves_the_other_copies_of_the_instance_and_the_same_key_of_another_instance_alone() {
+            // Given
+            store.hold(SAGA_ID, heldEvent("orders@5"));
+            store.hold(SAGA_ID, heldEvent("orders@6"));
+            store.hold("another-instance", heldEvent("orders@5"));
+
+            // When
+            store.failing(SAGA_ID, "orders@5", firstFailure);
 
             // Then
             assertAll(
-                    () -> assertThat(marked).isFalse(),
-                    () -> assertThat(store.heldIndex(SAGA_ID)).isEmpty()
-            );
+                    () -> assertThat(store.heldIndex(SAGA_ID)).filteredOn(ref -> ref.key().equals("orders@6")).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isNull()),
+                    () -> assertThat(store.heldIndex("another-instance")).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isNull()));
+        }
+
+        @Test
+        void failing_does_nothing_for_a_key_that_is_not_held() {
+            // Given
+            store.hold(SAGA_ID, heldEvent("orders@5"));
+
+            // When
+            store.failing(SAGA_ID, "orders@99", firstFailure);
+
+            // Then
+            assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertAll(
+                    () -> assertThat(ref.key()).isEqualTo("orders@5"),
+                    () -> assertThat(ref.failingSince()).isNull()));
+        }
+
+        @Test
+        void failing_does_not_insert_an_event_for_an_instance_that_holds_nothing() {
+            // When
+            store.failing(SAGA_ID, "orders@5", firstFailure);
+
+            // Then
+            assertThat(store.heldIndex(SAGA_ID)).isEmpty();
+        }
+
+        @Test
+        void failing_does_not_insert_a_copy_after_the_event_was_released() {
+            // Given
+            store.hold(SAGA_ID, heldEvent("orders@5"));
+            store.release(SAGA_ID, "orders@5");
+
+            // When
+            store.failing(SAGA_ID, "orders@5", firstFailure);
+
+            // Then
+            assertThat(store.heldIndex(SAGA_ID)).isEmpty();
         }
     }
 
     @Nested
-    @DisplayName("when the instance is marked as holding events")
-    class WhenTheInstanceIsMarkedAsHoldingEvents {
+    @DisplayName("when a held event is read back")
+    class WhenAHeldEventIsReadBack {
 
         @Test
-        void markHeldEvents_returns_the_envelope_as_it_was_before_the_write() {
+        void startEvent_and_failingSince_round_trip_through_heldIndex_and_held() {
             // Given
-            saveActiveStartedInstance(true, Set.of("orders@3"));
-
-            // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
+            HeldEvent held = heldEvent("orders@5", true, NOW.plusSeconds(3));
+            store.hold(SAGA_ID, held);
 
             // Then
             assertAll(
-                    () -> assertThat(before).isPresent(),
-                    () -> assertThat(before.orElseThrow().version()).isEqualTo(1),
-                    () -> assertThat(before.orElseThrow().heldEventsChecked()).isTrue(),
-                    () -> assertThat(before.orElseThrow().selfHeldKeys()).containsExactly("orders@3")
-            );
+                    () -> assertThat(store.heldIndex(SAGA_ID)).containsExactly(held.ref()),
+                    () -> assertThat(store.held(SAGA_ID, List.of("orders@5"))).containsExactly(held));
         }
 
         @Test
-        void markHeldEvents_unsets_heldEventsChecked() {
+        void a_copy_held_with_neither_reads_back_as_not_a_start_event_and_not_failing() {
             // Given
-            saveActiveStartedInstance(true, Set.of());
-
-            // When
-            store.markHeldEvents(SAGA_ID, null);
+            store.hold(SAGA_ID, heldEvent("orders@5"));
 
             // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().heldEventsChecked()).isFalse();
-        }
-
-        @Test
-        void markHeldEvents_adds_the_key_to_the_selfHeldKeys_and_keeps_the_ones_already_there() {
-            // Given
-            saveActiveStartedInstance(false, Set.of("orders@3"));
-
-            // When
-            store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().selfHeldKeys()).containsExactlyInAnyOrder("orders@3", "orders@5");
-        }
-
-        @Test
-        void markHeldEvents_without_a_key_leaves_the_selfHeldKeys_as_they_were() {
-            // Given
-            saveActiveStartedInstance(false, Set.of("orders@3"));
-
-            // When
-            store.markHeldEvents(SAGA_ID, null);
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().selfHeldKeys()).containsExactly("orders@3");
-        }
-
-        @Test
-        void markHeldEvents_adding_a_key_already_there_leaves_it_once() {
-            // Given
-            saveActiveStartedInstance(false, Set.of("orders@5"));
-
-            // When
-            store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().selfHeldKeys()).containsExactly("orders@5");
-        }
-
-        @Test
-        void markHeldEvents_raises_the_version_by_one() {
-            // Given
-            saveActiveStartedInstance(true, Set.of());
-
-            // When
-            store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().version()).isEqualTo(2);
-        }
-
-        @Test
-        void markHeldEvents_makes_a_compareAndSave_that_read_before_it_lose() {
-            // Given
-            saveActiveStartedInstance(true, Set.of());
-            SagaEnvelope<String> readBefore = store.find(SAGA_ID).orElseThrow();
-            store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // When
-            boolean saved = store.compareAndSave(SAGA_ID, envelope(readBefore.version() + 1, SagaStatus.ACTIVE, true, true, Set.of()), readBefore.version());
-
-            // Then
-            assertThat(saved).isFalse();
-        }
-
-        @Test
-        void markHeldEvents_changes_nothing_else_about_the_instance() {
-            // Given
-            saveActiveStartedInstance(true, Set.of());
-
-            // When
-            store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            SagaEnvelope<String> after = store.find(SAGA_ID).orElseThrow();
-            assertThat(after).isEqualTo(envelope(2, SagaStatus.ACTIVE, true, false, Set.of("orders@5")));
-        }
-
-        @Test
-        void markHeldEvents_is_empty_and_writes_nothing_for_an_instance_that_does_not_exist() {
-            // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertAll(
-                    () -> assertThat(before).isEmpty(),
-                    () -> assertThat(store.find(SAGA_ID)).isEmpty()
-            );
-        }
-
-        @Test
-        void markHeldEvents_is_empty_and_writes_nothing_for_an_instance_that_has_not_started() {
-            // Given
-            SagaEnvelope<String> notStarted = envelope(1, SagaStatus.ACTIVE, false, true, Set.of());
-            store.compareAndSave(SAGA_ID, notStarted, 0);
-
-            // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertAll(
-                    () -> assertThat(before).isEmpty(),
-                    () -> assertThat(store.find(SAGA_ID)).contains(notStarted)
-            );
-        }
-
-        @Test
-        void markHeldEvents_is_empty_and_writes_nothing_for_a_completed_instance() {
-            // Given
-            SagaEnvelope<String> completed = envelope(1, SagaStatus.COMPLETED, true, true, Set.of());
-            store.compareAndSave(SAGA_ID, completed, 0);
-
-            // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertAll(
-                    () -> assertThat(before).isEmpty(),
-                    () -> assertThat(store.find(SAGA_ID)).contains(completed)
-            );
-        }
-
-        @Test
-        void markHeldEvents_is_empty_and_writes_nothing_for_a_quarantined_instance() {
-            // Given
-            SagaEnvelope<String> quarantined = envelope(1, SagaStatus.QUARANTINED, true, true, Set.of());
-            store.compareAndSave(SAGA_ID, quarantined, 0);
-
-            // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertAll(
-                    () -> assertThat(before).isEmpty(),
-                    () -> assertThat(store.find(SAGA_ID)).contains(quarantined)
-            );
-        }
-    }
-
-    @Nested
-    @DisplayName("when a key is unmarked as self-held")
-    class WhenAKeyIsUnmarkedAsSelfHeld {
-
-        @Test
-        void unmarkSelfHeld_removes_the_key_and_keeps_the_others() {
-            // Given
-            saveActiveStartedInstance(false, Set.of("orders@3", "orders@5"));
-
-            // When
-            store.unmarkSelfHeld(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().selfHeldKeys()).containsExactly("orders@3");
-        }
-
-        @Test
-        void unmarkSelfHeld_raises_the_version_by_one() {
-            // Given
-            saveActiveStartedInstance(false, Set.of("orders@5"));
-
-            // When
-            store.unmarkSelfHeld(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().version()).isEqualTo(2);
-        }
-
-        @Test
-        void unmarkSelfHeld_leaves_heldEventsChecked_as_it_was() {
-            // Given
-            saveActiveStartedInstance(true, Set.of("orders@5"));
-
-            // When
-            store.unmarkSelfHeld(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().heldEventsChecked()).isTrue();
-        }
-
-        @Test
-        void unmarkSelfHeld_of_an_instance_that_does_not_exist_writes_nothing() {
-            // When
-            store.unmarkSelfHeld(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID)).isEmpty();
+            assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertAll(
+                    () -> assertThat(ref.startEvent()).isFalse(),
+                    () -> assertThat(ref.failingSince()).isNull()));
         }
     }
 
@@ -525,7 +385,7 @@ class InMemorySagaHeldEventsTest {
         @Test
         void delete_removes_the_events_held_for_the_instance() {
             // Given
-            saveActiveStartedInstance(false, Set.of());
+            saveActiveStartedInstance();
             store.hold(SAGA_ID, heldEvent("orders@5"));
 
             // When
@@ -538,7 +398,7 @@ class InMemorySagaHeldEventsTest {
         @Test
         void delete_leaves_the_events_held_for_another_instance() {
             // Given
-            saveActiveStartedInstance(false, Set.of());
+            saveActiveStartedInstance();
             HeldEvent other = heldEvent("orders@5");
             store.hold("another-instance", other);
 
@@ -547,6 +407,96 @@ class InMemorySagaHeldEventsTest {
 
             // Then
             assertThat(store.heldIndex("another-instance")).containsExactly(other.ref());
+        }
+    }
+
+    @Nested
+    @DisplayName("when the held events are listed without those waiting for a lower start")
+    class WhenTheHeldEventsAreListedWithoutThoseWaitingForALowerStart {
+
+        private final SagaEnvelope.StartMark start = new SagaEnvelope.StartMark("orders", 5, null);
+
+        @BeforeEach
+        void holdOneCopyOfEachKind() {
+            store.hold(SAGA_ID, copy("orders@3", "orders", 3L, false));
+            store.hold(SAGA_ID, copy("orders@4", "orders", 4L, false));
+            store.hold(SAGA_ID, copy("orders@5", "orders", 5L, false));
+            store.hold(SAGA_ID, copy("orders@7", "orders", 7L, false));
+            store.hold(SAGA_ID, copy("orders@2", "orders", 2L, true));
+            store.hold(SAGA_ID, copy("other@3", "other", 3L, false));
+            store.hold(SAGA_ID, copy("keyless", null, null, false));
+        }
+
+        @Test
+        void a_non_start_copy_on_the_starts_stream_below_the_start_is_left_out() {
+            // When
+            List<String> keys = keysWithoutWaiting();
+
+            // Then
+            assertThat(keys).doesNotContain("orders@3", "orders@4");
+        }
+
+        @Test
+        void a_non_start_copy_at_the_starts_version_is_returned() {
+            // When
+            List<String> keys = keysWithoutWaiting();
+
+            // Then
+            assertThat(keys).contains("orders@5");
+        }
+
+        @Test
+        void a_non_start_copy_above_the_start_is_returned() {
+            // When
+            List<String> keys = keysWithoutWaiting();
+
+            // Then
+            assertThat(keys).contains("orders@7");
+        }
+
+        @Test
+        void a_copy_flagged_as_a_start_event_below_the_start_is_returned() {
+            // When
+            List<String> keys = keysWithoutWaiting();
+
+            // Then
+            assertThat(keys).contains("orders@2");
+        }
+
+        @Test
+        void a_copy_of_another_stream_below_the_starts_version_is_returned() {
+            // When
+            List<String> keys = keysWithoutWaiting();
+
+            // Then
+            assertThat(keys).contains("other@3");
+        }
+
+        @Test
+        void a_copy_with_no_stream_key_is_returned() {
+            // When
+            List<String> keys = keysWithoutWaiting();
+
+            // Then
+            assertThat(keys).contains("keyless");
+        }
+
+        @Test
+        void the_events_returned_are_those_of_heldIndex_less_the_waiting_ones() {
+            // When
+            List<HeldEventRef> listed = store.heldIndexWithoutWaiting(SAGA_ID, start);
+
+            // Then
+            assertThat(listed).containsExactlyInAnyOrderElementsOf(store.heldIndex(SAGA_ID).stream()
+                    .filter(ref -> !ref.key().equals("orders@3") && !ref.key().equals("orders@4")).toList());
+        }
+
+        private List<String> keysWithoutWaiting() {
+            return store.heldIndexWithoutWaiting(SAGA_ID, start).stream().map(HeldEventRef::key).toList();
+        }
+
+        private HeldEvent copy(String key, @Nullable String streamId, @Nullable Long version, boolean startEvent) {
+            return new HeldEvent(SAGA_ID, new HeldEventRef(key, streamId, version, null, "test.Event", NOW, startEvent, null), cloudEvent("id-" + key, "{}"));
         }
     }
 }

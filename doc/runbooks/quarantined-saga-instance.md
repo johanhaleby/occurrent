@@ -250,9 +250,10 @@ finished some other way, which is what you need before step 5.
 replay it on an instance with quarantine on and it fails again after `quarantineAfter` has passed since its first
 failure, that first replay failure quarantines the instance. Fix the cause before you replay.
 
-When the log says the saga could not apply a held event while draining its held events, the delivery that drove the
-drain was refused as well. Under PARK, replay that delivery too once the cause is fixed, even if its reaction ran. A
-replay of an event the instance already applied is skipped as a redelivery, and it still applies the held events first.
+When the log says the saga could not apply a held event, the delivery it was handling was refused as well, and it is held
+as an event of its own unless the log also says "could not keep it". Any later input applies both once the cause is
+fixed. Under PARK, replay that delivery if nothing else is coming, even if its reaction ran. A replay of an event the
+instance already applied is skipped as a redelivery, and it still applies the held events first.
 
 ### 5. [you] Delete the instance, once you have decided not to recover it
 
@@ -361,12 +362,21 @@ Remove the ones for an id you know will never start:
 db.getCollection("saga-order-fulfilment-held-events").deleteMany({ sagaId: "order-4711" })
 ```
 
-A held event marked `selfHeld` is a failed event the instance keeps until it applies. One left on a `COMPLETED` instance
-is never applied, since a completed instance skips its events, and removing it is safe.
+A held event on the stream that started the instance, below the start's version, with `startEvent` false, waits for a
+start event below it. Replaying a stream's history from before its start stores one per event. Without such a start it
+never reacts, and it stays until the instance completes, which removes it. Removing it earlier is safe when you know no
+such start will arrive.
+
+A held event left on a `COMPLETED` instance is never applied. The next input to that instance removes it, and removing it
+yourself is safe. A TTL on the instance collection doesn't remove held events, so remove them with the instance.
+
+A held event that fails while it is applied has `failingSince` set. With quarantine on, the instance is quarantined once
+that has run past `quarantineAfter`, and its failure record names the held event's key.
 
 A failed event the saga could not keep, because the store failed while it was holding it, is logged at ERROR with "could
-not keep it". Under PARK, its parked copy may then be the only copy left, so replay that event once the store is
-back.
+not keep it". Under PARK, its parked copy may then be the only copy left, so replay that event once the store is back.
+Once the instance has moved a reorder window of that event's type past it, a replay is skipped as behind the reorder
+window, and its reaction never runs. Then the ERROR is what tells you to run the reaction's work by hand.
 
 ## Rollback considerations
 

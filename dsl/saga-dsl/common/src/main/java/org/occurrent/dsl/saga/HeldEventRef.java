@@ -23,8 +23,8 @@ import java.time.Instant;
 import static java.util.Objects.requireNonNull;
 
 /**
- * What the drain of a saga instance needs to know about one held event, without its body. A body can be close to the
- * store's document limit, so the drain reads every reference of an instance first and fetches the bodies in pages.
+ * What an attempt on a saga instance needs to know about one held event, without its body. A body can be close to the
+ * store's document limit, so an attempt reads the references first and fetches the bodies it applies in pages.
  *
  * @param key         the event's redelivery key ({@code streamId@streamVersion}), or its CloudEvent id and source for an
  *                    event that carries none. Unique per saga instance
@@ -33,11 +33,10 @@ import static java.util.Objects.requireNonNull;
  * @param position    the event's global position, or {@code null} when it carries none
  * @param type        the CloudEvent type
  * @param heldAt      when the event was held
- * @param selfHeld    whether the instance held the event because the event failed on it after it started, rather than
- *                    because it arrived before the instance started
- * @param outstanding whether the event is known not to have been applied, so the drain applies it however far behind
- *                    the instance has moved. Set only when the instance could not record that on itself because it had
- *                    reached the store's document limit
+ * @param startEvent   whether the saga would start on the event, answered when it was held. A body that could not be
+ *                     converted counts as a start event, so its copy is applied and its failure shows
+ * @param failingSince when applying the held event first failed, or {@code null} when it has not. Quarantine measures
+ *                     the event's budget from it
  */
 public record HeldEventRef(String key,
                            @Nullable String streamId,
@@ -45,8 +44,8 @@ public record HeldEventRef(String key,
                            @Nullable Long position,
                            String type,
                            Instant heldAt,
-                           boolean selfHeld,
-                           boolean outstanding) {
+                           boolean startEvent,
+                           @Nullable Instant failingSince) {
     public HeldEventRef {
         requireNonNull(key, "key cannot be null");
         requireNonNull(type, "type cannot be null");

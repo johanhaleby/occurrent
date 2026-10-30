@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -33,8 +34,8 @@ import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.dsl.saga.HeldEvent;
 import org.occurrent.dsl.saga.HeldEventRef;
 import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaHeldEvents;
 import org.occurrent.dsl.saga.SagaEnvelope.StartMark;
-import org.occurrent.dsl.saga.SagaHeldEvents.RefusedForSizeException;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
@@ -75,9 +76,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 
 /**
  * Docker-based. A saga instance holds events beside its own document, in a collection named after the saga collection,
- * and a handful of marks on the instance's document tell the executor that it does. This is the contract of that storage
- * against a real MongoDB, including the two writes MongoDB refuses for size, which the store must report as a
- * {@link RefusedForSizeException} without retrying them.
+ * and each held event has a flag for whether it is a start event and a time for since when it has been failing. This is the contract of that
+ * storage against MongoDB.
  */
 @Testcontainers
 @DisplayName("SpringMongoSagaStateStore held events")
@@ -92,8 +92,6 @@ class SpringMongoSagaHeldEventsTest {
     private static final String HELD_COLLECTION = COLLECTION + "-held-events";
     private static final String SAGA_ID = "order-1";
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
-    // MongoDB's limit on one document, 16 MiB.
-    private static final int DOCUMENT_LIMIT = 16 * 1024 * 1024;
 
     private ConnectionString connectionString;
     private MongoOperations mongoOperations;
@@ -111,14 +109,13 @@ class SpringMongoSagaHeldEventsTest {
         return new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase()));
     }
 
-    private static SagaEnvelope<String> envelope(String state, long version, SagaStatus status, boolean started, boolean heldEventsChecked,
-                                                 Set<String> drainedHeldKeys, Set<String> selfHeldKeys, StartMark startMark) {
+    private static SagaEnvelope<String> envelope(String state, long version, SagaStatus status, boolean started, StartMark startMark) {
         return new SagaEnvelope<>(SAGA_ID, state, status, version, List.of(), Map.of("orders", 4L), null, NOW, NOW, null, null, started, null,
-                Map.of(), heldEventsChecked, drainedHeldKeys, selfHeldKeys, startMark);
+                Map.of(), startMark);
     }
 
-    private void saveActiveStartedInstance(boolean heldEventsChecked, Set<String> selfHeldKeys) {
-        SagaEnvelope<String> instance = envelope("state", 1, SagaStatus.ACTIVE, true, heldEventsChecked, Set.of(), selfHeldKeys, null);
+    private void saveActiveStartedInstance() {
+        SagaEnvelope<String> instance = envelope("state", 1, SagaStatus.ACTIVE, true, null);
         assertThat(store.compareAndSave(SAGA_ID, instance, 0)).isTrue();
     }
 
@@ -133,11 +130,11 @@ class SpringMongoSagaHeldEventsTest {
     }
 
     private static HeldEvent heldEvent(String key) {
-        return heldEvent(key, cloudEvent("id-" + key), false, false);
+        return heldEvent(key, cloudEvent("id-" + key), false, null);
     }
 
-    private static HeldEvent heldEvent(String key, CloudEvent cloudEvent, boolean selfHeld, boolean outstanding) {
-        return new HeldEvent(SAGA_ID, new HeldEventRef(key, "orders", 5L, 50L, "test.Event", NOW, selfHeld, outstanding), cloudEvent);
+    private static HeldEvent heldEvent(String key, CloudEvent cloudEvent, boolean startEvent, Instant failingSince) {
+        return new HeldEvent(SAGA_ID, new HeldEventRef(key, "orders", 5L, 50L, "test.Event", NOW, startEvent, failingSince), cloudEvent);
     }
 
     // What a CloudEvent says, since two events with the same content are not equal when one carries its data as bytes and the other as parsed JSON.
@@ -191,11 +188,11 @@ class SpringMongoSagaHeldEventsTest {
         @Test
         void a_second_hold_of_the_same_key_leaves_the_first_copy_in_place() {
             // Given
-            HeldEvent first = heldEvent("orders@5", cloudEvent("first"), true, false);
+            HeldEvent first = heldEvent("orders@5", cloudEvent("first"), true, null);
             store.hold(SAGA_ID, first);
 
             // When
-            store.hold(SAGA_ID, heldEvent("orders@5", cloudEvent("second"), false, true));
+            store.hold(SAGA_ID, heldEvent("orders@5", cloudEvent("second"), false, Instant.parse("2026-02-01T00:00:00Z")));
 
             // Then
             assertThat(contentOf(store.held(SAGA_ID, List.of("orders@5")))).containsExactly(contentOf(first));
@@ -246,7 +243,7 @@ class SpringMongoSagaHeldEventsTest {
         void heldIndex_lists_the_reference_of_every_event_held_for_the_instance() {
             // Given
             HeldEvent first = heldEvent("orders@5");
-            HeldEvent second = heldEvent("orders@6", cloudEvent("id-orders@6"), true, false);
+            HeldEvent second = heldEvent("orders@6", cloudEvent("id-orders@6"), true, null);
             store.hold(SAGA_ID, first);
             store.hold(SAGA_ID, second);
             store.hold("another-instance", heldEvent("orders@7"));
@@ -261,7 +258,7 @@ class SpringMongoSagaHeldEventsTest {
         @Test
         void heldIndex_reads_a_reference_whose_event_carries_no_stream_key_or_position() {
             // Given
-            HeldEventRef bare = new HeldEventRef("id-1 from urn:test:source", null, null, null, "test.Event", NOW, false, false);
+            HeldEventRef bare = new HeldEventRef("id-1 from urn:test:source", null, null, null, "test.Event", NOW, false, null);
             store.hold(SAGA_ID, new HeldEvent(SAGA_ID, bare, cloudEvent("id-1")));
 
             // When
@@ -314,7 +311,7 @@ class SpringMongoSagaHeldEventsTest {
         void held_keeps_the_id_type_source_data_and_extensions_of_the_cloud_event() {
             // Given
             CloudEvent original = cloudEvent("original");
-            store.hold(SAGA_ID, heldEvent("orders@5", original, false, false));
+            store.hold(SAGA_ID, heldEvent("orders@5", original, false, null));
 
             // When
             CloudEvent read = store.held(SAGA_ID, List.of("orders@5")).get(0).cloudEvent();
@@ -336,7 +333,7 @@ class SpringMongoSagaHeldEventsTest {
         void held_keeps_the_stream_key_the_event_store_wrote_on_the_cloud_event() {
             // Given
             CloudEvent streamKeyed = CloudEventBuilder.v1(cloudEvent("streamed")).withExtension(OccurrentCloudEventExtension.occurrent("orders", 7)).build();
-            store.hold(SAGA_ID, heldEvent("orders@7", streamKeyed, false, false));
+            store.hold(SAGA_ID, heldEvent("orders@7", streamKeyed, false, null));
 
             // When
             CloudEvent read = store.held(SAGA_ID, List.of("orders@7")).get(0).cloudEvent();
@@ -349,17 +346,18 @@ class SpringMongoSagaHeldEventsTest {
         }
 
         @Test
-        void held_returns_the_reference_flags_next_to_the_event() {
+        void held_returns_the_start_event_flag_and_the_failing_since_next_to_the_event() {
             // Given
-            store.hold(SAGA_ID, heldEvent("orders@5", cloudEvent("id-orders@5"), true, true));
+            Instant failingSince = Instant.parse("2026-02-01T00:00:00Z");
+            store.hold(SAGA_ID, heldEvent("orders@5", cloudEvent("id-orders@5"), true, failingSince));
 
             // When
             HeldEventRef ref = store.held(SAGA_ID, List.of("orders@5")).get(0).ref();
 
             // Then
             assertAll(
-                    () -> assertThat(ref.selfHeld()).isTrue(),
-                    () -> assertThat(ref.outstanding()).isTrue()
+                    () -> assertThat(ref.startEvent()).isTrue(),
+                    () -> assertThat(ref.failingSince()).isEqualTo(failingSince)
             );
         }
 
@@ -460,294 +458,180 @@ class SpringMongoSagaHeldEventsTest {
     }
 
     @Nested
-    @DisplayName("when an event is marked outstanding")
-    class WhenAnEventIsMarkedOutstanding {
+    @DisplayName("when a held event is recorded as failing")
+    class WhenAHeldEventIsRecordedAsFailing {
+
+        private static final Instant FIRST = Instant.parse("2026-02-01T00:00:00Z");
+        private static final Instant LATER = Instant.parse("2026-03-01T00:00:00Z");
 
         @Test
-        void markOutstanding_answers_true_and_sets_the_flag_on_a_held_event() {
-            // Given
-            store.hold(SAGA_ID, heldEvent("orders@5", cloudEvent("id-orders@5"), true, false));
-
-            // When
-            boolean marked = store.markOutstanding(SAGA_ID, "orders@5");
-
-            // Then
-            assertAll(
-                    () -> assertThat(marked).isTrue(),
-                    () -> assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.outstanding()).isTrue())
-            );
-        }
-
-        @Test
-        void markOutstanding_changes_nothing_but_the_flag() {
-            // Given
-            HeldEvent held = heldEvent("orders@5", cloudEvent("id-orders@5"), true, false);
-            store.hold(SAGA_ID, held);
-
-            // When
-            store.markOutstanding(SAGA_ID, "orders@5");
-
-            // Then
-            HeldEventRef ref = held.ref();
-            HeldEvent expected = new HeldEvent(SAGA_ID, new HeldEventRef(ref.key(), ref.streamId(), ref.version(), ref.position(), ref.type(), ref.heldAt(), true, true), held.cloudEvent());
-            assertThat(contentOf(store.held(SAGA_ID, List.of("orders@5")))).containsExactly(contentOf(expected));
-        }
-
-        @Test
-        void markOutstanding_answers_false_for_a_key_that_is_not_held() {
+        void failing_sets_the_failing_since_of_the_held_event() {
             // Given
             store.hold(SAGA_ID, heldEvent("orders@5"));
 
             // When
-            boolean marked = store.markOutstanding(SAGA_ID, "orders@99");
+            store.failing(SAGA_ID, "orders@5", FIRST);
+
+            // Then
+            assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isEqualTo(FIRST));
+        }
+
+        @Test
+        void a_second_call_does_not_move_the_failing_since() {
+            // Given
+            store.hold(SAGA_ID, heldEvent("orders@5"));
+            store.failing(SAGA_ID, "orders@5", FIRST);
+
+            // When
+            store.failing(SAGA_ID, "orders@5", LATER);
+
+            // Then
+            assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isEqualTo(FIRST));
+        }
+
+        @Test
+        void failing_changes_nothing_but_the_failing_since() {
+            // Given
+            HeldEvent held = heldEvent("orders@5", cloudEvent("id-orders@5"), true, null);
+            store.hold(SAGA_ID, held);
+
+            // When
+            store.failing(SAGA_ID, "orders@5", FIRST);
 
             // Then
             assertAll(
-                    () -> assertThat(marked).isFalse(),
-                    () -> assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.outstanding()).isFalse())
+                    () -> assertThat(store.heldIndex(SAGA_ID)).singleElement().isEqualTo(new HeldEventRef(held.ref().key(), "orders", 5L, 50L, "test.Event", NOW, true, FIRST)),
+                    () -> assertThat(contentOf(store.held(SAGA_ID, List.of("orders@5"))).get(0).id()).isEqualTo("id-orders@5")
             );
         }
 
         @Test
-        void markOutstanding_does_not_insert_an_event_for_a_key_that_is_not_held() {
+        void failing_does_not_insert_an_event_for_a_key_that_is_not_held() {
             // When
-            boolean marked = store.markOutstanding(SAGA_ID, "orders@5");
+            store.failing(SAGA_ID, "orders@5", FIRST);
 
             // Then
             assertAll(
-                    () -> assertThat(marked).isFalse(),
-                    () -> assertThat(store.heldIndex(SAGA_ID)).isEmpty()
+                    () -> assertThat(store.heldIndex(SAGA_ID)).isEmpty(),
+                    () -> assertThat(mongoOperations.getCollection(HELD_COLLECTION).countDocuments()).isZero()
             );
+        }
+
+        @Test
+        void failing_of_an_unknown_key_leaves_the_other_held_events_alone() {
+            // Given
+            store.hold(SAGA_ID, heldEvent("orders@5"));
+
+            // When
+            store.failing(SAGA_ID, "orders@99", FIRST);
+
+            // Then
+            assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isNull());
+        }
+
+        @Test
+        void failing_leaves_the_event_of_another_instance_with_the_same_key_alone() {
+            // Given
+            store.hold("order-1", heldEvent("orders@5"));
+            store.hold("order-2", heldEvent("orders@5"));
+
+            // When
+            store.failing("order-1", "orders@5", FIRST);
+
+            // Then
+            assertAll(
+                    () -> assertThat(store.heldIndex("order-1")).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isEqualTo(FIRST)),
+                    () -> assertThat(store.heldIndex("order-2")).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isNull())
+            );
+        }
+
+        @Test
+        void a_held_event_that_is_held_again_after_failing_keeps_its_failing_since() {
+            // Given
+            store.hold(SAGA_ID, heldEvent("orders@5"));
+            store.failing(SAGA_ID, "orders@5", FIRST);
+
+            // When
+            store.hold(SAGA_ID, heldEvent("orders@5"));
+
+            // Then
+            assertThat(store.heldIndex(SAGA_ID)).singleElement().satisfies(ref -> assertThat(ref.failingSince()).isEqualTo(FIRST));
         }
     }
 
     @Nested
-    @DisplayName("when the instance is marked as holding events")
-    class WhenTheInstanceIsMarkedAsHoldingEvents {
+    @DisplayName("when a held event is read back")
+    class WhenAHeldEventIsReadBack {
 
         @Test
-        void markHeldEvents_returns_the_envelope_as_it_was_before_the_write() {
+        void heldIndex_and_held_read_back_the_start_event_flag_and_the_failing_since_that_were_held() {
             // Given
-            saveActiveStartedInstance(true, Set.of("orders@3"));
+            Instant failingSince = Instant.parse("2026-02-01T00:00:00Z");
+            HeldEvent held = heldEvent("orders@5", cloudEvent("id-orders@5"), true, failingSince);
+            store.hold(SAGA_ID, held);
 
             // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
+            HeldEventRef fromIndex = store.heldIndex(SAGA_ID).get(0);
+            HeldEventRef fromHeld = store.held(SAGA_ID, List.of("orders@5")).get(0).ref();
 
             // Then
             assertAll(
-                    () -> assertThat(before).isPresent(),
-                    () -> assertThat(before.orElseThrow().version()).isEqualTo(1),
-                    () -> assertThat(before.orElseThrow().heldEventsChecked()).isTrue(),
-                    () -> assertThat(before.orElseThrow().selfHeldKeys()).containsExactly("orders@3"),
-                    () -> assertThat(before.orElseThrow().streamWatermarks()).containsEntry("orders", 4L)
+                    () -> assertThat(fromIndex.startEvent()).isTrue(),
+                    () -> assertThat(fromIndex.failingSince()).isEqualTo(failingSince),
+                    () -> assertThat(fromHeld.startEvent()).isTrue(),
+                    () -> assertThat(fromHeld.failingSince()).isEqualTo(failingSince)
             );
         }
 
         @Test
-        void markHeldEvents_returns_the_envelope_without_its_state() {
+        void a_held_event_that_is_not_a_start_event_and_has_not_failed_reads_back_as_such() {
             // Given
-            saveActiveStartedInstance(true, Set.of());
+            store.hold(SAGA_ID, heldEvent("orders@5"));
 
             // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(before.orElseThrow().state()).isNull();
-        }
-
-        @Test
-        void markHeldEvents_leaves_the_stored_state_alone() {
-            // Given
-            saveActiveStartedInstance(true, Set.of());
-
-            // When
-            store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().state()).isEqualTo("state");
-        }
-
-        @Test
-        void markHeldEvents_unsets_heldEventsChecked() {
-            // Given
-            saveActiveStartedInstance(true, Set.of());
-
-            // When
-            store.markHeldEvents(SAGA_ID, null);
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().heldEventsChecked()).isFalse();
-        }
-
-        @Test
-        void markHeldEvents_adds_the_key_to_the_selfHeldKeys_and_keeps_the_ones_already_there() {
-            // Given
-            saveActiveStartedInstance(false, Set.of("orders@3"));
-
-            // When
-            store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().selfHeldKeys()).containsExactlyInAnyOrder("orders@3", "orders@5");
-        }
-
-        @Test
-        void markHeldEvents_without_a_key_leaves_the_selfHeldKeys_as_they_were() {
-            // Given
-            saveActiveStartedInstance(false, Set.of("orders@3"));
-
-            // When
-            store.markHeldEvents(SAGA_ID, null);
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().selfHeldKeys()).containsExactly("orders@3");
-        }
-
-        @Test
-        void markHeldEvents_adding_a_key_already_there_leaves_it_once() {
-            // Given
-            saveActiveStartedInstance(false, Set.of("orders@5"));
-
-            // When
-            store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(rawInstance().getList("selfHeldKeys", String.class)).containsExactly("orders@5");
-        }
-
-        @Test
-        void markHeldEvents_raises_the_version_by_one() {
-            // Given
-            saveActiveStartedInstance(true, Set.of());
-
-            // When
-            store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().version()).isEqualTo(2);
-        }
-
-        @Test
-        void markHeldEvents_makes_a_compareAndSave_that_read_before_it_lose() {
-            // Given
-            saveActiveStartedInstance(true, Set.of());
-            store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // When
-            boolean saved = store.compareAndSave(SAGA_ID, envelope("later", 2, SagaStatus.ACTIVE, true, true, Set.of(), Set.of(), null), 1);
-
-            // Then
-            assertThat(saved).isFalse();
-        }
-
-        @Test
-        void markHeldEvents_is_empty_and_writes_nothing_for_an_instance_that_does_not_exist() {
-            // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
+            HeldEventRef ref = store.heldIndex(SAGA_ID).get(0);
 
             // Then
             assertAll(
-                    () -> assertThat(before).isEmpty(),
-                    () -> assertThat(store.find(SAGA_ID)).isEmpty()
+                    () -> assertThat(ref.startEvent()).isFalse(),
+                    () -> assertThat(ref.failingSince()).isNull()
             );
         }
 
         @Test
-        void markHeldEvents_is_empty_and_writes_nothing_for_an_instance_that_has_not_started() {
+        void a_held_document_written_with_neither_field_reads_as_not_a_start_event_and_not_failing() {
             // Given
-            SagaEnvelope<String> notStarted = envelope("state", 1, SagaStatus.ACTIVE, false, true, Set.of(), Set.of(), null);
-            store.compareAndSave(SAGA_ID, notStarted, 0);
+            mongoOperations.insert(new Document("_id", new Document("sagaId", SAGA_ID).append("key", "orders@5"))
+                    .append("sagaId", SAGA_ID)
+                    .append("key", "orders@5")
+                    .append("streamId", "orders")
+                    .append("version", 5L)
+                    .append("position", 50L)
+                    .append("type", "test.Event")
+                    .append("heldAt", java.util.Date.from(NOW))
+                    .append("cloudEvent", "{\"specversion\":\"1.0\",\"id\":\"legacy\",\"source\":\"urn:test:source\",\"type\":\"test.Event\"}"), HELD_COLLECTION);
 
             // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
+            HeldEventRef fromIndex = store.heldIndex(SAGA_ID).get(0);
+            HeldEventRef fromHeld = store.held(SAGA_ID, List.of("orders@5")).get(0).ref();
 
             // Then
             assertAll(
-                    () -> assertThat(before).isEmpty(),
-                    () -> assertThat(store.find(SAGA_ID)).contains(notStarted)
+                    () -> assertThat(fromIndex.startEvent()).isFalse(),
+                    () -> assertThat(fromIndex.failingSince()).isNull(),
+                    () -> assertThat(fromHeld.startEvent()).isFalse(),
+                    () -> assertThat(fromHeld.failingSince()).isNull()
             );
         }
 
         @Test
-        void markHeldEvents_is_empty_and_writes_nothing_for_a_completed_instance() {
-            // Given
-            SagaEnvelope<String> completed = envelope("state", 1, SagaStatus.COMPLETED, true, true, Set.of(), Set.of(), null);
-            store.compareAndSave(SAGA_ID, completed, 0);
-
+        void a_held_event_that_never_failed_stores_no_failing_since() {
             // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
+            store.hold(SAGA_ID, heldEvent("orders@5"));
 
             // Then
-            assertAll(
-                    () -> assertThat(before).isEmpty(),
-                    () -> assertThat(store.find(SAGA_ID)).contains(completed)
-            );
-        }
-
-        @Test
-        void markHeldEvents_is_empty_and_writes_nothing_for_a_quarantined_instance() {
-            // Given
-            SagaEnvelope<String> quarantined = envelope("state", 1, SagaStatus.QUARANTINED, true, true, Set.of(), Set.of(), null);
-            store.compareAndSave(SAGA_ID, quarantined, 0);
-
-            // When
-            Optional<SagaEnvelope<String>> before = store.markHeldEvents(SAGA_ID, "orders@5");
-
-            // Then
-            assertAll(
-                    () -> assertThat(before).isEmpty(),
-                    () -> assertThat(store.find(SAGA_ID)).contains(quarantined)
-            );
-        }
-    }
-
-    @Nested
-    @DisplayName("when a key is unmarked as self-held")
-    class WhenAKeyIsUnmarkedAsSelfHeld {
-
-        @Test
-        void unmarkSelfHeld_removes_the_key_and_keeps_the_others() {
-            // Given
-            saveActiveStartedInstance(false, Set.of("orders@3", "orders@5"));
-
-            // When
-            store.unmarkSelfHeld(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().selfHeldKeys()).containsExactly("orders@3");
-        }
-
-        @Test
-        void unmarkSelfHeld_raises_the_version_by_one() {
-            // Given
-            saveActiveStartedInstance(false, Set.of("orders@5"));
-
-            // When
-            store.unmarkSelfHeld(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().version()).isEqualTo(2);
-        }
-
-        @Test
-        void unmarkSelfHeld_leaves_heldEventsChecked_as_it_was() {
-            // Given
-            saveActiveStartedInstance(true, Set.of("orders@5"));
-
-            // When
-            store.unmarkSelfHeld(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID).orElseThrow().heldEventsChecked()).isTrue();
-        }
-
-        @Test
-        void unmarkSelfHeld_of_an_instance_that_does_not_exist_writes_nothing() {
-            // When
-            store.unmarkSelfHeld(SAGA_ID, "orders@5");
-
-            // Then
-            assertThat(store.find(SAGA_ID)).isEmpty();
+            Document stored = requireNonNull(mongoOperations.findOne(new Query(), Document.class, HELD_COLLECTION));
+            assertThat(stored.keySet()).doesNotContain("failingSince");
         }
     }
 
@@ -758,7 +642,7 @@ class SpringMongoSagaHeldEventsTest {
         @Test
         void delete_removes_the_events_held_for_the_instance() {
             // Given
-            saveActiveStartedInstance(false, Set.of());
+            saveActiveStartedInstance();
             store.hold(SAGA_ID, heldEvent("orders@5"));
 
             // When
@@ -771,7 +655,7 @@ class SpringMongoSagaHeldEventsTest {
         @Test
         void delete_leaves_the_events_held_for_another_instance() {
             // Given
-            saveActiveStartedInstance(false, Set.of());
+            saveActiveStartedInstance();
             store.hold("another-instance", heldEvent("orders@5"));
 
             // When
@@ -783,33 +667,27 @@ class SpringMongoSagaHeldEventsTest {
     }
 
     @Nested
-    @DisplayName("when the envelope carries held-event fields")
-    class WhenTheEnvelopeCarriesHeldEventFields {
+    @DisplayName("when the envelope carries a start mark")
+    class WhenTheEnvelopeCarriesAStartMark {
 
-        private final SagaEnvelope<String> withHeldFields = envelope("state", 1, SagaStatus.ACTIVE, true, true,
-                Set.of("orders@1", "orders@2"), Set.of("orders@9"), new StartMark("orders", 3, 30L));
+        private final SagaEnvelope<String> withStartMark = envelope("state", 1, SagaStatus.ACTIVE, true, new StartMark("orders", 3, 30L));
 
         @Test
-        void find_reads_back_the_four_fields_a_compareAndSave_wrote() {
+        void find_reads_back_the_start_mark_a_compareAndSave_wrote() {
             // Given
-            store.compareAndSave(SAGA_ID, withHeldFields, 0);
+            store.compareAndSave(SAGA_ID, withStartMark, 0);
 
             // When
             SagaEnvelope<String> read = store.find(SAGA_ID).orElseThrow();
 
             // Then
-            assertAll(
-                    () -> assertThat(read.heldEventsChecked()).isTrue(),
-                    () -> assertThat(read.drainedHeldKeys()).containsExactlyInAnyOrder("orders@1", "orders@2"),
-                    () -> assertThat(read.selfHeldKeys()).containsExactly("orders@9"),
-                    () -> assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L))
-            );
+            assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L));
         }
 
         @Test
         void find_reads_back_a_start_mark_without_a_position() {
             // Given
-            store.compareAndSave(SAGA_ID, envelope("state", 1, SagaStatus.ACTIVE, true, false, Set.of(), Set.of(), new StartMark("orders", 3, null)), 0);
+            store.compareAndSave(SAGA_ID, envelope("state", 1, SagaStatus.ACTIVE, true, new StartMark("orders", 3, null)), 0);
 
             // When
             SagaEnvelope<String> read = store.find(SAGA_ID).orElseThrow();
@@ -819,45 +697,35 @@ class SpringMongoSagaHeldEventsTest {
         }
 
         @Test
-        void find_reads_back_the_four_fields_a_compareAndSave_update_wrote() {
+        void find_reads_back_the_start_mark_a_compareAndSave_update_wrote() {
             // Given
-            store.compareAndSave(SAGA_ID, envelope("state", 1, SagaStatus.ACTIVE, true, false, Set.of(), Set.of(), null), 0);
-            store.compareAndSave(SAGA_ID, envelope("state", 2, SagaStatus.ACTIVE, true, true, Set.of("orders@1"), Set.of("orders@9"), new StartMark("orders", 3, 30L)), 1);
+            store.compareAndSave(SAGA_ID, envelope("state", 1, SagaStatus.ACTIVE, true, null), 0);
+            store.compareAndSave(SAGA_ID, envelope("state", 2, SagaStatus.ACTIVE, true, new StartMark("orders", 3, 30L)), 1);
 
             // When
             SagaEnvelope<String> read = store.find(SAGA_ID).orElseThrow();
 
             // Then
-            assertAll(
-                    () -> assertThat(read.heldEventsChecked()).isTrue(),
-                    () -> assertThat(read.drainedHeldKeys()).containsExactly("orders@1"),
-                    () -> assertThat(read.selfHeldKeys()).containsExactly("orders@9"),
-                    () -> assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L))
-            );
+            assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L));
         }
 
         @Test
-        void findWithoutState_reads_back_the_four_fields_a_compareAndSave_wrote() {
+        void findWithoutState_reads_back_the_start_mark_a_compareAndSave_wrote() {
             // Given
-            store.compareAndSave(SAGA_ID, withHeldFields, 0);
+            store.compareAndSave(SAGA_ID, withStartMark, 0);
 
             // When
             SagaEnvelope<String> read = store.findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
-            assertAll(
-                    () -> assertThat(read.heldEventsChecked()).isTrue(),
-                    () -> assertThat(read.drainedHeldKeys()).containsExactlyInAnyOrder("orders@1", "orders@2"),
-                    () -> assertThat(read.selfHeldKeys()).containsExactly("orders@9"),
-                    () -> assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L))
-            );
+            assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L));
         }
 
         @Test
-        void compareAndSaveWithoutState_writes_the_four_fields_and_leaves_the_stored_state_alone() {
+        void compareAndSaveWithoutState_writes_the_start_mark_and_leaves_the_stored_state_alone() {
             // Given
-            store.compareAndSave(SAGA_ID, envelope("stored state", 1, SagaStatus.ACTIVE, true, false, Set.of(), Set.of(), null), 0);
-            SagaEnvelope<String> update = envelope("ignored state", 2, SagaStatus.ACTIVE, true, true, Set.of("orders@1"), Set.of("orders@9"), new StartMark("orders", 3, 30L));
+            store.compareAndSave(SAGA_ID, envelope("stored state", 1, SagaStatus.ACTIVE, true, null), 0);
+            SagaEnvelope<String> update = envelope("ignored state", 2, SagaStatus.ACTIVE, true, new StartMark("orders", 3, 30L));
 
             // When
             boolean saved = store.compareAndSaveWithoutState(SAGA_ID, update, 1);
@@ -867,231 +735,206 @@ class SpringMongoSagaHeldEventsTest {
             assertAll(
                     () -> assertThat(saved).isTrue(),
                     () -> assertThat(read.state()).isEqualTo("stored state"),
-                    () -> assertThat(read.heldEventsChecked()).isTrue(),
-                    () -> assertThat(read.drainedHeldKeys()).containsExactly("orders@1"),
-                    () -> assertThat(read.selfHeldKeys()).containsExactly("orders@9"),
                     () -> assertThat(read.startMark()).isEqualTo(new StartMark("orders", 3, 30L))
             );
         }
 
         @Test
-        void compareAndSaveWithoutState_removes_the_fields_the_new_envelope_does_not_carry() {
+        void compareAndSaveWithoutState_removes_the_start_mark_the_new_envelope_does_not_carry() {
             // Given
-            store.compareAndSave(SAGA_ID, withHeldFields, 0);
-            SagaEnvelope<String> update = envelope("state", 2, SagaStatus.ACTIVE, true, false, Set.of(), Set.of(), null);
+            store.compareAndSave(SAGA_ID, withStartMark, 0);
+            SagaEnvelope<String> update = envelope("state", 2, SagaStatus.ACTIVE, true, null);
 
             // When
             store.compareAndSaveWithoutState(SAGA_ID, update, 1);
 
             // Then
-            SagaEnvelope<String> read = store.find(SAGA_ID).orElseThrow();
-            assertAll(
-                    () -> assertThat(read.heldEventsChecked()).isFalse(),
-                    () -> assertThat(read.drainedHeldKeys()).isEmpty(),
-                    () -> assertThat(read.selfHeldKeys()).isEmpty(),
-                    () -> assertThat(read.startMark()).isNull()
-            );
+            assertThat(store.find(SAGA_ID).orElseThrow().startMark()).isNull();
         }
 
         @Test
-        void a_default_envelope_stores_none_of_the_four_fields() {
+        void a_default_envelope_stores_no_start_mark() {
             // When
-            store.compareAndSave(SAGA_ID, envelope("state", 1, SagaStatus.ACTIVE, true, false, Set.of(), Set.of(), null), 0);
+            store.compareAndSave(SAGA_ID, envelope("state", 1, SagaStatus.ACTIVE, true, null), 0);
 
             // Then
-            Document stored = rawInstance();
-            assertThat(stored.keySet()).doesNotContain("heldEventsChecked", "drainedHeldKeys", "selfHeldKeys", "startMark");
+            assertThat(rawInstance().keySet()).doesNotContain("startMark");
         }
 
         @Test
-        void a_document_written_without_the_fields_reads_as_a_drain_due_with_nothing_drained_or_self_held() {
+        void a_document_written_without_the_field_reads_as_having_no_start_mark() {
             // Given
-            mongoOperations.insert(new Document("_id", SAGA_ID)
-                    .append("status", "ACTIVE")
-                    .append("version", 1L)
-                    .append("timers", List.of())
-                    .append("streamWatermarks", new Document("orders", 4L))
-                    .append("createdAt", NOW.toEpochMilli())
-                    .append("updatedAt", NOW.toEpochMilli())
-                    .append("state", "state"), COLLECTION);
+            insertInstanceWithoutHeldEventFields();
 
             // When
             SagaEnvelope<String> read = store.find(SAGA_ID).orElseThrow();
 
             // Then
-            assertAll(
-                    () -> assertThat(read.heldEventsChecked()).isFalse(),
-                    () -> assertThat(read.drainedHeldKeys()).isEmpty(),
-                    () -> assertThat(read.selfHeldKeys()).isEmpty(),
-                    () -> assertThat(read.startMark()).isNull()
-            );
+            assertThat(read.startMark()).isNull();
         }
 
         @Test
-        void findWithoutState_reads_a_document_written_without_the_fields_as_defaults() {
+        void findWithoutState_reads_a_document_written_without_the_field_as_having_no_start_mark() {
             // Given
-            mongoOperations.insert(new Document("_id", SAGA_ID)
-                    .append("status", "ACTIVE")
-                    .append("version", 1L)
-                    .append("timers", List.of())
-                    .append("streamWatermarks", new Document("orders", 4L))
-                    .append("createdAt", NOW.toEpochMilli())
-                    .append("updatedAt", NOW.toEpochMilli())
-                    .append("state", "state"), COLLECTION);
+            insertInstanceWithoutHeldEventFields();
 
             // When
             SagaEnvelope<String> read = store.findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
-            assertAll(
-                    () -> assertThat(read.heldEventsChecked()).isFalse(),
-                    () -> assertThat(read.drainedHeldKeys()).isEmpty(),
-                    () -> assertThat(read.selfHeldKeys()).isEmpty(),
-                    () -> assertThat(read.startMark()).isNull()
-            );
+            assertThat(read.startMark()).isNull();
+        }
+
+        private void insertInstanceWithoutHeldEventFields() {
+            mongoOperations.insert(new Document("_id", SAGA_ID)
+                    .append("status", "ACTIVE")
+                    .append("version", 1L)
+                    .append("timers", List.of())
+                    .append("streamWatermarks", new Document("orders", 4L))
+                    .append("createdAt", NOW.toEpochMilli())
+                    .append("updatedAt", NOW.toEpochMilli())
+                    .append("state", "state"), COLLECTION);
         }
     }
 
     @Nested
-    @DisplayName("when MongoDB refuses a write for size")
-    class WhenMongoDbRefusesAWriteForSize {
+    @DisplayName("when the held events are listed without those waiting for a lower start")
+    class WhenTheHeldEventsAreListedWithoutThoseWaitingForALowerStart {
 
-        private final RetryStrategy retryThreeTimesWithoutWaiting = RetryStrategy.retry().backoff(Backoff.none()).maxAttempts(3);
-
-        private MongoTemplate observed;
-        private SpringMongoSagaStateStore<String> observingStore;
+        private final SagaEnvelope.StartMark start = new SagaEnvelope.StartMark("orders", 5, null);
 
         @BeforeEach
-        void createObservingStore() {
-            observed = spy(newMongoTemplate());
-            observingStore = new SpringMongoSagaStateStore<>(observed, COLLECTION, String.class, null, retryThreeTimesWithoutWaiting);
-        }
-
-        // An event whose body alone takes it past the document limit.
-        private HeldEvent heldEventLargerThanTheDocumentLimit(String key) {
-            String body = "a".repeat(DOCUMENT_LIMIT + 1024);
-            CloudEvent huge = CloudEventBuilder.v1().withId("huge").withSource(URI.create("urn:test:source")).withType("test.Event")
-                    .withData("text/plain", body.getBytes(StandardCharsets.UTF_8)).build();
-            return heldEvent(key, huge, false, false);
-        }
-
-        // An instance whose document is a few hundred bytes short of the limit, so that adding a long key takes it past.
-        private void saveInstanceCloseToTheDocumentLimit() {
-            String state = "a".repeat(DOCUMENT_LIMIT - 1_500);
-            assertThat(observingStore.compareAndSave(SAGA_ID, envelope(state, 1, SagaStatus.ACTIVE, true, true, Set.of(), Set.of(), null), 0)).isTrue();
-        }
-
-        private void verifyMarkHeldEventsWasAttemptedOnce() {
-            then(observed).should(times(1)).findAndModify(any(Query.class), any(UpdateDefinition.class), any(FindAndModifyOptions.class), eq(Document.class), eq(COLLECTION));
+        void holdOneCopyOfEachKind() {
+            store.hold(SAGA_ID, copy("orders@3", "orders", 3L, false));
+            store.hold(SAGA_ID, copy("orders@4", "orders", 4L, false));
+            store.hold(SAGA_ID, copy("orders@5", "orders", 5L, false));
+            store.hold(SAGA_ID, copy("orders@7", "orders", 7L, false));
+            store.hold(SAGA_ID, copy("orders@2", "orders", 2L, true));
+            store.hold(SAGA_ID, copy("other@3", "other", 3L, false));
+            store.hold(SAGA_ID, copy("keyless", null, null, false));
         }
 
         @Test
-        void hold_throws_RefusedForSizeException_for_an_event_that_alone_exceeds_the_document_limit() {
+        void a_non_start_copy_on_the_starts_stream_below_the_start_is_left_out() {
             // When
-            Throwable thrown = catchThrowable(() -> observingStore.hold(SAGA_ID, heldEventLargerThanTheDocumentLimit("orders@5")));
+            List<String> keys = keysWithoutWaiting();
 
             // Then
-            assertThat(thrown).isInstanceOf(RefusedForSizeException.class);
+            assertThat(keys).doesNotContain("orders@3", "orders@4");
         }
 
         @Test
-        void hold_does_not_retry_an_event_that_exceeds_the_document_limit() {
+        void a_non_start_copy_at_the_starts_version_is_returned() {
             // When
-            catchThrowable(() -> observingStore.hold(SAGA_ID, heldEventLargerThanTheDocumentLimit("orders@5")));
+            List<String> keys = keysWithoutWaiting();
 
             // Then
-            then(observed).should(times(1)).insert(any(Document.class), eq(HELD_COLLECTION));
+            assertThat(keys).contains("orders@5");
         }
 
         @Test
-        void hold_of_an_event_that_exceeds_the_document_limit_holds_nothing() {
+        void a_non_start_copy_above_the_start_is_returned() {
             // When
-            catchThrowable(() -> observingStore.hold(SAGA_ID, heldEventLargerThanTheDocumentLimit("orders@5")));
+            List<String> keys = keysWithoutWaiting();
 
             // Then
-            assertThat(observingStore.heldIndex(SAGA_ID)).isEmpty();
+            assertThat(keys).contains("orders@7");
         }
 
         @Test
-        void hold_throws_RefusedForSizeException_with_the_refusal_as_its_cause() {
+        void a_copy_flagged_as_a_start_event_below_the_start_is_returned() {
             // When
-            Throwable thrown = catchThrowable(() -> observingStore.hold(SAGA_ID, heldEventLargerThanTheDocumentLimit("orders@5")));
+            List<String> keys = keysWithoutWaiting();
 
             // Then
-            assertThat(thrown).hasCauseInstanceOf(RuntimeException.class);
+            assertThat(keys).contains("orders@2");
         }
 
         @Test
-        void markHeldEvents_throws_RefusedForSizeException_when_adding_the_key_takes_the_instance_past_the_document_limit() {
+        void a_copy_of_another_stream_below_the_starts_version_is_returned() {
+            // When
+            List<String> keys = keysWithoutWaiting();
+
+            // Then
+            assertThat(keys).contains("other@3");
+        }
+
+        @Test
+        void a_copy_with_no_stream_key_is_returned() {
+            // When
+            List<String> keys = keysWithoutWaiting();
+
+            // Then
+            assertThat(keys).contains("keyless");
+        }
+
+        @Test
+        void the_events_returned_are_those_of_heldIndex_less_the_waiting_ones() {
+            // When
+            List<HeldEventRef> listed = store.heldIndexWithoutWaiting(SAGA_ID, start);
+
+            // Then
+            assertThat(listed).containsExactlyInAnyOrderElementsOf(store.heldIndex(SAGA_ID).stream()
+                    .filter(ref -> !ref.key().equals("orders@3") && !ref.key().equals("orders@4")).toList());
+        }
+
+        private List<String> keysWithoutWaiting() {
+            return store.heldIndexWithoutWaiting(SAGA_ID, start).stream().map(HeldEventRef::key).toList();
+        }
+
+        private HeldEvent copy(String key, @Nullable String streamId, @Nullable Long version, boolean startEvent) {
+            return new HeldEvent(SAGA_ID, new HeldEventRef(key, streamId, version, null, "test.Event", NOW, startEvent, null), cloudEvent("id-" + key));
+        }
+
+        @Test
+        void the_query_agrees_with_the_rule_of_the_default_method_on_every_combination_of_stream_version_and_flag() {
             // Given
-            saveInstanceCloseToTheDocumentLimit();
+            store.delete(SAGA_ID);
+            for (String streamId : List.of("orders", "other")) {
+                for (long version = 1; version <= 8; version++) {
+                    store.hold(SAGA_ID, copy(streamId + "@" + version, streamId, version, false));
+                    store.hold(SAGA_ID, copy(streamId + "@" + version + "-start", streamId, version, true));
+                }
+            }
+            store.hold(SAGA_ID, copy("keyless", null, null, false));
+            store.hold(SAGA_ID, copy("keyless-start", null, null, true));
+            SagaHeldEvents<String> byTheDefault = new HeldEventsWithTheDefault(store);
 
             // When
-            Throwable thrown = catchThrowable(() -> observingStore.markHeldEvents(SAGA_ID, "k".repeat(5_000)));
-
-            // Then
-            assertThat(thrown).isInstanceOf(RefusedForSizeException.class);
-        }
-
-        @Test
-        void markHeldEvents_does_not_retry_a_key_that_takes_the_instance_past_the_document_limit() {
-            // Given
-            saveInstanceCloseToTheDocumentLimit();
-
-            // When
-            catchThrowable(() -> observingStore.markHeldEvents(SAGA_ID, "k".repeat(5_000)));
-
-            // Then
-            verifyMarkHeldEventsWasAttemptedOnce();
-        }
-
-        @Test
-        void markHeldEvents_that_is_refused_for_size_changes_nothing_on_the_instance() {
-            // Given
-            saveInstanceCloseToTheDocumentLimit();
-
-            // When
-            catchThrowable(() -> observingStore.markHeldEvents(SAGA_ID, "k".repeat(5_000)));
-
-            // Then
-            SagaEnvelope<String> after = store.findWithoutState(SAGA_ID).orElseThrow();
-            assertAll(
-                    () -> assertThat(after.version()).isEqualTo(1),
-                    () -> assertThat(after.heldEventsChecked()).isTrue(),
-                    () -> assertThat(after.selfHeldKeys()).isEmpty()
-            );
-        }
-
-        @Test
-        void markHeldEvents_without_a_key_is_accepted_on_an_instance_at_the_document_limit() {
-            // Given
-            saveInstanceCloseToTheDocumentLimit();
-
-            // When
-            Optional<SagaEnvelope<String>> before = observingStore.markHeldEvents(SAGA_ID, null);
+            List<HeldEventRef> byTheQuery = store.heldIndexWithoutWaiting(SAGA_ID, start);
 
             // Then
             assertAll(
-                    () -> assertThat(before).isPresent(),
-                    () -> assertThat(store.findWithoutState(SAGA_ID).orElseThrow().heldEventsChecked()).isFalse()
-            );
+                    () -> assertThat(byTheQuery).containsExactlyInAnyOrderElementsOf(byTheDefault.heldIndexWithoutWaiting(SAGA_ID, start)),
+                    () -> assertThat(byTheQuery).hasSizeLessThan(store.heldIndex(SAGA_ID).size()));
+        }
+    }
+
+    // Only heldIndex is the store's, so heldIndexWithoutWaiting is the default method of the interface.
+    private record HeldEventsWithTheDefault(SpringMongoSagaStateStore<String> store) implements SagaHeldEvents<String> {
+        @Override
+        public boolean hold(String sagaId, HeldEvent event) {
+            return store.hold(sagaId, event);
         }
 
-        @Test
-        void markHeldEvents_retries_a_failure_that_is_not_a_size_refusal_up_to_the_attempt_limit() {
-            // Given
-            saveActiveStartedInstance(true, Set.of());
-            DataAccessResourceFailureException transientFailure = new DataAccessResourceFailureException("MongoDB is down");
-            willThrow(transientFailure).given(observed).findAndModify(any(Query.class), any(UpdateDefinition.class), any(FindAndModifyOptions.class), eq(Document.class), eq(COLLECTION));
+        @Override
+        public void failing(String sagaId, String key, Instant at) {
+            store.failing(sagaId, key, at);
+        }
 
-            // When
-            Throwable thrown = catchThrowable(() -> observingStore.markHeldEvents(SAGA_ID, "orders@5"));
+        @Override
+        public List<HeldEventRef> heldIndex(String sagaId) {
+            return store.heldIndex(sagaId);
+        }
 
-            // Then
-            assertAll(
-                    () -> assertThat(thrown).isSameAs(transientFailure),
-                    () -> then(observed).should(times(3)).findAndModify(any(Query.class), any(UpdateDefinition.class), any(FindAndModifyOptions.class), eq(Document.class), eq(COLLECTION))
-            );
+        @Override
+        public List<HeldEvent> held(String sagaId, java.util.Collection<String> keys) {
+            return store.held(sagaId, keys);
+        }
+
+        @Override
+        public void release(String sagaId, String key) {
+            store.release(sagaId, key);
         }
     }
 }

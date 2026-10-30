@@ -351,9 +351,10 @@ The saga keeps the highest applied version per stream and event type. For an eve
 | Below it by the reorder window or more, and not pending | Skips it and logs a warning once per stream |
 | Pending, however far below it | Applies it and removes it from pending |
 
-A saga whose one start event type is a class that is neither abstract nor sealed skips an event of another type on the
-stream that started the instance when its version is below the start's, because it committed before the start. It does not
-skip one when the instance lists an earlier event of the start's type below it. The table applies to everything else.
+An event on the stream that started the instance, with a version below the start's, that is not a start event, runs no
+reaction when it arrives. A saga on a feed that can reorder keeps a copy of it, as
+[A saga holds an event that arrives before its instance starts](#a-saga-holds-an-event-that-arrives-before-its-instance-starts)
+describes, and a saga on a feed in commit order skips it. The table applies to everything else.
 
 A reaction that ran for a late event runs once. A redelivery of that event is skipped.
 
@@ -411,8 +412,7 @@ stretch as it did before. A saga that holds events is the exception, and has to
 ### A record pattern over `SagaEnvelope` or `SagaRunnerConfig` stops compiling
 
 A record pattern has to name every component of the canonical constructor. `SagaEnvelope` gains `streamMarks` as its
-14th component and `heldEventsChecked`, `drainedHeldKeys`, `selfHeldKeys` and `startMark` as its 15th to 18th, and
-`SagaRunnerConfig` gains `reorderWindow` as its 6th:
+14th component and `startMark` as its 15th, and `SagaRunnerConfig` gains `reorderWindow` as its 6th:
 
 ```java
 // Before, stops compiling
@@ -422,8 +422,7 @@ case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detectio
 case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detection, var quarantineAfter, var reorderWindow) -> ...
 ```
 
-The same applies to `SagaEnvelope`, which needs `var streamMarks, var heldEventsChecked, var drainedHeldKeys,
-var selfHeldKeys, var startMark` after its `failure` binding, and to an
+The same applies to `SagaEnvelope`, which needs `var streamMarks, var startMark` after its `failure` binding, and to an
 `instanceof` pattern as much as a `switch` case. `SagaEnvelope.StreamMarks` and `SagaEnvelope.TypeMark` are new types
 and only matter to a `SagaStateStore` implemented outside this repository, which has to persist `streamMarks`. A store
 that ignores it keeps working, and every instance then reads as it did before 0.35.0, so late versions are not
@@ -459,9 +458,15 @@ saga until one does. A saga on a model that answers true holds nothing and keeps
   input of its own. A timer of an instance that has not started is still skipped.
 - A held event whose start never arrives stays held until it is removed. The first time a saga holds an event on a node,
   it logs one INFO naming the store.
-- A failed event that the instance cannot list as pending is held too, and applied when it arrives again. That covers an
+- An event on the start's own stream, below the start's version, that is not a start event, is stored and does nothing
+  yet, whether it arrived before the start or after it. It runs when a start event of that stream below it applies. If
+  none does, it never reacts, as on 0.34.0, and completing the instance removes the copy. A replay of a stream's history
+  from before its start stores one copy per event until then.
+- A failed event that the instance cannot list as pending is held too, and the next input applies it. That covers an
   instance at its limit of 10 000 pending versions, a pending write that keeps losing its compare-and-set or fails in the
   store, and an event that another delivery passed by a whole reorder window while it was failing.
+- When a held event fails while it is applied, the delivery that was handling it is kept as a held event of its own and
+  refused, and the held event has its own quarantine clock.
 - Nothing drops a pending version any more. The saga logs a warning once one stream's pending versions of one type
   outnumber the reorder window.
 - `SagaRunner.run` throws an `IllegalStateException` when the subscription can hold and the state store does not
@@ -476,7 +481,7 @@ after the saga's collection with `-held-events`, with an index on `sagaId` and `
 role cannot create collections or indexes has to create it before the saga starts, or grant that.
 
 A `SagaStateStore` implemented outside this repository has to implement `SagaHeldEvents` as well, or `run` refuses it.
-It also has to persist the four new `SagaEnvelope` components, described under
+It also has to persist the new `startMark` component of `SagaEnvelope`, described under
 [Stored saga state](#stored-saga-state-for-held-events) below.
 
 Held events can build up when a saga is deployed onto a live topic, since the later events of instances that began
@@ -491,25 +496,22 @@ db.getCollection("<saga collection>-held-events").aggregate([
 
 ### Stop the saga on every node to upgrade
 
-A 0.34.0 node skips an event that arrives before its start, and its save replaces the instance document without the
-fields 0.35.0 uses to drain held events. So for a saga that holds events, stop its consumers on every node and start them
-on 0.35.0 together. Going back to 0.34.0 works the same way. 0.34.0 ignores the held collection and skips early events
-again, and a later upgrade drains what is still held on the next input.
+A 0.34.0 node skips an event that arrives before its start, and its save replaces the instance document without
+`startMark`, which is what tells a held event below the start to wait. So for a saga that holds events, stop its consumers
+on every node and start them on 0.35.0 together. Going back to 0.34.0 works the same way. 0.34.0 ignores the held
+collection and skips early events again, and after a later upgrade the next input to a started instance applies what is
+still held.
 
 ### Stored saga state for held events
 
-A saga instance document gains four fields, all written only by 0.35.0:
+A saga instance document gains one field, `startMark`, written only by 0.35.0. It holds the stream id, stream version and
+position of the lowest start event applied on that stream. A document without it reads as no start recorded, and then
+nothing waits. An instance stored before 0.35.0 has none.
 
-| Field | What it holds | A document without it |
-| --- | --- | --- |
-| `heldEventsChecked` | true once the instance has applied what was held for it | reads as false, so the next input drains |
-| `drainedHeldKeys` | the held events that were applied and may not be released yet, until a drain ends | reads as empty |
-| `selfHeldKeys` | failed events the instance keeps outstanding until they apply | reads as empty |
-| `startMark` | the start event's stream id, stream version and position | reads as no start recorded |
-
-A held document has an `_id` of the saga id and the event's key, the `sagaId` again for the index, the stream id, stream version, position when the event
-has one, type, `heldAt`, whether it is `selfHeld` or `outstanding`, and the CloudEvent as JSON. `SagaEnvelope` gains
-these as its 15th to 18th components. The 14-argument constructor stays and fills in nothing held.
+A held document has an `_id` of the saga id and the event's key, the `sagaId` again for the index, the stream id, stream
+version, position when the event has one, type, `heldAt`, `startEvent`, whether the event would start the saga when it was
+held, `failingSince` once applying it has failed, and the CloudEvent as JSON. `SagaEnvelope` gains `startMark` as its 15th
+component. The 14-argument constructor stays and records no start.
 
 ## A saga's quarantine budget runs per failing event
 

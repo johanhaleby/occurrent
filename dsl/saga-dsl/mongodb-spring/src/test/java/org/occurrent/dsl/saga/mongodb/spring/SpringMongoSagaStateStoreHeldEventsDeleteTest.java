@@ -84,7 +84,7 @@ class SpringMongoSagaStateStoreHeldEventsDeleteTest {
 
     private static HeldEvent heldEvent(String sagaId, String streamId, long version) {
         CloudEvent cloudEvent = CloudEventBuilder.v1().withId(streamId + "@" + version).withSource(URI.create("urn:test")).withType("com.example.ItemAdded").build();
-        HeldEventRef ref = new HeldEventRef(streamId + "@" + version, streamId, version, null, "com.example.ItemAdded", NOW, false, false);
+        HeldEventRef ref = new HeldEventRef(streamId + "@" + version, streamId, version, null, "com.example.ItemAdded", NOW, false, null);
         return new HeldEvent(sagaId, ref, cloudEvent);
     }
 

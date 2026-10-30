@@ -127,47 +127,17 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     }
 
     @Override
-    public boolean markOutstanding(String sagaId, String key) {
+    public void failing(String sagaId, String key, Instant at) {
         requireNonNull(sagaId, "sagaId cannot be null");
         requireNonNull(key, "key cannot be null");
-        boolean[] marked = {false};
+        requireNonNull(at, "at cannot be null");
         heldEvents.computeIfPresent(sagaId, (id, held) -> {
-            marked[0] = held.computeIfPresent(key, (k, event) -> {
+            held.computeIfPresent(key, (k, event) -> {
                 HeldEventRef ref = event.ref();
-                return new HeldEvent(event.sagaId(), new HeldEventRef(ref.key(), ref.streamId(), ref.version(), ref.position(),
-                        ref.type(), ref.heldAt(), ref.selfHeld(), true), event.cloudEvent());
-            }) != null;
+                return ref.failingSince() != null ? event : new HeldEvent(event.sagaId(), new HeldEventRef(ref.key(), ref.streamId(), ref.version(), ref.position(),
+                        ref.type(), ref.heldAt(), ref.startEvent(), at), event.cloudEvent());
+            });
             return held;
-        });
-        return marked[0];
-    }
-
-    @Override
-    public Optional<SagaEnvelope<S>> markHeldEvents(String sagaId, @Nullable String selfHeldKey) {
-        requireNonNull(sagaId, "sagaId cannot be null");
-        @SuppressWarnings("unchecked") SagaEnvelope<S>[] before = new SagaEnvelope[1];
-        store.computeIfPresent(sagaId, (id, existing) -> {
-            if (!existing.started() || existing.status() != SagaStatus.ACTIVE) {
-                return existing;
-            }
-            before[0] = existing;
-            Set<String> selfHeldKeys = new HashSet<>(existing.selfHeldKeys());
-            if (selfHeldKey != null) {
-                selfHeldKeys.add(selfHeldKey);
-            }
-            return withHeldFields(existing, false, selfHeldKeys);
-        });
-        return Optional.ofNullable(before[0]);
-    }
-
-    @Override
-    public void unmarkSelfHeld(String sagaId, String selfHeldKey) {
-        requireNonNull(sagaId, "sagaId cannot be null");
-        requireNonNull(selfHeldKey, "selfHeldKey cannot be null");
-        store.computeIfPresent(sagaId, (id, existing) -> {
-            Set<String> selfHeldKeys = new HashSet<>(existing.selfHeldKeys());
-            selfHeldKeys.remove(selfHeldKey);
-            return withHeldFields(existing, existing.heldEventsChecked(), selfHeldKeys);
         });
     }
 
@@ -197,13 +167,5 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
             held.remove(key);
             return held.isEmpty() ? null : held;
         });
-    }
-
-    // The same envelope one version on, with the drain flag and the self-held keys given. Both marks raise the version,
-    // so a compare-and-set that read before them loses and reads them.
-    private static <S extends @Nullable Object> SagaEnvelope<S> withHeldFields(SagaEnvelope<S> e, boolean heldEventsChecked, Set<String> selfHeldKeys) {
-        return new SagaEnvelope<>(e.sagaId(), e.state(), e.status(), e.version() + 1, e.timers(), e.streamWatermarks(),
-                e.positionWatermark(), e.createdAt(), e.updatedAt(), e.completedAt(), e.currentStep(), e.started(), e.failure(),
-                e.streamMarks(), heldEventsChecked, e.drainedHeldKeys(), selfHeldKeys, e.startMark());
     }
 }

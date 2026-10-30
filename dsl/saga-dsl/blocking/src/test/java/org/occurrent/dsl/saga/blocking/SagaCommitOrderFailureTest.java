@@ -53,7 +53,7 @@ import static org.slf4j.LoggerFactory.getLogger;
 /**
  * What a failed version costs on a feed that delivers in commit order and on one that does not. A feed in commit order
  * redelivers a failed event in place, so a version the instance cannot list as pending is logged at ERROR and not
- * kept, while a held copy that failed in a drain is kept on any feed, because the copy exists only if some delivery
+ * kept, while a held copy that failed is kept on any feed, because the copy exists only if some delivery
  * held it. The window of two puts version 2 behind it once versions 3 to 8 are applied.
  */
 @DisplayName("SagaCommitOrderFailure")
@@ -119,22 +119,21 @@ class SagaCommitOrderFailureTest {
     }
 
     @Nested
-    @DisplayName("when a held copy fails in a drain on a model in commit order and its listing as pending fails")
-    class WhenAHeldCopyFailsInADrainOnAModelInCommitOrderAndItsListingAsPendingFails {
+    @DisplayName("when a held copy fails on a model in commit order")
+    class WhenAHeldCopyFailsOnAModelInCommitOrder {
 
         /**
          * Version 2 arrives before the start while the model holds, so it is held. The saga then runs on a model that
-         * declares every event in commit order, and the start drives a drain whose held copy fails. The write that would
-         * list it as pending always loses.
+         * declares every event in commit order, and the start applies the held copy, which fails. A write without the
+         * state always loses, which no failure of a held copy makes.
          */
-        private CopyFailed afterTheCopyFailedInTheDrainTheStartDrove() {
+        private CopyFailed afterTheCopyFailedWhenTheStartAppliedIt() {
             CommitOrderStubSubscriptionModel holding = CommitOrderStubSubscriptionModel.notInCommitOrderForNow();
             run(holding);
             holding.deliver(ID, itemAt(2, "two"));
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
             dispatcher.failReservationOf("two");
-            store.loseEveryWriteWithoutState(true);
             Throwable thrown = catchThrowable(() -> model.deliver(ID, placedAt(1)));
             return new CopyFailed(model, thrown);
         }
@@ -145,29 +144,29 @@ class SagaCommitOrderFailureTest {
         @Test
         void the_failure_of_the_held_copy_is_the_cause_of_the_failure_that_reaches_the_feed() {
             // When
-            CopyFailed failed = afterTheCopyFailedInTheDrainTheStartDrove();
+            CopyFailed failed = afterTheCopyFailedWhenTheStartAppliedIt();
 
             // Then
             assertThat(failed.thrown()).hasMessageContaining(KEY_OF_TWO).hasCause(dispatcher.failure);
         }
 
         @Test
-        void the_copy_is_kept_and_named_by_the_instance_as_self_held() {
+        void the_copy_stays_held_and_the_instance_names_no_failure_for_it() {
             // When
-            afterTheCopyFailedInTheDrainTheStartDrove();
+            afterTheCopyFailedWhenTheStartAppliedIt();
 
             // Then
             assertAll(
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
                     () -> assertThat(onlyHeldRef().key()).isEqualTo(KEY_OF_TWO),
-                    () -> assertThat(stored().heldEventsChecked()).as("a drain is due").isFalse()
+                    () -> assertThat(stored().failure()).isNull(),
+                    () -> assertThat(pending()).isEmpty()
             );
         }
 
         @Test
         void no_error_is_logged() {
             // When
-            afterTheCopyFailedInTheDrainTheStartDrove();
+            afterTheCopyFailedWhenTheStartAppliedIt();
 
             // Then
             assertThat(errors()).isEmpty();
@@ -176,9 +175,8 @@ class SagaCommitOrderFailureTest {
         @Test
         void the_retried_driving_delivery_applies_the_copy_once() {
             // Given
-            CommitOrderStubSubscriptionModel model = afterTheCopyFailedInTheDrainTheStartDrove().model();
+            CommitOrderStubSubscriptionModel model = afterTheCopyFailedWhenTheStartAppliedIt().model();
             dispatcher.stopFailingReservationOf("two");
-            store.loseEveryWriteWithoutState(false);
 
             // When
             Throwable retried = catchThrowable(() -> model.deliver(ID, placedAt(1)));
@@ -188,7 +186,6 @@ class SagaCommitOrderFailureTest {
                     () -> assertThat(retried).isNull(),
                     () -> assertThat(dispatcher.issued()).containsExactly(new OpenLedger(ORDER), reserve("two")),
                     () -> assertThat(stored().state().items()).containsExactly("two"),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
                     () -> assertThat(heldIndex()).isEmpty(),
                     () -> assertThat(errors()).isEmpty()
             );
@@ -214,7 +211,6 @@ class SagaCommitOrderFailureTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(dispatcher.failure),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
                     () -> assertThat(heldIndex()).isEmpty(),
                     () -> assertThat(pending()).isEmpty()
             );
@@ -237,7 +233,7 @@ class SagaCommitOrderFailureTest {
         }
 
         @Test
-        void a_model_that_holds_self_holds_the_same_event_and_logs_no_error() {
+        void a_model_that_holds_keeps_a_plain_copy_of_the_same_event_and_logs_no_error() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.notInCommitOrderForNow();
             run(model);
@@ -251,8 +247,10 @@ class SagaCommitOrderFailureTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(dispatcher.failure),
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
-                    () -> assertThat(onlyHeldRef().selfHeld()).isTrue(),
+                    () -> assertThat(onlyHeldRef()).satisfies(ref -> assertAll(
+                            () -> assertThat(ref.key()).isEqualTo(KEY_OF_TWO),
+                            () -> assertThat(ref.startEvent()).isFalse(),
+                            () -> assertThat(ref.failingSince()).isNull())),
                     () -> assertThat(errors()).isEmpty()
             );
         }
@@ -271,7 +269,6 @@ class SagaCommitOrderFailureTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isNotNull().hasMessageContaining(KEY_OF_TWO),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
                     () -> assertThat(heldIndex()).isEmpty(),
                     () -> assertThat(pending()).isEmpty()
             );
@@ -293,7 +290,7 @@ class SagaCommitOrderFailureTest {
         }
 
         @Test
-        void a_model_that_holds_self_holds_the_event_whose_first_save_lost_and_logs_no_error() {
+        void a_model_that_holds_keeps_a_plain_copy_of_the_event_whose_first_save_lost_and_logs_no_error() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.notInCommitOrderForNow();
             run(model);
@@ -306,29 +303,29 @@ class SagaCommitOrderFailureTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isNotNull().hasMessageContaining(KEY_OF_TWO),
-                    () -> assertThat(stored().selfHeldKeys()).containsExactly(KEY_OF_TWO),
-                    () -> assertThat(onlyHeldRef().selfHeld()).isTrue(),
+                    () -> assertThat(onlyHeldRef()).satisfies(ref -> assertAll(
+                            () -> assertThat(ref.key()).isEqualTo(KEY_OF_TWO),
+                            () -> assertThat(ref.startEvent()).isFalse(),
+                            () -> assertThat(ref.failingSince()).isNull())),
                     () -> assertThat(errors()).isEmpty()
             );
         }
     }
 
     @Nested
-    @DisplayName("when the saga runs on a model in commit order after the size fallback kept an event outstanding")
-    class WhenTheSagaRunsOnAModelInCommitOrderAfterTheSizeFallbackKeptAnEventOutstanding {
+    @DisplayName("when the saga runs on a model in commit order after a plain copy was kept for an event that failed")
+    class WhenTheSagaRunsOnAModelInCommitOrderAfterAPlainCopyWasKeptForAnEventThatFailed {
 
         /**
-         * Version 2 fails while the model holds and versions 3 to 8 overtake it. The instance is at the store's size
-         * limit, so the event is kept as an outstanding held copy and not as a key on the instance. The saga then runs on
-         * a model that declares every event in commit order, and the returned model is that one.
+         * Version 2 fails while the model holds and versions 3 to 8 overtake it, so a plain copy of it is held. The saga
+         * then runs on a model that declares every event in commit order, and the returned model is that one.
          */
-        private CommitOrderStubSubscriptionModel afterTheSizeFallbackKeptVersionTwoOutstanding() {
+        private CommitOrderStubSubscriptionModel afterAPlainCopyOfVersionTwoWasKept() {
             CommitOrderStubSubscriptionModel holding = CommitOrderStubSubscriptionModel.notInCommitOrderForNow();
             run(holding);
             holding.deliver(ID, placedAt(1));
             dispatcher.failReservationOf("two");
             dispatcher.beforeReservationOf("two", () -> deliverItems(holding, 3, 8));
-            store.refuseMarksCarryingAKey(true);
             Throwable thrown = catchThrowable(() -> holding.deliver(ID, itemAt(2, "two")));
             assertThat(thrown).as("the delivery that failed").isSameAs(dispatcher.failure);
             dispatcher.stopFailingReservationOf("two");
@@ -338,24 +335,24 @@ class SagaCommitOrderFailureTest {
         }
 
         @Test
-        void the_event_is_kept_as_an_outstanding_held_copy_before_the_saga_runs_on_the_model_in_commit_order() {
+        void the_event_is_kept_as_a_plain_held_copy_before_the_saga_runs_on_the_model_in_commit_order() {
             // When
-            afterTheSizeFallbackKeptVersionTwoOutstanding();
+            afterAPlainCopyOfVersionTwoWasKept();
 
             // Then
             HeldEventRef ref = onlyHeldRef();
             assertAll(
                     () -> assertThat(ref.key()).isEqualTo(KEY_OF_TWO),
-                    () -> assertThat(ref.outstanding()).isTrue(),
-                    () -> assertThat(ref.selfHeld()).isFalse(),
+                    () -> assertThat(ref.startEvent()).isFalse(),
+                    () -> assertThat(ref.failingSince()).isNull(),
                     () -> assertThat(dispatcher.issued()).doesNotContain(reserve("two"))
             );
         }
 
         @Test
-        void the_redelivery_is_skipped() {
+        void the_redelivery_is_acknowledged() {
             // Given
-            CommitOrderStubSubscriptionModel model = afterTheSizeFallbackKeptVersionTwoOutstanding();
+            CommitOrderStubSubscriptionModel model = afterAPlainCopyOfVersionTwoWasKept();
 
             // When
             Throwable thrown = catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
@@ -365,9 +362,9 @@ class SagaCommitOrderFailureTest {
         }
 
         @Test
-        void the_drain_applies_the_outstanding_copy_once() {
+        void the_redelivery_applies_the_copy_once() {
             // Given
-            CommitOrderStubSubscriptionModel model = afterTheSizeFallbackKeptVersionTwoOutstanding();
+            CommitOrderStubSubscriptionModel model = afterAPlainCopyOfVersionTwoWasKept();
 
             // When
             model.deliver(ID, itemAt(2, "two"));
@@ -380,25 +377,21 @@ class SagaCommitOrderFailureTest {
         }
 
         @Test
-        void the_copy_is_released_and_no_drain_is_left_due() {
+        void the_copy_is_released() {
             // Given
-            CommitOrderStubSubscriptionModel model = afterTheSizeFallbackKeptVersionTwoOutstanding();
+            CommitOrderStubSubscriptionModel model = afterAPlainCopyOfVersionTwoWasKept();
 
             // When
             model.deliver(ID, itemAt(2, "two"));
 
             // Then
-            assertAll(
-                    () -> assertThat(heldIndex()).isEmpty(),
-                    () -> assertThat(stored().selfHeldKeys()).isEmpty(),
-                    () -> assertThat(stored().heldEventsChecked()).isTrue()
-            );
+            assertThat(heldIndex()).isEmpty();
         }
 
         @Test
         void a_further_redelivery_does_not_apply_it_again() {
             // Given
-            CommitOrderStubSubscriptionModel model = afterTheSizeFallbackKeptVersionTwoOutstanding();
+            CommitOrderStubSubscriptionModel model = afterAPlainCopyOfVersionTwoWasKept();
             model.deliver(ID, itemAt(2, "two"));
 
             // When
