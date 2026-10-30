@@ -254,8 +254,9 @@ interface SubscriptionResumePoints {
 }
 ```
 
-Under competing consumers, read the stored string each time the lease is acquired, with `StartAt.dynamic(ctx ->
-StartAt.checkpoint(new StringBasedCheckpoint(readFromMyStore())))`. A marked string given to a bare MongoDB subscription
+Under competing consumers, read the stored string when a node first gets the lease, with `StartAt.dynamic(ctx ->
+StartAt.checkpoint(new StringBasedCheckpoint(readFromMyStore())))`. A node that gets the lease back resumes from where
+it last ran, which can deliver events again and skips none. A marked string given to a bare MongoDB subscription
 model opens at the model's default with no error. A live checkpoint resumes only while the oplog still has it.
 
 ## Alternatives considered

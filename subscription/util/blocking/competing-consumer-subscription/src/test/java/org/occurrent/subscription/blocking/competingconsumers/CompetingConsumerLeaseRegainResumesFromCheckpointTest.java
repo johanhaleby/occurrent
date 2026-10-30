@@ -29,6 +29,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
@@ -38,6 +39,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -75,6 +77,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -279,6 +282,57 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
         assertThat(eventsA).extracting(CloudEvent::getId).doesNotContain("e2", "e3");
         await("catch-up is never re-triggered by the regain").during(2, SECONDS).atMost(5, SECONDS)
                 .untilAsserted(() -> assertThat(catchupA.isCatchingUp(subscriptionId)).isFalse());
+    }
+
+    @Test
+    void a_dynamic_start_reading_a_checkpoint_the_application_holds_is_read_at_a_nodes_first_lease_acquisition_and_a_regain_redelivers_rather_than_loses() {
+        // Given
+        String subscriptionId = UUID.randomUUID().toString();
+        AtomicReference<String> heldCheckpoint = new AtomicReference<>();
+        CopyOnWriteArrayList<String> eventsA = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> eventsB = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<Evaluation> evaluationsA = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<Evaluation> evaluationsB = new CopyOnWriteArrayList<>();
+        nodeA = new CompetingConsumerSubscriptionModel(new CatchupSubscriptionModel(springModel(), eventStore), strategy);
+        nodeB = new CompetingConsumerSubscriptionModel(new CatchupSubscriptionModel(springModel(), eventStore), strategy);
+
+        nodeA.subscribe("A", subscriptionId, null, fromTheHeldCheckpoint(heldCheckpoint, evaluationsA), holdingTheCheckpoint(heldCheckpoint, eventsA)).waitUntilStarted();
+        eventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "e1")));
+        await("A delivers e1").atMost(5, SECONDS).untilAsserted(() -> assertThat(eventsA).containsExactly("e1"));
+        String checkpointAfterE1 = heldCheckpoint.get();
+
+        nodeB.subscribe("B", subscriptionId, null, fromTheHeldCheckpoint(heldCheckpoint, evaluationsB), holdingTheCheckpoint(heldCheckpoint, eventsB));
+        List<Evaluation> evaluationsOfBAtRegistration = List.copyOf(evaluationsB);
+
+        eventStore.write(streamId, serialize(new NameWasChanged("e2", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "e2")));
+        await("A delivers e2").atMost(5, SECONDS).untilAsserted(() -> assertThat(eventsA).containsExactly("e1", "e2"));
+        String checkpointAfterE2 = heldCheckpoint.get();
+        List<Evaluation> evaluationsOfBBeforeItsFirstAcquisition = List.copyOf(evaluationsB);
+
+        // When
+        strategy.transferLease(subscriptionId, "A", "B");
+        eventStore.write(streamId, serialize(new NameWasChanged("e3", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "e3")));
+        await("B delivers e3").atMost(5, SECONDS).untilAsserted(() -> assertThat(eventsB).contains("e3"));
+        String checkpointAfterE3 = heldCheckpoint.get();
+        int evaluationsOfABeforeTheRegain = evaluationsA.size();
+
+        strategy.transferLease(subscriptionId, "B", "A");
+        eventStore.write(streamId, serialize(new NameWasChanged("e4", LocalDateTime.of(2026, 1, 1, 0, 0, 3), "name", "e4")));
+        await("A delivers e4").atMost(5, SECONDS).untilAsserted(() -> assertThat(eventsA).contains("e4"));
+
+        // Then
+        assertThat(evaluationsA.subList(0, evaluationsOfABeforeTheRegain)).as("A's evaluations when it subscribes and wins the lease").containsExactly(
+                new Evaluation(CompetingConsumerSubscriptionModel.class, null), new Evaluation(CatchupSubscriptionModel.class, null), new Evaluation(CatchupSubscriptionModel.class, null));
+        assertThat(evaluationsOfBAtRegistration).as("B's evaluations when it registers while A holds the lease")
+                .containsExactly(new Evaluation(CompetingConsumerSubscriptionModel.class, checkpointAfterE1));
+        assertThat(evaluationsOfBBeforeItsFirstAcquisition).as("B's evaluations until its first acquisition").isEqualTo(evaluationsOfBAtRegistration);
+        assertThat(evaluationsB.subList(1, evaluationsB.size())).as("B's evaluations at its first acquisition")
+                .containsExactly(new Evaluation(CatchupSubscriptionModel.class, checkpointAfterE2));
+        assertThat(eventsB).as("what B delivers").containsExactly("e3");
+        // Read at the regain only to decide whether to replay, so A resumes from its own position and redelivers e3
+        assertThat(evaluationsA.subList(evaluationsOfABeforeTheRegain, evaluationsA.size())).as("A's evaluations when it regains the lease")
+                .containsExactly(new Evaluation(CatchupSubscriptionModel.class, checkpointAfterE3));
+        assertThat(eventsA).as("what A delivers").containsExactly("e1", "e2", "e3", "e4");
     }
 
     @Test
@@ -850,6 +904,24 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
         EventStoreConfig config = new EventStoreConfig.Builder().eventStoreCollectionName(eventCollection).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(STREAM).withStreamPosition().build();
         return new SpringMongoEventStore(mongoTemplate, config);
+    }
+
+    private record Evaluation(Class<?> subscriptionModelType, String checkpointRead) {
+    }
+
+    private static StartAt fromTheHeldCheckpoint(AtomicReference<String> heldCheckpoint, List<Evaluation> evaluations) {
+        return StartAt.dynamic(context -> {
+            String held = heldCheckpoint.get();
+            evaluations.add(new Evaluation(context.subscriptionModelType(), held));
+            return held == null ? StartAt.now() : StartAt.checkpoint(new StringBasedCheckpoint(held));
+        });
+    }
+
+    private static Consumer<CloudEvent> holdingTheCheckpoint(AtomicReference<String> heldCheckpoint, List<String> delivered) {
+        return event -> {
+            heldCheckpoint.set(EventMetadata.from(event).getCheckpoint().orElseThrow());
+            delivered.add(event.getId());
+        };
     }
 
     private List<CloudEvent> serialize(DomainEvent e) {

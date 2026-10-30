@@ -24,6 +24,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Metadata associated with an event, such as its stream id and version and any other CloudEvent extension carried on
@@ -31,6 +32,12 @@ import java.util.Objects;
  * subscription, saga, projection, view, and DCB DSLs so they all read the same thing. Lives next to
  * {@link OccurrentCloudEventExtension}, whose keys it reads, rather than in any single DSL, since it is metadata about
  * a stored event and not specific to how the event is consumed.
+ * <p>
+ * It also holds the checkpoint of an event that has one ({@link CheckpointCarrier}), kept apart from the
+ * extensions. {@link #get(String)}, {@link #getData()}, {@link #equals(Object)} and {@link #hashCode()} leave it out, so
+ * the metadata of an event a replay delivered equals the metadata of the same event delivered live. Metadata built with
+ * {@link #EventMetadata(Map)} has no checkpoint. A test that needs one builds it with
+ * {@code EventMetadata.from(new CheckpointAwareCloudEvent(event, checkpoint))}.
  */
 @NullMarked
 public final class EventMetadata {
@@ -38,11 +45,17 @@ public final class EventMetadata {
     private static final EventMetadata EMPTY = new EventMetadata(Map.of());
 
     private final Map<String, @Nullable Object> data;
+    private final @Nullable String checkpoint;
 
     public EventMetadata(Map<String, @Nullable Object> data) {
+        this(data, null);
+    }
+
+    private EventMetadata(Map<String, @Nullable Object> data, @Nullable String checkpoint) {
         Objects.requireNonNull(data, "data cannot be null");
         // A plain HashMap copy rather than Map.copyOf, since an extension value may legitimately be null.
         this.data = Collections.unmodifiableMap(new HashMap<>(data));
+        this.checkpoint = checkpoint;
     }
 
     /**
@@ -120,6 +133,17 @@ public final class EventMetadata {
         return data;
     }
 
+    /**
+     * The checkpoint the subscription delivered the event with, or empty when the event has none. Store it with the
+     * application's state, in the same transaction, and restart with
+     * {@code StartAt.checkpoint(new StringBasedCheckpoint(stored))} or {@code DcbStartAt.checkpoint(stored)}.
+     * {@link CheckpointCarrier#checkpoint()} says which subscription models understand it, and what a restart from it
+     * does once the oplog no longer reaches back to it.
+     */
+    public Optional<String> getCheckpoint() {
+        return Optional.ofNullable(checkpoint);
+    }
+
     @Override
     public boolean equals(@Nullable Object o) {
         return o instanceof EventMetadata that && data.equals(that.data);
@@ -147,6 +171,7 @@ public final class EventMetadata {
     /**
      * Build the metadata from a {@link CloudEvent}, capturing its extensions (stream id and version, the DCB position and
      * tags, and any others). Used by both the blocking and the reactive subscription DSLs so the two read the same thing.
+     * Reads the checkpoint too when the event is a {@link CheckpointCarrier}.
      */
     public static EventMetadata from(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
@@ -157,6 +182,6 @@ public final class EventMetadata {
                 data.put(name, value);
             }
         }
-        return new EventMetadata(data);
+        return new EventMetadata(data, cloudEvent instanceof CheckpointCarrier carrier ? carrier.checkpoint() : null);
     }
 }

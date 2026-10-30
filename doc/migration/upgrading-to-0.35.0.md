@@ -17,6 +17,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [The reactive `executeAndReturnState` emits a non-null state](#the-reactive-executeandreturnstate-emits-a-non-null-state).
   `ReactiveSnapshotDeciderApplicationService` and `ReactiveSnapshotDcbDeciderApplicationService` return
   `Mono<@NonNull S>`. **Breaks the build** for Kotlin code that writes the result type as `Mono<State?>`.
+- [A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from).
+  `DcbStartAt` gains the case `DcbStartAt.AtCheckpoint`. **Breaks the build** if you `switch` exhaustively over
+  `DcbStartAt` without a `default`.
 
 ### Sagas
 
@@ -54,6 +57,13 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [A catch-up keeps its live start in the checkpoints it stores](#a-catch-up-keeps-its-live-start-in-the-checkpoints-it-stores).
   0.34 refuses the new checkpoints, so a rolling upgrade or a rollback needs care. A catch-up that loses its live
   start on every replay now throws `CatchupCannotResumeException`. Compiles unchanged.
+- [A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from).
+  A blocking catch-up delivers each replayed event as a `CheckpointAwareCloudEvent`, which equals only another one
+  with the same checkpoint. Store the checkpoint with your state to resume from it. **Breaks the build** if you
+  `switch` exhaustively over `DcbStartAt` without a `default`.
+- [A catch-up over both a stream and a DCB model refuses a position start without a filter](#a-catch-up-over-both-a-stream-and-a-dcb-model-refuses-a-position-start-without-a-filter).
+  A subscription with no filter that starts at a position checkpoint throws `IllegalArgumentException`. Compiles
+  unchanged.
 
 ### Spring Boot starter
 
@@ -64,8 +74,14 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [A catch-up keeps its live start in the checkpoints it stores](#a-catch-up-keeps-its-live-start-in-the-checkpoints-it-stores).
   A subscription with `resumeBehavior = SAME_AS_START_AT` goes live from the live start its catch-up read. Compiles
   unchanged.
+- [A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from). A
+  `SubscriptionResumePoints` bean says where each annotated subscription resumes. Compiles unchanged.
 
 ### Brokers
+
+- [A catch-up over both a stream and a DCB model refuses a position start without a filter](#a-catch-up-over-both-a-stream-and-a-dcb-model-refuses-a-position-start-without-a-filter).
+  `CloudEventForwarder.forward(subscriptionId, startAt)` and `DomainEventForwarder.forward(subscriptionId, startAt)` are
+  refused at a position checkpoint over such a model. Compiles unchanged.
 
 #### RabbitMQ
 
@@ -624,3 +640,135 @@ with the exception, which `waitUntilStarted()` throws.
 
 A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
 a time replay's checkpoint in the new form.
+
+## A replayed event holds the checkpoint to resume from
+
+`StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` now deliver each event they replay as a
+`CheckpointAwareCloudEvent`, holding the checkpoint the catch-up stores after it. The live subscription and the reactor
+catch-ups already delivered their events that way. An application that keeps its own state can store the checkpoint
+with that state, in the same transaction, and resume from it. The state and the point the subscription resumes from
+then never disagree. See [#1297](https://github.com/johanhaleby/occurrent/issues/1297).
+
+### Who is affected
+
+An action or a converter that compares a replayed event with the `CloudEvent` that was written, or checks its class. A
+`CheckpointAwareCloudEvent` equals only another one with the same checkpoint, so such a comparison now fails. Compare
+`getOriginalCloudEvent()` instead. `EventMetadata` equality doesn't include the checkpoint, so the metadata of an event from
+the replay and of the same event from live compare equal.
+
+### Resuming from a checkpoint you store
+
+Read the checkpoint where your handler gets the event:
+
+| Handler | Read the checkpoint with |
+| --- | --- |
+| The DCB DSL, blocking and reactor | `DcbEventMetadata.checkpoint()` |
+| The Kotlin stream DSL, a `@Subscription` method with an `EventMetadata` parameter, a `@Projection` view | `EventMetadata.getCheckpoint()` |
+| An action that takes the `CloudEvent` | `EventMetadata.from(cloudEvent).getCheckpoint()` |
+
+Each returns an empty `Optional` for an event delivered with no checkpoint. Store the string with your state, in the
+same transaction, and start the subscription from it again with
+`StartAt.checkpoint(new StringBasedCheckpoint(checkpoint))`, or `DcbStartAt.checkpoint(checkpoint)` for a DCB
+subscription.
+
+From the checkpoint of a live event, or of an event that a catch-up replays by position, the subscription resumes
+after that event. A catch-up that replays by time resumes at the event's time instead, so it delivers the events with
+that time again, that event included. An event without a time holds the checkpoint of the event before it, and resumes
+where that one does. When its `catchupPhaseSortBy` doesn't start with the time ascending, an event from its first read
+resumes the whole replay from where it started.
+
+To rewind a read model to a point you know is good, keep the checkpoint of the event at that point, and start the
+subscription from it.
+
+The string means something only to a catch-up subscription. A MongoDB subscription model with no catch-up wrapping it
+opens at its default with no error when you give it the checkpoint of a replayed event.
+
+The checkpoint of a live event holds a change stream resume token, so a restart from it needs the change stream
+history to still reach back to it. On MongoDB that is the oplog. Once it no longer does, the catch-up does not take the
+subscription over, and the subscription model it wraps decides. A blocking MongoDB subscription model then stops the
+subscription and logs an error, or restarts it from the present when it is set to restart after lost history, which
+skips the events in between.
+
+### Under a competing consumer
+
+`CompetingConsumerSubscriptionModel` hands your start to the model it wraps when the node first gets the lease, not
+when you subscribe. A `StartAt.checkpoint(..)` you build when you subscribe is as old as the node's start, so a node
+that takes over an hour later delivers that hour's events again. Read the checkpoint when the node takes over instead:
+
+```java
+competingConsumerSubscriptionModel.subscribe("my-read-model", filter, StartAt.dynamic(context -> {
+    String checkpoint = myStore.checkpoint();
+    return checkpoint == null ? StartAt.subscriptionModelDefault() : StartAt.checkpoint(new StringBasedCheckpoint(checkpoint));
+}), action);
+```
+
+Return a start of your own, such as `StartAt.subscriptionModelDefault()`, while your store holds no checkpoint yet,
+since `StringBasedCheckpoint` refuses `null`.
+
+When a node gets the lease back after losing it, the model it wraps resumes from where that node last ran. Events can
+be delivered again. None are skipped, unless the change stream history no longer reaches back to that position and the
+model is set to restart after lost history, which restarts the subscription from the present.
+
+### Spring Boot
+
+Declare a `SubscriptionResumePoints` bean, and Spring Boot asks it where each `@Subscription`, `@StreamSubscription`,
+`@DcbSubscription`, `@Projection`, `@Saga` and `@Snapshot` subscription resumes, whatever start position the
+annotation gives, `NOW` and `DEFAULT` included:
+
+```java
+@Bean
+SubscriptionResumePoints subscriptionResumePoints(MyReadModelRepository repository) {
+    return subscriptionId -> repository.findCheckpoint(subscriptionId).orElse(null);
+}
+```
+
+A non-null answer is the checkpoint the subscription resumes from, ahead of the one Spring Boot's `CheckpointStorage`
+holds. When that stored checkpoint is newer than the answer, the events between the two are delivered again. `null`
+starts the subscription from the annotation's start, as it starts without the bean. Spring Boot reads the bean each time
+a subscription model reads the start, also when a node of a competing consumer takes over, and can ask more than once
+for one start, so return the same answer each time.
+
+With `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING` or an explicit position, the answer only
+moves where the replay starts. The subscription keeps no checkpoint in `CheckpointStorage` once it is live, and the
+competing consumer model does not compete for it. A catch-up that stores checkpoints during its replay still does, and
+deletes the last one when the replay goes live.
+
+Spring Boot decides from the annotation, not from the answer, whether application startup waits for the subscription.
+When `occurrent.subscription.mode` is `manual`, nothing waits. Otherwise, under the default `startupMode`, a subscription whose annotation starts at `NOW` or `DEFAULT` waits, also when the
+answer makes it replay. One whose annotation replays, from the beginning, a position or a time, starts in the
+background, also when the answer makes it go live. Set `startupMode` on the annotation to choose.
+
+### An exhaustive `switch` over `DcbStartAt`
+
+`DcbStartAt.checkpoint(..)` returns the new `DcbStartAt.AtCheckpoint`. `DcbStartAt` is sealed, so a `switch` over it
+that lists every case and has no `default` no longer compiles. Add a case for `DcbStartAt.AtCheckpoint`.
+
+### Why there is no recipe
+
+What the new case should do depends on what the `switch` does with the others, so there is nothing for
+`UpgradeToOccurrent_0_35` to write into it.
+
+## A catch-up over both a stream and a DCB model refuses a position start without a filter
+
+The blocking `CatchupSubscriptionModel` and `ReactorCatchupSubscriptionModel` hold a stream and a DCB catch-up when you
+use both, as the Spring Boot starters do. They route a subscription with no filter by its start. A time or beginning
+start goes to the stream catch-up, and a position checkpoint went to the DCB one, so a stream subscription restored from
+its own checkpoint replayed only DCB events and skipped its stream events. Both models now throw an
+`IllegalArgumentException` before they subscribe anything.
+
+### Who is affected
+
+Code that subscribes with no filter, or with a `null` one, at a position checkpoint over a model that holds both
+catch-ups. That includes `subscribe(subscriptionId, startAt, action)`, which passes no filter, and the broker
+`CloudEventForwarder.forward(subscriptionId, startAt)` and `DomainEventForwarder.forward(subscriptionId, startAt)`. The
+DSLs and the Spring Boot annotations pass a filter, and a time start, a beginning start and a model with only one
+catch-up are not affected.
+
+Under a `CompetingConsumerSubscriptionModel`, `subscribe` throws when the node gets the lease straight away or the
+competing consumer model is stopped. A node that gets the lease later logs a warning, gives the lease back, and fails the
+same way every time it gets the lease.
+
+### What to do
+
+Pass a `StreamSubscriptionFilter` for stream events, a `DcbSubscriptionFilter` for DCB events, or an
+`AgnosticSubscriptionFilter` for both. For a broker forwarder, use the `forward` overload that takes a filter.

@@ -170,12 +170,13 @@ class SnapshotAnnotationRegistrar {
         if (replaysHistory && !stream && !startPositionSupport.positionReplaySupported()) {
             throw new IllegalArgumentException("@Snapshot '%s' asks to replay history, but this store does not write a global position, so the reactive position-based catch-up cannot replay. Use startAt = NOW or DEFAULT.".formatted(id));
         }
-        StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+        StartAt annotatedStart = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+        StartAt startAt = startPositionSupport.withResumePoint(id, annotatedStart);
         boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         startPositionSupport.applyStartupWorkarounds();
         if (stream) {
             StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
-            subscribeCall.subscribe(() -> "@Snapshot '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
+            subscribeCall.subscribe(() -> "@Snapshot '%s'".formatted(id), LateSubscriber.startIsFixed(annotatedStart), () -> {
                 var result = streamSubscriptions.subscribe(id, filter(eventFilter), startAt, consumer);
                 if (waitUntilStarted) {
                     result.waitUntilStarted().block();
@@ -183,7 +184,7 @@ class SnapshotAnnotationRegistrar {
             });
         } else {
             Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
-            subscribeCall.subscribe(() -> "@Snapshot '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
+            subscribeCall.subscribe(() -> "@Snapshot '%s'".formatted(id), LateSubscriber.startIsFixed(annotatedStart), () -> {
                 var result = subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, consumer);
                 if (waitUntilStarted) {
                     result.waitUntilStarted().block();
@@ -210,7 +211,8 @@ class SnapshotAnnotationRegistrar {
         int schemaVersion = dcbSnapshotView.schemaVersion();
         org.occurrent.eventstore.api.dcb.reactor.DcbEventStore dcbEventStore = applicationContext.getBean(org.occurrent.eventstore.api.dcb.reactor.DcbEventStore.class);
 
-        DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+        DcbStartAt annotatedStart = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+        DcbStartAt startAt = startPositionSupport.withResumePoint(id, annotatedStart);
         startPositionSupport.applyStartupWorkarounds();
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
@@ -236,7 +238,7 @@ class SnapshotAnnotationRegistrar {
                 });
             });
         };
-        subscribeCall.subscribe(() -> "@Snapshot '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
+        subscribeCall.subscribe(() -> "@Snapshot '%s'".formatted(id), LateSubscriber.startIsFixed(annotatedStart), () -> {
             var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer);
             if (waitUntilStarted) {
                 subscription.waitUntilStarted().block();

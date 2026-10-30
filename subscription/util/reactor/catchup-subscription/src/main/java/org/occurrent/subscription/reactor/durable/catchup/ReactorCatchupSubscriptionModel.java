@@ -52,6 +52,8 @@ import static java.util.Objects.requireNonNull;
  * DCB, or both. Mirrors the routing of the blocking {@code CatchupSubscriptionModel}. A stream-only store that wants to
  * avoid the DCB dependency can use {@link ReactorStreamCatchupSubscriptionModel} directly as the DCB-free variant.
  * <p>
+ * A dual-mode model refuses a subscription that has no filter and starts at a position checkpoint, with an {@link IllegalArgumentException} thrown from {@code subscribe} rather than signalled through a {@code Flux}, since the position could belong to stream events or to DCB events. Pass a {@link StreamSubscriptionFilter}, a {@link DcbSubscriptionFilter}, or an {@link AgnosticSubscriptionFilter} for both. A start at a time, at the beginning of time, or at the marked time form of a checkpoint needs no filter.
+ * <p>
  * It also implements the reactor {@link SubscriptionModel} (issues #547 and #550): a named subscription is routed the
  * same way and handled by the routed inner model, which replays and then hands the live half to the wrapped model's
  * own named {@code subscribe(..)}, so retry and synchronous filter refusal are inherited. A durable model wrapping
@@ -122,7 +124,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
-        return route(filter, startAt).subscribe(filter, startAt);
+        return route(null, filter, startAt).subscribe(filter, startAt);
     }
 
     /**
@@ -144,22 +146,22 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     // Route to the DCB, stream, or capability-agnostic catch-up model. An AgnosticSubscriptionFilter routes to the
     // unscoped agnostic model so both stream and DCB events are delivered; if there is no agnostic model (a DCB-only
     // store) it falls back to the DCB model, whose store has only DCB events anyway.
-    private CheckpointAwareSubscriptionModel route(@Nullable SubscriptionFilter filter, StartAt startAt) {
+    private CheckpointAwareSubscriptionModel route(@Nullable String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
         if (filter instanceof AgnosticSubscriptionFilter) {
             return agnosticCatchupSubscriptionModel != null
                     ? agnosticCatchupSubscriptionModel
                     : requireNonNull(dcbCatchupSubscriptionModel);
         }
-        return routesToDcb(filter, startAt)
+        return routesToDcb(subscriptionId, filter, startAt)
                 ? requireNonNull(dcbCatchupSubscriptionModel)
                 : requireNonNull(streamCatchupSubscriptionModel);
     }
 
     // Route to the DCB path or the stream path. A single-mode model has only one inner model and always routes there.
     // A dual-mode model routes by filter type first, since a global position start is ambiguous. Stream and DCB replay
-    // both use a GlobalCheckpoint, so only the filter tells them apart. A null filter falls back to the
-    // position heuristic and is narrowed by the default query or filter.
-    private boolean routesToDcb(@Nullable SubscriptionFilter filter, StartAt startAt) {
+    // both use a GlobalCheckpoint, so only the filter tells them apart. A null filter with a position start is refused
+    // instead of guessed. A null filter with any other start is narrowed by the default query or filter.
+    private boolean routesToDcb(@Nullable String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
         if (dcbCatchupSubscriptionModel == null) {
             return false;
         }
@@ -172,7 +174,16 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         if (filter instanceof StreamSubscriptionFilter) {
             return false;
         }
-        return startsAtExplicitDcbPosition(startAt);
+        boolean positionStart = startsAtExplicitDcbPosition(startAt);
+        // Without a filter the position could be a stream position or a DCB position, and routing it to DCB would
+        // silently drop the stream events after it
+        if (positionStart && filter == null) {
+            throw new IllegalArgumentException((subscriptionId == null ? "A subscription" : "Subscription '" + subscriptionId + "'")
+                    + " has no subscription filter and starts at a position checkpoint, which a model with both a stream and a DCB store cannot route. Pass a "
+                    + StreamSubscriptionFilter.class.getSimpleName() + " for stream events, a " + DcbSubscriptionFilter.class.getSimpleName() + " for DCB events, or an "
+                    + AgnosticSubscriptionFilter.class.getSimpleName() + " for both.");
+        }
+        return positionStart;
     }
 
     private static boolean startsAtExplicitDcbPosition(StartAt startAt) {
@@ -220,7 +231,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         // Before route(..), which can evaluate a dynamic StartAt. shutdown() shuts this inner model down first.
         (streamCatchupSubscriptionModel != null ? streamCatchupSubscriptionModel.namedSubscriptions : requireNonNull(dcbCatchupSubscriptionModel).namedSubscriptions).requireNamedAndNotShutdown();
-        SubscriptionModel routed = (SubscriptionModel) route(filter, startAt);
+        SubscriptionModel routed = (SubscriptionModel) route(subscriptionId, filter, startAt);
         // Claim the owner slot before subscribing, so a life-cycle call racing the subscribe reaches the model that
         // owns the replay before that model has registered the replay itself; roll the claim back if the subscribe
         // refuses, so the id stays free.

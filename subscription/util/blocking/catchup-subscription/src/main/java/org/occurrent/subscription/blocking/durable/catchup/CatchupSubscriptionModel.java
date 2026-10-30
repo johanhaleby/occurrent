@@ -108,6 +108,10 @@ import java.util.stream.Stream;
  * the DCB dependency altogether can use {@link StreamCatchupSubscriptionModel} directly as the DCB-free variant.
  * </p>
  * <p>
+ * A dual-mode model refuses a subscription that has no filter and starts at a position checkpoint, with an {@link IllegalArgumentException}, since the position could belong to stream events or to DCB events. Pass a {@link StreamSubscriptionFilter}, a {@link DcbSubscriptionFilter}, or an {@link AgnosticSubscriptionFilter} for both. A start at a time, at the beginning of time, or at the marked time form of a checkpoint needs no filter.
+ * Behind a {@code CompetingConsumerSubscriptionModel} this model is subscribed when the node first acquires the lease, or straight away as a paused subscription when the competing consumer model is stopped, and the refusal comes at that point.
+ * </p>
+ * <p>
  * The subscription model this wraps must not call any method of this model from inside its own {@code subscribe},
  * {@code subscribePaused}, {@code cancelSubscription}, {@code pauseSubscription}, {@code resumeSubscription},
  * {@code start} or {@code stop}. Its {@code isPaused}, {@code isRunning} and {@code canResumeFrom}, and the
@@ -248,7 +252,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
-        return route(filter, startAt).subscribe(subscriptionId, filter, startAt, action);
+        return route(subscriptionId, filter, startAt).subscribe(subscriptionId, filter, startAt, action);
     }
 
     /**
@@ -258,28 +262,28 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
-        return route(filter, startAt).subscribePaused(subscriptionId, filter, startAt, action);
+        return route(subscriptionId, filter, startAt).subscribePaused(subscriptionId, filter, startAt, action);
     }
 
     // Route to the DCB, stream, or capability-agnostic catch-up model. A single-mode model has only one inner model and
     // always routes there. A dual-mode model routes by filter type first, since a global position start is ambiguous
     // between the position-ordered replays. An AgnosticSubscriptionFilter routes to the unscoped agnostic model so both
     // stream and DCB events are delivered; if there is no agnostic model (a DCB-only store) it falls back to the DCB
-    // model, whose store has only DCB events anyway. Only an already-resolved start is inspected for the fallback
-    // heuristic, so routing reads no position storage.
-    private SubscriptionModel route(@Nullable SubscriptionFilter filter, StartAt startAt) {
+    // model, whose store has only DCB events anyway. Only an already-resolved start is inspected, so routing reads no
+    // position storage. A null filter with a position start is refused instead of guessed.
+    private SubscriptionModel route(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
         if (filter instanceof AgnosticSubscriptionFilter) {
             if (agnosticCatchupSubscriptionModel != null) {
                 return agnosticCatchupSubscriptionModel;
             }
             return Objects.requireNonNull(dcbCatchupSubscriptionModel);
         }
-        return routesToDcb(filter, startAt)
+        return routesToDcb(subscriptionId, filter, startAt)
                 ? Objects.requireNonNull(dcbCatchupSubscriptionModel)
                 : Objects.requireNonNull(streamCatchupSubscriptionModel);
     }
 
-    private boolean routesToDcb(@Nullable SubscriptionFilter filter, StartAt startAt) {
+    private boolean routesToDcb(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
         if (dcbCatchupSubscriptionModel == null) {
             return false;
         }
@@ -292,7 +296,15 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         if (filter instanceof StreamSubscriptionFilter) {
             return false;
         }
-        return StreamCatchupSubscriptionModel.startsAtExplicitGlobalPosition(startAt, CatchupSubscriptionModel.class);
+        boolean positionStart = StreamCatchupSubscriptionModel.startsAtExplicitGlobalPosition(startAt, CatchupSubscriptionModel.class);
+        // Without a filter the position could be a stream position or a DCB position, and routing it to DCB would
+        // silently drop the stream events after it
+        if (positionStart && filter == null) {
+            throw new IllegalArgumentException("Subscription '" + subscriptionId + "' has no subscription filter and starts at a position checkpoint, which a model with both a stream and a DCB store cannot route. Pass a "
+                    + StreamSubscriptionFilter.class.getSimpleName() + " for stream events, a " + DcbSubscriptionFilter.class.getSimpleName() + " for DCB events, or an "
+                    + AgnosticSubscriptionFilter.class.getSimpleName() + " for both.");
+        }
+        return positionStart;
     }
 
     // Whichever catch-up children this configuration wired. Only the live delegate is always present.

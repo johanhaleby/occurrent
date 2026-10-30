@@ -28,6 +28,7 @@ import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
 import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
@@ -117,7 +118,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
             warnIfStoredWithoutLiveStart(subscriptionId, checkpoint);
             if (checkpoint == null) {
-                return subscribeLiveWithoutCatchup(subscriptionId, filter, requestedStartAt, action, holdPaused);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, requestedStartAt), action, holdPaused);
             }
             firstStartAt = StartAt.checkpoint(checkpoint);
         } else {
@@ -127,7 +128,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // A non-DCB position means the catch-up already handed over and the live subscription stored a change-stream
         // token (or the caller asked to start live directly). Subscribe live, still applying the DCB query post-filter.
         if (!isDcbCatchupPosition(subscriptionId, firstStartAt)) {
-            return subscribeLiveWithoutCatchup(subscriptionId, filter, firstStartAt, action, holdPaused);
+            return subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, firstStartAt), action, holdPaused);
         }
 
         // A replay that stop() cut short runs again from the last position it stored, as a restart would, so the
@@ -261,7 +262,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     /**
      * Delivers catch-up events to {@code action}, optionally deduping against {@code cache}, and persists the DCB
      * subscription position for events matching {@code persistDuringCatchup}, the attempt's own predicate, so its count
-     * runs on across windows.
+     * runs on across windows. Each event is delivered as a {@link CheckpointAwareCloudEvent} with the checkpoint the
+     * replay stores after it, derived once, so the delivered and the stored checkpoint are the same.
      */
     private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache, Predicate<CloudEvent> persistDuringCatchup, PositionReplayStart replayStart, long replayTo) {
         // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
@@ -275,15 +277,16 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                 takeWhile = takeWhile.filter(e -> !cache.contains(CatchupEventKey.of(e))).peek(e -> cache.add(CatchupEventKey.of(e)));
             }
             takeWhile
+                    .map(e -> new CheckpointAwareCloudEvent(e, replayStart.checkpointAt(OccurrentCloudEventExtension.getPosition(e), replayTo)))
                     .peek(action)
                     // Rechecked here, not just by takeWhile before action ran: see the blocking stream catch-up's
                     // identical reasoning, action can outlast this attempt's ownership. Not shouldKeepReplaying, for
                     // the same reason. The action has completed, so a stop or a shutdown does not keep its position
                     // from being stored, and a replay that runs again after a stop starts from there.
                     .filter(e -> isSafeToPersistFor(subscriptionId))
-                    .filter(persistDuringCatchup)
+                    .filter(e -> persistDuringCatchup.test(e.getOriginalCloudEvent()))
                     .forEach(e -> doIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class,
-                            cfg -> saveCatchupCheckpoint(subscriptionId, cfg, replayStart.checkpointAt(OccurrentCloudEventExtension.getPosition(e), replayTo))));
+                            cfg -> saveCatchupCheckpoint(subscriptionId, cfg, e.getCheckpoint())));
         }
     }
 

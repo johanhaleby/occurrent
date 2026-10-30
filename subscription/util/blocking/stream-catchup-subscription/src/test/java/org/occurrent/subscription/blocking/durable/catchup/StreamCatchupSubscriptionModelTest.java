@@ -34,6 +34,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.PositionRange;
@@ -68,6 +69,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -254,6 +256,33 @@ class StreamCatchupSubscriptionModelTest {
         // The stored checkpoints also hold the live start, so only their positions are compared
         assertThat(saved.stream().map(StringBasedCheckpoint::new).filter(GlobalCheckpoint::isGlobalCheckpoint).map(GlobalCheckpoint::positionOf))
                 .as("every third event of six, read in windows of two").contains(3L, 6L);
+    }
+
+    @Test
+    void each_event_a_replay_by_position_delivers_carries_the_checkpoint_stored_right_after_it() {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+
+        // When
+        List<String> log = replayThreeEventsLoggingEachDeliveryAndSave(eventStore, StartAt.checkpoint(GlobalCheckpoint.of(0)));
+
+        // Then
+        assertThat(entriesRightAfterEachDelivery(log)).as("what is stored right after each replayed event").containsExactlyElementsOf(deliveriesAsSaves(log));
+        assertThat(deliveredCheckpoints(log).stream().map(StringBasedCheckpoint::new).map(GlobalCheckpoint::positionOf))
+                .as("the position each delivered checkpoint holds").containsExactly(1L, 2L, 3L);
+    }
+
+    @Test
+    void each_event_a_replay_by_time_delivers_carries_the_checkpoint_stored_right_after_it() {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+
+        // When
+        List<String> log = replayThreeEventsLoggingEachDeliveryAndSave(eventStore, StartAtTime.beginningOfTime());
+
+        // Then
+        assertThat(entriesRightAfterEachDelivery(log)).as("what is stored right after each replayed event").containsExactlyElementsOf(deliveriesAsSaves(log));
+        assertThat(deliveredCheckpoints(log)).as("the checkpoints the replayed events were delivered with").doesNotHaveDuplicates();
     }
 
     @Test
@@ -1831,6 +1860,45 @@ class StreamCatchupSubscriptionModelTest {
     private void write(InMemoryEventStore eventStore, DomainEvent event) {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(event));
         eventStore.write(event.eventId(), cloudEvents);
+    }
+
+    // One log for deliveries and saves, so the order between them shows
+    private List<String> replayThreeEventsLoggingEachDeliveryAndSave(InMemoryEventStore eventStore, StartAt startAt) {
+        write(eventStore, nameDefined("event1"));
+        write(eventStore, nameDefined("event2"));
+        write(eventStore, nameDefined("event3"));
+        CopyOnWriteArrayList<String> log = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                log.add("saved:" + checkpoint.asString());
+                return super.save(id, checkpoint, condition);
+            }
+        };
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+
+        subscription.subscribe("subscription", startAt, cloudEvent -> {
+            log.add("delivered:" + EventMetadata.from(cloudEvent).getCheckpoint().orElse("none"));
+            received.add(cloudEvent);
+        }).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(entriesRightAfterEachDelivery(log)).hasSize(3));
+        assertThat(received).as("the replayed events").hasSize(3).allSatisfy(cloudEvent -> assertThat(cloudEvent).isInstanceOf(CheckpointAwareCloudEvent.class));
+        return log;
+    }
+
+    private static List<String> entriesRightAfterEachDelivery(List<String> log) {
+        return IntStream.range(0, log.size() - 1).filter(i -> log.get(i).startsWith("delivered:")).mapToObj(i -> log.get(i + 1)).toList();
+    }
+
+    private static List<String> deliveriesAsSaves(List<String> log) {
+        return deliveredCheckpoints(log).stream().map(checkpoint -> "saved:" + checkpoint).toList();
+    }
+
+    private static List<String> deliveredCheckpoints(List<String> log) {
+        return log.stream().filter(entry -> entry.startsWith("delivered:")).map(entry -> entry.substring("delivered:".length())).toList();
     }
 
     private static final class PositionOnlyInMemoryEventStore extends InMemoryEventStore {

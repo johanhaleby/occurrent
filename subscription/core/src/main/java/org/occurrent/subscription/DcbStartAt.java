@@ -18,6 +18,8 @@ package org.occurrent.subscription;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.cloudevents.CheckpointCarrier;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 
 import java.util.function.Function;
@@ -25,9 +27,10 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Specifies where a DCB subscription should start. This is the DCB counterpart to {@link StartAt}: it can only express
- * DCB start positions (a {@code position} or one of the relative starts), never a time-based stream position, so a
- * DCB subscription cannot be handed a position that belongs to a stream subscription.
+ * Specifies where a DCB subscription should start. This is the DCB counterpart to {@link StartAt}: apart from
+ * {@link #checkpoint(String)}, which takes the string a subscription delivered, it can only express DCB start
+ * positions (a {@code position} or one of the relative starts), never a time-based stream position, so a DCB
+ * subscription cannot be handed a position that belongs to a stream subscription.
  * <p>
  * Convert to the generic {@link StartAt} the shared subscription model consumes with {@link #toStartAt()}.
  */
@@ -76,6 +79,18 @@ public sealed interface DcbStartAt {
     }
 
     /**
+     * Start subscribing from a checkpoint the subscription delivered with an event, read from
+     * {@link EventMetadata#getCheckpoint()} or {@code DcbEventMetadata.checkpoint()}. Store it with the application's
+     * state, in the same transaction, and pass it back here on restart. The same as
+     * {@code StartAt.checkpoint(new StringBasedCheckpoint(checkpoint))}. {@link CheckpointCarrier#checkpoint()} says
+     * which subscription models understand it, and what a restart from it does once the oplog no longer reaches back
+     * to it.
+     */
+    static DcbStartAt checkpoint(String checkpoint) {
+        return new AtCheckpoint(checkpoint);
+    }
+
+    /**
      * Create a DCB start position that is resolved each time the subscription is started, for example to start from the
      * beginning the first time and then resume from the stored position. The function receives the subscription model
      * context and may return {@code null} to signal that the subscription should not start at this layer and should
@@ -110,6 +125,20 @@ public sealed interface DcbStartAt {
         @Override
         public StartAt toStartAt() {
             return StartAt.checkpoint(GlobalCheckpoint.of(lastProcessedPosition));
+        }
+    }
+
+    record AtCheckpoint(String checkpoint) implements DcbStartAt {
+        public AtCheckpoint {
+            requireNonNull(checkpoint, "DCB checkpoint cannot be null");
+            if (checkpoint.isBlank()) {
+                throw new IllegalArgumentException("DCB checkpoint cannot be blank");
+            }
+        }
+
+        @Override
+        public StartAt toStartAt() {
+            return StartAt.checkpoint(new StringBasedCheckpoint(checkpoint));
         }
     }
 

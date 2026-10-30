@@ -50,6 +50,7 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
@@ -388,6 +389,44 @@ class LateRegistrationOnANonBlockingThreadTest {
 
             assertThat(model.isSubscribed("late-mixed-default")).isTrue();
             assertThat(model.isSubscribed("late-mixed-default-beginning")).isTrue();
+        });
+    }
+
+    // The bean may answer null for any id, so no answer is known when the bean is built, and a NOW or DEFAULT start
+    // subscribes in place as it does without the bean.
+    @Test
+    void a_lazy_projection_with_a_default_start_is_still_refused_on_a_parallel_thread_when_the_application_declares_resume_points() {
+        runner.withUserConfiguration(BlockingModelConfiguration.class, AnsweringResumePointsConfiguration.class, LazyEventStoreProjectionConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            BlockingModel model = context.getBean(BlockingModel.class);
+
+            assertThat(failureResolvingOnAParallelThread(context, "eventStoreProjectionHolder"))
+                    .hasStackTraceContaining("@Projection 'late-event-store-projection' may start from wherever the event feed has reached when it subscribes");
+            assertThat(model.isSubscribed("late-event-store-projection")).isFalse();
+        });
+    }
+
+    @Test
+    void a_lazy_subscription_with_a_default_start_is_still_refused_on_a_parallel_thread_when_the_application_declares_resume_points() {
+        runner.withUserConfiguration(BlockingModelConfiguration.class, AnsweringResumePointsConfiguration.class, LazyDefaultStartSubscriptionConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            BlockingModel model = context.getBean(BlockingModel.class);
+
+            assertThat(failureResolvingOnAParallelThread(context, "defaultStartSubscriptionHolder"))
+                    .hasStackTraceContaining("the handler 'late-default-start-subscription' on " + DefaultStartSubscriptionHolder.class.getName() + "#on may start from wherever the event feed has reached");
+            assertThat(model.isSubscribed("late-default-start-subscription")).isFalse();
+        });
+    }
+
+    @Test
+    void a_lazy_snapshot_with_a_now_start_is_still_refused_on_a_parallel_thread_when_the_application_declares_resume_points() {
+        runner.withUserConfiguration(BlockingModelConfiguration.class, AnsweringResumePointsConfiguration.class, SnapshotStoreConfiguration.class, PositionWritingEventStoreConfiguration.class, LazySnapshotConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            BlockingModel model = context.getBean(BlockingModel.class);
+
+            assertThat(failureResolvingOnAParallelThread(context, "snapshotHolder"))
+                    .hasStackTraceContaining("@Snapshot 'late-snapshot' may start from wherever the event feed has reached when it subscribes");
+            assertThat(model.isSubscribed("late-snapshot")).isFalse();
         });
     }
 
@@ -1489,6 +1528,14 @@ class LateRegistrationOnANonBlockingThreadTest {
         Mono<Void> on(TestEvent event) {
             handled.add(event.id());
             return Mono.empty();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class AnsweringResumePointsConfiguration {
+        @Bean
+        SubscriptionResumePoints resumePoints() {
+            return subscriptionId -> GlobalCheckpoint.of(5).asString();
         }
     }
 
