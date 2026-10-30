@@ -478,17 +478,17 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
                 refusedReads--;
                 return Mono.error(refusal);
             }
-            return Mono.just(stream());
+            return Mono.just(stream(criteria));
         }
 
         @Override
         public Mono<DcbEventStream> read(DcbCriteria criteria) {
             readOptions.add(Optional.empty());
-            return Mono.just(stream());
+            return Mono.just(stream(criteria));
         }
 
-        private DcbEventStream stream() {
-            return new DcbEventStream(readEvents, 3, DcbConsistencyToken.of(3), readVersions);
+        private DcbEventStream stream(DcbCriteria criteria) {
+            return new DcbEventStream(readEvents, 3, DcbConsistencyToken.of(criteria, 3), readVersions);
         }
 
         @Override

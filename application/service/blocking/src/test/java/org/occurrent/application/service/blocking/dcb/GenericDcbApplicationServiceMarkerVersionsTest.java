@@ -459,17 +459,17 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
                 refusedReads--;
                 throw refusal;
             }
-            return stream();
+            return stream(criteria);
         }
 
         @Override
         public DcbEventStream read(DcbCriteria criteria) {
             readOptions.add(Optional.empty());
-            return stream();
+            return stream(criteria);
         }
 
-        private DcbEventStream stream() {
-            return new DcbEventStream(readEvents, 3, DcbConsistencyToken.of(3), readVersions);
+        private DcbEventStream stream(DcbCriteria criteria) {
+            return new DcbEventStream(readEvents, 3, DcbConsistencyToken.of(criteria, 3), readVersions);
         }
 
         @Override

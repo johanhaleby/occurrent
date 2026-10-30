@@ -21,6 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
@@ -183,7 +184,7 @@ class SnapshotSupportTest {
     void refuse_event_below_folded_position_refuses_a_read_that_returned_an_event_below_the_highest_folded_position() {
         SnapshotSupport.DcbBase<Integer> base = new SnapshotSupport.DcbBase<>(10, Optional.of(versions("tag:a", 4)), 42);
 
-        assertThatThrownBy(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, new DcbEventStream(List.of(eventAt(41)), 42)))
+        assertThatThrownBy(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, readOf(CRITERIA, List.of(eventAt(41)), 42)))
                 .isInstanceOf(DcbSnapshotInvalidException.class)
                 .hasMessageContaining("below position 42");
     }
@@ -192,7 +193,7 @@ class SnapshotSupportTest {
     void refuse_event_below_folded_position_accepts_a_read_whose_events_are_all_above_the_highest_folded_position() {
         SnapshotSupport.DcbBase<Integer> base = new SnapshotSupport.DcbBase<>(10, Optional.of(versions("tag:a", 4)), 42);
 
-        assertThatCode(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, new DcbEventStream(List.of(eventAt(43)), 43)))
+        assertThatCode(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, readOf(CRITERIA, List.of(eventAt(43)), 43)))
                 .doesNotThrowAnyException();
     }
 
@@ -200,7 +201,7 @@ class SnapshotSupportTest {
     void refuse_event_below_folded_position_accepts_a_read_without_events() {
         SnapshotSupport.DcbBase<Integer> base = new SnapshotSupport.DcbBase<>(10, Optional.of(versions("tag:a", 4)), 42);
 
-        assertThatCode(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, new DcbEventStream(List.of(), 42)))
+        assertThatCode(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, readOf(CRITERIA, List.of(), 42)))
                 .doesNotThrowAnyException();
     }
 
@@ -208,8 +209,12 @@ class SnapshotSupportTest {
     void refuse_event_below_folded_position_accepts_any_event_when_the_read_is_from_the_initial_state() {
         SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.DcbBase.initial(() -> 0);
 
-        assertThatCode(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, new DcbEventStream(List.of(eventAt(1)), 1)))
+        assertThatCode(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, readOf(CRITERIA, List.of(eventAt(1)), 1)))
                 .doesNotThrowAnyException();
+    }
+
+    private static DcbEventStream readOf(DcbCriteria criteria, List<CloudEvent> events, long lastSequencePosition) {
+        return new DcbEventStream(events, lastSequencePosition, DcbConsistencyToken.of(criteria, lastSequencePosition));
     }
 
     private static CloudEvent eventAt(long position) {
