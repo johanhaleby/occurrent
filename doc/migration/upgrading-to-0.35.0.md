@@ -1143,11 +1143,12 @@ with `DEFAULT` starts where its default start does, and whether `BEGINNING_OF_TI
 again depends on whether it stores a checkpoint.
 
 With the starter's durable model, `NOW` with `DEFAULT` also records where the feed is when a subscription with no stored
-checkpoint registers, the way any start from the model default does. If the model cannot read that position, it refuses
-the registration. Such a subscription waits for its start by default when `occurrent.subscription.mode` is `auto`, so
+checkpoint registers, the way any start from the model default does. If the storage answers nothing for that position,
+as a server that refuses the `hostInfo` command does, the model refuses the registration, and so it does when the read
+fails. Such a subscription waits for its start by default when `occurrent.subscription.mode` is `auto`, so
 the application does not start, where `NOW` used to start anyway. With `startupMode = BACKGROUND`, with mode `manual`,
 or on a bean built after startup, the refusal does not hold up startup, and the subscription is not running. Setting
-`occurrent.subscription.start-when-no-start-position-can-be-recorded=true` starts it regardless, see
+`occurrent.subscription.start-when-no-start-position-can-be-recorded=true` starts it when the storage answers nothing, see
 [section 7 of the 0.34.0 guide](upgrading-to-0.34.0.md#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
 
 A subscription that handled an event before the upgrade normally has a checkpoint stored already, because the old start
