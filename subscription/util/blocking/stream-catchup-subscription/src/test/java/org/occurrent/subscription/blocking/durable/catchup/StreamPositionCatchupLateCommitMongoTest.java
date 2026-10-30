@@ -21,6 +21,8 @@ import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import org.assertj.core.api.InstanceOfAssertFactories;
+import org.awaitility.core.ConditionTimeoutException;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.junit.jupiter.api.*;
@@ -28,19 +30,25 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CatchupCannotResumeException;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig;
+import org.occurrent.tck.latecommit.LateCommitGuarantee;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.ChangeStreamHistory;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -57,12 +65,14 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
@@ -190,6 +200,61 @@ class StreamPositionCatchupLateCommitMongoTest {
             appendToStream("stream-d", named("D"));
             await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).contains("D"));
             assertThat(received).as("every committed event reaches the subscription").contains("A", "B", "C", "D");
+        } finally {
+            second.shutdown();
+        }
+    }
+
+    @Test
+    void a_restart_from_the_checkpoint_a_replayed_event_was_delivered_with_delivers_an_event_that_committed_below_it() throws Exception {
+        // Given
+        // Writer A reserves position 1 and holds its transaction open while B and C commit
+        Thread writerA = new Thread(() -> appendToStream("stream-a", named("A")), HELD_WRITER);
+        writerA.start();
+        assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
+        appendToStream("stream-b", named("B"));
+        appendToStream("stream-c", named("C"));
+        assertThat(eventStore.currentPosition()).isEqualTo(3);
+
+        // A first process without checkpoint storage handles B, holds on to the checkpoint B was delivered with, then dies while handling C
+        ConcurrentHashMap<String, String> checkpointDeliveredWith = new ConcurrentHashMap<>();
+        SpringMongoSubscriptionModel firstLive = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        StreamCatchupSubscriptionModel first = new StreamCatchupSubscriptionModel(firstLive, eventStore, new CatchupSubscriptionModelConfig(100));
+        CountDownLatch handlingC = new CountDownLatch(1);
+        CountDownLatch crashed = new CountDownLatch(1);
+        first.subscribe("sub", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            String name = nameOf(cloudEvent);
+            if (name.equals("C")) {
+                handlingC.countDown();
+                block(crashed);
+            } else {
+                checkpointDeliveredWith.put(name, EventMetadata.from(cloudEvent).getCheckpoint().orElseThrow());
+            }
+        });
+        assertThat(handlingC.await(20, TimeUnit.SECONDS)).isTrue();
+        first.shutdown();
+        crashed.countDown();
+        String stored = requireNonNull(checkpointDeliveredWith.get("B"));
+        assertThat(GlobalCheckpoint.positionOf(new StringBasedCheckpoint(stored))).as("the position the checkpoint of B holds").isEqualTo(2);
+
+        // A commits at position 1, below that checkpoint
+        releaseA.countDown();
+        writerA.join(20_000);
+
+        // When
+        // A second process restarts from the checkpoint the application held on to
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        SpringMongoSubscriptionModel secondLive = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        StreamCatchupSubscriptionModel second = new StreamCatchupSubscriptionModel(secondLive, eventStore, new CatchupSubscriptionModelConfig(100));
+        try {
+            second.subscribe("sub", StartAt.checkpoint(new StringBasedCheckpoint(stored)), cloudEvent -> received.add(nameOf(cloudEvent))).waitUntilStarted();
+            appendToStream("stream-d", named("D"));
+
+            // Then
+            await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).as("the restarted subscription is delivering").contains("C", "D"));
+            LateCommitGuarantee.require(received.contains("A"),
+                    "the event that committed below the delivered checkpoint is delivered after the restart",
+                    () -> "the subscription was delivered " + received);
         } finally {
             second.shutdown();
         }
@@ -427,7 +492,149 @@ class StreamPositionCatchupLateCommitMongoTest {
         }
     }
 
+    @Test
+    void a_catch_up_whose_start_resolves_to_nothing_for_the_live_model_delivers_an_event_that_commits_below_the_replay_before_the_handover() throws Exception {
+        // Given
+        Thread writerA = new Thread(() -> appendToStream("stream-a", named("A")), HELD_WRITER);
+        writerA.start();
+        assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
+        appendToStream("stream-b", named("B"));
+        appendToStream("stream-c", named("C"));
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        SpringMongoSubscriptionModel live = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        StreamCatchupSubscriptionModel model = new StreamCatchupSubscriptionModel(live, eventStore, config);
+        StartAt resolvesToNothingForTheLiveModel = StartAt.dynamic(context ->
+                context.hasSubscriptionModelType(SpringMongoSubscriptionModel.class) ? null : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        try {
+            // When
+            model.subscribe("sub", resolvesToNothingForTheLiveModel, cloudEvent -> {
+                String name = nameOf(cloudEvent);
+                received.add(name);
+                if (name.equals("C")) {
+                    // A commits at position 1 after the replay read past it and before the handover
+                    releaseA.countDown();
+                    join(writerA);
+                }
+            }).waitUntilStarted();
+            appendToStream("stream-d", named("D"));
+            boolean deliveredAfterTheHandover = arrives(received, "D");
+
+            // Then
+            assertThat(writerA.isAlive()).as("writer A still committing").isFalse();
+            assertThat(deliveredAfterTheHandover).as("an event written after the handover is delivered live").isTrue();
+            assertThat(received).as("the event that committed below the replay before the handover").contains("A");
+        } finally {
+            model.shutdown();
+        }
+    }
+
     // The Spring Boot starter's default
+    @Test
+    void a_catch_up_whose_start_resolves_to_nothing_for_the_live_model_stores_its_live_start_and_a_restart_from_it_delivers_a_late_commit() throws Exception {
+        Thread writerA = new Thread(() -> appendToStream("stream-a", named("A")), HELD_WRITER);
+        writerA.start();
+        assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
+        appendToStream("stream-b", named("B"));
+        appendToStream("stream-c", named("C"));
+
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+
+        // First process: its start resolves to nothing for the live model, it delivers B, stores position 2 and dies
+        // while handling C
+        SpringMongoSubscriptionModel firstLive = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        StreamCatchupSubscriptionModel first = new StreamCatchupSubscriptionModel(firstLive, eventStore, config);
+        StartAt resolvesToNothingForTheLiveModel = StartAt.dynamic(context ->
+                context.hasSubscriptionModelType(SpringMongoSubscriptionModel.class) ? null : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        CountDownLatch handlingC = new CountDownLatch(1);
+        CountDownLatch crashed = new CountDownLatch(1);
+        first.subscribe("sub", resolvesToNothingForTheLiveModel, cloudEvent -> {
+            String name = nameOf(cloudEvent);
+            received.add(name);
+            if (name.equals("C")) {
+                handlingC.countDown();
+                block(crashed);
+            }
+        });
+        assertThat(handlingC.await(20, TimeUnit.SECONDS)).isTrue();
+        Checkpoint stored = requireNonNull(storage.read("sub"));
+        assertThat(CatchupCheckpoints.isMarked(stored)).as("stored in the marked form, which a version that would resume it without its live start refuses").isTrue();
+        assertThat(CatchupCheckpoints.parse(stored)).asInstanceOf(InstanceOfAssertFactories.type(CatchupCheckpoints.Position.class))
+                .satisfies(position -> assertThat(position.position()).as("position").isEqualTo(2))
+                .satisfies(position -> assertThat(position.liveFrom()).as("the live start the replay read").isNotNull());
+        first.shutdown();
+        crashed.countDown();
+
+        // A commits at position 1, below the stored position, while the process is down
+        releaseA.countDown();
+        writerA.join(20_000);
+        assertThat(eventStore.currentPosition()).isEqualTo(3);
+
+        assertThatARestartDelivers("A", config, received);
+    }
+
+    @Test
+    void a_position_stored_by_0_34_without_a_live_start_is_refused_before_anything_is_written() throws Exception {
+        // Given
+        Thread writerA = new Thread(() -> appendToStream("stream-a", named("A")), HELD_WRITER);
+        writerA.start();
+        assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
+        appendToStream("stream-b", named("B"));
+        appendToStream("stream-c", named("C"));
+
+        // The checkpoint format of 0.34 and earlier, a bare position with nothing stored beside it
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        storage.save("sub", GlobalCheckpoint.of(2));
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+
+        // A commits at position 1, below the stored position, while nothing is running
+        releaseA.countDown();
+        writerA.join(20_000);
+        assertThat(eventStore.currentPosition()).isEqualTo(3);
+
+        // When the subscription restarts
+        SpringMongoSubscriptionModel secondLive = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        StreamCatchupSubscriptionModel second = new StreamCatchupSubscriptionModel(secondLive, eventStore, config);
+        try {
+            Subscription subscription = second.subscribe("sub", StartAt.subscriptionModelDefault(), cloudEvent -> received.add(nameOf(cloudEvent)));
+            Throwable failure = catchThrowable(subscription::waitUntilStarted);
+            appendToStream("stream-d", named("D"));
+
+            // Then the start is refused, naming the subscription and the way out
+            assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("sub")
+                    .hasMessageContaining("after position 2")
+                    .hasMessageContaining("EventMetadata.getCheckpoint()");
+            // And the stored position is as it was, with nothing delivered
+            assertThat(storage.read("sub")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(GlobalCheckpoint.of(2).asString());
+            await().during(Duration.ofSeconds(1)).atMost(AT_MOST).untilAsserted(() -> assertThat(received).as("delivered").isEmpty());
+        } finally {
+            second.shutdown();
+        }
+    }
+
+    // Resumes "sub" the way the model default does, appends D and requires the late commit to have arrived by the time
+    // D did. D commits after the late event, so a delivery that never comes is a skip and not a slow subscription.
+    private void assertThatARestartDelivers(String lateCommit, CatchupSubscriptionModelConfig config, CopyOnWriteArrayList<String> received) {
+        SpringMongoSubscriptionModel secondLive = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        StreamCatchupSubscriptionModel second = new StreamCatchupSubscriptionModel(secondLive, eventStore, config);
+        try {
+            Subscription subscription = second.subscribe("sub", StartAt.subscriptionModelDefault(), cloudEvent -> received.add(nameOf(cloudEvent)));
+            subscription.waitUntilStarted();
+            appendToStream("stream-d", named("D"));
+            await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).as("the restarted subscription is delivering").contains("D"));
+            LateCommitGuarantee.require(received.contains(lateCommit),
+                    "the event that committed below the stored position is delivered after the restart",
+                    () -> "the subscription was delivered " + received);
+        } finally {
+            second.shutdown();
+        }
+    }
+
     private SpringMongoSubscriptionModel liveModelThatRestartsOnLostHistory() {
         return new SpringMongoSubscriptionModel(mongoTemplate, SpringMongoSubscriptionModelConfig.withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true));
     }
@@ -435,6 +642,23 @@ class StreamPositionCatchupLateCommitMongoTest {
     private void dropChangeStreamHistoryUpToNow() {
         BsonTimestamp now = requireNonNull(mongoClient.getDatabase(DATABASE).runCommand(new Document("hostInfo", 1)).get("operationTime", BsonTimestamp.class));
         ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, DATABASE, now);
+    }
+
+    private static boolean arrives(List<String> received, String name) {
+        try {
+            await().atMost(AT_MOST).until(() -> received.contains(name));
+            return true;
+        } catch (ConditionTimeoutException e) {
+            return false;
+        }
+    }
+
+    private static void join(Thread thread) {
+        try {
+            thread.join(20_000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static void block(CountDownLatch latch) {

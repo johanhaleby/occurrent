@@ -306,9 +306,10 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
             StepVerifier.create(subscription.waitUntilStarted())
                     .expectErrorSatisfies(throwable -> assertThat(throwable)
-                            .isInstanceOf(IllegalStateException.class)
+                            .isInstanceOf(CatchupCannotResumeException.class)
                             .hasMessageContaining("sub")
                             .hasMessageContaining("4 replays")
+                            .hasMessageMatching("(?s).*replays\\. The longest replay took \\d+ ms .*")
                             .hasMessageContaining("oplog"))
                     .verify(Duration.ofSeconds(20));
             assertThat(received).as("the whole history once for each of the 4 replays")
@@ -320,8 +321,58 @@ class ReactorStreamCatchupSubscriptionModelTest {
         }
     }
 
+    @Test
+    void a_named_start_after_a_bare_position_above_0_is_refused_with_the_advice_to_cancel_first_and_hands_nothing_over() {
+        // Given
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedPositionOrderedReader());
+        try {
+            // When
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(1)), cloudEvent -> Mono.empty());
+
+            // Then
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable)
+                            .isInstanceOf(CatchupCannotResumeException.class)
+                            .hasMessageContaining("catch-up subscription sub after position 1")
+                            .hasMessageContaining("cancel it first, which deletes that checkpoint")
+                            .hasMessageContaining("EventMetadata.getCheckpoint()"))
+                    .verify(Duration.ofSeconds(10));
+            assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_named_start_from_a_stored_live_start_the_model_no_longer_has_above_the_beginning_is_refused_with_the_advice_to_cancel_first() {
+        // Given a stored checkpoint whose replay began above the beginning, and a model that has lost its live start
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.losesEveryToken = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        Checkpoint stored = GlobalCheckpoint.of(3, new StringBasedCheckpoint("aged out live start"), 1, 3);
+        try {
+            // When
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(stored), cloudEvent -> Mono.empty());
+
+            // Then
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable)
+                            .isInstanceOf(CatchupCannotResumeException.class)
+                            .hasMessageContaining("catch-up subscription sub again from position 1")
+                            .hasMessageContaining("cancel it first, which deletes that checkpoint")
+                            .hasMessageContaining("from the beginning again"))
+                    .verify(Duration.ofSeconds(10));
+            assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
     // Three events at positions 1 to 3, and a head that stays at 3
-    private static final class ThreeEventReader implements PositionOrderedReader {
+    private static final class ThreeEventReader implements UnscopedPositionOrderedReader {
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
             long from = range.afterPosition().orElse(0L) + 1;
@@ -348,7 +399,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
     // One event already there and one more written while the history is being read, so the catch-up has a history to
     // read and something to deliver afterwards. The head grows on the second read, which is what the reconciliation
     // sees.
-    private static final class GrowingPositionOrderedReader implements PositionOrderedReader {
+    private static final class GrowingPositionOrderedReader implements UnscopedPositionOrderedReader {
         private final java.util.concurrent.atomic.AtomicInteger headReads = new java.util.concurrent.atomic.AtomicInteger();
 
         @Override
@@ -392,7 +443,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         }
     }
 
-    private static final class UnusedPositionOrderedReader implements PositionOrderedReader {
+    private static final class UnusedPositionOrderedReader implements UnscopedPositionOrderedReader {
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
             return Flux.error(new AssertionError("readInPositionOrder must not be called when the catch-up fails loudly"));
@@ -413,7 +464,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
     // Flux.never() registers a subscriber and then neither emits nor terminates. subscribe() itself still returns
     // immediately (registering a subscriber is not blocking), so the calling thread is never stuck, and the replay
     // is simply left in flight, exactly as if a slow store had not answered the first page yet.
-    private static final class StuckPositionOrderedReader implements PositionOrderedReader {
+    private static final class StuckPositionOrderedReader implements UnscopedPositionOrderedReader {
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
             return Flux.never();
@@ -432,7 +483,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
     // Like StuckPositionOrderedReader until release(), after which every window it reads is empty, so the replay
     // finishes and hands over.
-    private static final class ReleasablePositionOrderedReader implements PositionOrderedReader {
+    private static final class ReleasablePositionOrderedReader implements UnscopedPositionOrderedReader {
         private final Sinks.Empty<Void> released = Sinks.empty();
 
         void release() {
@@ -550,7 +601,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
     // Bulk head 0, so the bulk read (startPosition, 0] is empty, then reconcile head 1, so reconcile (0, 1] reads
     // one event, "e1" from producer A. Mirrors GrowingPositionOrderedReader's two-read shape with a fixed id instead
     // of one derived from position, so a live event sharing only that id can be built against it.
-    private static final class BulkEmptyThenOneReconciledEventReader implements PositionOrderedReader {
+    private static final class BulkEmptyThenOneReconciledEventReader implements UnscopedPositionOrderedReader {
         private final java.util.concurrent.atomic.AtomicInteger headReads = new java.util.concurrent.atomic.AtomicInteger();
 
         @Override

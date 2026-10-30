@@ -25,9 +25,12 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
+import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
@@ -148,6 +151,7 @@ class StartPositionSupport {
         };
     }
 
+    @SuppressWarnings("removal")
     DcbStartAt generateDcbStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtDcbPosition, ResumeBehavior resumeBehavior) {
         if (startAtDcbPosition >= 0) {
             // Start after a specific position, applying the same replay-then-resume logic BEGINNING uses.
@@ -175,5 +179,48 @@ class StartPositionSupport {
                 return storage.read(subscriptionId).blockOptional().isPresent() ? DcbStartAt.subscriptionModelDefault() : replayStart;
             });
         };
+    }
+
+    // Asks the application's SubscriptionResumePoints bean, when it declared one, each time a subscription model resolves
+    // the start. A non-null answer replaces the annotation's start, except where that start is null for a durable model,
+    // as under SAME_AS_START_AT. That model stays off, so a catch-up above it runs from the answer without its live
+    // delegate. A null answer resolves what the annotation built, so LateSubscriber.startIsFixed takes the start from
+    // before this wrap.
+    StartAt withResumePoint(String subscriptionId, StartAt startAt) {
+        @Nullable SubscriptionResumePoints resumePoints = applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable();
+        if (resumePoints == null) {
+            return startAt;
+        }
+        return StartAt.dynamic(context -> {
+            @Nullable StartAt built = startAt.get(context);
+            if (built == null) {
+                return null;
+            }
+            @Nullable String resumePoint = resumePoints.resumePointFor(subscriptionId);
+            return resumePoint == null ? built : StartAt.checkpoint(new StringBasedCheckpoint(resumePoint));
+        });
+    }
+
+    DcbStartAt withResumePoint(String subscriptionId, DcbStartAt startAt) {
+        @Nullable SubscriptionResumePoints resumePoints = applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable();
+        if (resumePoints == null) {
+            return startAt;
+        }
+        return DcbStartAt.dynamic(context -> {
+            @Nullable DcbStartAt built = resolve(startAt, context);
+            if (built == null) {
+                return null;
+            }
+            @Nullable String resumePoint = resumePoints.resumePointFor(subscriptionId);
+            return resumePoint == null ? built : DcbStartAt.checkpoint(resumePoint);
+        });
+    }
+
+    private static @Nullable DcbStartAt resolve(DcbStartAt startAt, SubscriptionModelContext context) {
+        @Nullable DcbStartAt resolved = startAt;
+        while (resolved instanceof DcbStartAt.Dynamic dynamic) {
+            resolved = dynamic.function().apply(context);
+        }
+        return resolved;
     }
 }

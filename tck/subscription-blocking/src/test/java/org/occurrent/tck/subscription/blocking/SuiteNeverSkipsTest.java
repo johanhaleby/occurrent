@@ -29,6 +29,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.tck.latecommit.LateCommits;
 
 import java.time.Duration;
 import java.util.List;
@@ -136,6 +137,28 @@ class SuiteNeverSkipsTest {
         // because a suite whose second branch is only ever exercised elsewhere is a suite nothing in this module can
         // prove is satisfiable.
         assertEveryTestPasses(StartingAtThePresentRestartConformance.class, "subscription model");
+    }
+
+    @Test
+    void the_restart_suite_passes_every_test_against_a_model_that_refuses_a_bare_position_and_hands_out_checkpoints() {
+        // The catch-up flavour of the same declaration, run here for the same reason as the branch above.
+        assertEveryTestPasses(RefusingABarePositionRestartConformance.class, "subscription model");
+    }
+
+    @Test
+    void the_restart_suite_fails_before_its_first_assertion_against_a_fixture_that_has_no_lateCommits() {
+        Events tests = EngineTestKit.engine("junit-jupiter")
+                .selectors(selectClass(DeclinesLateCommitsRestartConformance.class))
+                .execute()
+                .testEvents();
+
+        assertThat(tests.started().count()).isPositive();
+        assertThat(tests.succeeded().count()).isZero();
+        assertThat(tests.failed().stream())
+                .describedAs("every test must fail on the missing lateCommits() and nothing else")
+                .allSatisfy(event -> assertThat(event.getRequiredPayload(TestExecutionResult.class).getThrowable().orElseThrow())
+                        .isInstanceOf(UnsupportedOperationException.class)
+                        .hasMessageContaining("lateCommits"));
     }
 
     @Test
@@ -426,6 +449,22 @@ class SuiteNeverSkipsTest {
         }
     }
 
+    static class RefusingABarePositionRestartConformance extends RestartConformance {
+
+        @Override
+        protected RestartableSubscriptionModelFixture createFixture() {
+            return new WorkingRestartableSubscriptionModelFixture(true, true);
+        }
+    }
+
+    static class DeclinesLateCommitsRestartConformance extends RestartConformance {
+
+        @Override
+        protected RestartableSubscriptionModelFixture createFixture() {
+            return new FixtureWithoutLateCommits();
+        }
+    }
+
     private static class NoopSubscriptionModelFixture implements SubscriptionModelFixture {
 
         @Override
@@ -467,6 +506,42 @@ class SuiteNeverSkipsTest {
         @Override
         public boolean resumesAfterARestart() {
             // Never reached: the model throws from subscribe long before the suite asks which branch to assert.
+            return true;
+        }
+
+        @Override
+        public LateCommits lateCommits() {
+            // Answered, so the suite fails on the model that honours nothing and not on a missing declaration.
+            return LateCommits.inPositionOrder();
+        }
+
+        @Override
+        public boolean honoursAGlobalPosition() {
+            return false;
+        }
+
+        @Override
+        public boolean refusesABareGlobalPosition() {
+            // Declared so the test that only a model handing out checkpoints owes runs, and fails, rather than
+            // returning early, which would make "honours nothing" pass one test.
+            return true;
+        }
+    }
+
+    /**
+     * A restartable fixture that never overrides {@link RestartableSubscriptionModelFixture#lateCommits()}. The suite
+     * touches it in setup, so every test fails there with the default's message.
+     */
+    private static class FixtureWithoutLateCommits extends NoopSubscriptionModelFixture
+            implements RestartableSubscriptionModelFixture {
+
+        @Override
+        public SubscriptionModel restart() {
+            return NoopSubscriptionModel.INSTANCE;
+        }
+
+        @Override
+        public boolean resumesAfterARestart() {
             return true;
         }
     }
@@ -519,12 +594,18 @@ class SuiteNeverSkipsTest {
 
         private final WorkingRestartableSubscriptionModel.Storage storage = new WorkingRestartableSubscriptionModel.Storage();
         private final boolean resumesAfterARestart;
+        private final boolean refusesABareGlobalPosition;
 
         private WorkingRestartableSubscriptionModel model;
 
         WorkingRestartableSubscriptionModelFixture(boolean resumesAfterARestart) {
+            this(resumesAfterARestart, false);
+        }
+
+        WorkingRestartableSubscriptionModelFixture(boolean resumesAfterARestart, boolean refusesABareGlobalPosition) {
             this.resumesAfterARestart = resumesAfterARestart;
-            this.model = new WorkingRestartableSubscriptionModel(storage, resumesAfterARestart);
+            this.refusesABareGlobalPosition = refusesABareGlobalPosition;
+            this.model = new WorkingRestartableSubscriptionModel(storage, resumesAfterARestart, refusesABareGlobalPosition);
         }
 
         @Override
@@ -535,13 +616,32 @@ class SuiteNeverSkipsTest {
         @Override
         public SubscriptionModel restart() {
             model.shutdown();
-            model = new WorkingRestartableSubscriptionModel(storage, resumesAfterARestart);
+            model = new WorkingRestartableSubscriptionModel(storage, resumesAfterARestart, refusesABareGlobalPosition);
             return model;
         }
 
         @Override
         public boolean resumesAfterARestart() {
             return resumesAfterARestart;
+        }
+
+        @Override
+        public LateCommits lateCommits() {
+            // The log appends and delivers as one step under one lock, so a lower position is never visible after a
+            // higher one.
+            return LateCommits.inPositionOrder();
+        }
+
+        @Override
+        public boolean honoursAGlobalPosition() {
+            // A model that resumes honours a bare position, and one that does not refuses it, one way or the other
+            // depending on whether it hands out checkpoints. All three branches get a green run.
+            return resumesAfterARestart && !refusesABareGlobalPosition;
+        }
+
+        @Override
+        public boolean refusesABareGlobalPosition() {
+            return refusesABareGlobalPosition;
         }
 
         @Override

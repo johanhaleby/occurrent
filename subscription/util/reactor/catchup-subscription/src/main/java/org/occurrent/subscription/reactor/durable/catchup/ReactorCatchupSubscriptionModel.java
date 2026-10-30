@@ -32,6 +32,7 @@ import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -50,6 +51,8 @@ import static java.util.Objects.requireNonNull;
  * {@code ReactorDcbCatchupSubscriptionModel} (DCB catch-up), so a single model serves an application that uses streams,
  * DCB, or both. Mirrors the routing of the blocking {@code CatchupSubscriptionModel}. A stream-only store that wants to
  * avoid the DCB dependency can use {@link ReactorStreamCatchupSubscriptionModel} directly as the DCB-free variant.
+ * <p>
+ * A dual-mode model refuses a subscription that has no filter and starts at a position checkpoint, with an {@link IllegalArgumentException} thrown from {@code subscribe} rather than signalled through a {@code Flux}, since the position could belong to stream events or to DCB events. Pass a {@link StreamSubscriptionFilter}, a {@link DcbSubscriptionFilter}, or an {@link AgnosticSubscriptionFilter} for both. A start at a time, at the beginning of time, or at the marked time form of a checkpoint needs no filter.
  * <p>
  * It also implements the reactor {@link SubscriptionModel} (issues #547 and #550): a named subscription is routed the
  * same way and handled by the routed inner model, which replays and then hands the live half to the wrapped model's
@@ -121,7 +124,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
-        return route(filter, startAt).subscribe(filter, startAt);
+        return route(null, filter, startAt).subscribe(filter, startAt);
     }
 
     /**
@@ -143,22 +146,22 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     // Route to the DCB, stream, or capability-agnostic catch-up model. An AgnosticSubscriptionFilter routes to the
     // unscoped agnostic model so both stream and DCB events are delivered; if there is no agnostic model (a DCB-only
     // store) it falls back to the DCB model, whose store has only DCB events anyway.
-    private CheckpointAwareSubscriptionModel route(@Nullable SubscriptionFilter filter, StartAt startAt) {
+    private CheckpointAwareSubscriptionModel route(@Nullable String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
         if (filter instanceof AgnosticSubscriptionFilter) {
             return agnosticCatchupSubscriptionModel != null
                     ? agnosticCatchupSubscriptionModel
                     : requireNonNull(dcbCatchupSubscriptionModel);
         }
-        return routesToDcb(filter, startAt)
+        return routesToDcb(subscriptionId, filter, startAt)
                 ? requireNonNull(dcbCatchupSubscriptionModel)
                 : requireNonNull(streamCatchupSubscriptionModel);
     }
 
     // Route to the DCB path or the stream path. A single-mode model has only one inner model and always routes there.
     // A dual-mode model routes by filter type first, since a global position start is ambiguous. Stream and DCB replay
-    // both use a GlobalCheckpoint, so only the filter tells them apart. A null filter falls back to the
-    // position heuristic and is narrowed by the default query or filter.
-    private boolean routesToDcb(@Nullable SubscriptionFilter filter, StartAt startAt) {
+    // both use a GlobalCheckpoint, so only the filter tells them apart. A null filter with a position start is refused
+    // instead of guessed. A null filter with any other start is narrowed by the default query or filter.
+    private boolean routesToDcb(@Nullable String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
         if (dcbCatchupSubscriptionModel == null) {
             return false;
         }
@@ -171,13 +174,23 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         if (filter instanceof StreamSubscriptionFilter) {
             return false;
         }
-        return startsAtExplicitDcbPosition(startAt);
+        boolean positionStart = startsAtExplicitDcbPosition(startAt);
+        // Without a filter the position could be a stream position or a DCB position, and routing it to DCB would
+        // silently drop the stream events after it
+        if (positionStart && filter == null) {
+            throw new IllegalArgumentException((subscriptionId == null ? "A subscription" : "Subscription '" + subscriptionId + "'")
+                    + " has no subscription filter and starts at a position checkpoint, which a model with both a stream and a DCB store cannot route. Pass a "
+                    + StreamSubscriptionFilter.class.getSimpleName() + " for stream events, a " + DcbSubscriptionFilter.class.getSimpleName() + " for DCB events, or an "
+                    + AgnosticSubscriptionFilter.class.getSimpleName() + " for both.");
+        }
+        return positionStart;
     }
 
     private static boolean startsAtExplicitDcbPosition(StartAt startAt) {
         StartAt resolved = startAt.get(new StartAt.SubscriptionModelContext(ReactorCatchupSubscriptionModel.class));
+        // The marked form of a time replay starts with the position prefix, and goes to the stream model, which refuses it
         return resolved instanceof StartAtCheckpoint position
-                && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
+                && !CatchupCheckpoints.isMarkedTime(position.checkpoint) && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
     }
 
     @Override
@@ -218,18 +231,19 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         // Before route(..), which can evaluate a dynamic StartAt. shutdown() shuts this inner model down first.
         (streamCatchupSubscriptionModel != null ? streamCatchupSubscriptionModel.namedSubscriptions : requireNonNull(dcbCatchupSubscriptionModel).namedSubscriptions).requireNamedAndNotShutdown();
-        SubscriptionModel routed = (SubscriptionModel) route(filter, startAt);
+        SubscriptionModel routed = (SubscriptionModel) route(subscriptionId, filter, startAt);
         // Claim the owner slot before subscribing, so a life-cycle call racing the subscribe reaches the model that
         // owns the replay before that model has registered the replay itself; roll the claim back if the subscribe
         // refuses, so the id stays free.
-        if (subscriptionOwners.putIfAbsent(subscriptionId, routed) != null) {
+        Route route = new Route(routed);
+        if (subscriptionOwners.putIfAbsent(subscriptionId, route) != null) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         final Subscription subscription;
         try {
             subscription = routed.subscribe(subscriptionId, filter, startAt, action);
         } catch (RuntimeException e) {
-            subscriptionOwners.remove(subscriptionId, routed);
+            subscriptionOwners.remove(subscriptionId, route);
             throw e;
         }
         return subscription;
@@ -238,15 +252,27 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     // Which inner model a named subscription was routed to, so a per-subscription life-cycle call reaches the model
     // that may still be replaying it. It is also the duplicate-id guard across the inner models, which cannot see each
     // other's replays because an id stays invisible to the wrapped model until the handover.
-    private final ConcurrentMap<String, SubscriptionModel> subscriptionOwners = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Route> subscriptionOwners = new ConcurrentHashMap<>();
+
+    // One per subscribe, so a cancel that ends forgets only the route it read and never that of a later subscribe
+    private static final class Route {
+        private final SubscriptionModel owner;
+        // Read and written only inside a compute of subscriptionOwners on this route's id
+        private int cancelsUnderWay;
+        private boolean cancelEnded;
+
+        private Route(SubscriptionModel owner) {
+            this.owner = owner;
+        }
+    }
 
     // Routes a per-subscription life-cycle call. The record above answers for every id this dispatcher created, and a
     // replay still in flight is the one state the wrapped model cannot answer for, so the inner models are asked next.
     // Anything left belongs to the wrapped model, and every inner model forwards there, so one of them gives its answer.
     private SubscriptionModel ownerOf(String subscriptionId) {
-        SubscriptionModel owner = subscriptionOwners.get(subscriptionId);
-        if (owner != null) {
-            return owner;
+        Route route = subscriptionOwners.get(subscriptionId);
+        if (route != null) {
+            return route.owner;
         }
         SubscriptionModel replaying = innerModelCatchingUp(subscriptionId);
         return replaying != null ? replaying : anyInnerModel();
@@ -362,11 +388,49 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         ownerOf(subscriptionId).pauseSubscription(subscriptionId);
     }
 
+    /**
+     * Passes the cancel to the inner catch-up model that holds the subscription, see
+     * {@link ReactorStreamCatchupSubscriptionModel#cancelSubscription(String)}. Until the {@code Mono} this returns has
+     * completed or failed, and every other cancel of {@code subscriptionId} through this model has too, a subscribe of
+     * that id through this model throws {@link DuplicateSubscriptionIdException}, and the other calls for that id reach
+     * that inner model. That holds also when nothing subscribes to the {@code Mono}.
+     */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
-        SubscriptionModel owner = ownerOf(subscriptionId);
-        subscriptionOwners.remove(subscriptionId);
-        return owner.cancelSubscription(subscriptionId);
+        Route route = subscriptionOwners.computeIfPresent(subscriptionId, (id, current) -> {
+            current.cancelsUnderWay++;
+            return current;
+        });
+        if (route == null) {
+            return ownerOf(subscriptionId).cancelSubscription(subscriptionId);
+        }
+        Mono<Void> cancelled;
+        try {
+            cancelled = route.owner.cancelSubscription(subscriptionId);
+        } catch (RuntimeException | Error e) {
+            // Kept, so later calls still reach the owner after a cancel it refuses
+            cancelEnds(subscriptionId, route, false);
+            throw e;
+        }
+        Mono<Void> ended = cancelled.doOnTerminate(() -> cancelEnds(subscriptionId, route, true)).cache();
+        // Subscribed here so the route is forgotten even when nothing subscribes to what this returns. The owner logs
+        // a cancel that fails.
+        ended.subscribe(unused -> {
+        }, failure -> {
+        });
+        return ended;
+    }
+
+    // Forgets the route once no cancel of it is under way and one of them has ended
+    private void cancelEnds(String subscriptionId, Route route, boolean ended) {
+        subscriptionOwners.computeIfPresent(subscriptionId, (id, current) -> {
+            if (current != route) {
+                return current;
+            }
+            current.cancelEnded |= ended;
+            current.cancelsUnderWay--;
+            return current.cancelsUnderWay == 0 && current.cancelEnded ? null : current;
+        });
     }
 
     @Override

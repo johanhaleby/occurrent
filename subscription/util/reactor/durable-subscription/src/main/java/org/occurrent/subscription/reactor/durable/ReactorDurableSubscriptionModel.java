@@ -25,7 +25,6 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
-import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -238,7 +237,8 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * refusals above into a start without a recorded position, accepting the loss window it documents.
  * <p>
  * When the wrapped model implements {@link HistoryLossReportingSubscriptions}, this model passes the listeners and
- * {@link #subscribeFailingIfStartLost(SubscriptionFilter, StartAt)} to it. When this model hands its subscriptions to a
+ * {@link #subscribeFailingIfStartLost(SubscriptionFilter, StartAt)} and {@link #subscribeFailingOnHistoryLoss(SubscriptionFilter, StartAt)}
+ * to it. When this model hands its subscriptions to a
  * wrapped model that implements {@link RepositionableSubscriptions}, it resumes a subscription at a given position
  * there. So a catch-up subscription model that wraps this model takes over a subscription whose live start the wrapped model
  * loses as it opens, and the wrapped model doesn't restart that subscription from the present. A subscription handed
@@ -419,6 +419,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     @Override
     public Flux<CloudEvent> subscribeFailingIfStartLost(@Nullable SubscriptionFilter filter, StartAt startAt) {
         return historyLossReportingOfTheWrappedModel().subscribeFailingIfStartLost(filter, startAt);
+    }
+
+    /**
+     * The wrapped model's {@link HistoryLossReportingSubscriptions#subscribeFailingOnHistoryLoss(SubscriptionFilter, StartAt)},
+     * which stores no checkpoint, as {@link #subscribe(SubscriptionFilter, StartAt)} doesn't.
+     *
+     * @throws UnsupportedOperationException If the wrapped model doesn't implement {@link HistoryLossReportingSubscriptions}.
+     */
+    @Override
+    public Flux<CloudEvent> subscribeFailingOnHistoryLoss(@Nullable SubscriptionFilter filter, StartAt startAt) {
+        return historyLossReportingOfTheWrappedModel().subscribeFailingOnHistoryLoss(filter, startAt);
     }
 
     private Optional<HistoryLossReportingSubscriptions> historyLossReporting() {
@@ -2077,8 +2088,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // checkpoint written back, before the subscription starts, and before resolveFirstCheckpointRace for a
             // registration with positionAtRegistration.
             TakeOver readAfter = storedAtTheCall != null ? storedAtTheCall.takeOver() : writer.takeOver;
-            Mono<Checkpoint> stored = (storedAtTheCall != null ? storedAtTheCall.read() : readStoredPosition(subscriptionId, readAfter))
-                    .doOnNext(checkpoint -> warnIfStoredWithoutLiveStart(subscriptionId, checkpoint));
+            Mono<Checkpoint> stored = storedAtTheCall != null ? storedAtTheCall.read() : readStoredPosition(subscriptionId, readAfter);
             Mono<Checkpoint> held = readAfter.writtenBack == null ? stored
                     : stored.flatMap(checkpoint -> holdStartPosition(subscriptionId, checkpoint, readAfter, writer));
             final Mono<Checkpoint> startsFrom;
@@ -2152,16 +2162,6 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             return Mono.empty();
         }
         return resolveStartAt(subscriptionId, nextStartAt, positionNow, positionAtRegistration, present, writer, storedAtTheCall);
-    }
-
-    // A global position without a live start was stored by a catch-up from before the live start was kept. The
-    // catch-up resumes from it with a live start read now, which misses an event whose position was reserved below
-    // the stored one but written after the earlier replay read past it.
-    private static void warnIfStoredWithoutLiveStart(String subscriptionId, Checkpoint stored) {
-        if (GlobalCheckpoint.isGlobalCheckpoint(stored) && GlobalCheckpoint.parse(stored).liveFrom().isEmpty()) {
-            log.warn("Subscription {} resumes from stored checkpoint \"{}\", which has no live start. If a catch-up subscription stored it, an event written to a position below it after the earlier replay read past that position is not delivered. See the 0.34.0 upgrade guide.",
-                    subscriptionId, stored.asString());
-        }
     }
 
     // Deferred, so storage is asked only when the read is subscribed to, which is never under the monitor

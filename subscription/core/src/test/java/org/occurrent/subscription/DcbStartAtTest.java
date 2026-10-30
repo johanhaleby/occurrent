@@ -46,6 +46,16 @@ class DcbStartAtTest {
     }
 
     @Test
+    void beginning_is_a_start_at_position_zero() {
+        assertThat(DcbStartAt.beginning()).isEqualTo(new DcbStartAt.AtPosition(0));
+    }
+
+    @Test
+    void after_position_zero_is_the_beginning() {
+        assertThat(DcbStartAt.afterPosition(0)).isEqualTo(DcbStartAt.beginning());
+    }
+
+    @Test
     void after_position_maps_to_the_given_dcb_position() {
         StartAt startAt = DcbStartAt.afterPosition(5).toStartAt();
         assertThat(startAt).isInstanceOf(StartAt.StartAtCheckpoint.class);
@@ -57,6 +67,32 @@ class DcbStartAtTest {
         assertThatThrownBy(() -> DcbStartAt.afterPosition(-1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("negative");
+    }
+
+    @Test
+    void checkpoint_maps_to_a_string_based_checkpoint_of_the_given_string() {
+        // Given
+        String delivered = "position:5;origin:0;liveFrom:token";
+
+        // When
+        StartAt startAt = DcbStartAt.checkpoint(delivered).toStartAt();
+
+        // Then
+        assertThat(startAt).isInstanceOf(StartAt.StartAtCheckpoint.class);
+        assertThat(((StartAt.StartAtCheckpoint) startAt).checkpoint).isEqualTo(new StringBasedCheckpoint(delivered));
+    }
+
+    @Test
+    void checkpoint_rejects_null_eagerly() {
+        assertThatThrownBy(() -> DcbStartAt.checkpoint(null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void checkpoint_rejects_a_blank_string_eagerly() {
+        assertThatThrownBy(() -> DcbStartAt.checkpoint(" "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("blank");
     }
 
     @Test

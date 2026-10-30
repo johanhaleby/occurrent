@@ -33,6 +33,23 @@
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-core</artifactId>
         </dependency>
+        <!-- The late-commit hold (HeldAppend, LateAppend) is shared by the event-store and the subscription suites, and
+             it hands out the stores it holds, so it needs their API types. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-api-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-api-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-api-dcb</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>
@@ -62,4 +79,19 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- Read by ScaffoldingNeverShipsInAReleaseTest, which fails a release build that still contains
+                             org.occurrent.tck.internal.scaffolding. -->
+                        <occurrent.tck.project.version>${project.version}</occurrent.tck.project.version>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

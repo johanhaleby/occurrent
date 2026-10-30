@@ -4,7 +4,10 @@ Date: 2026-07-17
 
 ## Status
 
-Accepted
+Accepted. Amended by [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md), which makes a DCB snapshot's version the
+marker versions of its boundary instead of a position. The passage below that calls a DCB version a global position that
+never resets, so that a DCB snapshot can never be ahead of its head, no longer describes it. A pruned marker can now put
+a DCB snapshot ahead of its boundary, and the read refuses such a snapshot instead of applying events onto it.
 
 ## Context
 

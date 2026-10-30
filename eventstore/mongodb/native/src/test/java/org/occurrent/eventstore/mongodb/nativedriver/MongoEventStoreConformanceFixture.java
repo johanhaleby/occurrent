@@ -24,6 +24,10 @@ import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.*;
+import org.occurrent.tck.latecommit.AppendHold;
+import org.occurrent.tck.latecommit.HeldAppend;
+import org.occurrent.tck.latecommit.LateCommits;
+import org.occurrent.testsupport.mongodb.HoldingMongoClient;
 
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
@@ -37,6 +41,7 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
     private final MongoClient mongoClient;
     private final String database;
     private final MongoEventStore eventStore;
+    private final EventStoreConfig eventStoreConfig;
     private final TimeRepresentation timeRepresentation;
 
     MongoEventStoreConformanceFixture(ConnectionString connectionString) {
@@ -47,11 +52,11 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
         this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
         this.database = requireNonNull(connectionString.getDatabase());
-        EventStoreConfig config = new EventStoreConfig.Builder()
+        this.eventStoreConfig = new EventStoreConfig.Builder()
                 .timeRepresentation(timeRepresentation)
                 .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
                 .build();
-        this.eventStore = new MongoEventStore(mongoClient, database, "events", config);
+        this.eventStore = new MongoEventStore(mongoClient, database, "events", eventStoreConfig);
     }
 
     @Override
@@ -108,6 +113,26 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
     @Override
     public DcbAppendConditionModel appendConditionModel() {
         return DcbAppendConditionModel.TAG_MARKER;
+    }
+
+    /**
+     * The store reserves the position block before the append transaction starts, so an append can be held between the
+     * two. The hold is a client that blocks the first {@code startSession}, which the store calls after it has reserved
+     * its position and before it begins the transaction.
+     */
+    @Override
+    public LateCommits lateCommits() {
+        return LateCommits.holding(() -> {
+            AppendHold hold = new AppendHold();
+            MongoClient holdingClient = HoldingMongoClient.beforeEachSession(mongoClient, () -> {
+                if (hold.engage()) {
+                    hold.awaitRelease();
+                }
+            });
+            MongoEventStore holding = new MongoEventStore(holdingClient, database, "events", eventStoreConfig);
+            return HeldAppend.of(hold, holding, () -> {
+            });
+        });
     }
 
     @Override

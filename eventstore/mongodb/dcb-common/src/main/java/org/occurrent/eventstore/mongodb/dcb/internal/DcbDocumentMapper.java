@@ -58,14 +58,16 @@ public final class DcbDocumentMapper {
     }
 
     /**
-     * Converts a stored document back to a CloudEvent. The DCB index fields are stripped before delegating to the
-     * stream mapper, and the position is reattached as a CloudEvent extension. A plain stream document carries
-     * neither field, so this also handles stream events and is safe as the single deserialization point for both.
+     * Converts a stored document back to a CloudEvent. The DCB index fields and the marker versions are stripped before
+     * delegating to the stream mapper, and the position is reattached as a CloudEvent extension. A plain stream document
+     * carries none of these fields, so this also handles stream events and is safe as the single deserialization point
+     * for both.
      */
     public static CloudEvent toCloudEvent(TimeRepresentation timeRepresentation, Document cloudEventDocument) {
         Object storedPosition = cloudEventDocument.get(OccurrentCloudEventExtension.POSITION);
         Document stripped = new Document(cloudEventDocument);
         stripped.remove(DCB_TAGS_INDEX_FIELD);
+        stripped.remove(DcbMarkerModel.EVENT_MARKER_VERSIONS);
         PositionDocumentMapper.stripPosition(stripped);
 
         CloudEvent cloudEvent = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(timeRepresentation, stripped);
@@ -89,6 +91,18 @@ public final class DcbDocumentMapper {
         }
         if (DcbCloudEvents.isDcbEvent(originalCloudEvent)) {
             updatedDocument.put(DCB_TAGS_INDEX_FIELD, DcbCloudEvents.getTags(originalCloudEvent).stream().map(Tag::canonical).collect(Collectors.toCollection(ArrayList::new)));
+        }
+    }
+
+    /**
+     * Copies the marker versions of {@code originalDocument} onto {@code updatedDocument}, for an {@code updateEvent}
+     * write-back that rebuilt the document from a CloudEvent, which no longer carries them. The raw value is copied
+     * whatever its BSON type, never through a typed cast, since an older {@code updateEvent} may have left a string
+     * there. A document without marker versions leaves {@code updatedDocument} as it is.
+     */
+    public static void preserveMarkerVersions(Document originalDocument, Document updatedDocument) {
+        if (originalDocument.containsKey(DcbMarkerModel.EVENT_MARKER_VERSIONS)) {
+            updatedDocument.put(DcbMarkerModel.EVENT_MARKER_VERSIONS, originalDocument.get(DcbMarkerModel.EVENT_MARKER_VERSIONS));
         }
     }
 }

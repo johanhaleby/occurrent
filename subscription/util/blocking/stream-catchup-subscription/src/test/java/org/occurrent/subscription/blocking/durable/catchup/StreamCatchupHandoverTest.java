@@ -26,6 +26,8 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
@@ -175,7 +177,7 @@ class StreamCatchupHandoverTest {
     // whose bulk read can trigger a write as a side effect, landing that event in the reconciliation delta instead
     // of the bulk history, the same overlap FakePositionStore's heads(bulkHead, reconcileHead) produces for the
     // position path.
-    private static final class FakeTimeEventStoreQueries implements EventStoreQueries {
+    private static final class FakeTimeEventStoreQueries implements EventStoreQueries, CatchupReads {
         private final List<CloudEvent> events = new ArrayList<>();
         private Runnable duringBulkRead = () -> {
         };
@@ -187,6 +189,12 @@ class StreamCatchupHandoverTest {
 
         void append(CloudEvent event) {
             events.add(event);
+        }
+
+        // Appends are visible as soon as they return and the time path never reads by position, so the scope reads the fake directly
+        @Override
+        public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+            return TimeOrderedCatchupReads.over(this).openCatchupReadScope(notBefore);
         }
 
         @Override
@@ -223,7 +231,7 @@ class StreamCatchupHandoverTest {
     // A position-ordered store whose currentPosition answers a scripted sequence of heads (bulk head, then reconcile
     // snapshot) so a test can make the head advance mid-replay. readInPositionOrder honors the range bounds. The
     // time-based query paths must never run in position mode, so they fail loudly.
-    private static final class FakePositionStore implements EventStoreQueries, PositionOrderedReader {
+    private static final class FakePositionStore implements EventStoreQueries, PositionOrderedReader, CatchupReads {
         private final TreeMap<Long, CloudEvent> byPosition = new TreeMap<>();
         private long[] heads = {0L};
         private int headIndex = 0;
@@ -245,6 +253,12 @@ class StreamCatchupHandoverTest {
         FakePositionStore heads(long... heads) {
             this.heads = heads;
             return this;
+        }
+
+        // Positions and events are in memory and become visible together, so the scope reads the fake directly
+        @Override
+        public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+            return CatchupReads.unscoped(this, this).openCatchupReadScope(notBefore);
         }
 
         @Override

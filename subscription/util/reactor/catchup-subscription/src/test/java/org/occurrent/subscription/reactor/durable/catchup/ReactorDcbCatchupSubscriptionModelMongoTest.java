@@ -32,17 +32,26 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
+import org.occurrent.tck.latecommit.AppendHold;
+import org.occurrent.tck.latecommit.LateCommitGuarantee;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.HoldingTransactionalOperator;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -57,10 +66,14 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
 @Timeout(120)
@@ -76,6 +89,8 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     OccurrentMongoFlush flush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private ReactorMongoEventStore eventStore;
+    private ReactiveMongoTemplate mongoTemplate;
+    private ReactiveMongoTransactionManager tx;
     private ReactorMongoSubscriptionModel subscriptionModel;
     private CloudEventConverter<DomainEvent> converter;
     private MongoClient mongoClient;
@@ -85,8 +100,8 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     void create_instances() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcbcatchup");
         mongoClient = MongoClients.create(connectionString);
-        ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
-        ReactiveMongoTransactionManager tx = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        tx = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig config = new EventStoreConfig.Builder()
                 .eventStoreCollectionName("events")
                 .transactionConfig(tx)
@@ -196,6 +211,103 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
         });
     }
 
+    @Test
+    void a_position_the_application_stored_itself_is_refused() {
+        // The first append reserves its position and parks before its transaction starts, without blocking a thread
+        AppendHold hold = new AppendHold();
+        CountDownLatch parked = new CountDownLatch(1);
+        EventStoreConfig holdingConfig = new EventStoreConfig.Builder()
+                .eventStoreCollectionName("events")
+                .transactionConfig(new HoldingTransactionalOperator(TransactionalOperator.create(tx), () -> {
+                    if (!hold.engage()) {
+                        return Mono.empty();
+                    }
+                    parked.countDown();
+                    return Mono.fromFuture(hold.released()).timeout(AppendHold.RELEASE_TIMEOUT);
+                }))
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                .build();
+        ReactorMongoEventStore holdingStore = new ReactorMongoEventStore(mongoTemplate, holdingConfig);
+        AtomicReference<DcbAppendResult> appendedA = new AtomicReference<>();
+        disposables.add(holdingStore.append(tagged(name("A"), "name:a")).doOnNext(appendedA::set).subscribe());
+        await().atMost(Duration.ofSeconds(20)).until(() -> parked.getCount() == 0);
+        DcbAppendResult appendedB = holdingStore.append(tagged(name("B"), "name:b")).block();
+        DcbAppendResult appendedC = holdingStore.append(tagged(name("C"), "name:c")).block();
+
+        // A commits below the position the application stored for C
+        hold.released().complete(null);
+        await().atMost(Duration.ofSeconds(20)).until(() -> appendedA.get() != null);
+        assertThat(appendedA.get().firstSequencePosition()).as("A reserved its position before B did").isLessThan(requireNonNull(appendedB).firstSequencePosition());
+
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+
+        // When
+        Throwable failure = catchThrowable(() -> catchup.subscribe(DcbCriteria.all(), DcbStartAt.afterPosition(requireNonNull(appendedC).lastSequencePosition()))
+                .map(ce -> ((NameDefined) converter.toDomainEvent(ce)).name()).doOnNext(received::add).blockLast(Duration.ofSeconds(40)));
+
+        // Then
+        assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                .hasMessageContaining("after position " + requireNonNull(appendedC).lastSequencePosition())
+                .hasMessageContaining("EventMetadata.getCheckpoint()");
+        assertThat(received).as("delivered").isEmpty();
+    }
+
+    @Test
+    void an_event_that_committed_below_the_checkpoint_the_application_stored_from_a_delivered_event_is_delivered() {
+        // The first append reserves its position and parks before its transaction starts, without blocking a thread
+        AppendHold hold = new AppendHold();
+        CountDownLatch parked = new CountDownLatch(1);
+        EventStoreConfig holdingConfig = new EventStoreConfig.Builder()
+                .eventStoreCollectionName("events")
+                .transactionConfig(new HoldingTransactionalOperator(TransactionalOperator.create(tx), () -> {
+                    if (!hold.engage()) {
+                        return Mono.empty();
+                    }
+                    parked.countDown();
+                    return Mono.fromFuture(hold.released()).timeout(AppendHold.RELEASE_TIMEOUT);
+                }))
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                .build();
+        ReactorMongoEventStore holdingStore = new ReactorMongoEventStore(mongoTemplate, holdingConfig);
+        AtomicReference<DcbAppendResult> appendedA = new AtomicReference<>();
+        disposables.add(holdingStore.append(tagged(name("A"), "name:a")).doOnNext(appendedA::set).subscribe());
+        await().atMost(Duration.ofSeconds(20)).until(() -> parked.getCount() == 0);
+        DcbAppendResult appendedB = holdingStore.append(tagged(name("B"), "name:b")).block();
+        holdingStore.append(tagged(name("C"), "name:c")).block();
+
+        // A first subscription delivers B and C, and the application stores the checkpoint C was delivered with
+        AtomicReference<String> checkpointOfC = new AtomicReference<>();
+        ReactorDcbCatchupSubscriptionModel first = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore);
+        Disposable firstSubscription = first.subscribe(DcbCriteria.all(), DcbStartAt.beginning()).doOnNext(ce -> {
+            if (((NameDefined) converter.toDomainEvent(ce)).name().equals("C")) {
+                checkpointOfC.set(EventMetadata.from(ce).getCheckpoint().orElseThrow());
+            }
+        }).subscribe();
+        disposables.add(firstSubscription);
+        await().atMost(Duration.ofSeconds(40)).until(() -> checkpointOfC.get() != null);
+        firstSubscription.dispose();
+
+        // A commits below that checkpoint
+        hold.released().complete(null);
+        await().atMost(Duration.ofSeconds(20)).until(() -> appendedA.get() != null);
+        assertThat(appendedA.get().firstSequencePosition()).as("A reserved its position before B did").isLessThan(requireNonNull(appendedB).firstSequencePosition());
+
+        // When a second subscription starts from the stored checkpoint
+        ReactorDcbCatchupSubscriptionModel second = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(second.subscribe(DcbCriteria.all(), DcbStartAt.checkpoint(checkpointOfC.get())), received);
+        appendTagged(name("D"), "name:d");
+
+        // Then
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).as("the started subscription is delivering").contains("D"));
+        LateCommitGuarantee.require(received.contains("A"),
+                "the event that committed below the stored checkpoint is delivered",
+                () -> "the subscription was delivered " + received);
+    }
+
     private void subscribe(Flux<CloudEvent> flux, CopyOnWriteArrayList<String> received) {
         disposables.add(flux.map(ce -> ((NameDefined) converter.toDomainEvent(ce)).name()).doOnNext(received::add).subscribe());
         // Give the change-stream subscription a moment to start before the test writes more events.
@@ -207,8 +319,12 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     }
 
     private void appendTagged(DomainEvent event, String tag) {
+        eventStore.append(tagged(event, tag)).block();
+    }
+
+    private List<CloudEvent> tagged(DomainEvent event, String tag) {
         CloudEvent cloudEvent = converter.toCloudEvents(List.of(event)).get(0);
-        eventStore.append(List.of(DcbCloudEvents.withTags(cloudEvent, Set.of(Tag.parse(tag))))).block();
+        return List.of(DcbCloudEvents.withTags(cloudEvent, Set.of(Tag.parse(tag))));
     }
 
     private static void sleep(long millis) {
@@ -223,7 +339,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     // the head probe (afterPosition == upToPosition), so the delay is applied to the first real window read after it.
     // The event committed during the delay lands above the captured bulk head and must be recovered exactly once
     // through reconciliation or the live subscription, which resumes from a token captured before the replay.
-    private static final class DelayFirstReadDcbEventStore implements DcbEventStore {
+    private static final class DelayFirstReadDcbEventStore implements DcbEventStore, DcbCatchupReads {
         private final DcbEventStore delegate;
         private final Duration delay;
         private final AtomicBoolean firstReadStarted;
@@ -237,14 +353,39 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
 
         @Override
         public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
+            return delayedUnlessHeadProbe(options, () -> delegate.read(criteria, options));
+        }
+
+        // The reads of the catch-up go through the scope the delegate opens, so the first window read of the scope is delayed
+        @Override
+        public Mono<DcbCatchupReadScope> openDcbCatchupReadScope(@Nullable String notBefore) {
+            return ((DcbCatchupReads) delegate).openDcbCatchupReadScope(notBefore).map(scope -> new DcbCatchupReadScope() {
+                @Override
+                public @Nullable String liveStart() {
+                    return scope.liveStart();
+                }
+
+                @Override
+                public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
+                    return delayedUnlessHeadProbe(options, () -> scope.read(criteria, options));
+                }
+
+                @Override
+                public Mono<Void> close() {
+                    return scope.close();
+                }
+            });
+        }
+
+        private Mono<DcbEventStream> delayedUnlessHeadProbe(DcbReadOptions options, Supplier<Mono<DcbEventStream>> read) {
             boolean isHeadProbe = options.afterPosition().orElse(0) == options.upToPosition().orElse(0);
             if (!isHeadProbe && windowDelayed.compareAndSet(false, true)) {
                 return Mono.defer(() -> {
                     firstReadStarted.set(true);
-                    return delegate.read(criteria, options).delayElement(delay);
+                    return read.get().delayElement(delay);
                 });
             }
-            return delegate.read(criteria, options);
+            return read.get();
         }
 
         @Override

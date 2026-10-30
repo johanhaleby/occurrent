@@ -22,6 +22,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
@@ -32,14 +33,22 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -126,6 +135,33 @@ class DcbSubscriptionsTest {
     }
 
     @Test
+    void subscribe_with_metadata_exposes_the_checkpoint_the_subscription_model_delivered_the_event_with() {
+        // Given
+        DcbSubscriptions<DomainEvent> checkpointed = new DcbSubscriptions<>(new CheckpointDeliveringSubscriptionModel(subscriptionModel, "position:1;origin:0;liveFrom:token"), cloudEventConverter);
+        CopyOnWriteArrayList<Optional<String>> checkpoints = new CopyOnWriteArrayList<>();
+        checkpointed.subscribeWithMetadata("subscription", DcbCriteria.tags(Tag.of("name", "1")), (metadata, event) -> checkpoints.add(metadata.checkpoint())).waitUntilStarted();
+
+        // When
+        append("name:1", new NameDefined("eventId1", time, "name", "Some Doe"));
+
+        // Then
+        await().untilAsserted(() -> assertThat(checkpoints).containsExactly(Optional.of("position:1;origin:0;liveFrom:token")));
+    }
+
+    @Test
+    void subscribe_with_metadata_has_no_checkpoint_when_the_subscription_model_delivers_none() {
+        // Given
+        CopyOnWriteArrayList<Optional<String>> checkpoints = new CopyOnWriteArrayList<>();
+        dcbSubscriptions.subscribeWithMetadata("subscription", DcbCriteria.tags(Tag.of("name", "1")), (metadata, event) -> checkpoints.add(metadata.checkpoint())).waitUntilStarted();
+
+        // When
+        append("name:1", new NameDefined("eventId1", time, "name", "Some Doe"));
+
+        // Then
+        await().untilAsserted(() -> assertThat(checkpoints).containsExactly(Optional.empty()));
+    }
+
+    @Test
     void cancel_stops_further_delivery_to_the_subscription() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         dcbSubscriptions.subscribe("subscription", DcbCriteria.tags(Tag.of("name", "1")), (DomainEvent event) -> received.add(event)).waitUntilStarted();
@@ -159,5 +195,66 @@ class DcbSubscriptionsTest {
                 .map(event -> DcbCloudEvents.withTags(event, parsedTags))
                 .toList();
         eventStore.append(cloudEvents);
+    }
+
+    // Hands every event to the subscriber the way a catch-up model hands one it replays
+    private static final class CheckpointDeliveringSubscriptionModel implements SubscriptionModel {
+        private final SubscriptionModel delegate;
+        private final String checkpoint;
+
+        CheckpointDeliveringSubscriptionModel(SubscriptionModel delegate, String checkpoint) {
+            this.delegate = delegate;
+            this.checkpoint = checkpoint;
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, cloudEvent -> action.accept(new CheckpointAwareCloudEvent(cloudEvent, new StringBasedCheckpoint(checkpoint))));
+        }
+
+        @Override
+        public void stop() {
+            delegate.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            delegate.start(resumeSubscriptionsAutomatically);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return delegate.isRunning();
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return delegate.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return delegate.isPaused(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            delegate.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            delegate.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
     }
 }

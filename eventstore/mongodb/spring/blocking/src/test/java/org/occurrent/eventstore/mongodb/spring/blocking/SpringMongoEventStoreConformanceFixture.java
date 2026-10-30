@@ -24,9 +24,14 @@ import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.*;
+import org.occurrent.tck.latecommit.AppendHold;
+import org.occurrent.tck.latecommit.HeldAppend;
+import org.occurrent.tck.latecommit.LateCommits;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
@@ -46,6 +51,7 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
     private final MongoTemplate mongoTemplate;
     private final MongoTransactionManager transactionManager;
     private final SpringMongoEventStore eventStore;
+    private final String collection;
     private final TimeRepresentation timeRepresentation;
 
     SpringMongoEventStoreConformanceFixture(ConnectionString connectionString) {
@@ -56,6 +62,7 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
         this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
         String database = requireNonNull(connectionString.getDatabase());
+        this.collection = connectionString.getCollection();
         this.mongoTemplate = new MongoTemplate(mongoClient, database);
         this.transactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, database));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
@@ -121,6 +128,45 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
     @Override
     public DcbAppendConditionModel appendConditionModel() {
         return DcbAppendConditionModel.TAG_MARKER;
+    }
+
+    /**
+     * The store reserves the position block before the append transaction starts, so an append can be held between the
+     * two. The hold is a {@link TransactionTemplate} that parks the first {@code execute}, which the store calls after it
+     * has reserved its position and before it begins the transaction.
+     */
+    @Override
+    public LateCommits lateCommits() {
+        return LateCommits.holding(() -> {
+            AppendHold hold = new AppendHold();
+            EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
+                    .eventStoreCollectionName(collection)
+                    .transactionConfig(new HoldingTransactionTemplate(transactionManager, hold))
+                    .timeRepresentation(timeRepresentation)
+                    .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                    .build();
+            SpringMongoEventStore holding = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
+            return HeldAppend.of(hold, holding, () -> {
+            });
+        });
+    }
+
+    private static final class HoldingTransactionTemplate extends TransactionTemplate {
+
+        private final transient AppendHold hold;
+
+        HoldingTransactionTemplate(MongoTransactionManager transactionManager, AppendHold hold) {
+            super(transactionManager);
+            this.hold = hold;
+        }
+
+        @Override
+        public <T> T execute(TransactionCallback<T> action) {
+            if (hold.engage()) {
+                hold.awaitRelease();
+            }
+            return super.execute(action);
+        }
     }
 
     @Override

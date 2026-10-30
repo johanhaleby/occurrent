@@ -18,6 +18,8 @@ package org.occurrent.subscription;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.cloudevents.CheckpointCarrier;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 
 import java.util.function.Function;
@@ -25,9 +27,10 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Specifies where a DCB subscription should start. This is the DCB counterpart to {@link StartAt}: it can only express
- * DCB start positions (a {@code position} or one of the relative starts), never a time-based stream position, so a
- * DCB subscription cannot be handed a position that belongs to a stream subscription.
+ * Specifies where a DCB subscription should start. This is the DCB counterpart to {@link StartAt}: apart from
+ * {@link #checkpoint(String)}, which takes the string a subscription delivered, it can only express DCB start
+ * positions (a {@code position} or one of the relative starts), never a time-based stream position, so a DCB
+ * subscription cannot be handed a position that belongs to a stream subscription.
  * <p>
  * Convert to the generic {@link StartAt} the shared subscription model consumes with {@link #toStartAt()}.
  */
@@ -56,23 +59,39 @@ public sealed interface DcbStartAt {
 
     /**
      * Start subscribing from the beginning of the DCB sequence, replaying the whole history by {@code position} before
-     * switching to live delivery. Shorthand for {@code afterPosition(0)} (DCB positions are assigned from {@code 1}, so
-     * "after 0" is the first event). The history replay is performed by a catch-up-capable subscription model (the Spring
-     * Boot stack includes one), so a subscription model without catch-up support may not replay past events from this
-     * position.
+     * switching to live delivery. DCB positions are assigned from {@code 1}, so the replay starts after position
+     * {@code 0} and delivers the first event. A catch-up subscription model replays the history, and the Spring Boot
+     * stack includes one. A subscription model without catch-up support may not replay past events from this position,
+     * and the MongoDB subscription models refuse it with an {@link UnsupportedStartAtException}.
      */
     static DcbStartAt beginning() {
-        return afterPosition(0);
+        return new AtPosition(0);
     }
 
     /**
      * Start subscribing after the given DCB sequence position, delivering events from {@code lastProcessedPosition + 1}
-     * onward. This is resume semantics: {@code lastProcessedPosition} is the position you have already processed, so the
-     * event at that position is not redelivered. Use {@code 0} (or {@link #beginning()}) to replay the whole history,
-     * since DCB positions are assigned from {@code 1}.
+     * onward. {@code 0} replays the whole history, the same as {@link #beginning()}. A position above {@code 0} is
+     * refused at start, since an event that committed below it after you read it would never be delivered. To resume
+     * after an event, keep the checkpoint the subscription delivers with it and start from {@link #checkpoint(String)}.
+     *
+     * @deprecated A position above {@code 0} is refused. Use {@link #beginning()} to replay the whole history, and
+     * {@link #checkpoint(String)} to resume after an event.
      */
+    @Deprecated(forRemoval = true)
     static DcbStartAt afterPosition(long lastProcessedPosition) {
         return new AtPosition(lastProcessedPosition);
+    }
+
+    /**
+     * Start subscribing from a checkpoint the subscription delivered with an event, read from
+     * {@link EventMetadata#getCheckpoint()} or {@code DcbEventMetadata.checkpoint()}. Store it with the application's
+     * state, in the same transaction, and pass it back here on restart. The same as
+     * {@code StartAt.checkpoint(new StringBasedCheckpoint(checkpoint))}. {@link CheckpointCarrier#checkpoint()} says
+     * which subscription models understand it, and what a restart from it does once the oplog no longer reaches back
+     * to it.
+     */
+    static DcbStartAt checkpoint(String checkpoint) {
+        return new AtCheckpoint(checkpoint);
     }
 
     /**
@@ -110,6 +129,20 @@ public sealed interface DcbStartAt {
         @Override
         public StartAt toStartAt() {
             return StartAt.checkpoint(GlobalCheckpoint.of(lastProcessedPosition));
+        }
+    }
+
+    record AtCheckpoint(String checkpoint) implements DcbStartAt {
+        public AtCheckpoint {
+            requireNonNull(checkpoint, "DCB checkpoint cannot be null");
+            if (checkpoint.isBlank()) {
+                throw new IllegalArgumentException("DCB checkpoint cannot be blank");
+            }
+        }
+
+        @Override
+        public StartAt toStartAt() {
+            return StartAt.checkpoint(new StringBasedCheckpoint(checkpoint));
         }
     }
 

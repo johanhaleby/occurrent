@@ -16,6 +16,8 @@
 
 package org.occurrent.subscription.reactor.durable.catchup;
 
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -32,6 +34,8 @@ import reactor.test.StepVerifier;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorDcbCatchupSubscriptionModelTest {
 
@@ -43,6 +47,18 @@ class ReactorDcbCatchupSubscriptionModelTest {
         // errors instead of replaying. The event store is never read, the failure happens before the first replay read.
         StepVerifier.create(catchup.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.beginning()))
                 .expectError(IllegalStateException.class)
+                .verify();
+    }
+
+    @Test
+    void a_start_after_a_dcb_position_above_zero_is_refused_before_anything_is_read() {
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedDcbEventStore());
+
+        StepVerifier.create(catchup.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.afterPosition(2)))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(CatchupCannotResumeException.class)
+                        .hasMessageContaining("after position 2")
+                        .hasMessageContaining("EventMetadata.getCheckpoint()"))
                 .verify();
     }
 
@@ -108,7 +124,12 @@ class ReactorDcbCatchupSubscriptionModelTest {
         }
     }
 
-    private static final class UnusedDcbEventStore implements DcbEventStore {
+    private static final class UnusedDcbEventStore implements DcbEventStore, DcbCatchupReads {
+        @Override
+        public Mono<DcbCatchupReadScope> openDcbCatchupReadScope(@Nullable String notBefore) {
+            return DcbCatchupReads.unscoped(this).openDcbCatchupReadScope(notBefore);
+        }
+
         @Override
         public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
             return Mono.error(new AssertionError("read must not be called when the catch-up fails loudly"));

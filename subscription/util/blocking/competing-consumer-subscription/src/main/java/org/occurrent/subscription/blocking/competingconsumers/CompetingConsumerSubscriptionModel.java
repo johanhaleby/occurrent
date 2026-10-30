@@ -67,6 +67,24 @@ import static java.util.Objects.requireNonNull;
  * about the other instances, which are meant to use the very same id.
  * <br>
  * <br>
+ * A {@link StartAt#dynamic(java.util.function.Function)} start is read when the subscription is made, where a
+ * {@code null} answer for this model makes it a subscription that does not compete. The wrapped model reads it again when
+ * this node first gets the lease, and starts from what the function returns at that moment. So a start that reads a
+ * checkpoint the application stores with its own state starts from the latest one the application holds when this node
+ * takes over. When this node gets the lease back after losing it, the wrapped model resumes from its own position, not
+ * from the start. That can deliver events again. It skips none, unless the change stream history, such as the MongoDB
+ * oplog, no longer reaches back to that position and the wrapped model is set to restart after lost history, which
+ * restarts the subscription from the present. Under a catch-up subscription model the function is read once more then,
+ * only to decide whether the catch-up replays.
+ * <br>
+ * <br>
+ * A wrapped model can refuse a subscription when it starts it, as a catch-up model holding both a stream and a DCB
+ * catch-up refuses one with no filter that starts at a position checkpoint. When this node gets the lease while the
+ * subscription is made, or this model is stopped, {@code subscribe} throws the refusal and the subscription id is free
+ * again. When this node gets the lease later, the refusal is logged as a warning and the lease is given back. The
+ * subscription stays registered, so it fails the same way every time this node gets the lease, and the id stays taken.
+ * <br>
+ * <br>
  * {@link #pauseSubscription(String)} works on a node that has not won the lock, not only on the one delivering events.
  * Pausing such a node records the pause and stops it from competing until it is explicitly resumed, so cluster-wide
  * pause is calling {@link #pauseSubscription(String)} on every node

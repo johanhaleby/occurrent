@@ -38,9 +38,14 @@ import java.util.Optional;
  *                 constructor is always empty, and nothing stops a caller from passing {@link Optional#empty()} to
  *                 the four-argument one directly, so this component's presence is a property of where the result
  *                 came from, not one this record enforces on its own.
+ * @param markerVersions the versions of the conflict markers of the append condition's criteria after this append,
+ *                       read inside the append's transaction. Present only for an append whose condition has a
+ *                       consistency token and criteria other than {@link DcbCriteria.MatchAll}, on a store that
+ *                       reports marker versions. Every constructor other than the canonical one leaves it empty.
  */
 @NullMarked
-public record DcbAppendResult(long firstSequencePosition, long lastSequencePosition, int eventCount, Optional<AppendId> appendId) {
+public record DcbAppendResult(long firstSequencePosition, long lastSequencePosition, int eventCount, Optional<AppendId> appendId,
+                              Optional<DcbMarkerVersions> markerVersions) {
 
     public DcbAppendResult {
         if (firstSequencePosition <= 0) {
@@ -53,12 +58,22 @@ public record DcbAppendResult(long firstSequencePosition, long lastSequencePosit
             throw new IllegalArgumentException("Event count must be greater than zero");
         }
         Objects.requireNonNull(appendId, "Append id cannot be null");
+        Objects.requireNonNull(markerVersions, "Marker versions cannot be null");
     }
 
     /**
-     * Builds a result with no append id. Use {@link #DcbAppendResult(long, long, int, Optional)} to report one.
+     * Builds a result with no marker versions. Use {@link #DcbAppendResult(long, long, int, Optional, Optional)} to
+     * report them.
+     */
+    public DcbAppendResult(long firstSequencePosition, long lastSequencePosition, int eventCount, Optional<AppendId> appendId) {
+        this(firstSequencePosition, lastSequencePosition, eventCount, appendId, Optional.empty());
+    }
+
+    /**
+     * Builds a result with no append id and no marker versions. Use
+     * {@link #DcbAppendResult(long, long, int, Optional)} to report an append id.
      */
     public DcbAppendResult(long firstSequencePosition, long lastSequencePosition, int eventCount) {
-        this(firstSequencePosition, lastSequencePosition, eventCount, Optional.empty());
+        this(firstSequencePosition, lastSequencePosition, eventCount, Optional.empty(), Optional.empty());
     }
 }

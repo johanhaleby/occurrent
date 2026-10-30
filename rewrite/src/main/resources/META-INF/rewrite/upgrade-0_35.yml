@@ -20,4 +20,5 @@ displayName: Upgrade to Occurrent 0.35.0
 description: >-
   Migrates an application from Occurrent 0.34.0 to 0.35.0. See doc/migration/upgrading-to-0.35.0.md for what
   the release changes.
-recipeList: []
+recipeList:
+  - org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35

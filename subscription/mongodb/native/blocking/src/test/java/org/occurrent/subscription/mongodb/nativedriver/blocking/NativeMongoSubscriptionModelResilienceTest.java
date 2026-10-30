@@ -43,7 +43,9 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -77,6 +79,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import static java.time.ZoneOffset.UTC;
@@ -378,6 +381,48 @@ public class NativeMongoSubscriptionModelResilienceTest {
     }
 
     /**
+     * Wraps a collection whose first change stream fails with lost history as soon as it is iterated, and whose error
+     * code isn't returned until {@code released}. {@code checkingErrorCode} counts down when the model reads it, and
+     * {@code firstStreamEnded} when the model closes that stream a second time, which it does last when it has handled
+     * the failure. A later change stream reads nothing.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionWhoseFirstStreamLosesItsHistoryOnceReleased(CountDownLatch checkingErrorCode, CountDownLatch released, CountDownLatch firstStreamEnded) {
+        MongoCommandException historyLost = new MongoCommandException(changeStreamHistoryLostResponse(), new ServerAddress()) {
+            @Override
+            public int getErrorCode() {
+                checkingErrorCode.countDown();
+                try {
+                    released.await(10, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.getErrorCode();
+            }
+        };
+        AtomicInteger closes = new AtomicInteger();
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> firstCursor = mock(MongoChangeStreamCursor.class);
+        doThrow(historyLost).when(firstCursor).tryNext();
+        doAnswer(invocation -> {
+            if (closes.incrementAndGet() == 2) {
+                firstStreamEnded.countDown();
+            }
+            return null;
+        }).when(firstCursor).close();
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> laterCursor = mock(MongoChangeStreamCursor.class);
+        doAnswer(invocation -> {
+            // An empty batch, after the wait the server would have made
+            Thread.sleep(50);
+            return null;
+        }).when(laterCursor).tryNext();
+        ChangeStreamIterable<Document> firstIterable = iterableOf(firstCursor);
+        ChangeStreamIterable<Document> laterIterable = iterableOf(laterCursor);
+        MongoCollection<Document> collection = mock(MongoCollection.class);
+        when(collection.watch(anyList(), eq(Document.class))).thenReturn(firstIterable).thenReturn(laterIterable);
+        return collection;
+    }
+
+    /**
      * Wraps {@code realEventCollection} so that the first change stream hands {@code batch} to the model one document
      * at a time and ignores being closed, as the driver's own cursor does for the documents it has already fetched.
      * Every later {@code watch(...)} call behaves like the real collection.
@@ -429,6 +474,11 @@ public class NativeMongoSubscriptionModelResilienceTest {
     @Nested
     @DisplayName("ChangeStreamHistoryLost")
     class ChangeStreamHistoryLostTest {
+
+        private final MongoOperationTimeCheckpoint start = new MongoOperationTimeCheckpoint(new BsonTimestamp(1, 1));
+        private final CountDownLatch errorCodeReleased = new CountDownLatch(1);
+        private final CountDownLatch firstStreamEnded = new CountDownLatch(1);
+        private final CopyOnWriteArrayList<String> asked = new CopyOnWriteArrayList<>();
 
         @Test
         void a_subscription_made_while_the_model_is_stopped_whose_history_is_lost_before_start_gets_the_history_lost_handling() {
@@ -533,6 +583,59 @@ public class NativeMongoSubscriptionModelResilienceTest {
             // Then
             assertThat(pausing).isLessThan(Duration.ofMillis(500));
             assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
+        }
+
+        @Test
+        void a_history_loss_reported_by_a_run_that_was_cancelled_meanwhile_does_not_reach_the_listeners_of_the_subscription_made_in_its_place() throws InterruptedException {
+            // Given a subscription whose change stream lost its history, and a model that has not asked the listeners yet
+            String subscriptionId = subscribedWhoseHistoryLossIsHeldAtTheErrorCode();
+
+            // When the subscription is cancelled and made again
+            subscriptionModel.cancelSubscription(subscriptionId);
+            subscriptionModel.subscribe(subscriptionId, StartAt.checkpoint(start), __ -> {
+            });
+            errorCodeReleased.countDown();
+            assertThat(firstStreamEnded.await(10, SECONDS)).as("the first change stream ended").isTrue();
+
+            // Then
+            assertThat(asked).as("positions the listener was asked about").isEmpty();
+            assertThat(subscriptionModel.isRunning(subscriptionId)).as("the subscription made in its place runs").isTrue();
+        }
+
+        @Test
+        void a_history_loss_reported_by_the_run_that_is_current_reaches_the_listeners() throws InterruptedException {
+            // Given a subscription whose change stream lost its history, and a model that has not asked the listeners yet
+            String subscriptionId = subscribedWhoseHistoryLossIsHeldAtTheErrorCode();
+
+            // When nothing happens to the subscription meanwhile
+            errorCodeReleased.countDown();
+
+            // Then
+            await().atMost(10, SECONDS).untilAsserted(() -> assertThat(asked).containsExactly(subscriptionId + "@" + start.asString()));
+        }
+
+        // The model reads the error code before it asks the listeners, and is held there until errorCodeReleased
+        private String subscribedWhoseHistoryLossIsHeldAtTheErrorCode() throws InterruptedException {
+            CountDownLatch checkingErrorCode = new CountDownLatch(1);
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionWhoseFirstStreamLosesItsHistoryOnceReleased(checkingErrorCode, errorCodeReleased, firstStreamEnded),
+                    TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            subscriptionModel.addHistoryLossListener(new HistoryLossReportingSubscriptions.HistoryLossListener() {
+                @Override
+                public HistoryLossHandling handleHistoryLoss(String listenedSubscriptionId, Checkpoint lostFrom) {
+                    asked.add(listenedSubscriptionId + "@" + lostFrom.asString());
+                    return HistoryLossHandling.leaveToSubscriptionModel();
+                }
+
+                @Override
+                public void restartingAfterHistoryLoss(String listenedSubscriptionId, Checkpoint restartedFrom, BooleanSupplier stillCurrent) {
+                }
+            });
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.checkpoint(start), __ -> {
+            });
+            assertThat(checkingErrorCode.await(10, SECONDS)).as("the model reads the error code").isTrue();
+            return subscriptionId;
         }
 
         @Test

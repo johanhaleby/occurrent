@@ -21,6 +21,7 @@ import com.mongodb.client.*;
 import com.mongodb.client.model.*;
 import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
@@ -30,8 +31,13 @@ import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.*;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
+import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventRepairValidator;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
@@ -39,10 +45,13 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
+import org.occurrent.eventstore.mongodb.dcb.internal.MarkerVersionsReadFailures;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbTagsIndexCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
+import org.occurrent.eventstore.mongodb.internal.OperationTimeLiveStart;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter;
@@ -56,6 +65,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -85,9 +95,15 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWith
  * {@link EventStoreConfig.Builder#eventStoreCapabilities(Set)} to enable DCB, or to enable both stream and DCB
  * operations. Occurrent creates missing indexes for enabled capabilities, but it never removes indexes automatically.
  * For large production collections, create new indexes out-of-band before enabling a new capability.
+ * <p>
+ * A DCB read that asks for marker versions runs in a read-only snapshot transaction of its own, bounded by
+ * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a session the caller bound with
+ * {@link ClientSessionHolder} it reports no marker versions, since that transaction's writes may still abort, and a read
+ * after marker versions is refused. The store answers {@link DcbAppendConfirmation} with a majority read on the
+ * primary that joins no session.
  */
 @NullMarked
-public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader {
+public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation, CatchupReads, DcbCatchupReads {
     private static final Logger log = LoggerFactory.getLogger(MongoEventStore.class);
     private static final String ID = "_id";
     private static final String NATURAL = "$natural";
@@ -104,6 +120,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
     private final boolean streamPositionEnabled;
     private final boolean requireBackfilledPosition;
+    private final boolean resumeFromMarkerVersions;
+    private final TransactionOptions markerVersionsTransactionOptions;
+    private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
     /**
      * Create a new instance of {@code MongoEventStore}
@@ -147,6 +166,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // counter collection are not created when the startup guard disables position for this store.
         this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventCollection);
         this.requireBackfilledPosition = config.requireBackfilledPosition;
+        this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
+        this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
+        boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
+        if (dcbEnabled && !resumeFromMarkerVersions) {
+            log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
+        }
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -244,7 +269,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private Stream<Document> readCloudEvents(Bson query, int skip, int limit, SortBy sortBy) {
-        final FindIterable<Document> documentsWithoutSkipAndLimit = findEvents(query);
+        return readCloudEvents(query, skip, limit, sortBy, this::findEvents);
+    }
+
+    // The find is passed in so a catch-up read scope can read the same way through its own session
+    private Stream<Document> readCloudEvents(Bson query, int skip, int limit, SortBy sortBy, Function<Bson, FindIterable<Document>> find) {
+        final FindIterable<Document> documentsWithoutSkipAndLimit = find.apply(query);
 
         final FindIterable<Document> documentsWithSkipAndLimit;
         if (skip != 0 || limit != Integer.MAX_VALUE) {
@@ -362,17 +392,25 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireDcbCapability();
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
+        return options.versionsRequested() ? readWithMarkerVersions(criteria, options) : readWithoutMarkerVersions(criteria, options);
+    }
 
+    private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(null, criteria), this::currentPosition, this::findEvents);
+    }
+
+    // The token, the head and the find are passed in so a catch-up read scope can read all three through its own session
+    private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, LongSupplier consistencyToken, LongSupplier currentPosition, Function<Bson, FindIterable<Document>> find) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
         // false conflict that retries) rather than miss the conflict.
-        long consistencyTokenValue = consistencyToken(null, criteria);
-        long highWatermark = currentPosition();
+        long consistencyTokenValue = consistencyToken.getAsLong();
+        long highWatermark = currentPosition.getAsLong();
         long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
         Bson mongoQuery = toDcbBsonQuery(criteria, options.afterPosition().orElse(0), upperBound);
 
         boolean fetchDescending = options.direction() == DcbReadOptions.Direction.BACKWARD;
-        FindIterable<Document> documents = findEvents(mongoQuery)
+        FindIterable<Document> documents = find.apply(mongoQuery)
                 .sort(fetchDescending ? descending(OccurrentCloudEventExtension.POSITION) : ascending(OccurrentCloudEventExtension.POSITION));
         if (options.skip() > 0) {
             documents = documents.skip(options.skip());
@@ -390,6 +428,134 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(consistencyTokenValue));
     }
 
+    // Markers, counter and events come from one point in time, so the reported versions cover exactly the events read
+    // and a read after them misses none. This runs in a read-only snapshot transaction of the store's own, never with
+    // the transaction options configured for writes, and commits it once by hand. The majority commit makes sure the
+    // snapshot was majority-committed. Inside a caller's session it reports no versions, since the session's own
+    // increments may still abort and a later append would reuse them. A failure reports no versions instead of failing
+    // the read. A read after versions can't fall back to a full read without double-applying events, so it is refused
+    // in both cases.
+    private DcbEventStream readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
+        if (!resumeFromMarkerVersions) {
+            if (afterVersions.isPresent()) {
+                throw new DcbSnapshotInvalidException(criteria, afterVersions.get(), "Resuming from marker versions is turned off for this event store (resumeFromMarkerVersions)");
+            }
+            return readWithoutMarkerVersions(criteria, options);
+        }
+        if (criteria instanceof DcbCriteria.MatchAll) {
+            afterVersions.ifPresent(saved -> DcbMarkerVersionsSupport.requireResumable(criteria, saved, Map.of()));
+            return readWithoutMarkerVersions(criteria, options);
+        }
+
+        ClientSession ambientSession = ClientSessionHolder.get();
+        if (ambientSession != null) {
+            return markerVersionsUnavailable(criteria, options, "The read runs inside a session or transaction the caller owns, whose writes may still abort", null);
+        }
+
+        final ClientSession clientSession;
+        try {
+            clientSession = mongoClient.startSession();
+        } catch (RuntimeException e) {
+            return markerVersionsReadFailed(criteria, options, "start session", e);
+        }
+        String failedPhase = "read";
+        RuntimeException failure = null;
+        try (clientSession) {
+            DcbEventStream eventStream = null;
+            try {
+                clientSession.startTransaction(markerVersionsTransactionOptions);
+                eventStream = readMarkerVersionsInSession(clientSession, criteria, options);
+            } catch (DcbSnapshotInvalidException e) {
+                // Closing the session aborts the read-only transaction
+                throw e;
+            } catch (RuntimeException e) {
+                failure = e;
+            }
+            if (eventStream != null) {
+                try {
+                    clientSession.commitTransaction();
+                    return eventStream;
+                } catch (RuntimeException e) {
+                    // A failed commit leaves the session in the committed state, so closing it sends no abort
+                    failedPhase = "commit";
+                    failure = e;
+                }
+            }
+        }
+        return markerVersionsReadFailed(criteria, options, failedPhase, requireNonNull(failure));
+    }
+
+    private DcbEventStream readMarkerVersionsInSession(ClientSession clientSession, DcbCriteria criteria, DcbReadOptions options) {
+        Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
+        Map<String, Document> markers = DcbMarkerVersionsDocuments.markersByKey(dcbCheckpointCollection.find(clientSession, DcbMarkerVersionsDocuments.markersFilter(markerKeys)));
+        Map<String, DcbMarkerVersionsSupport.ObservedMarker> observed = DcbMarkerVersionsDocuments.observe(markers);
+        Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
+        afterVersions.ifPresent(saved -> DcbMarkerVersionsSupport.requireResumable(criteria, saved, observed));
+        long consistencyTokenValue = DcbMarkerVersionsDocuments.consistencyToken(markerKeys, markers);
+
+        long highWatermark = currentPosition(clientSession);
+        long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+        Bson mongoQuery = afterVersions
+                .map(saved -> toDcbBsonQuery(criteria, 0, upperBound, item -> DcbMarkerVersionsDocuments.afterVersionsFilter(item, markers, saved)))
+                .orElseGet(() -> toDcbBsonQuery(criteria, options.afterPosition().orElse(0), upperBound));
+
+        boolean fetchDescending = options.direction() == DcbReadOptions.Direction.BACKWARD;
+        FindIterable<Document> documents = eventCollection.find(clientSession, mongoQuery)
+                .sort(fetchDescending ? descending(OccurrentCloudEventExtension.POSITION) : ascending(OccurrentCloudEventExtension.POSITION));
+        if (options.skip() > 0) {
+            documents = documents.skip(options.skip());
+        }
+        if (options.limit().isPresent()) {
+            documents = documents.limit(options.limit().getAsInt());
+        }
+        List<CloudEvent> events = StreamSupport.stream(queryOptions.apply(documents).spliterator(), false)
+                .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
+                .toList();
+        if (fetchDescending) {
+            events = new ArrayList<>(events);
+            Collections.reverse(events);
+        }
+        Optional<DcbMarkerVersions> markerVersions = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(markerKeys, observed) : Optional.empty();
+        return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(consistencyTokenValue), markerVersions);
+    }
+
+    private DcbEventStream markerVersionsReadFailed(DcbCriteria criteria, DcbReadOptions options, String phase, RuntimeException cause) {
+        if (markerVersionsReadFailures.recordAndCheckFirst(phase, cause)) {
+            log.warn(MarkerVersionsReadFailures.message(phase, cause, options.afterVersions().isPresent()), cause);
+        } else if (log.isDebugEnabled()) {
+            log.debug(MarkerVersionsReadFailures.message(phase, cause, options.afterVersions().isPresent()), cause);
+        }
+        return markerVersionsUnavailable(criteria, options, "The event store could not take a consistent snapshot to compare the saved marker versions against (" + phase + " failed)", cause);
+    }
+
+    private DcbEventStream markerVersionsUnavailable(DcbCriteria criteria, DcbReadOptions options, String reason, @Nullable Throwable cause) {
+        Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
+        if (afterVersions.isPresent()) {
+            throw new DcbSnapshotInvalidException(criteria, afterVersions.get(), reason, cause);
+        }
+        return readWithoutMarkerVersions(criteria, options);
+    }
+
+    @Override
+    public boolean isConfirmed(DcbAppendResult appendResult) {
+        requireNonNull(appendResult, DcbAppendResult.class.getSimpleName() + " cannot be null");
+        Optional<AppendId> appendId = appendResult.appendId();
+        if (appendId.isEmpty()) {
+            return false;
+        }
+        try {
+            Bson filter = and(eq(OccurrentCloudEventExtension.APPEND_ID, appendId.get().toString()),
+                    gte(OccurrentCloudEventExtension.POSITION, appendResult.firstSequencePosition()),
+                    lte(OccurrentCloudEventExtension.POSITION, appendResult.lastSequencePosition()));
+            return eventCollection.withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary())
+                    .find(filter).projection(Projections.include(ID)).limit(1).first() != null;
+        } catch (RuntimeException e) {
+            log.debug("Could not confirm DCB append {}, so it counts as unconfirmed", appendId.get(), e);
+            return false;
+        }
+    }
+
     /**
      * Reads events matching {@code filter} in position order, within {@code range}, clamped to the store's highest
      * written position at read time. The upper bound is the lesser of the range's {@code upToPosition} and that
@@ -401,10 +567,15 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     @Override
     public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
         requirePosition();
+        return readInPositionOrder(filter, range, this::currentPosition, this::findEvents);
+    }
+
+    // The head and the find are passed in so a catch-up read scope can read both through its own session
+    private Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range, LongSupplier currentPosition, Function<Bson, FindIterable<Document>> find) {
         requireNonNull(filter, "Filter cannot be null");
         requireNonNull(range, "Range cannot be null");
 
-        long highWatermark = currentPosition();
+        long highWatermark = currentPosition.getAsLong();
         long lowerBound = range.afterPosition().orElse(0);
         long upperBound = Math.min(highWatermark, range.upToPosition().orElse(highWatermark));
 
@@ -412,7 +583,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         Bson filterBson = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
         Bson query = and(positionFilter, filterBson);
 
-        FindIterable<Document> documents = findEvents(query).sort(ascending(OccurrentCloudEventExtension.POSITION));
+        FindIterable<Document> documents = find.apply(query).sort(ascending(OccurrentCloudEventExtension.POSITION));
         return StreamSupport.stream(queryOptions.apply(documents).spliterator(), false)
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
     }
@@ -491,19 +662,22 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private DcbAppendResult appendInSession(ClientSession clientSession, String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition, AppendId appendId) {
         long currentStreamVersion = currentStreamVersion(streamId, clientSession);
+        final Map<String, Document> markers;
         if (condition != null) {
-            enforceAppendCondition(clientSession, condition, eventsToAppend, lastPosition);
+            markers = enforceAppendCondition(clientSession, condition, eventsToAppend, lastPosition);
         } else {
             // An unconditional append still increments its events' markers, so a concurrent conditional append
             // on an overlapping tag or type shares a marker, serializes against it, and its consistency-token
             // check observes it. Without this, nothing forces a write-write conflict and a concurrent
             // conditional append's snapshot could miss this append (write skew). See ADR 0021.
-            incrementConflictMarkers(clientSession, DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
+            markers = incrementConflictMarkers(clientSession, DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
         }
 
         List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition, appendId);
+        DcbMarkerVersionsDocuments.stampMarkerVersions(documents, eventsToAppend, markers);
         insertAllDcb(clientSession, streamId, currentStreamVersion, documents);
-        return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size(), Optional.of(appendId));
+        Optional<DcbMarkerVersions> markerVersions = resumeFromMarkerVersions ? DcbMarkerVersionsDocuments.appendedVersions(condition, markers) : Optional.empty();
+        return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size(), Optional.of(appendId), markerVersions);
     }
 
     private List<Document> convertDcbCloudEventsToDocuments(String streamId, List<CloudEvent> cloudEvents, long currentStreamVersion, long firstPosition, AppendId appendId) {
@@ -521,7 +695,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return documents;
     }
 
-    private void enforceAppendCondition(ClientSession clientSession, DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition) {
+    private Map<String, Document> enforceAppendCondition(ClientSession clientSession, DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition) {
         Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
         final boolean conflict;
         if (expectedToken.isPresent()) {
@@ -547,7 +721,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // concurrent matching append is serialized even when this append's own events do not match the query.
         TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.criteria()));
         markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
-        incrementConflictMarkers(clientSession, markerKeys, lastPosition);
+        return incrementConflictMarkers(clientSession, markerKeys, lastPosition);
     }
 
     // Increment a conflict marker per key. Two appends that can match a common event share at least one marker
@@ -558,18 +732,22 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // The marker collection holds one document per distinct tag and type that has taken part in an append, and
     // nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection
     // without bound. An operator can prune markers during quiescence, a later append recreates any it still needs.
-    private void incrementConflictMarkers(ClientSession clientSession, Set<String> markerKeys, long lastPosition) {
+    // Returns the incremented markers as this transaction left them, keyed by marker key, so the append stamps its
+    // events with the versions it gave them (ADR 148).
+    private Map<String, Document> incrementConflictMarkers(ClientSession clientSession, Set<String> markerKeys, long lastPosition) {
         if (markerKeys.isEmpty()) {
-            return;
+            return Map.of();
         }
-        // One unordered bulk write of upserts rather than one updateOne round trip per key, so a boundary with several
-        // tags and types costs one round trip inside the transaction instead of K serial ones.
-        List<WriteModel<Document>> updates = markerKeys.stream()
-                .map(key -> (WriteModel<Document>) new UpdateOneModel<Document>(eq(ID, DcbMarkerModel.markerId(key)),
-                        Updates.combine(Updates.inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L), Updates.set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition)),
-                        new UpdateOptions().upsert(true)))
-                .toList();
+        // One unordered bulk write rather than one updateOne round trip per key, so a boundary with several tags and
+        // types costs one round trip inside the transaction instead of K serial ones. Each marker gets its upsert and
+        // an update that gives a marker an older writer created an epoch.
+        List<WriteModel<Document>> updates = new ArrayList<>(markerKeys.size() * 2);
+        for (String key : markerKeys) {
+            updates.add(new UpdateOneModel<>(eq(ID, DcbMarkerModel.markerId(key)), DcbMarkerVersionsDocuments.markerIncrement(lastPosition), new UpdateOptions().upsert(true)));
+            updates.add(new UpdateOneModel<>(DcbMarkerVersionsDocuments.markerWithoutEpoch(key), DcbMarkerVersionsDocuments.setEpoch()));
+        }
         dcbCheckpointCollection.bulkWrite(clientSession, updates, new BulkWriteOptions().ordered(false));
+        return DcbMarkerVersionsDocuments.markersByKey(dcbCheckpointCollection.find(clientSession, DcbMarkerVersionsDocuments.markersFilter(markerKeys)));
     }
 
     // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. The sum is
@@ -632,6 +810,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     public long currentPosition() {
         requirePosition();
         Document document = dcbPositionCollection.find(eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first();
+        return document == null ? 0 : ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue();
+    }
+
+    private long currentPosition(ClientSession clientSession) {
+        Document document = dcbPositionCollection.find(clientSession, eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first();
         return document == null ? 0 : ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue();
     }
 
@@ -776,6 +959,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
                 Document updatedDocument = convertToDocument(timeRepresentation, streamId, streamVersion, updatedCloudEvent);
                 DcbDocumentMapper.preservePositionAndDcbTags(currentCloudEvent, updatedDocument);
+                DcbDocumentMapper.preserveMarkerVersions(document, updatedDocument);
                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                 cloudEventUpdater.apply(updatedDocument);
             }
@@ -790,6 +974,99 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         final Bson query = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
         return readCloudEvents(query, skip, limit, sortBy)
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
+    }
+
+    /**
+     * Internal. Opens a {@link CatchupReadScope}, see {@link CatchupReads#openCatchupReadScope(String)}. The scope
+     * reads through a causally consistent session of its own, never the caller's, and every read in it uses read
+     * concern majority. The session is closed with the scope.
+     */
+    @Override
+    public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+        return new MongoCatchupReadScope(notBefore);
+    }
+
+    /**
+     * Internal. Opens a {@link DcbCatchupReadScope}, see {@link DcbCatchupReads#openDcbCatchupReadScope(String)}.
+     *
+     * @throws UnsupportedOperationException if this store does not have the DCB capability.
+     */
+    @Override
+    public DcbCatchupReadScope openDcbCatchupReadScope(@Nullable String notBefore) {
+        requireDcbCapability();
+        return new MongoCatchupReadScope(notBefore);
+    }
+
+    // One causally consistent session for one replay attempt. The live start is the operation time of a majority read of
+    // the position counter on the primary, plus one increment, and every replay read is a majority read in the same
+    // session, so each of them sees every write that was majority-committed by then. A read preference configured on the
+    // collection is kept for the replay reads, and only the counter is read from the primary.
+    private final class MongoCatchupReadScope implements CatchupReadScope, DcbCatchupReadScope {
+        private final ClientSession session;
+        private final MongoCollection<Document> events = eventCollection.withReadConcern(ReadConcern.MAJORITY);
+        private final MongoCollection<Document> positions = dcbPositionCollection.withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary());
+        private final @Nullable String liveStart;
+
+        MongoCatchupReadScope(@Nullable String notBefore) {
+            this.session = mongoClient.startSession(ClientSessionOptions.builder().causallyConsistent(true).build());
+            try {
+                if (notBefore != null) {
+                    // Advances to just before the live start and not to it, since the cluster time may not have reached it yet
+                    // and the replay only needs what committed before it
+                    OperationTimeLiveStart.tryParse(notBefore).map(OperationTimeLiveStart::oneIncrementBefore).ifPresent(session::advanceOperationTime);
+                }
+                positions.find(session, eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first();
+                BsonTimestamp t0 = session.getOperationTime();
+                this.liveStart = OperationTimeLiveStart.liveStartAfterRead(t0);
+            } catch (RuntimeException e) {
+                session.close();
+                throw e;
+            }
+        }
+
+        @Override
+        public @Nullable String liveStart() {
+            return liveStart;
+        }
+
+        @Override
+        public long currentPosition() {
+            requirePosition();
+            Document document = positions.find(session, eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first();
+            return document == null ? 0 : ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue();
+        }
+
+        @Override
+        public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            requirePosition();
+            return MongoEventStore.this.readInPositionOrder(filter, range, this::currentPosition, this::findEvents);
+        }
+
+        @Override
+        public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+            requireStreamCapability();
+            requireNonNull(filter, "Filter cannot be null");
+            Bson query = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
+            return readCloudEvents(query, skip, limit, sortBy, this::findEvents)
+                    .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
+        }
+
+        @Override
+        public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+            requireDcbCapability();
+            requireNonNull(criteria, "Criteria cannot be null");
+            DcbCatchupReadScope.requirePositionRange(options);
+            return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(session, criteria), this::currentPosition, this::findEvents);
+        }
+
+        private FindIterable<Document> findEvents(Bson query) {
+            return events.find(session, query);
+        }
+
+        @Override
+        public void close() {
+            session.close();
+        }
     }
 
     @Override
@@ -872,6 +1149,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             // Evidence: explain("executionStats") on a 5,000-of-305,000 skewed dataset (a plausible popular-tag
             // boundary) showed a winning SORT stage over the dcbTags index without this compound index.
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true));
+            // A read after marker versions selects events by one mv element per criteria item (ADR 148).
+            eventStoreCollection.createIndex(DcbMarkerVersionsDocuments.markerVersionsIndex(), new IndexOptions().sparse(true));
         }
         if (dcbEnabled && !eventStoreCapabilities.contains(STREAM)) {
             warnOnPositionedStreamEventsWithoutDcbTagsIndex(eventStoreCollection);
@@ -1060,13 +1339,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     // Package-private so MongoEventStoreDcbConcurrencyTest can explain the exact query the store sends
     static Bson toDcbBsonQuery(DcbCriteria criteria, long afterPosition, long upperSequencePosition) {
+        return toDcbBsonQuery(criteria, afterPosition, upperSequencePosition, null);
+    }
+
+    // itemRestriction narrows each item's filter, so a read after marker versions selects every item by its own mv element
+    static Bson toDcbBsonQuery(DcbCriteria criteria, long afterPosition, long upperSequencePosition, @Nullable Function<DcbCriterion, Bson> itemRestriction) {
         Bson positionFilter = and(gt(OccurrentCloudEventExtension.POSITION, afterPosition), lte(OccurrentCloudEventExtension.POSITION, upperSequencePosition));
         Bson dcbTagsExistsFilter = Filters.exists(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD);
         if (criteria instanceof DcbCriteria.MatchAll) {
             return and(positionFilter, dcbTagsExistsFilter);
         }
         List<Bson> itemFilters = DcbMarkerModel.dcbQueryItems(criteria).stream()
-                .map(MongoEventStore::toBsonFilter)
+                .map(item -> itemRestriction == null ? toBsonFilter(item) : and(toBsonFilter(item), itemRestriction.apply(item)))
                 .toList();
         return and(positionFilter, dcbTagsExistsFilter, or(itemFilters));
     }

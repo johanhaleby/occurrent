@@ -43,17 +43,20 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.CatchupTimeCheckpoint;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
@@ -64,6 +67,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -1290,7 +1294,7 @@ class StreamCatchupResumeReplayMongoTest {
             }
         });
         assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches its second event").isTrue();
-        assertThat(CatchupTimeCheckpoint.isCatchupTimeCheckpoint(requireNonNull(storage.read(subscriptionId)))).as("what A's replay stored is a catch-up time checkpoint").isTrue();
+        assertThat(CatchupCheckpoints.isMarkedTime(requireNonNull(storage.read(subscriptionId)))).as("what A's replay stored is the marked time form, since it replays from a time past the beginning of time").isTrue();
         // And an event is written that has a time earlier than the one stored, after the live start A read
         appendAt("late", OffsetDateTime.parse("2025-12-31T12:00:00Z"));
 
@@ -1302,6 +1306,62 @@ class StreamCatchupResumeReplayMongoTest {
         // Then everything written while the subscription was paused is delivered, also what has the earlier time
         await("B delivers what is written after the resume").atMost(10, SECONDS).until(() -> receivedByB.contains("afterResume"));
         assertThat(receivedByB).as("what B received").contains("late", "h2", "h3", "afterResume");
+    }
+
+    @Test
+    void a_resume_of_a_subscription_with_a_bare_time_stored_is_held_and_the_stored_checkpoint_is_left_as_it_was() throws Exception {
+        // Given B holds the subscription paused, and a bare time is stored for it
+        Checkpoint bareTime = TimeBasedCheckpoint.from(OffsetDateTime.parse("2026-01-01T00:00:00Z"));
+        givenBHoldsTheSubscriptionPausedWithStored(bareTime, durable -> durable);
+
+        // When B is resumed
+        catchupB.resumeSubscription(subscriptionId);
+
+        // Then the replay is held and refused once, naming the subscription and the way out
+        assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(bareTime, "holds no live start");
+    }
+
+    @Test
+    void a_resume_of_a_subscription_with_a_bare_position_above_zero_stored_is_held_and_the_stored_checkpoint_is_left_as_it_was() throws Exception {
+        // Given B holds the subscription paused, and a bare position stored by 0.34 or earlier
+        Checkpoint barePosition = GlobalCheckpoint.of(2);
+        givenBHoldsTheSubscriptionPausedWithStored(barePosition, durable -> durable);
+
+        // When B is resumed
+        catchupB.resumeSubscription(subscriptionId);
+
+        // Then the replay is held and refused once, naming the subscription and the way out
+        assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(barePosition, "after position 2");
+    }
+
+    @Test
+    void a_resume_of_a_subscription_whose_stored_live_start_is_lost_is_held_when_the_replay_began_above_the_beginning_and_the_stored_checkpoint_is_left_as_it_was() throws Exception {
+        // Given B holds the subscription paused, and a position is stored with a live start the live delegate no longer has, from a replay that began at position 1
+        Checkpoint stored = GlobalCheckpoint.of(2, new StringBasedCheckpoint(LiveStartLosingModel.LOST), 1, 3);
+        givenBHoldsTheSubscriptionPausedWithStored(stored, LiveStartLosingModel::new);
+
+        // When B is resumed
+        catchupB.resumeSubscription(subscriptionId);
+
+        // Then the replay is held and refused once, instead of replaying again
+        assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(stored, "from the beginning again");
+    }
+
+    @Test
+    void a_resume_of_a_subscription_whose_stored_live_start_is_lost_replays_again_from_the_beginning_when_the_replay_began_at_position_zero() throws Exception {
+        // Given B holds the subscription paused, and a position is stored with a live start the live delegate no longer has, from a replay that began at the beginning
+        Checkpoint stored = GlobalCheckpoint.of(2, new StringBasedCheckpoint(LiveStartLosingModel.LOST), 0, 3);
+        givenBHoldsTheSubscriptionPausedWithStored(stored, LiveStartLosingModel::new);
+
+        // When B is resumed
+        catchupB.resumeSubscription(subscriptionId);
+        append("afterResume", 4);
+
+        // Then the whole history is delivered again and the subscription runs
+        await("B delivers the whole history and what is written after the resume").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h1", "h2", "h3", "afterResume"));
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
     }
 
     @Test
@@ -2626,6 +2686,30 @@ class StreamCatchupResumeReplayMongoTest {
         };
     }
 
+    // B holds the subscription paused with the checkpoint stored by something else, the history is written
+    private void givenBHoldsTheSubscriptionPausedWithStored(Checkpoint stored, Function<DurableSubscriptionModel, CheckpointAwareSubscriptionModel> liveDelegateOfB) {
+        givenTwoNodes(liveDelegateOfB);
+        append("h1", 0);
+        append("h2", 1);
+        append("h3", 2);
+        catchupB.subscribePaused(subscriptionId, null, StartAt.subscriptionModelDefault(), event -> receivedByB.add(nameOf(event)));
+        storage.save(subscriptionId, stored);
+    }
+
+    private void assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(Checkpoint stored, String messagePart) {
+        await("the replay is held").atMost(10, SECONDS).untilAsserted(() -> assertThat(catchupB.hasParkedReplay(subscriptionId)).isTrue());
+        assertThat(catchupB.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(catchupB.isRunning(subscriptionId)).as("running").isFalse();
+        assertThat(catchupB.isCatchingUp(subscriptionId)).as("catching up").isFalse();
+        // The held replay is not run again, so the refusal is logged once and nothing is stored or delivered meanwhile
+        await("the refusal is logged once").during(2, SECONDS).atMost(6, SECONDS)
+                .untilAsserted(() -> assertThat(errorLog.messagesAbout(subscriptionId)).filteredOn(message -> message.contains("it was held")).hasSize(1));
+        assertThat(errorLog.failures).as("the failure of the held replay").singleElement().asString()
+                .startsWith(CatchupCannotResumeException.class.getName()).contains(subscriptionId).contains(messagePart);
+        assertThat(storage.read(subscriptionId)).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
+        assertThat(receivedByB).as("delivered").isEmpty();
+    }
+
     // B holds the subscription paused with nothing stored. A replays from the start and stalls in its second event,
     // with the position after the first stored. An event is written after B registered.
     private void givenAnotherNodeStoredAPosition(Consumer<CloudEvent> actionOfB) throws Exception {
@@ -3074,11 +3158,15 @@ class StreamCatchupResumeReplayMongoTest {
      */
     private static final class ErrorLog extends AppenderBase<ILoggingEvent> {
         private final CopyOnWriteArrayList<String> messages = new CopyOnWriteArrayList<>();
+        private final CopyOnWriteArrayList<String> failures = new CopyOnWriteArrayList<>();
 
         @Override
         protected void append(ILoggingEvent event) {
             if (event.getLevel() == Level.ERROR) {
                 messages.add(event.getFormattedMessage());
+                if (event.getThrowableProxy() != null) {
+                    failures.add(event.getThrowableProxy().getClassName() + ": " + event.getThrowableProxy().getMessage());
+                }
             }
         }
 
@@ -3203,7 +3291,7 @@ class StreamCatchupResumeReplayMongoTest {
     /**
      * Reads the event store as it is, except that the history read of a replay fails a set number of times.
      */
-    private static final class FlakyReader implements EventStoreQueries, PositionOrderedReader {
+    private static final class FlakyReader implements EventStoreQueries, PositionOrderedReader, CatchupReads {
         private final SpringMongoEventStore delegate;
         private final AtomicInteger failuresLeft = new AtomicInteger();
         final AtomicInteger failures = new AtomicInteger();
@@ -3219,12 +3307,28 @@ class StreamCatchupResumeReplayMongoTest {
 
         @Override
         public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            failIfScheduledTo();
+            return delegate.readInPositionOrder(filter, range);
+        }
+
+        private void failIfScheduledTo() {
             if (Thread.currentThread().getName().startsWith(REPLAY_THREAD_PREFIX) && failuresLeft.getAndUpdate(left -> left > 0 ? left - 1 : 0) > 0) {
                 failures.incrementAndGet();
                 lastFailedOn = Thread.currentThread();
                 throw new IllegalStateException("The event store is unavailable");
             }
-            return delegate.readInPositionOrder(filter, range);
+        }
+
+        // The history read of a replay goes through the scope the delegate opens, so the failure applies to it
+        @Override
+        public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+            return new ForwardingCatchupReadScope(delegate.openCatchupReadScope(notBefore)) {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    failIfScheduledTo();
+                    return super.readInPositionOrder(filter, range);
+                }
+            };
         }
 
         @Override
@@ -3596,6 +3700,39 @@ class StreamCatchupResumeReplayMongoTest {
                 throw new IllegalStateException(UNAVAILABLE);
             }
             return super.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return delegate;
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return RepositionableSubscriptions.findIn(delegate).map(model -> model.restartsAt(checkpoint)).orElse(true);
+        }
+    }
+
+    /**
+     * A wrapper of the model it is made over that no longer has the live start named by {@link #LOST}.
+     */
+    private static final class LiveStartLosingModel extends DelegatingModel implements SubscriptionModelWrapper, RepositionableSubscriptions {
+        static final String LOST = "aged out live start";
+
+        LiveStartLosingModel(CheckpointAwareSubscriptionModel delegate) {
+            super(delegate);
+        }
+
+        @Override
+        public boolean canResumeFrom(Checkpoint checkpoint) {
+            return !checkpoint.asString().equals(LOST) && super.canResumeFrom(checkpoint);
         }
 
         @Override

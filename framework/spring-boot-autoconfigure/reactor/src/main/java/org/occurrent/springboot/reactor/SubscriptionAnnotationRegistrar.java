@@ -351,7 +351,8 @@ class SubscriptionAnnotationRegistrar {
         Filter filter = resolved.filter();
 
         boolean streamHistoryReplaySupported = startPositionSupport.streamHistoryReplaySupported();
-        StartAt startAt = startPositionSupport.generateStreamStartAt(subscription, streamHistoryReplaySupported);
+        StartAt annotatedStart = startPositionSupport.generateStreamStartAt(subscription, streamHistoryReplaySupported);
+        StartAt startAt = startPositionSupport.withResumePoint(id, annotatedStart);
 
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
                 invokeMono(invocation, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
@@ -365,7 +366,7 @@ class SubscriptionAnnotationRegistrar {
             if (shouldWaitUntilStarted) {
                 result.waitUntilStarted().block();
             }
-        }, LateSubscriber.startIsFixed(startAt));
+        }, LateSubscriber.startIsFixed(annotatedStart));
     }
 
     @SuppressWarnings("unchecked")
@@ -388,7 +389,8 @@ class SubscriptionAnnotationRegistrar {
             throw new IllegalArgumentException(("@Subscription '%s' asks to replay history (BEGINNING or startAtGlobalPosition), but this store does not write a global position, so the reactive " +
                     "position-based catch-up cannot replay. Use startAt = NOW or DEFAULT.").formatted(id));
         }
-        StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), startAtGlobalPosition, annotation.resumeBehavior());
+        StartAt annotatedStart = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), startAtGlobalPosition, annotation.resumeBehavior());
+        StartAt startAt = startPositionSupport.withResumePoint(id, annotatedStart);
         boolean shouldWaitUntilStarted = mayBlockForReplay && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
         startPositionSupport.applyStartupWorkarounds();
@@ -398,7 +400,7 @@ class SubscriptionAnnotationRegistrar {
             if (shouldWaitUntilStarted) {
                 result.waitUntilStarted().block();
             }
-        }, LateSubscriber.startIsFixed(startAt));
+        }, LateSubscriber.startIsFixed(annotatedStart));
     }
 
     @SuppressWarnings("unchecked")
@@ -455,7 +457,8 @@ class SubscriptionAnnotationRegistrar {
         if (startAtDcbPosition >= 0 && annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT) {
             throw new IllegalArgumentException("Specify either startAt or startAtDcbPosition for @DcbSubscription '%s', not both.".formatted(id));
         }
-        DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), startAtDcbPosition, annotation.resumeBehavior());
+        DcbStartAt annotatedStart = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), startAtDcbPosition, annotation.resumeBehavior());
+        DcbStartAt startAt = startPositionSupport.withResumePoint(id, annotatedStart);
         boolean replaysHistory = startAtDcbPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         boolean shouldWaitUntilStarted = mayBlockForReplay && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
@@ -466,7 +469,7 @@ class SubscriptionAnnotationRegistrar {
             if (shouldWaitUntilStarted) {
                 subscription.waitUntilStarted().block();
             }
-        }, LateSubscriber.startIsFixed(startAt));
+        }, LateSubscriber.startIsFixed(annotatedStart));
     }
 
     // Invokes the annotated method for a delivered event. The method is expected to return a Mono<Void> (a null or

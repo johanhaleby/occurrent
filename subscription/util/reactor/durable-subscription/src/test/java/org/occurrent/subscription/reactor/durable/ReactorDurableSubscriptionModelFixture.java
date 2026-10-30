@@ -28,18 +28,27 @@ import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscriptionModel;
+import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
+import org.occurrent.tck.latecommit.AppendHold;
+import org.occurrent.tck.latecommit.HeldAppend;
+import org.occurrent.tck.latecommit.LateCommits;
+import org.occurrent.tck.subscription.blocking.RestartableSubscriptionModelFixture;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 import org.occurrent.tck.subscription.reactor.BlockingSubscriptionOverReactive;
+import org.occurrent.testsupport.mongodb.HoldingTransactionalOperator;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.ReactiveTransactionManager;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.UnaryOperator;
 
 /**
  * Feeds {@code Durable(Catchup(Mongo))}, the composition the Spring Boot starter actually wires
@@ -48,36 +57,50 @@ import java.util.UUID;
  * gets its own event collection and its own checkpoint collection, named with a UUID, mirroring
  * {@code ReactorMongoSubscriptionModelFixture}.
  */
-class ReactorDurableSubscriptionModelFixture implements SubscriptionModelFixture {
+class ReactorDurableSubscriptionModelFixture implements RestartableSubscriptionModelFixture {
 
     private final String streamId = UUID.randomUUID().toString();
 
     private final ReactorMongoEventStore eventStore;
-    private final ReactorMongoSubscriptionModel mongoModel;
-    private final ReactorDurableSubscriptionModel durableModel;
-    private final SubscriptionModel subscriptionModel;
     private final ReactiveMongoTemplate reactiveMongoTemplate;
+    private final ReactiveTransactionManager reactiveMongoTransactionManager;
+    private final TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
     private final String eventCollectionName;
     private final String checkpointCollectionName;
+    // One instance for the whole fixture, never rebuilt: the checkpoint collection IS the durable state a restart
+    // is supposed to survive, the same reason the event collection is never recreated either.
+    private final ReactorCheckpointStorage checkpointStorage;
+
+    private ReactorDurableSubscriptionModel durableModel;
+    private SubscriptionModel subscriptionModel;
 
     ReactorDurableSubscriptionModelFixture(MongoClient mongoClient, String databaseName) {
         this.eventCollectionName = "events-" + UUID.randomUUID();
         this.checkpointCollectionName = "checkpoints-" + UUID.randomUUID();
         this.reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, databaseName);
-        TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
-        ReactiveTransactionManager reactiveMongoTransactionManager =
-                new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName));
-        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
-                .eventStoreCollectionName(eventCollectionName)
-                .transactionConfig(reactiveMongoTransactionManager)
-                .timeRepresentation(timeRepresentation)
+        this.reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName));
+        this.eventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig(builder -> builder.transactionConfig(reactiveMongoTransactionManager)));
+        this.checkpointStorage = new ReactorCheckpointStorage(reactiveMongoTemplate, checkpointCollectionName);
+        buildModel();
+    }
+
+    private EventStoreConfig eventStoreConfig(UnaryOperator<EventStoreConfig.Builder> transactions) {
+        return transactions.apply(new EventStoreConfig.Builder()
+                        .eventStoreCollectionName(eventCollectionName)
+                        .timeRepresentation(timeRepresentation))
                 .build();
-        this.eventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
-        this.mongoModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollectionName, timeRepresentation);
+    }
+
+    /**
+     * Builds a fresh {@code Durable(Catchup(Mongo))} over the event collection and the one checkpoint storage this
+     * fixture has. Used by the constructor and by {@link #restart()}, so a restart is this same construction run a
+     * second time over what the first run left behind.
+     */
+    private void buildModel() {
+        ReactorMongoSubscriptionModel mongoModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollectionName, timeRepresentation);
         // A default filter, or the catch-up model refuses a subscription made with no SubscriptionFilter at all,
         // which is exactly what the TCK's convenience subscribe(id, action) overload passes.
         CheckpointAwareSubscriptionModel catchupModel = new ReactorCatchupSubscriptionModel(mongoModel, eventStore, Filter.all());
-        ReactorCheckpointStorage checkpointStorage = new ReactorCheckpointStorage(reactiveMongoTemplate, checkpointCollectionName);
         this.durableModel = new ReactorDurableSubscriptionModel(catchupModel, checkpointStorage);
         this.subscriptionModel = BlockingSubscriptionOverReactive.of(durableModel);
     }
@@ -89,6 +112,57 @@ class ReactorDurableSubscriptionModelFixture implements SubscriptionModelFixture
     @Override
     public SubscriptionModel subscriptionModel() {
         return subscriptionModel;
+    }
+
+    @Override
+    public SubscriptionModel restart() {
+        durableModel.shutdown();
+        buildModel();
+        return subscriptionModel;
+    }
+
+    /**
+     * False. A bare {@code GlobalCheckpoint} carries no live start, so the reactive catch-up model inside cannot tell
+     * that nothing committed below it and refuses the start, see {@link #refusesABareGlobalPosition()}.
+     */
+    @Override
+    public boolean honoursAGlobalPosition() {
+        return false;
+    }
+
+    /**
+     * True. The refusal is a {@code CatchupCannotResumeException}, and the checkpoint delivered with an event is what to
+     * start from instead.
+     */
+    @Override
+    public boolean refusesABareGlobalPosition() {
+        return true;
+    }
+
+    /**
+     * The model resumes from the checkpoint {@link #checkpointStorage} holds, and that outlives {@link #restart()}.
+     */
+    @Override
+    public boolean resumesAfterARestart() {
+        return true;
+    }
+
+    /**
+     * The store in front of the model reserves an event's position before the transaction that writes it begins, so a
+     * write can be held between the two. The hold is a {@link TransactionalOperator} that parks the first transaction
+     * it is asked to wrap without blocking a thread, on the same event collection as {@link #eventStore}, so the
+     * subscription sees the held write once it commits.
+     */
+    @Override
+    public LateCommits lateCommits() {
+        return LateCommits.holding(() -> {
+            AppendHold hold = new AppendHold();
+            TransactionalOperator holding = new HoldingTransactionalOperator(TransactionalOperator.create(reactiveMongoTransactionManager),
+                    () -> hold.engage() ? Mono.fromFuture(hold.released()).timeout(AppendHold.RELEASE_TIMEOUT) : Mono.empty());
+            ReactorMongoEventStore holdingStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig(builder -> builder.transactionConfig(holding)));
+            return HeldAppend.of(hold, BlockingEventStoreOverReactive.of(holdingStore), () -> {
+            });
+        });
     }
 
     @Override

@@ -236,6 +236,7 @@ public final class ChangeStreamSubscriptions {
         // thread, where the retry wrapper throws it again forever and the caller holds a subscription whose latch
         // never counts down. A dynamic position is a no-op in there, for a reason checkStartPosition documents.
         MongoCommons.checkStartPosition(startAt, subscriptionModelContext());
+        MongoCommons.refuseCatchupPosition(startAt);
 
         if (shutdown || model.executorIsShutDown()) {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
@@ -548,6 +549,12 @@ public final class ChangeStreamSubscriptions {
         if (lostFrom == null || historyLossListeners.isEmpty()) {
             return false;
         }
+        // Before the listeners, which can record the loss on the subscription now holding the id
+        if (!isRunningOn(subscriptionId, internalSubscription)) {
+            log.debug("There was not enough oplog to resume subscription {} from {}, but it was paused, resumed or cancelled meanwhile, so no listener is asked.",
+                    subscriptionId, lostFrom.asString(), historyLost);
+            return true;
+        }
         HistoryLossHandling.TakeOver takeOver = null;
         try {
             for (HistoryLossListener listener : historyLossListeners) {
@@ -577,6 +584,13 @@ public final class ChangeStreamSubscriptions {
             log.error("The listener that took subscription {} over after its history was lost failed once it was paused, so it stays paused. Resuming it starts it again.", subscriptionId, e);
         }
         return true;
+    }
+
+    // Whether the subscription is still running on this run, which a pause, a resume, a cancel and a shutdown end
+    private boolean isRunningOn(String subscriptionId, InternalSubscription internalSubscription) {
+        synchronized (monitor) {
+            return !shutdown && runningSubscriptions.get(subscriptionId) == internalSubscription;
+        }
     }
 
     // Under the model's monitor, which every pause, resume and cancel holds, so the subscription is in one of the two

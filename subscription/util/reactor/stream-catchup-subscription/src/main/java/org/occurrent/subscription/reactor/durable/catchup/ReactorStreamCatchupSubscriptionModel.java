@@ -23,6 +23,8 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
 import org.occurrent.filter.Filter;
 import org.occurrent.inmemory.filtermatching.FilterMatcher;
 import org.occurrent.subscription.*;
@@ -33,6 +35,7 @@ import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -74,7 +77,8 @@ import static java.util.Objects.requireNonNull;
  * live subscription also sees it.
  * <p>
  * Each replayed event has a {@link GlobalCheckpoint} that also holds the live token, the position the replay started
- * from and the head the replay read. A durable model layered on top stores it, and a resume from it replays up to that
+ * from and the head the replay read, or the same in a marked {@link StringBasedCheckpoint} when that position is above
+ * zero. A durable model layered on top stores it, and a resume from it replays up to that
  * head and goes live from that same token, so an event whose position was reserved below the stored position but
  * written after the earlier replay read past it is still delivered. When the wrapped model no longer has the history
  * from the stored token, the replay starts over from the position the first attempt started from and redelivers the
@@ -131,6 +135,9 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     final NamedCatchupSupport namedSubscriptions;
     private final PositionOrderedReader positionOrderedReader;
+    // The same object as positionOrderedReader. A catch-up reads its live start and every replay read through the scope it
+    // opens for each attempt, so the reader has to implement the SPI, which a decorator around the reader doesn't.
+    private final CatchupReads catchupReads;
     private final @Nullable Filter defaultFilter;
     private final long windowSize;
     private final int handoverCacheSize;
@@ -187,6 +194,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         this.subscriptionModelContextType = requireNonNull(subscriptionModelContextType, "subscriptionModelContextType cannot be null");
         this.namedSubscriptions = new NamedCatchupSupport(subscriptionModel, subscriptionModelContextType);
         this.positionOrderedReader = requireNonNull(positionOrderedReader, PositionOrderedReader.class.getSimpleName() + " cannot be null");
+        this.catchupReads = CatchupScopes.requireCatchupReads(positionOrderedReader, CatchupReads.class);
         this.defaultFilter = defaultFilter;
         this.capabilityScope = capabilityScope;
         if (windowSize <= 0) {
@@ -272,9 +280,11 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             return namedSubscriptions.subscribeStraightToLive(subscriptionId, liveFilter, livePredicate, resolved == null ? startAt : resolved, action);
         }
-        GlobalCheckpoint start = GlobalCheckpoint.parse(position.checkpoint);
-        CatchupReader reader = new StreamCatchupReader(positionOrderedReader, scoped);
-        return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, reader, windowSize, handoverCacheSize, start, action);
+        if (CatchupCheckpoints.isMarkedTime(position.checkpoint)) {
+            throw PositionCatchupPipeline.startsAtTime(subscriptionId, position.checkpoint);
+        }
+        CatchupCheckpoints.Position start = PositionCatchupPipeline.positionOf(position.checkpoint);
+        return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, scopes(scoped), windowSize, handoverCacheSize, start, action);
     }
 
     // --- The life cycle forwards to the wrapped model, with bookkeeping for subscriptions still replaying.
@@ -314,6 +324,16 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         namedSubscriptions.pauseSubscription(subscriptionId);
     }
 
+    /**
+     * Cancels the subscription, and stops its replay when it hasn't handed over to the wrapped model yet. While the cancel
+     * this method sends the wrapped model has not ended, a subscribe of {@code subscriptionId} throws
+     * {@link DuplicateSubscriptionIdException}, since the wrapped model cancels by id and its cancel would otherwise reach
+     * a subscription of the id made in the meantime. That includes a subscribe from code this cancel runs, such as a
+     * {@code doOnCancel} on the {@code Mono} an action returned or a handler on {@link Subscription#waitUntilStarted()}.
+     * The cancel ends when the wrapped model throws, or when the {@code Mono} it returned completes or fails, and it ends
+     * before a subscriber of the returned {@code Mono} is told that it completed. {@code ReactorMongoSubscriptionModel}
+     * ends it before this method returns. A cancel the wrapped model never ends keeps a subscribe of the id refused.
+     */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
         return namedSubscriptions.cancelSubscription(subscriptionId);
@@ -378,12 +398,11 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             // Not a catch-up position, so go straight to live. Filter in-process too, so a backend that does not
             // honor the filter server-side still only delivers matching events, and skip events without a position.
-            return subscriptionModel.subscribe(StreamSubscriptionFilter.filter(filter), resolved == null ? startAt : resolved)
+            return PositionCatchupPipeline.straightToLive(subscriptionModel, StreamSubscriptionFilter.filter(filter), resolved == null ? startAt : resolved)
                     .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && matchesLocally.test(cloudEvent));
         }
 
-        CatchupReader reader = new StreamCatchupReader(positionOrderedReader, filter);
-        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(scopes(filter), windowSize, handoverCacheSize);
         Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && matchesLocally.test(cloudEvent);
         return pipeline.catchup(subscriptionModel, StreamSubscriptionFilter.filter(filter), livePredicate, position.checkpoint);
     }
@@ -398,18 +417,33 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         return filter instanceof Filter.All ? capabilityScope : filter.and(capabilityScope);
     }
 
-    // Reads stream events in position order through the PositionOrderedReader, wrapping each with its position so a
-    // durable model layered on top can persist replay progress.
-    private record StreamCatchupReader(PositionOrderedReader positionOrderedReader, Filter filter) implements CatchupReader {
+    // Opens the scope of one replay attempt, which reads stream events in position order
+    private CatchupScopes scopes(Filter filter) {
+        return notBefore -> catchupReads.openCatchupReadScope(notBefore).map(scope -> new StreamCatchupScope(scope, filter));
+    }
+
+    // Reads stream events in position order through the scope, wrapping each with its position so a durable model
+    // layered on top can persist replay progress.
+    private record StreamCatchupScope(CatchupReadScope scope, Filter filter) implements CatchupScope {
         @Override
         public Flux<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
-            return positionOrderedReader.readInPositionOrder(filter, PositionRange.between(fromExclusive, toInclusive))
+            return scope.readInPositionOrder(filter, PositionRange.between(fromExclusive, toInclusive))
                     .map(event -> (CloudEvent) new CheckpointAwareCloudEvent(event, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(event))));
         }
 
         @Override
         public Mono<Long> currentHead() {
-            return positionOrderedReader.currentPosition();
+            return scope.currentPosition();
+        }
+
+        @Override
+        public @Nullable String liveStart() {
+            return scope.liveStart();
+        }
+
+        @Override
+        public Mono<Void> close() {
+            return scope.close();
         }
     }
 }

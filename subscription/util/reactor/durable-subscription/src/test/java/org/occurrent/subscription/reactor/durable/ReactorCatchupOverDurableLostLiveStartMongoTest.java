@@ -43,6 +43,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbSubscriptionFilter;
@@ -90,6 +91,7 @@ import java.util.function.Supplier;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
@@ -219,6 +221,85 @@ class ReactorCatchupOverDurableLostLiveStartMongoTest {
                 () -> assertThat(catchupsStarted).as("the catch-up started once for each replay").hasValue(2),
                 () -> assertThat(savedBeforeLiveEvents).as("the positions the durable model stored before the subscription delivered an event live").isEmpty()
         );
+    }
+
+    @Test
+    void a_stream_subscription_started_from_a_token_the_oplog_lost_is_paused_for_good_and_stores_and_delivers_nothing() {
+        verifiesALiveStartFromALostTokenIsPausedForGood(Replay.STREAM);
+    }
+
+    @Test
+    void a_dcb_subscription_started_from_a_token_the_oplog_lost_is_paused_for_good_and_stores_and_delivers_nothing() {
+        verifiesALiveStartFromALostTokenIsPausedForGood(Replay.DCB);
+    }
+
+    private void verifiesALiveStartFromALostTokenIsPausedForGood(Replay replay) {
+        ReactorMongoSubscriptionModel mongoModel = mongoModel(true);
+        catchup = catchupOverDurable(mongoModel);
+        Checkpoint token = requireNonNull(mongoModel.globalCheckpoint().block(Duration.ofSeconds(10)));
+        write(replay, event());
+        failsTheNextChangeStreamOpen();
+
+        catchup.subscribe(SUBSCRIPTION_ID, filter(replay), StartAt.checkpoint(token), event -> Mono.fromRunnable(() -> received.add(event.getId())));
+
+        assertThat(waitsFor(() -> catchup.isPaused(SUBSCRIPTION_ID))).as("paused").isTrue();
+        write(replay, event());
+        await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(8)).untilAsserted(() -> assertThat(received).as("delivered, so nothing restarted from the present").isEmpty());
+        assertAll(
+                () -> assertThat(catchup.isRunning(SUBSCRIPTION_ID)).as("running").isFalse(),
+                () -> assertThatThrownBy(() -> catchup.resumeSubscription(SUBSCRIPTION_ID)).as("what a resume throws").isInstanceOf(CatchupCannotResumeException.class),
+                () -> assertThat(saved).as("positions the durable model stored").isEmpty(),
+                () -> assertThat(historyLostReplies).as("the replies that said the oplog lost the history").hasValue(1));
+    }
+
+    @Test
+    void an_unnamed_stream_flux_over_the_durable_model_that_reads_on_and_loses_the_history_fails_with_catchup_cannot_resume() {
+        verifiesAnUnnamedFluxOverTheDurableModelFailsOnALaterLoss(Replay.STREAM);
+    }
+
+    @Test
+    void an_unnamed_dcb_flux_over_the_durable_model_that_reads_on_and_loses_the_history_fails_with_catchup_cannot_resume() {
+        verifiesAnUnnamedFluxOverTheDurableModelFailsOnALaterLoss(Replay.DCB);
+    }
+
+    private void verifiesAnUnnamedFluxOverTheDurableModelFailsOnALaterLoss(Replay replay) {
+        catchup = catchupOverDurable(mongoModel(true));
+        CopyOnWriteArrayList<Throwable> failures = new CopyOnWriteArrayList<>();
+        catchup.subscribe(filter(replay), StartAt.now()).subscribe(event -> received.add(event.getId()), failures::add);
+        // The change stream opens at the present, so events are written until one is delivered
+        assertThat(waitsFor(() -> {
+            if (received.isEmpty()) {
+                write(replay, event());
+            }
+            return !received.isEmpty();
+        })).as("an event is delivered").isTrue();
+
+        Mono.from(writerClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", new Document("times", 1))
+                .append("data", new Document("failCommands", List.of("getMore")).append("errorCode", HISTORY_LOST).append("appName", SUBSCRIBER_APPLICATION_NAME)))).block(Duration.ofSeconds(10));
+
+        assertThat(waitsFor(() -> !failures.isEmpty())).as("the Flux failed").isTrue();
+        CloudEvent afterTheLoss = event();
+        write(replay, afterTheLoss);
+        await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(8)).untilAsserted(() -> assertThat(received).as("delivered, so nothing restarted from the present").doesNotContain(afterTheLoss.getId()));
+        assertAll(
+                () -> assertThat(failures.getFirst()).as("failure").isInstanceOf(CatchupCannotResumeException.class),
+                () -> assertThat(historyLostReplies).as("the replies that said the oplog lost the history").hasValue(1),
+                () -> assertThat(saved).as("positions the durable model stored").isEmpty());
+    }
+
+    private ReactorMongoSubscriptionModel mongoModel(boolean restartLostSubscriptions) {
+        return new ReactorMongoSubscriptionModel(new ReactiveMongoTemplate(subscriberClient, database), "events", TimeRepresentation.RFC_3339_STRING,
+                ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)).restartSubscriptionsOnChangeStreamHistoryLost(restartLostSubscriptions));
+    }
+
+    private ReactorCatchupSubscriptionModel catchupOverDurable(ReactorMongoSubscriptionModel mongoModel) {
+        ReactorDurableSubscriptionModel durable = new ReactorDurableSubscriptionModel(mongoModel, recordingSavesOf(new ReactorCheckpointStorage(new ReactiveMongoTemplate(writerClient, database), "checkpoints")));
+        return new ReactorCatchupSubscriptionModel(durable, eventStore, eventStore, null, null, 100, 1000);
+    }
+
+    private void failsTheNextChangeStreamOpen() {
+        Mono.from(writerClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", new Document("times", 1))
+                .append("data", new Document("failCommands", List.of("aggregate")).append("errorCode", HISTORY_LOST).append("appName", SUBSCRIBER_APPLICATION_NAME)))).block(Duration.ofSeconds(10));
     }
 
     // Fails the next change stream open once with 286 and writes an event between the live start and the open

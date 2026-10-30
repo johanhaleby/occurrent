@@ -18,6 +18,7 @@ package org.occurrent.tck.subscription.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.tck.latecommit.LateCommits;
 
 import java.util.List;
 
@@ -60,4 +61,62 @@ public interface RestartableSubscriptionModelFixture extends SubscriptionModelFi
      * lost rather than that nothing repeats.
      */
     boolean resumesAfterARestart();
+
+    /**
+     * How the store behind this model answers an append that commits after one with a higher position. Asked by
+     * {@link RestartConformance}, which holds one append between the moment its position is assigned and the moment it
+     * commits, lets a later append be delivered and stored as the position to restart from, and then commits the held
+     * one.
+     * <p>
+     * A store that reserves a position before its transaction commits answers with
+     * {@link LateCommits#holding(java.util.function.Supplier)}, and builds the hold from a public injection point of the
+     * store that wrote what this model reads. A store that assigns a position and commits it as one step answers
+     * {@link LateCommits#inPositionOrder()}, and the suite then runs the same steps with nothing held.
+     * <p>
+     * Required, with no usable default, because there is no answer that is right often enough to inherit. A fixture
+     * that does not override it fails {@link RestartConformance} before its first assertion.
+     */
+    default LateCommits lateCommits() {
+        throw new UnsupportedOperationException(getClass().getName() + " runs RestartConformance but does not override "
+                + "lateCommits(). Either override it, or stop extending the restart suite.");
+    }
+
+    /**
+     * Whether a subscription started at {@code StartAt.checkpoint(GlobalCheckpoint.of(p))}, a position the application
+     * stored itself, delivers what was committed after position {@code p} was reached, including an event that
+     * committed late with a position below {@code p}.
+     * <p>
+     * Answering {@code true} owes {@link RestartConformance} that late event. Answering {@code false} owes a refusal,
+     * since a bare position carries nothing that proves no event committed below it, and a model that cannot prove
+     * that must not start. The refusal is an {@code UnsupportedStartAtException} unless the model declares
+     * {@link #refusesABareGlobalPosition()} and accepts {@link StartAtVariant#CHECKPOINT}, see
+     * {@link #acceptedStartAtVariants()}. A model that answers {@code true} must accept {@code CHECKPOINT}, since the
+     * test then starts it at the position without checking the variants first.
+     * <p>
+     * Required, with no usable default, for the same reason as {@link #lateCommits()}. A fixture that does not override
+     * it fails {@link RestartConformance} before its first assertion.
+     */
+    default boolean honoursAGlobalPosition() {
+        throw new UnsupportedOperationException(getClass().getName() + " runs RestartConformance but does not override "
+                + "honoursAGlobalPosition(). Either override it, or stop extending the restart suite.");
+    }
+
+    /**
+     * Whether the refusal {@link #honoursAGlobalPosition()} owes when it answers {@code false} is a
+     * {@code CatchupCannotResumeException} rather than an {@code UnsupportedStartAtException}. A catch-up model over an
+     * event store that writes positions answers {@code true}. It accepts a checkpoint, and refuses a bare position
+     * because it has no live start to hand over from, with the message naming the subscription and the way out. A
+     * blocking stream catch-up over an event store that writes no positions answers {@code false}, since it refuses a
+     * position above 0 with an {@code UnsupportedStartAtException} from {@code subscribe}.
+     * <p>
+     * Such a model also hands out, with every event it delivers, a checkpoint that does carry the proof, so
+     * {@link RestartConformance} also asserts that a subscription started at the checkpoint delivered with an event
+     * delivers an event that committed below it. Ignored when {@link #honoursAGlobalPosition()} answers {@code true}.
+     * <p>
+     * Answers {@code false} unless overridden, which keeps a model that refuses a position by not accepting it, the
+     * common case, from having to say so.
+     */
+    default boolean refusesABareGlobalPosition() {
+        return false;
+    }
 }

@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.lang.Nullable;
+import org.occurrent.cloudevents.CheckpointCarrier;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
@@ -32,7 +33,7 @@ import java.util.Set;
  * it's possible to resume the stream from a particular state. You can treat this cloud event implementation
  * as a regular cloud event.
  */
-public final class CheckpointAwareCloudEvent implements CloudEvent {
+public final class CheckpointAwareCloudEvent implements CloudEvent, CheckpointCarrier {
     private final CloudEvent cloudEvent;
     private final Checkpoint checkpoint;
 
@@ -97,6 +98,11 @@ public final class CheckpointAwareCloudEvent implements CloudEvent {
 
     public Checkpoint getCheckpoint() {
         return checkpoint;
+    }
+
+    @Override
+    public String checkpoint() {
+        return checkpoint.asString();
     }
 
     public CloudEvent getOriginalCloudEvent() {

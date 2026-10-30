@@ -247,7 +247,8 @@ class ProjectionAnnotationRegistrar {
             FluxSubscriptionModel fluxSubscriptionModel = applicationContext.getBean(FluxSubscriptionModel.class);
             ReactiveDcbProjectionRunner<E> runner = ReactiveDcbProjectionRunner.create(fluxSubscriptionModel, converter);
             boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-            DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+            DcbStartAt annotatedStart = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+            DcbStartAt startAt = startPositionSupport.withResumePoint(id, annotatedStart);
             startPositionSupport.applyStartupWorkarounds();
             // Resolved from fluxSubscriptionModel itself, not from an independently looked-up Subscribable bean: a
             // DCB-only composition is not required to expose one at all, and a context with more than one would let
@@ -259,7 +260,7 @@ class ProjectionAnnotationRegistrar {
             warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution, capability));
             Object store = resolveStore(annotation, id);
             boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
-            subscribeCall.subscribe(() -> "@Projection '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
+            subscribeCall.subscribe(() -> "@Projection '%s'".formatted(id), LateSubscriber.startIsFixed(annotatedStart), () -> {
                 var subscription = projectDcb(runner, id, annotation, dcbProjection, store, startAt, recordingResolution);
                 if (waitUntilStarted) {
                     subscription.waitUntilStarted().block();
@@ -287,13 +288,14 @@ class ProjectionAnnotationRegistrar {
                 if (replaysHistory && !stream && !startPositionSupport.positionReplaySupported()) {
                     throw new IllegalArgumentException("@Projection '%s' asks to replay history, but this store does not write a global position, so the reactive position-based catch-up cannot replay. Use startAt = NOW or DEFAULT.".formatted(id));
                 }
-                StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+                StartAt annotatedStart = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+                StartAt startAt = startPositionSupport.withResumePoint(id, annotatedStart);
                 startPositionSupport.applyStartupWorkarounds();
                 CatchupResolution recordingResolution = annotation.recordAppliedAppends() ? resolveCatchupModel(id, subscribable) : null;
                 warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution, subscribable));
                 Object store = resolveStore(annotation, id);
                 boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
-                subscribeCall.subscribe(() -> "@Projection '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
+                subscribeCall.subscribe(() -> "@Projection '%s'".formatted(id), LateSubscriber.startIsFixed(annotatedStart), () -> {
                     var subscription = projectAgnosticOrStream(runner, id, annotation, projection, store, startAt, recordingResolution);
                     if (waitUntilStarted) {
                         subscription.waitUntilStarted().block();

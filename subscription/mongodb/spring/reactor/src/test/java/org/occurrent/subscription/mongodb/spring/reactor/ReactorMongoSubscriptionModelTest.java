@@ -32,7 +32,14 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -47,6 +54,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.net.URI;
 import java.time.Duration;
@@ -54,6 +62,7 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -62,11 +71,13 @@ import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
@@ -302,6 +313,173 @@ public class ReactorMongoSubscriptionModelTest {
             // Then
             await().atMost(FIVE_SECONDS).until(state::size, is(1));
             assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getSimpleName()));
+        }
+    }
+
+    @Nested
+    @DisplayName("Subscribe at a catch-up position")
+    class SubscribeAtACatchupPositionTest {
+
+        @AfterEach
+        void shutdown_subscription_model() {
+            subscription.shutdown();
+        }
+
+        @Test
+        void subscribing_at_a_global_checkpoint_is_refused_and_leaves_the_id_free() {
+            assertNamedSubscribeIsRefusedAndLeavesTheIdFree(GlobalCheckpoint.of(7));
+        }
+
+        @Test
+        void subscribing_at_a_global_checkpoint_with_a_live_start_is_refused_and_leaves_the_id_free() {
+            assertNamedSubscribeIsRefusedAndLeavesTheIdFree(GlobalCheckpoint.of(5, liveStart(), 0, 7));
+        }
+
+        @Test
+        void subscribing_at_a_global_checkpoint_read_back_as_a_string_is_refused_and_leaves_the_id_free() {
+            assertNamedSubscribeIsRefusedAndLeavesTheIdFree(new StringBasedCheckpoint(GlobalCheckpoint.of(5, liveStart(), 0, 7).asString()));
+        }
+
+        @Test
+        void subscribing_at_a_catchup_time_checkpoint_is_refused_and_leaves_the_id_free() {
+            assertNamedSubscribeIsRefusedAndLeavesTheIdFree(catchupTimeCheckpoint());
+        }
+
+        @Test
+        void subscribing_at_a_catchup_time_checkpoint_read_back_as_a_string_is_refused_and_leaves_the_id_free() {
+            assertNamedSubscribeIsRefusedAndLeavesTheIdFree(new StringBasedCheckpoint(catchupTimeCheckpoint().asString()));
+        }
+
+        @Test
+        void the_flux_subscribed_at_a_global_checkpoint_fails_when_subscribed_to() {
+            assertFluxFailsWhenSubscribedTo(GlobalCheckpoint.of(7), false);
+        }
+
+        @Test
+        void the_flux_subscribed_at_a_global_checkpoint_read_back_as_a_string_fails_when_subscribed_to() {
+            assertFluxFailsWhenSubscribedTo(new StringBasedCheckpoint(GlobalCheckpoint.of(5, liveStart(), 0, 7).asString()), false);
+        }
+
+        @Test
+        void the_flux_subscribed_at_a_catchup_time_checkpoint_fails_when_subscribed_to() {
+            assertFluxFailsWhenSubscribedTo(catchupTimeCheckpoint(), false);
+        }
+
+        @Test
+        void the_flux_that_fails_if_the_start_is_lost_fails_when_subscribed_to_at_a_global_checkpoint() {
+            assertFluxFailsWhenSubscribedTo(GlobalCheckpoint.of(7), true);
+        }
+
+        @Test
+        void the_flux_that_fails_if_the_start_is_lost_fails_when_subscribed_to_at_a_global_checkpoint_read_back_as_a_string() {
+            assertFluxFailsWhenSubscribedTo(new StringBasedCheckpoint(GlobalCheckpoint.of(5, liveStart(), 0, 7).asString()), true);
+        }
+
+        @Test
+        void the_flux_that_fails_if_the_start_is_lost_fails_when_subscribed_to_at_a_catchup_time_checkpoint() {
+            assertFluxFailsWhenSubscribedTo(catchupTimeCheckpoint(), true);
+        }
+
+        @Test
+        void subscribing_at_a_time_string_is_still_accepted() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            Subscription started = subscription.subscribe(subscriptionId, StartAt.checkpoint(new StringBasedCheckpoint("2026-01-01T00:00:00Z")), cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)));
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            NameDefined written = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(written)).block();
+
+            // Then
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(state).extracting(CloudEvent::getId).contains(written.eventId()));
+        }
+
+        @Test
+        void the_flux_subscribed_at_a_time_string_is_still_accepted() {
+            // When
+            Flux<CloudEvent> flux = subscription.subscribe(StartAt.checkpoint(new StringBasedCheckpoint("2026-01-01T00:00:00Z")));
+
+            // Then it neither fails nor completes
+            StepVerifier.create(flux)
+                    .expectSubscription()
+                    .expectNoEvent(Duration.ofMillis(500))
+                    .thenCancel()
+                    .verify(Duration.ofSeconds(5));
+        }
+
+        @Test
+        void subscribing_at_a_dynamic_position_is_not_checked() {
+            // Given
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            Throwable throwable = catchThrowable(() -> subscription.subscribe(subscriptionId, StartAt.dynamic(() -> StartAt.checkpoint(GlobalCheckpoint.of(7))), cloudEvent -> Mono.empty()));
+
+            // Then
+            assertThat(throwable).isNull();
+            assertThat(subscription.isRunning(subscriptionId)).isTrue();
+        }
+
+        private void assertNamedSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint) {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> refused = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<CloudEvent> later = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            NameDefined writtenBefore = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBefore)).block();
+            StartAt startAt = StartAt.checkpoint(checkpoint);
+
+            // When
+            Throwable throwable = catchThrowable(() -> subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.fromRunnable(() -> refused.add(cloudEvent))));
+
+            // Then it is refused by the call itself, naming the checkpoint, and nothing is registered under the id
+            assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("\"" + checkpoint.asString() + "\"");
+            assertAll(
+                    () -> assertThat(((UnsupportedStartAtException) throwable).startAt()).isSameAs(startAt),
+                    () -> assertThat(subscription.isRunning(subscriptionId)).isFalse(),
+                    () -> assertThat(subscription.isPaused(subscriptionId)).isFalse()
+            );
+
+            // And the id can be used again, while the refused handler is never called
+            Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> later.add(cloudEvent)));
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            NameWasChanged sentinel = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "sentinel");
+            mongoEventStore.write("1", 1, serialize(sentinel)).block();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(later).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+            assertThat(refused).isEmpty();
+        }
+
+        private void assertFluxFailsWhenSubscribedTo(Checkpoint checkpoint, boolean failingIfStartLost) {
+            // Given
+            NameDefined writtenBefore = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBefore)).block();
+            StartAt startAt = StartAt.checkpoint(checkpoint);
+
+            // When
+            AtomicReference<Flux<CloudEvent>> flux = new AtomicReference<>();
+            Throwable thrownByTheCall = catchThrowable(() -> flux.set(failingIfStartLost ? subscription.subscribeFailingIfStartLost(null, startAt) : subscription.subscribe(startAt)));
+
+            // Then the call returns the Flux, which fails with the exception before it delivers anything, naming the checkpoint
+            assertThat(thrownByTheCall).isNull();
+            StepVerifier.create(flux.get())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                            .hasMessageContaining("\"" + checkpoint.asString() + "\"")
+                            .satisfies(refused -> assertThat(((UnsupportedStartAtException) refused).startAt()).isSameAs(startAt)))
+                    .verify(Duration.ofSeconds(5));
+        }
+
+        private Checkpoint liveStart() {
+            return requireNonNull(subscription.globalCheckpoint().block(Duration.ofSeconds(10)));
+        }
+
+        private CatchupTimeCheckpoint catchupTimeCheckpoint() {
+            return CatchupTimeCheckpoint.of("2026-01-01T00:00:00Z", liveStart(), "2026-01-01T00:00:00Z");
         }
     }
 

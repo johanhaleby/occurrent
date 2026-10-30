@@ -42,6 +42,7 @@ import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.RepositionableSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -362,6 +363,40 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         }
     }
 
+    // The handover that the takeover replaced returns while the takeover replay still runs, and a start(true) of the
+    // wrapped model has resumed the subscription where it lost the history
+    @Test
+    void a_takeover_that_replaces_a_handover_still_under_way_holds_the_live_events_after_that_handover_returns() {
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        wrapped.loses = LosingLiveStartModel.Loses.ON_ANOTHER_THREAD_WHILE_SUBSCRIBE_WAITS;
+        AtomicReference<Sinks.Empty<Void>> takeoverReplayBlocked = new AtomicReference<>();
+        wrapped.beforeTheTakeoverRuns = () -> {
+            reader.head = 4;
+            takeoverReplayBlocked.set(reader.blockReads());
+            wrapped.resumeSubscription(ID);
+        };
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            Subscription subscription = catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                    cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+            subscription.waitUntilStarted().block(Duration.ofSeconds(5));
+            assertThat(catchup.isCatchingUp(ID)).as("the takeover replay is in flight").isTrue();
+
+            Disposable delivery = wrapped.actionOf(ID).apply(liveEvent("lost", 5)).subscribe();
+            assertThat(received).as("events the caller's action was given while the takeover replays").containsExactly("e1", "e2", "e3");
+
+            // As the pause in the takeover's handover does
+            delivery.dispose();
+            takeoverReplayBlocked.get().tryEmitEmpty();
+
+            assertThat(received).as("the history again, now with the event written in the gap").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4");
+            assertThat(catchup.isRunning(ID)).isTrue();
+            assertThat(catchup.isCatchingUp(ID)).as("the takeover replay is over").isFalse();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
     @Test
     void a_resume_after_the_wrapped_model_paused_the_subscription_for_the_takeover_and_before_it_ran_the_takeover_replays_instead_of_resuming_the_wrapped_model_where_it_lost_the_history() {
         LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
@@ -530,7 +565,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     // Events at positions 1 to head, where a read can be blocked or failed
-    private static final class ScriptedReader implements PositionOrderedReader {
+    static final class ScriptedReader implements UnscopedPositionOrderedReader {
         volatile long head = 3;
         private final AtomicReference<Mono<Void>> beforeEachRead = new AtomicReference<>(Mono.empty());
 
@@ -571,7 +606,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
     // Loses the live start it opens at when the test says so and asks its listeners as the Mongo model does.
     // Without a taker, restarts from the present or ends the subscription.
-    private static final class LosingLiveStartModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
+    static final class LosingLiveStartModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
         private enum State {RUNNING, PAUSED}
 
         enum Loses {WHEN_THE_TEST_SAYS, ON_THE_THREAD_OF_SUBSCRIBE, ON_ANOTHER_THREAD_WHILE_SUBSCRIBE_WAITS}
@@ -600,6 +635,16 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         };
         volatile Runnable beforeTheNextResumeAtAPosition = () -> {
         };
+        // A cancel subscribed to removes the subscription only once this completes, so a test holds a cancel under way
+        volatile Mono<Void> cancelCompletesWhen = Mono.empty();
+        // Runs on the thread of every subscribe(id, ..) before the model registers the subscription
+        volatile Runnable beforeSubscribeRegisters = () -> {
+        };
+        final AtomicInteger subscribeCalls = new AtomicInteger();
+        final AtomicInteger starts = new AtomicInteger();
+        private volatile @Nullable Checkpoint refusedStart;
+        private volatile @Nullable RuntimeException refusal;
+        volatile boolean startResumesPausedSubscriptions;
         volatile Loses loses = Loses.WHEN_THE_TEST_SAYS;
         volatile UnaryOperator<Checkpoint> reportsTheLostPositionAs = UnaryOperator.identity();
 
@@ -611,8 +656,35 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             return held.get(subscriptionId).position();
         }
 
+        // The action the subscription runs, for a test that gives it an event without blocking
+        Function<CloudEvent, Mono<Void>> actionOf(String subscriptionId) {
+            return held.get(subscriptionId).action();
+        }
+
         void losesTheNextOpen() {
             opensToLose.set(1);
+        }
+
+        // The next subscribe(id, ..) at start throws failure instead of registering the subscription
+        void refusesTheSubscribeAt(Checkpoint start, RuntimeException failure) {
+            refusal = failure;
+            refusedStart = start;
+        }
+
+        // What the listeners answer for a loss, without pausing or restarting anything
+        HistoryLossHandling asksTheListeners(String subscriptionId, Checkpoint lostFrom) {
+            for (HistoryLossListener listener : listeners) {
+                HistoryLossHandling handling = listener.handleHistoryLoss(subscriptionId, lostFrom);
+                if (handling instanceof HistoryLossHandling.TakeOver) {
+                    return handling;
+                }
+            }
+            return HistoryLossHandling.leaveToSubscriptionModel();
+        }
+
+        // The oplog loses the history from lostFrom for a subscription, wherever it opened
+        void losesTheHistoryFrom(String subscriptionId, Checkpoint lostFrom) {
+            reportsLoss(subscriptionId, lostFrom);
         }
 
         void losesTheLiveStartOnTheNextCheckWhetherItRuns() {
@@ -638,9 +710,12 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         }
 
         private void losesTheLiveStartOf(String subscriptionId) {
-            Held lost = held.get(subscriptionId);
+            reportsLoss(subscriptionId, held.get(subscriptionId).position());
+        }
+
+        private void reportsLoss(String subscriptionId, Checkpoint lostFrom) {
             for (HistoryLossListener listener : listeners) {
-                if (listener.handleHistoryLoss(subscriptionId, reportsTheLostPositionAs.apply(lost.position())) instanceof HistoryLossHandling.TakeOver takeOver) {
+                if (listener.handleHistoryLoss(subscriptionId, reportsTheLostPositionAs.apply(lostFrom)) instanceof HistoryLossHandling.TakeOver takeOver) {
                     held.computeIfPresent(subscriptionId, (id, current) -> current.at(current.position(), State.PAUSED));
                     beforeTheTakeoverRuns.run();
                     takeOversRun.incrementAndGet();
@@ -697,8 +772,20 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         }
 
         @Override
+        public Flux<CloudEvent> subscribeFailingOnHistoryLoss(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.error(new AssertionError("The cold primitive must not be used by the named catch-up path"));
+        }
+
+        @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            subscribeCalls.incrementAndGet();
+            beforeSubscribeRegisters.run();
             Checkpoint position = ((StartAt.StartAtCheckpoint) startAt).checkpoint;
+            RuntimeException refused = refusal;
+            if (refused != null && position.equals(refusedStart)) {
+                refusal = null;
+                throw refused;
+            }
             held.put(subscriptionId, new Held(action, position, State.RUNNING));
             opened(subscriptionId);
             if (openThatLoses != null && loses != Loses.WHEN_THE_TEST_SAYS) {
@@ -778,10 +865,10 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
         @Override
         public Mono<Void> cancelSubscription(String subscriptionId) {
-            return Mono.fromRunnable(() -> {
+            return Mono.defer(() -> cancelCompletesWhen).then(Mono.fromRunnable(() -> {
                 cancelled.add(subscriptionId);
                 held.remove(subscriptionId);
-            });
+            }));
         }
 
         @Override
@@ -810,6 +897,16 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
+            starts.incrementAndGet();
+            if (resumeSubscriptionsAutomatically && startResumesPausedSubscriptions) {
+                List.copyOf(held.keySet()).forEach(subscriptionId -> {
+                    Held current = held.get(subscriptionId);
+                    if (current != null && current.state() == State.PAUSED) {
+                        held.put(subscriptionId, current.at(current.position(), State.RUNNING));
+                        opened(subscriptionId);
+                    }
+                });
+            }
         }
 
         @Override

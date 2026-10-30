@@ -66,6 +66,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.filter.Filter.type;
 
@@ -192,6 +193,27 @@ class ReactorDurableCatchupQuietPositionTest {
 
         // Then
         assertThat(mongoModel.added).as("listeners added to the Mongo model under a dual mode catch-up model").hasSize(1);
+    }
+
+    @Test
+    void a_dual_mode_catch_up_model_refuses_a_subscription_without_a_filter_from_a_position_checkpoint_before_the_durable_model_stores_anything() {
+        // Given
+        writeMatchingEvents(1);
+        ReactorMongoSubscriptionModel mongoModel = new ReactorMongoSubscriptionModel(template, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new ReactorCatchupSubscriptionModel(mongoModel, eventStore, eventStore, DcbCriteria.all(), Filter.all()), checkpointStorage, quickToSave());
+        models.add(model);
+
+        // When
+        Throwable refusal = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(GlobalCheckpoint.of(0)), event -> Mono.fromRunnable(() -> delivered.add(event))));
+
+        // Then
+        assertThat(refusal).as("the subscribe without a filter").isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContainingAll("Subscription '" + SUBSCRIPTION_ID + "'", "StreamSubscriptionFilter", "DcbSubscriptionFilter", "AgnosticSubscriptionFilter");
+        assertThat(storedPosition()).as("the checkpoint stored for the refused id").isNull();
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).as("the refused id runs").isFalse();
+        assertThat(delivered).as("what the refused subscribe delivered").isEmpty();
+        model.subscribe(SUBSCRIPTION_ID, MATCHING_ONLY, StartAt.checkpoint(GlobalCheckpoint.of(0)), event -> Mono.fromRunnable(() -> delivered.add(event))).waitUntilStarted(TIMEOUT).block();
+        await().atMost(REPLAY_ENDS_WITHIN).untilAsserted(() -> assertThat(delivered).as("what a subscribe with a filter for the same id receives").hasSize(1));
     }
 
     private ReactorDurableSubscriptionModel durableOverCatchup(ReactorMongoSubscriptionModel mongoModel) {

@@ -21,7 +21,11 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.*;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.api.dcb.*;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.filter.Filter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -48,7 +52,8 @@ import static java.util.Objects.requireNonNull;
  */
 @NullMarked
 public final class BlockingEventStoreOverReactive
-        implements EventStore, EventStoreQueries, EventStoreOperations, ReadEventStreamWithFilter, PositionOrderedReader, DcbEventStore {
+        implements EventStore, EventStoreQueries, EventStoreOperations, ReadEventStreamWithFilter, PositionOrderedReader, DcbEventStore,
+                   DcbAppendConfirmation, CatchupReads, DcbCatchupReads {
 
     private final org.occurrent.eventstore.api.reactor.EventStore eventStore;
     private final org.occurrent.eventstore.api.reactor.EventStoreQueries queries;
@@ -183,6 +188,71 @@ public final class BlockingEventStoreOverReactive
         return positionOrderedReader.writesPosition();
     }
 
+    // CatchupReads and DcbCatchupReads
+
+    // The bridge forwards to the scope of the reactive store it wraps and blocks on each call, so a catch-up over the
+    // bridge reads the way a catch-up over the reactive store does. A reactive store that doesn't implement the
+    // reactive SPI has no scope to forward to, so opening one is refused.
+
+    @Override
+    public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+        if (!(positionOrderedReader instanceof org.occurrent.eventstore.api.reactor.internal.CatchupReads reactiveReads)) {
+            throw new UnsupportedOperationException("The reactive position ordered reader " + positionOrderedReader.getClass().getName() + " does not implement " + org.occurrent.eventstore.api.reactor.internal.CatchupReads.class.getName());
+        }
+        org.occurrent.eventstore.api.reactor.internal.CatchupReadScope scope = blockRequiringAValue(reactiveReads.openCatchupReadScope(notBefore), "openCatchupReadScope(String)");
+        return new CatchupReadScope() {
+            @Override
+            public @Nullable String liveStart() {
+                return scope.liveStart();
+            }
+
+            @Override
+            public long currentPosition() {
+                return blockRequiringAValue(scope.currentPosition(), "currentPosition()");
+            }
+
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return scope.readInPositionOrder(filter, range).toStream();
+            }
+
+            // The reactive scope has no query, because no reactive catch-up reads by query. This read is not in the scope.
+            @Override
+            public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+                return queries.query(filter, skip, limit, sortBy).toStream();
+            }
+
+            @Override
+            public void close() {
+                scope.close().block();
+            }
+        };
+    }
+
+    @Override
+    public DcbCatchupReadScope openDcbCatchupReadScope(@Nullable String notBefore) {
+        if (!(dcbEventStore instanceof org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads reactiveReads)) {
+            throw new UnsupportedOperationException("The reactive DCB event store " + dcbEventStore.getClass().getName() + " does not implement " + org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads.class.getName());
+        }
+        org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope scope = blockRequiringAValue(reactiveReads.openDcbCatchupReadScope(notBefore), "openDcbCatchupReadScope(String)");
+        return new DcbCatchupReadScope() {
+            @Override
+            public @Nullable String liveStart() {
+                return scope.liveStart();
+            }
+
+            @Override
+            public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+                return blockRequiringAValue(scope.read(criteria, options), "read(DcbCriteria, DcbReadOptions)");
+            }
+
+            @Override
+            public void close() {
+                scope.close().block();
+            }
+        };
+    }
+
     // DcbEventStore
 
     // exists(DcbCriteria, DcbReadOptions) and count(DcbCriteria, DcbReadOptions) are overridden here rather than left
@@ -213,6 +283,18 @@ public final class BlockingEventStoreOverReactive
     @Override
     public DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition) {
         return blockRequiringAValue(dcbEventStore.append(events, condition), "append(List, DcbAppendCondition)");
+    }
+
+    /**
+     * Confirms through the reactive store when it can, and answers {@code false} when it can't, which is how
+     * {@link DcbAppendConfirmation} treats a store that doesn't implement it.
+     */
+    @Override
+    public boolean isConfirmed(DcbAppendResult appendResult) {
+        if (!(dcbEventStore instanceof org.occurrent.eventstore.api.dcb.reactor.DcbAppendConfirmation confirmation)) {
+            return false;
+        }
+        return Boolean.TRUE.equals(block(confirmation.isConfirmed(appendResult)));
     }
 
     /**

@@ -30,9 +30,13 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
+import org.occurrent.tck.latecommit.AppendHold;
+import org.occurrent.tck.latecommit.HeldAppend;
+import org.occurrent.tck.latecommit.LateCommits;
 import org.occurrent.tck.subscription.blocking.RestartableSubscriptionModelFixture;
 import org.occurrent.tck.subscription.blocking.StartAtVariant;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
+import org.occurrent.testsupport.mongodb.HoldingMongoClient;
 
 import java.time.Duration;
 import java.util.EnumSet;
@@ -75,6 +79,7 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
  */
 class CatchupSubscriptionModelFixture implements RestartableSubscriptionModelFixture {
 
+    private final MongoClient mongoClient;
     private final MongoDatabase database;
     private final MongoCollection<Document> eventCollection;
     private final MongoEventStore eventStore;
@@ -82,6 +87,7 @@ class CatchupSubscriptionModelFixture implements RestartableSubscriptionModelFix
     // state a restart is supposed to survive, the same reason the event collection above is never recreated either.
     private final NativeMongoCheckpointStorage storage;
     private final TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
+    private final EventStoreConfig eventStoreConfig = new EventStoreConfig(timeRepresentation);
     private final String streamId = UUID.randomUUID().toString();
     private final AtomicLong streamVersion = new AtomicLong(0);
 
@@ -91,9 +97,10 @@ class CatchupSubscriptionModelFixture implements RestartableSubscriptionModelFix
     private CatchupSubscriptionModel catchupModel;
 
     CatchupSubscriptionModelFixture(MongoClient mongoClient, MongoDatabase database) {
+        this.mongoClient = mongoClient;
         this.database = database;
         this.eventCollection = database.getCollection("events-" + UUID.randomUUID());
-        this.eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(timeRepresentation));
+        this.eventStore = new MongoEventStore(mongoClient, database, eventCollection, eventStoreConfig);
         this.storage = new NativeMongoCheckpointStorage(database, "checkpoints-" + UUID.randomUUID());
         buildModel();
     }
@@ -155,6 +162,45 @@ class CatchupSubscriptionModelFixture implements RestartableSubscriptionModelFix
     @Override
     public boolean resumesAfterARestart() {
         return true;
+    }
+
+    /**
+     * False. A bare {@code GlobalCheckpoint} carries no live start, so the catch-up model cannot tell that nothing
+     * committed below it and refuses the start, see {@link #refusesABareGlobalPosition()}.
+     */
+    @Override
+    public boolean honoursAGlobalPosition() {
+        return false;
+    }
+
+    /**
+     * True. The refusal is a {@code CatchupCannotResumeException}, and the checkpoint delivered with an event is what to
+     * start from instead.
+     */
+    @Override
+    public boolean refusesABareGlobalPosition() {
+        return true;
+    }
+
+    /**
+     * The event store in front of the model reserves an event's position before the transaction that writes it begins,
+     * so a write can be held between the two. The hold is a client that blocks the first {@code startSession}, which
+     * the store calls after it has reserved its position and before it begins the transaction, on the same event
+     * collection as {@link #eventStore}, so the change stream sees the held write once it commits.
+     */
+    @Override
+    public LateCommits lateCommits() {
+        return LateCommits.holding(() -> {
+            AppendHold hold = new AppendHold();
+            MongoClient holdingClient = HoldingMongoClient.beforeEachSession(mongoClient, () -> {
+                if (hold.engage()) {
+                    hold.awaitRelease();
+                }
+            });
+            MongoEventStore holding = new MongoEventStore(holdingClient, database, eventCollection, eventStoreConfig);
+            return HeldAppend.of(hold, holding, () -> {
+            });
+        });
     }
 
     /**

@@ -23,6 +23,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.junit.jupiter.api.*;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
@@ -33,8 +34,10 @@ import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
@@ -59,7 +62,9 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -163,6 +168,26 @@ class ReactorCatchupLateCommitMongoTest {
 
         verifyLateCommitIsDeliveredAfterRestart(append,
                 live -> new ReactorCatchupSubscriptionModel(live, (DcbEventStore) eventStore, DcbCriteria.all()));
+    }
+
+    @Test
+    void a_stream_event_that_committed_below_the_checkpoint_a_replayed_event_was_delivered_with_is_delivered_after_a_restart_from_it() {
+        ReactorMongoEventStore eventStore = eventStore(STREAM);
+        Function<CloudEvent, Mono<Void>> append = event -> eventStore.write("stream-" + event.getId(), Flux.just(event)).then();
+
+        verifyLateCommitIsDeliveredAfterARestartFromTheDeliveredCheckpoint(append,
+                live -> new ReactorCatchupSubscriptionModel(live, eventStore, Filter.all()),
+                stored -> StartAt.checkpoint(new StringBasedCheckpoint(stored)));
+    }
+
+    @Test
+    void a_dcb_event_that_committed_below_the_checkpoint_a_replayed_event_was_delivered_with_is_delivered_after_a_restart_from_it() {
+        ReactorMongoEventStore eventStore = eventStore(STREAM, DCB);
+        Function<CloudEvent, Mono<Void>> append = event -> eventStore.append(List.of(DcbCloudEvents.withTags(event, List.of(Tag.parse("id:" + event.getId()))))).then();
+
+        verifyLateCommitIsDeliveredAfterARestartFromTheDeliveredCheckpoint(append,
+                live -> new ReactorCatchupSubscriptionModel(live, (DcbEventStore) eventStore, DcbCriteria.all()),
+                stored -> DcbStartAt.checkpoint(stored).toStartAt());
     }
 
     @Test
@@ -390,6 +415,54 @@ class ReactorCatchupLateCommitMongoTest {
             append.apply(event("D")).block(TIMEOUT);
             await().atMost(TIMEOUT).untilAsserted(() -> assertThat(received).contains("D"));
             assertThat(received).as("every committed event reaches the subscription").contains("A", "B", "C", "D");
+        } finally {
+            second.shutdown();
+        }
+    }
+
+    private void verifyLateCommitIsDeliveredAfterARestartFromTheDeliveredCheckpoint(Function<CloudEvent, Mono<Void>> append,
+                                                                                   Function<ReactorMongoSubscriptionModel, ReactorCatchupSubscriptionModel> catchupOver,
+                                                                                   Function<String, StartAt> restoreFrom) {
+        // A reserves position 1 and holds its transaction open
+        holdNextCommit.set(true);
+        Disposable writingA = append.apply(event("A")).subscribe();
+        awaitOrFail(heldInCommit, 20);
+        // B and C take positions 2 and 3 and commit
+        append.apply(event("B")).block(TIMEOUT);
+        append.apply(event("C")).block(TIMEOUT);
+
+        // First process without checkpoint storage handles B, holds on to the checkpoint B was delivered with, then dies while handling C
+        Map<String, String> checkpointDeliveredWith = new ConcurrentHashMap<>();
+        ReactorCatchupSubscriptionModel first = catchupOver.apply(liveModel());
+        CountDownLatch handlingC = new CountDownLatch(1);
+        CountDownLatch crashed = new CountDownLatch(1);
+        first.subscribe("sub", null, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() -> {
+            if (cloudEvent.getId().equals("C")) {
+                handlingC.countDown();
+                awaitOrFail(crashed, 60);
+            } else {
+                checkpointDeliveredWith.put(cloudEvent.getId(), EventMetadata.from(cloudEvent).getCheckpoint().orElseThrow());
+            }
+        }));
+        awaitOrFail(handlingC, 20);
+        first.shutdown();
+        crashed.countDown();
+        String stored = requireNonNull(checkpointDeliveredWith.get("B"));
+        assertThat(GlobalCheckpoint.positionOf(new StringBasedCheckpoint(stored))).as("the position the checkpoint of B holds").isEqualTo(2);
+
+        // A commits at position 1, below that checkpoint
+        releaseHeld.countDown();
+        await().atMost(TIMEOUT).until(writingA::isDisposed);
+
+        // Second process restarts from the checkpoint the application held on to
+        List<String> received = new CopyOnWriteArrayList<>();
+        ReactorCatchupSubscriptionModel second = catchupOver.apply(liveModel());
+        try {
+            second.subscribe("sub", null, restoreFrom.apply(stored), cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())))
+                    .waitUntilStarted().block(TIMEOUT);
+            append.apply(event("D")).block(TIMEOUT);
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(received).contains("D"));
+            assertThat(received).as("the events the restarted subscription is owed").contains("A", "C", "D");
         } finally {
             second.shutdown();
         }

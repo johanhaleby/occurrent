@@ -18,13 +18,17 @@
 package org.occurrent.springboot.blocking;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.occurrent.springboot.common.StartupWorkaround;
+import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -75,10 +79,14 @@ class StartPositionSupport {
         };
     }
 
+    StartAt generateAgnosticStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtGlobalPosition, ResumeBehavior resumeBehavior) {
+        return withResumePoint(subscriptionId, agnosticStartAt(subscriptionId, startPosition, startAtGlobalPosition, resumeBehavior));
+    }
+
     // Build the neutral StartAt over the unified global position. BEGINNING replays from global position 0,
     // startAtGlobalPosition replays after a specific position, both applying the same replay-then-resume logic. NOW and
     // DEFAULT go straight to live.
-    StartAt generateAgnosticStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtGlobalPosition, ResumeBehavior resumeBehavior) {
+    private StartAt agnosticStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtGlobalPosition, ResumeBehavior resumeBehavior) {
         if (startAtGlobalPosition >= 0) {
             return replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(startAtGlobalPosition)), resumeBehavior);
         }
@@ -124,6 +132,11 @@ class StartPositionSupport {
     }
 
     DcbStartAt generateDcbStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtDcbPosition, ResumeBehavior resumeBehavior) {
+        return withResumePoint(subscriptionId, dcbStartAt(subscriptionId, startPosition, startAtDcbPosition, resumeBehavior));
+    }
+
+    @SuppressWarnings("removal")
+    private DcbStartAt dcbStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtDcbPosition, ResumeBehavior resumeBehavior) {
         if (startAtDcbPosition >= 0) {
             // Start after a specific position, applying the same replay-then-resume logic BEGINNING uses.
             return replayThenResume(subscriptionId, DcbStartAt.afterPosition(startAtDcbPosition), resumeBehavior);
@@ -154,6 +167,10 @@ class StartPositionSupport {
     }
 
     @NonNull StartAt generateStartAt(String subscriptionId, StartPositionToUse startPositionToUse, ResumeBehavior resumeBehavior) {
+        return withResumePoint(subscriptionId, streamStartAt(subscriptionId, startPositionToUse, resumeBehavior));
+    }
+
+    private StartAt streamStartAt(String subscriptionId, StartPositionToUse startPositionToUse, ResumeBehavior resumeBehavior) {
         return switch (startPositionToUse) {
             case StartPositionToUse.StartAtISO8601 iso8601 -> switch (resumeBehavior) {
                 case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
@@ -193,7 +210,7 @@ class StartPositionSupport {
             };
             case StartPositionToUse.StartAtTimeEpoch epoch -> {
                 OffsetDateTime offsetDateTime = OffsetDateTime.ofInstant(Instant.ofEpochMilli(epoch.startAtTimeEpoch), ZoneOffset.UTC);
-                yield generateStartAt(subscriptionId, new StartPositionToUse.StartAtISO8601(offsetDateTime), resumeBehavior);
+                yield streamStartAt(subscriptionId, new StartPositionToUse.StartAtISO8601(offsetDateTime), resumeBehavior);
             }
             case StartPositionToUse.StartAtStartPosition startAtStartPosition -> switch (startAtStartPosition.startPosition) {
                 case BEGINNING_OF_TIME -> switch (resumeBehavior) {
@@ -242,6 +259,48 @@ class StartPositionSupport {
                 });
             };
         };
+    }
+
+    // Asks the application's SubscriptionResumePoints bean, when it declared one, each time a subscription model resolves
+    // the start. A non-null answer replaces the annotation's start, except where that start is null for a competing
+    // consumer or durable model, as under SAME_AS_START_AT. Those stay off, so a catch-up above them runs from the answer
+    // without its live delegate. A null answer resolves what the annotation built.
+    private StartAt withResumePoint(String subscriptionId, StartAt startAt) {
+        @Nullable SubscriptionResumePoints resumePoints = applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable();
+        if (resumePoints == null) {
+            return startAt;
+        }
+        return StartAt.dynamic(context -> {
+            @Nullable StartAt built = startAt.get(context);
+            if (built == null && !CatchupSubscriptionModel.class.isAssignableFrom(context.subscriptionModelType())) {
+                return null;
+            }
+            @Nullable String resumePoint = resumePoints.resumePointFor(subscriptionId);
+            return resumePoint == null ? built : StartAt.checkpoint(new StringBasedCheckpoint(resumePoint));
+        });
+    }
+
+    private DcbStartAt withResumePoint(String subscriptionId, DcbStartAt startAt) {
+        @Nullable SubscriptionResumePoints resumePoints = applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable();
+        if (resumePoints == null) {
+            return startAt;
+        }
+        return DcbStartAt.dynamic(context -> {
+            @Nullable DcbStartAt built = resolve(startAt, context);
+            if (built == null) {
+                return null;
+            }
+            @Nullable String resumePoint = resumePoints.resumePointFor(subscriptionId);
+            return resumePoint == null ? built : DcbStartAt.checkpoint(resumePoint);
+        });
+    }
+
+    private static @Nullable DcbStartAt resolve(DcbStartAt startAt, SubscriptionModelContext context) {
+        @Nullable DcbStartAt resolved = startAt;
+        while (resolved instanceof DcbStartAt.Dynamic dynamic) {
+            resolved = dynamic.function().apply(context);
+        }
+        return resolved;
     }
 
     static StartPositionToUse findStartPositionToUseOrThrow(String subscriptionId, String startAtISO8601, long startAtTimeEpoch, StartPosition startPosition) {

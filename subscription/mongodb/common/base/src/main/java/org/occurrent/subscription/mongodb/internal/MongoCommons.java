@@ -25,6 +25,7 @@ import com.mongodb.MongoSocketException;
 import com.mongodb.MongoTimeoutException;
 import org.bson.*;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.eventstore.mongodb.internal.OperationTimeLiveStart;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
@@ -58,7 +59,7 @@ import static java.util.Objects.requireNonNull;
 public class MongoCommons {
 
     public static final String RESUME_TOKEN = "resumeToken";
-    public static final String OPERATION_TIME = "operationTime";
+    public static final String OPERATION_TIME = OperationTimeLiveStart.OPERATION_TIME;
     public static final String GENERIC_CHECKPOINT = "checkpoint";
     // Legacy field name used before the SubscriptionPosition -> Checkpoint rename. Kept so that documents written
     // by older versions of Occurrent can still be read. New writes never use this field, and because every adapter
@@ -172,7 +173,7 @@ public class MongoCommons {
             if (value.contains(RESUME_TOKEN)) {
                 return new MongoResumeTokenCheckpoint(BsonDocument.parse(value).getDocument(RESUME_TOKEN));
             } else if (value.contains(OPERATION_TIME)) {
-                BsonTimestamp operationTime = Document.parse(value).get(OPERATION_TIME, BsonTimestamp.class);
+                BsonTimestamp operationTime = OperationTimeLiveStart.parse(value);
                 if (operationTime != null) {
                     return new MongoOperationTimeCheckpoint(operationTime);
                 }
@@ -519,6 +520,28 @@ public class MongoCommons {
     }
 
     /**
+     * Throws when {@code startAt} is a position a catch-up subscription model stores, a {@link GlobalCheckpoint} or a
+     * {@link CatchupTimeCheckpoint}. A change stream can't open at either, and
+     * {@link #applyStartPosition(Object, BiFunction, BiFunction, StartAt, SubscriptionModelContext)} opens it at the
+     * present for them, which skips every event written before it.
+     * <p>
+     * A subscription model calls it when a subscription starts, not when one resumes. A durable subscription model
+     * wrapping a MongoDB subscription model resumes a subscription at the position a catch-up stored on purpose, and
+     * the change stream then goes on from the position the subscription has read to. A dynamic {@link StartAt} is not
+     * checked, for the reason {@link #checkStartPosition(StartAt, SubscriptionModelContext)} gives.
+     *
+     * @throws UnsupportedStartAtException If {@code startAt} is a position a catch-up subscription model stores.
+     */
+    public static void refuseCatchupPosition(@Nullable StartAt startAt) {
+        if (startAt instanceof StartAtCheckpoint position
+                && (GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(position.checkpoint))) {
+            throw new UnsupportedStartAtException(startAt, "Cannot open a change stream at checkpoint \"" + position.checkpoint.asString()
+                    + "\", which is a position a catch-up subscription model stores and not a change stream position. Opening it at the present instead would skip every event written before it. "
+                    + "Start the subscription through the catch-up subscription model that stored the checkpoint.");
+        }
+    }
+
+    /**
      * Stands in for the object a start position would be applied to, so {@link #checkStartPosition} can reuse the
      * whole of {@code applyStartPosition} rather than growing a second copy of its parsing that could drift from it.
      */
@@ -553,8 +576,7 @@ public class MongoCommons {
                 BsonDocument resumeToken = bsonDocument.getDocument(RESUME_TOKEN);
                 withStartPositionApplied = applyResumeToken.apply(t, resumeToken);
             } else if (changeStreamPositionString.contains(OPERATION_TIME)) {
-                Document document = Document.parse(changeStreamPositionString);
-                BsonTimestamp operationTime = document.get(OPERATION_TIME, BsonTimestamp.class);
+                BsonTimestamp operationTime = OperationTimeLiveStart.parse(changeStreamPositionString);
                 withStartPositionApplied = applyOperationTime.apply(t, operationTime);
             } else {
                 // Unrecognized start position: return t (subscription model default/now) instead of throwing,

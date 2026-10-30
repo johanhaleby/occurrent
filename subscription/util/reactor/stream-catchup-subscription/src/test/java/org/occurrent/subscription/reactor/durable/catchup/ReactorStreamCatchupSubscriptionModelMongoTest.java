@@ -21,11 +21,13 @@ import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
@@ -34,10 +36,14 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CatchupCannotResumeException;
+import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
@@ -64,9 +70,13 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -236,20 +246,28 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
     }
 
     @Test
-    void resumes_correctly_from_a_global_subscription_position() {
+    void resumes_correctly_from_a_checkpoint_delivered_with_an_event() {
+        // Given
         appendToStream("stream-1", name("h1"));
         appendToStream("stream-1", name("h2"));
         appendToStream("stream-1", name("h3"));
+        // A first subscription delivers the history, and the checkpoint h1 was delivered with is kept
+        AtomicReference<String> checkpointOfH1 = new AtomicReference<>();
+        ReactorStreamCatchupSubscriptionModel first = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
+        disposables.add(first.subscribe(Filter.streamId("stream-1"), StartAt.checkpoint(GlobalCheckpoint.of(0)))
+                .doOnNext(cloudEvent -> {
+                    if (((NameDefined) converter.toDomainEvent(cloudEvent)).name().equals("h1")) {
+                        checkpointOfH1.set(EventMetadata.from(cloudEvent).getCheckpoint().orElseThrow());
+                    }
+                }).subscribe());
+        await().atMost(Duration.ofSeconds(40)).until(() -> checkpointOfH1.get() != null);
 
-        // Resolve the position of h1 so the resumed replay should skip it and start with h2.
-        CloudEvent h1Event = requireNonNull(requireNonNull(eventStore.read("stream-1", 0, Integer.MAX_VALUE).block())
-                .events().blockFirst());
-        long h1Position = OccurrentCloudEventExtension.getPosition(h1Event);
-
-        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
+        // When a second subscription starts from that checkpoint
+        ReactorStreamCatchupSubscriptionModel second = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.checkpoint(GlobalCheckpoint.of(h1Position))), received);
+        subscribe(second.subscribe(Filter.streamId("stream-1"), DcbStartAt.checkpoint(checkpointOfH1.get()).toStartAt()), received);
 
+        // Then the replay skips h1 and starts with h2
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h2", "h3"));
 
         appendToStream("stream-1", name("live0"));
@@ -258,6 +276,29 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
             assertThat(received).containsExactly("h2", "h3", "live0");
             assertThat(received).doesNotHaveDuplicates();
         });
+    }
+
+    @Test
+    void a_global_subscription_position_without_a_live_start_is_refused_with_an_error_signal() {
+        // Given
+        appendToStream("stream-1", name("h1"));
+        appendToStream("stream-1", name("h2"));
+        appendToStream("stream-1", name("h3"));
+        CloudEvent h1Event = requireNonNull(requireNonNull(eventStore.read("stream-1", 0, Integer.MAX_VALUE).block())
+                .events().blockFirst());
+        long h1Position = OccurrentCloudEventExtension.getPosition(h1Event);
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+
+        // When
+        Throwable failure = catchThrowable(() -> catchup.subscribe(Filter.streamId("stream-1"), StartAt.checkpoint(GlobalCheckpoint.of(h1Position)))
+                .map(cloudEvent -> ((NameDefined) converter.toDomainEvent(cloudEvent)).name()).doOnNext(received::add).blockLast(Duration.ofSeconds(40)));
+
+        // Then
+        assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
+                .hasMessageContaining("after position " + h1Position)
+                .hasMessageContaining("EventMetadata.getCheckpoint()");
+        assertThat(received).as("delivered").isEmpty();
     }
 
     @Test
@@ -325,31 +366,48 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
     // written and actually sees that write inside the window the head already covers. A fixed delay would race the
     // write on a slow machine and fail without saying why.
     private record HeadAheadOfCommittedPositionOrderedReader(PositionOrderedReader delegate, long ahead, CountDownLatch releaseFirstRead,
-                                                             AtomicBoolean firstReadStarted) implements PositionOrderedReader {
+                                                             AtomicBoolean firstReadStarted) implements PositionOrderedReader, CatchupReads {
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-            return Flux.defer(() -> {
-                if (!firstReadStarted.compareAndSet(false, true)) {
-                    return delegate.readInPositionOrder(filter, range);
-                }
-                return Mono.fromCallable(() -> releaseFirstRead.await(60, TimeUnit.SECONDS))
-                        .subscribeOn(Schedulers.boundedElastic())
-                        .thenMany(delegate.readInPositionOrder(filter, range));
-            });
+            return readThrough(delegate, filter, range);
         }
 
         @Override
         public Mono<Long> currentPosition() {
-            return delegate.currentPosition().map(position -> position + ahead);
+            return headThrough(delegate);
         }
 
         @Override
         public boolean writesPosition() {
             return delegate.writesPosition();
         }
+
+        // The reads the catch-up makes go through the scope the delegate opens, so the head and the held first read apply to them
+        @Override
+        public Mono<CatchupReadScope> openCatchupReadScope(@Nullable String notBefore) {
+            return ((CatchupReads) delegate).openCatchupReadScope(notBefore).map(scope -> {
+                PositionOrderedReader inScope = new ScopeAsReader(scope, delegate.writesPosition());
+                return new DecoratedScope(scope, () -> headThrough(inScope), (filter, range) -> readThrough(inScope, filter, range));
+            });
+        }
+
+        private Flux<CloudEvent> readThrough(PositionOrderedReader source, Filter filter, PositionRange range) {
+            return Flux.defer(() -> {
+                if (!firstReadStarted.compareAndSet(false, true)) {
+                    return source.readInPositionOrder(filter, range);
+                }
+                return Mono.fromCallable(() -> releaseFirstRead.await(60, TimeUnit.SECONDS))
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .thenMany(source.readInPositionOrder(filter, range));
+            });
+        }
+
+        private Mono<Long> headThrough(PositionOrderedReader source) {
+            return source.currentPosition().map(position -> position + ahead);
+        }
     }
 
-    private static final class DelayFirstReadPositionOrderedReader implements PositionOrderedReader {
+    private static final class DelayFirstReadPositionOrderedReader implements PositionOrderedReader, CatchupReads {
         private final PositionOrderedReader delegate;
         private final Duration delay;
         private final AtomicBoolean firstReadStarted;
@@ -363,13 +421,7 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
 
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-            if (windowDelayed.compareAndSet(false, true)) {
-                return Flux.defer(() -> {
-                    firstReadStarted.set(true);
-                    return delegate.readInPositionOrder(filter, range).delayElements(delay);
-                });
-            }
-            return delegate.readInPositionOrder(filter, range);
+            return readThrough(delegate, filter, range);
         }
 
         @Override
@@ -380,6 +432,59 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
         @Override
         public boolean writesPosition() {
             return delegate.writesPosition();
+        }
+
+        // The reads the catch-up makes go through the scope the delegate opens, so the delay applies to the first of them
+        @Override
+        public Mono<CatchupReadScope> openCatchupReadScope(@Nullable String notBefore) {
+            return ((CatchupReads) delegate).openCatchupReadScope(notBefore).map(scope ->
+                    new DecoratedScope(scope, scope::currentPosition, (filter, range) -> readThrough(new ScopeAsReader(scope, delegate.writesPosition()), filter, range)));
+        }
+
+        private Flux<CloudEvent> readThrough(PositionOrderedReader source, Filter filter, PositionRange range) {
+            if (windowDelayed.compareAndSet(false, true)) {
+                return Flux.defer(() -> {
+                    firstReadStarted.set(true);
+                    return source.readInPositionOrder(filter, range).delayElements(delay);
+                });
+            }
+            return source.readInPositionOrder(filter, range);
+        }
+    }
+
+    // The scope with its head and its window reads replaced
+    private record DecoratedScope(CatchupReadScope scope, Supplier<Mono<Long>> head, BiFunction<Filter, PositionRange, Flux<CloudEvent>> read) implements CatchupReadScope {
+        @Override
+        public @Nullable String liveStart() {
+            return scope.liveStart();
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return head.get();
+        }
+
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            return read.apply(filter, range);
+        }
+
+        @Override
+        public Mono<Void> close() {
+            return scope.close();
+        }
+    }
+
+    // A scope seen as a reader, so the decorators' logic can run over a scope the way it runs over a store
+    private record ScopeAsReader(CatchupReadScope scope, boolean writesPosition) implements PositionOrderedReader {
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            return scope.readInPositionOrder(filter, range);
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return scope.currentPosition();
         }
     }
 }
