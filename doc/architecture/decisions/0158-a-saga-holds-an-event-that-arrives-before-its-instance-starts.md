@@ -114,8 +114,8 @@ gone at fetch was released by another deliverer and is passed over. One pass in 
 | The copy | What the drain does |
 |---|---|
 | proven applied | release |
-| on the start's stream, below the start's version, on a saga whose one start event type is a concrete class | release, DEBUG |
-| its key is in `selfHeldKeys`, or the copy is marked `outstanding` | apply, however far behind the reorder window |
+| its key is in `selfHeldKeys`, or the copy is marked `outstanding` | apply, however far behind the reorder window, except that `process` skips a copy of another type below the start and the drain releases it |
+| held before the start, on the start's stream, below the start's version, on a saga whose one start event type is neither abstract nor sealed, and the instance lists no earlier event of the start's type below it | release, DEBUG |
 | self-held, its key in neither set | plain classification, apply when new, otherwise leave it with a WARN |
 | behind the reorder window | leave it with a WARN. The lookup below applies it on its event's next delivery |
 | a redelivery only by the pre-0.35 floor (ADR 154) | apply, with an ERROR naming the key, since a held copy was never applied |
@@ -133,26 +133,35 @@ reaction to an event that committed before the start. That is the same cost a ho
 event delivered after the start, because classification compares versions and marks, not positions. Holding such a copy
 forever instead would keep its bytes and never run its reaction.
 
-**On a saga whose one start event type is a concrete class, an event of another type on the start's own stream below
-the start's version is skipped.** A lower version of that stream committed before the start, so a delivery of such an
-event after the start is skipped with a DEBUG log, the same as the drain releases its copy. Classification alone would
-apply it, because ADR 154 compares a version with the marks of its own type, and a type with no mark has nothing to
-compare with. An event of the start type itself is still classified.
+**On a saga whose one start event type is a class that is neither abstract nor sealed, an event of another type on the
+start's own stream below the start's version is skipped.** A lower version of that stream committed before the start, so
+a delivery of such an event after the start is skipped with a DEBUG log, the same as the drain releases its copy.
+Classification alone would apply it, because ADR 154 compares a version with the marks of its own type, and a type with
+no mark has nothing to compare with. An event of the start type itself is still classified. An instance that names the
+skipped event, in a failure record, a pending entry or a self-held key, saves itself without it, because only a save that
+applies an event takes it off otherwise.
 
 **A saga with several start event types classifies an event below the start like any other, on both paths.**
 `startMark` is the first start event delivered, not the first one on the stream. With start types `A` and `B`, another
 type `C` and the stream `B@3`, `C@4`, `A@5`, an instance that receives `A@5` first starts there. `C@4` committed after
 the real first event, so skipping it would lose it, and classifying it costs at most one extra reaction to an event
-that committed before the start. An abstract class or interface as the only start event type counts as several, because
+that committed before the start. An abstract class, a sealed class or an interface as the only start event type counts as several, because
 `startsOn(Opening.class)` lets every event type below it start the instance, and the `Class` that `startEventTypes()`
 returns says so without reading the stream.
 
-**A concrete start event type that appears twice on one stream is a limit of this decision.** With one start type `A`,
+**A start event type that appears twice on one stream is a limit of this decision while the instance knows only the
+later one.** With one start type `A`,
 another type `C` and the stream `A@3`, `C@4`, `A@5`, an instance that receives `A@5` first starts there. `C@4` is then
 skipped when it is delivered after `A@5` and released by the drain when it was held before it, although it committed
-after `A@3`. `A@3` is applied, since it is of the start type. A concrete start class with a subclass on the stream
-behaves the same. `SagaHeldEventTest` records both cases. Telling `C@4` from an event before the real start would mean
-reading the stream, which the saga does not do.
+after `A@3`. `A@3` is applied, since it is of the start type. When the instance already lists `A@3`, as pending because it
+failed or as applied after the start, `C@4` is classified on both paths, so `A@3` failing, `C@4` being held and `A@5`
+starting loses nothing. The instance finds the start's type by looking for the start's version among its marks, so once it
+has moved the reorder window or more past the start it no longer knows the type, and `C@4` is skipped again. A class
+that is neither abstract nor sealed, with a subclass on the stream, can lose an event the same way, and an earlier event of
+the subclass does not change that even when the instance lists it, because it sits under the subclass's own type. The
+builder refuses such a class unless `replacementFilter(...)` is set, so only that or a `Saga` of your own reaches it.
+`SagaHeldEventTest` records these cases. Telling `C@4` from an event before the real start while `A@3` has not arrived
+would mean reading the stream, which the saga does not do.
 
 A held copy is applied through `process`, with its own meta and its own failure handling. When it fails, the driving
 input is refused as any failing input is, the failed version is listed pending or self-held as below, and REDELIVER
@@ -160,17 +169,23 @@ retries the driving input, which drains first. When the held copy's failure quar
 driving input is acknowledged without being applied, as every later input of a quarantined instance is. The retention
 check asks about the driving input, since that is the event the subscription moves past, and the held copy stays in the
 store. A held copy that fails in a drain a timer ran is kept and measured the same way, and the timer stays due until the
-held copy applies. A held copy whose conversion or `evolve` throws while the drain checks whether it ends the instance
-is applied at once, so that failure is its own as well.
+held copy applies. A timer's attempt asks whether the timer is still due after the drain, because a held copy can cancel
+or re-arm it. A held copy whose conversion or `evolve` throws while the drain checks whether it ends the instance
+is applied at once, so that failure is its own as well. A held copy with no redelivery key has no clock of its own, so the
+budget runs on the keyed delivery it stops, and a quarantine names that delivery. A drain a timer ran has no such delivery,
+so that failure is only logged. A copy the instance counts as handled or behind the window that fails on the lookup below
+gets its key in `selfHeldKeys`, which makes it new, so a failure record names it, its budget runs and the next drain
+applies it.
 
 **The lookup on every keyed delivery.** Whenever the state store can hold, every keyed delivery to a started instance
 reads the held copy with its own key on each attempt, after the drain and before classifying the delivery, whatever `holds` is. So a lost compare-and-set reads it again, and so does the run after a hold. A
 copy held while the saga ran on a model that reorders is then still found when its event comes back on a model that
 declares commit order, as after a deploy that moves the saga to another model. A self-held copy not marked
-`outstanding` is left to the drain. Any other copy is released when the delivery applies the event or classifies it a
-redelivery from the marks. When the delivery would skip it as behind the window, or as a redelivery from the pre-0.35
-floor, the delivery applies it instead, adds its key to `drainedHeldKeys` and releases it. The floor case logs the same
-ERROR as the drain's, because it makes the same trade.
+`outstanding` is left to the drain. Any other copy is released without being applied when the marks show its event
+applied or when the delivery skips the event as committed before the start. Otherwise the delivery applies it, adds its
+key to `drainedHeldKeys` and releases it, also when it would have skipped the event as behind the window or as a
+redelivery from the pre-0.35 floor. The key means a release that fails cannot apply the copy a second time. The floor case
+logs the same ERROR as the drain's, because it makes the same trade.
 
 ### The self-hold of a failed version
 
@@ -267,9 +282,9 @@ on proof or a pending entry.
   gives `delete` as a remedy for an instance parked in a renamed step. After `delete`, a later event of that id is held,
   not skipped. To abandon an instance on such a subscription, keep a terminal envelope and remove its held events, as
   the runbook shows.
-- **An event between two start events of one stream can be lost on a saga whose one start event type is a concrete
-  class**, when the later start event reaches the instance first. The decision above describes the case, and closing it would mean reading the
-  stream.
+- **An event between two start events of one stream can be lost on a saga whose one start event type is neither abstract
+  nor sealed**, when the later start event reaches the instance first and the instance does not list the earlier one yet.
+  The decision above describes the case, and closing it would mean reading the stream.
 - **Every attempt of a keyed delivery reads the held collection once when the state store can hold.** That is the lookup above. It
   stays on a model that declares commit order, since a copy held before the saga moved to that model may still be
   waiting for its event.

@@ -44,11 +44,12 @@ import static java.util.Objects.requireNonNull;
  *   <li>A correlated event whose type is not in {@link #startEventTypes()} and whose instance has not started is held
  *       and applied once the instance starts. On a subscription that delivers in commit order only an event that came
  *       before the start in that order arrives before it, so it is skipped instead.</li>
- *   <li>On a saga whose one {@linkplain #startEventTypes() start event type} is a concrete class, an event of another
- *       type on the stream that started the instance, below the start's version, committed before the start. It is
- *       skipped when it arrives after the start, and its held copy is released without being applied. A saga with
- *       several start event types, or with an abstract class or interface as its start event type, can start on the
- *       later of two start events, so it treats such an event as any other.</li>
+ *   <li>On a saga whose one {@linkplain #startEventTypes() start event type} is a class that is neither abstract nor
+ *       sealed, an event of another type on the stream that started the instance, below the start's version, committed
+ *       before the start. It is skipped when it arrives after the start, and its held copy is released without being
+ *       applied. A saga with several start event types, or with an abstract class, a sealed class or an interface as its
+ *       start event type, can start on the later of two start events, so it treats such an event as any other. So does
+ *       a saga whose instance lists an earlier event of the start's type below that event, as failed or as applied.</li>
  *   <li>For each input the executor computes {@code s' = evolve(state, input)}, then {@code react(s', input)}: react sees
  *       the state <em>after</em> the fold. Replay only ever folds {@link #evolve}, so it produces no effects.</li>
  *   <li>{@link #onStart(Object, Object)} runs exactly once, when a start event creates the instance, after the first

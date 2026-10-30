@@ -261,7 +261,8 @@ public final class SagaExecutionSupport {
         }
         if (isBeforeTheStart(saga, current, input, meta)) {
             log.debug("Saga instance '{}' skipped the event '{}', an earlier version of the stream that started it.", sagaId, meta.redeliveryKey());
-            return Outcome.skip();
+            SagaEnvelope<S> settled = withoutTheEventBeforeTheStart(Objects.requireNonNull(current), meta, held, now);
+            return settled == null ? Outcome.skip() : Outcome.processed(settled, List.of(), current.version());
         }
         if (current != null && held.heldCopyKey() == null && classify(current, meta, reorderWindow) != Delivery.NEW) {
             return Outcome.skip();
@@ -607,7 +608,7 @@ public final class SagaExecutionSupport {
     public enum HeldStep {
         /** The instance proves it applied the event, so the copy is released. */
         RELEASE_APPLIED,
-        /** An earlier version of the stream that started the instance, on a saga whose one start event type is a concrete class, so the copy is released. */
+        /** An earlier version of the stream that started the instance, held before the start, on a saga whose one start event type stands for one event type, so the copy is released. */
         RELEASE_BEFORE_START,
         /** Applied. */
         APPLY,
@@ -621,7 +622,9 @@ public final class SagaExecutionSupport {
 
     /**
      * What a drain does with the held event {@code ref} describes. A self-held key or an {@code outstanding} copy keeps
-     * it new however far behind it is, and anything else is classified as a delivery of it would be.
+     * it new however far behind it is, and anything else is classified as a delivery of it would be. Such a copy can be
+     * of a start event type, which only its converted event shows, so it goes to {@link #process}, which skips it when it
+     * is not.
      */
     public static <E, S extends @Nullable Object, C> HeldStep drainStep(Saga<E, S, C> saga, SagaEnvelope<S> current, HeldEventRef ref, int reorderWindow) {
         String streamId = ref.streamId();
@@ -632,11 +635,12 @@ public final class SagaExecutionSupport {
         if (provesApplied(current, streamId, version, ref.key())) {
             return HeldStep.RELEASE_APPLIED;
         }
-        if (startsOnOneConcreteEventType(saga) && isBeforeTheStart(current.startMark(), streamId, version)) {
-            return HeldStep.RELEASE_BEFORE_START;
-        }
         if (current.selfHeldKeys().contains(ref.key()) || ref.outstanding()) {
             return HeldStep.APPLY;
+        }
+        // A start event type is held only when it failed, so a copy that was not self-held is of another type.
+        if (!ref.selfHeld() && startsOnOneEventType(saga) && isBeforeTheStart(current, streamId, version)) {
+            return HeldStep.RELEASE_BEFORE_START;
         }
         Delivery delivery = classify(current, metaOf(ref), reorderWindow);
         if (delivery == Delivery.NEW) {
@@ -649,28 +653,76 @@ public final class SagaExecutionSupport {
         return delivery == Delivery.BEHIND_WINDOW ? HeldStep.LEAVE_BEHIND_WINDOW : HeldStep.APPLY_FROM_THE_FLOOR;
     }
 
-    private static boolean isBeforeTheStart(SagaEnvelope.@Nullable StartMark start, String streamId, long version) {
-        return start != null && start.streamId().equals(streamId) && version < start.version();
+    private static <S extends @Nullable Object> boolean isBeforeTheStart(SagaEnvelope<S> current, String streamId, long version) {
+        SagaEnvelope.StartMark start = current.startMark();
+        return start != null && start.streamId().equals(streamId) && version < start.version()
+               && !hasAnEarlierStartEvent(current, start, version);
+    }
+
+    // Whether the instance names an event of the start's type below the version, pending because it failed or applied
+    // after the start. That event is the real start or nearer to it, so the version can have committed after it. The
+    // start's type is found by its version, so this says no once the instance has forgotten that version, and a subclass
+    // of the start event type sits under a type of its own, so its events do not count.
+    private static <S extends @Nullable Object> boolean hasAnEarlierStartEvent(SagaEnvelope<S> current, SagaEnvelope.StartMark start, long version) {
+        StreamMarks marks = current.streamMarks().get(start.streamId());
+        if (marks == null) {
+            return false;
+        }
+        return marks.byType().entrySet().stream()
+                .filter(type -> type.getValue().mark() == start.version() || type.getValue().applied().contains(start.version()))
+                .anyMatch(type -> type.getValue().applied().stream().anyMatch(earlier -> earlier < version)
+                                  || marks.pending().getOrDefault(type.getKey(), List.of()).stream().anyMatch(earlier -> earlier < version));
+    }
+
+    // The instance as saved once it stops naming an event it skips as committed before the start, or null when it does
+    // not name it. Any other save takes it off only by applying the event, and such an event never applies.
+    private static <S extends @Nullable Object> @Nullable SagaEnvelope<S> withoutTheEventBeforeTheStart(SagaEnvelope<S> current, EventMeta meta, HeldContext held, Instant now) {
+        String streamId = Objects.requireNonNull(meta.streamId());
+        long version = Objects.requireNonNull(meta.streamVersion());
+        StreamMarks marks = current.streamMarks().get(streamId);
+        if (!isSelfHeld(current, meta) && !namesFailureOf(current, meta) && !isOutstanding(marks, meta)) {
+            return null;
+        }
+        Map<String, StreamMarks> streamMarks = new LinkedHashMap<>(current.streamMarks());
+        if (marks != null) {
+            Map<String, List<Long>> pending = new LinkedHashMap<>(marks.pending());
+            pending.computeIfPresent(typeKey(meta), (type, versions) -> {
+                List<Long> remaining = versions.stream().filter(v -> v != version).toList();
+                return remaining.isEmpty() ? null : remaining;
+            });
+            Map<Long, Instant> pendingSince = new LinkedHashMap<>(marks.pendingSince());
+            pendingSince.remove(version);
+            streamMarks.put(streamId, new StreamMarks(marks.floor(), marks.byType(), pending, marks.legacyFailed().stream().filter(v -> v != version).toList(), pendingSince));
+        }
+        return new SagaEnvelope<>(current.sagaId(), current.state(), current.status(), current.version() + 1, current.timers(),
+                current.streamWatermarks(), current.positionWatermark(), current.createdAt(), now, current.completedAt(),
+                current.currentStep(), current.started(), failureAfter(current, meta, false), streamMarks, current.heldEventsChecked(),
+                current.drainedHeldKeys(), selfHeldKeysAfter(current, meta, held), current.startMark());
     }
 
     /**
      * Whether the instance skips this delivery as committed before the start. That is an event of the stream that
      * started {@code current}, below the start's version and not of a start event type, on a saga whose one start event
-     * type is a concrete class. A drain releases the held copy of such an event in the same way. A saga with several
-     * start event types can start on the later of two of them, and an abstract class or interface as the start event
-     * type stands for several, so such a saga classifies everything it receives after the start. An event below the
-     * start can still have committed after an earlier event of the start event type on the same stream, which only
-     * reading the stream would show.
+     * type stands for one event type. A drain releases the held copy of such an event in the same way. A saga with several
+     * start event types can start on the later of two of them, and an abstract, sealed or interface start event type
+     * stands for several, so such a saga classifies everything it receives after the start. So does an event with an
+     * earlier event of the start's type below it that the instance names, as pending or applied. An event below the start
+     * can still have committed after an earlier event of the start event type that the instance has not received, which
+     * only reading the stream would show.
      */
     public static <E, S extends @Nullable Object, C> boolean isBeforeTheStart(Saga<E, S, C> saga, @Nullable SagaEnvelope<S> current, SagaInput<E> input, EventMeta meta) {
-        return startsOnOneConcreteEventType(saga) && current != null && meta.streamId() != null && meta.streamVersion() != null
-               && isBeforeTheStart(current.startMark(), meta.streamId(), meta.streamVersion())
+        return startsOnOneEventType(saga) && current != null && meta.streamId() != null && meta.streamVersion() != null
+               && isBeforeTheStart(current, meta.streamId(), meta.streamVersion())
                && input instanceof SagaInput.Event<E> ev && !isStartEvent(saga, ev.event());
     }
 
-    private static <E, S extends @Nullable Object, C> boolean startsOnOneConcreteEventType(Saga<E, S, C> saga) {
+    private static <E, S extends @Nullable Object, C> boolean startsOnOneEventType(Saga<E, S, C> saga) {
         Set<Class<? extends E>> startTypes = saga.startEventTypes();
-        return startTypes.size() == 1 && !Modifier.isAbstract(startTypes.iterator().next().getModifiers());
+        if (startTypes.size() != 1) {
+            return false;
+        }
+        Class<? extends E> startType = startTypes.iterator().next();
+        return !Modifier.isAbstract(startType.getModifiers()) && !startType.isSealed();
     }
 
     /** The delivery metadata of the held event {@code ref} describes. */

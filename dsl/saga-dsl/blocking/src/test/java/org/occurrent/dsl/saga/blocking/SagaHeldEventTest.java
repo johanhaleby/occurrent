@@ -53,6 +53,7 @@ import org.occurrent.dsl.saga.flow.Continuation;
 import org.occurrent.dsl.saga.flow.FlowSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
+import org.occurrent.filter.Filter;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
@@ -73,7 +74,9 @@ import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -96,7 +99,7 @@ class SagaHeldEventTest {
     private static final Duration EXPIRY = Duration.ofMinutes(10);
     private static final String ITEM_ADDED_TYPE = ItemAdded.class.getName();
 
-    sealed interface OrderEvent permits Opening, ItemAdded, Intake, Booking {
+    sealed interface OrderEvent permits Opening, ItemAdded, Intake, Booking, PlainBooking {
         String eventId();
 
         String orderId();
@@ -186,6 +189,40 @@ class SagaHeldEventTest {
         }
     }
 
+    /**
+     * A concrete class that has a subclass and is neither sealed nor final, so a saga can start on it only under a
+     * {@code replacementFilter}, because the subclasses it has cannot be enumerated.
+     */
+    static non-sealed class PlainBooking implements OrderEvent {
+        private final String eventId;
+        private final String orderId;
+
+        @JsonCreator
+        PlainBooking(@JsonProperty("eventId") String eventId, @JsonProperty("orderId") String orderId) {
+            this.eventId = eventId;
+            this.orderId = orderId;
+        }
+
+        @Override
+        @JsonProperty("eventId")
+        public String eventId() {
+            return eventId;
+        }
+
+        @Override
+        @JsonProperty("orderId")
+        public String orderId() {
+            return orderId;
+        }
+    }
+
+    static final class PlainRebooking extends PlainBooking {
+        @JsonCreator
+        PlainRebooking(@JsonProperty("eventId") String eventId, @JsonProperty("orderId") String orderId) {
+            super(eventId, orderId);
+        }
+    }
+
     sealed interface OrderCommand permits OpenLedger, Reserve, Ship, Expire {
     }
 
@@ -271,7 +308,23 @@ class SagaHeldEventTest {
     }
 
     private <S> SagaExecution<OrderEvent, S, OrderCommand> executionOf(Saga<OrderEvent, S, OrderCommand> saga, SagaStateStore<S> stateStore) {
-        return new SagaExecution<>("orders", saga, stateStore, this::dispatch, converter, SagaRunnerConfig.defaults(), event -> true, now::get, holds);
+        return executionOf(saga, stateStore, SagaRunnerConfig.defaults());
+    }
+
+    private <S> SagaExecution<OrderEvent, S, OrderCommand> executionOf(Saga<OrderEvent, S, OrderCommand> saga, SagaStateStore<S> stateStore, SagaRunnerConfig config) {
+        return new SagaExecution<>("orders", saga, stateStore, this::dispatch, converter, config, event -> true, now::get, holds);
+    }
+
+    /** The reaction of every event names it, so that an event whose reaction ran can be told from one whose reaction did not, whatever its type. */
+    private Saga<OrderEvent, Order, OrderCommand> sagaWhoseReactionsNameTheEvent() {
+        return Saga.<OrderEvent, Order, OrderCommand>builder(null)
+                .correlateAll(OrderEvent::orderId)
+                .startsOn(OrderPlaced.class)
+                .evolve(OrderPlaced.class, (state, e) -> new Order(state == null ? List.of() : state.items(), false))
+                .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.eventId()))))
+                .evolve(ItemAdded.class, (state, e) -> state.withItem(e.item()))
+                .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))))
+                .build();
     }
 
     /** A saga whose payment starts an instance as well as the placement does, so that either can come first. */
@@ -341,6 +394,14 @@ class SagaHeldEventTest {
         return streamKeyed(ORDER_STREAM, streamVersion, new Rebooking("rebooking-" + streamVersion, ORDER));
     }
 
+    private CloudEvent plainBookingAt(long streamVersion) {
+        return streamKeyed(ORDER_STREAM, streamVersion, new PlainBooking("plain-booking-" + streamVersion, ORDER));
+    }
+
+    private CloudEvent plainRebookingAt(long streamVersion) {
+        return streamKeyed(ORDER_STREAM, streamVersion, new PlainRebooking("plain-rebooking-" + streamVersion, ORDER));
+    }
+
     private CloudEvent unkeyedItem(String item) {
         return converter.toCloudEvent(new ItemAdded("item-" + item, ORDER, item));
     }
@@ -361,6 +422,33 @@ class SagaHeldEventTest {
     private List<Long> pendingItemVersions() {
         StreamMarks marks = store.find(ORDER).map(instance -> instance.streamMarks().get(ORDER_STREAM)).orElse(null);
         return marks == null ? List.of() : marks.pending().getOrDefault(ITEM_ADDED_TYPE, List.of());
+    }
+
+    private List<Long> pendingVersionsOf(Class<?> type) {
+        StreamMarks marks = store.find(ORDER).map(instance -> instance.streamMarks().get(ORDER_STREAM)).orElse(null);
+        return marks == null ? List.of() : marks.pending().getOrDefault(type.getName(), List.of());
+    }
+
+    private Set<Long> versionsWithAPendingInstant() {
+        StreamMarks marks = store.find(ORDER).map(instance -> instance.streamMarks().get(ORDER_STREAM)).orElse(null);
+        return marks == null ? Set.of() : marks.pendingSince().keySet();
+    }
+
+    private @Nullable String failureInput() {
+        SagaFailure failure = store.find(ORDER).orElseThrow().failure();
+        return failure == null ? null : failure.input();
+    }
+
+    private Set<String> selfHeldKeys() {
+        return store.find(ORDER).orElseThrow().selfHeldKeys();
+    }
+
+    private SagaStatus statusOfTheInstance() {
+        return store.find(ORDER).orElseThrow().status();
+    }
+
+    private List<OrderCommand> issuedReservationsOf(String item) {
+        return issued.stream().filter(command -> command.equals(new Reserve(ORDER, item))).toList();
     }
 
     @Nested
@@ -927,6 +1015,26 @@ class SagaHeldEventTest {
         store.markHeldEvents(ORDER, null);
     }
 
+    // What a self-hold leaves behind, the copy flagged as self-held and the instance naming its key, with the drain marked as due.
+    private void holdSelfHeld(long version, CloudEvent event) {
+        String key = ORDER_STREAM + "@" + version;
+        store.hold(ORDER, new HeldEvent(ORDER, new HeldEventRef(key, ORDER_STREAM, version, null, event.getType(), now.get(), true, false), event));
+        store.markHeldEvents(ORDER, key);
+    }
+
+    // What the fallback for an instance at the document limit leaves behind, the marker on the copy and not on the instance, with the drain marked as due.
+    private void holdOutstanding(long version, CloudEvent event) {
+        String key = ORDER_STREAM + "@" + version;
+        store.hold(ORDER, new HeldEvent(ORDER, new HeldEventRef(key, ORDER_STREAM, version, null, event.getType(), now.get(), false, true), event));
+        store.markHeldEvents(ORDER, null);
+    }
+
+    // A copy that a hold leaves, without the mark of the drain that the hold sets, so that nothing but the lookup of a delivery of the event finds it.
+    private void holdWithoutMarkingADrain(long version, CloudEvent event) {
+        HeldEventRef ref = new HeldEventRef(ORDER_STREAM + "@" + version, ORDER_STREAM, version, null, event.getType(), now.get(), false, false);
+        store.hold(ORDER, new HeldEvent(ORDER, ref, event));
+    }
+
     // Rewrites the stored instance to list versions of the start's stream as outstanding, the way an earlier failure would have left them.
     @SuppressWarnings("deprecation")
     private void listOnTheInstance(String pendingType, List<Long> pendingVersions, Set<String> selfHeldKeys, @Nullable SagaFailure failure) {
@@ -941,6 +1049,20 @@ class SagaHeldEventTest {
                 stored.positionWatermark(), stored.createdAt(), stored.updatedAt(), stored.completedAt(), stored.currentStep(), stored.started(), failure, streamMarks,
                 stored.heldEventsChecked(), stored.drainedHeldKeys(), selfHeldKeys, stored.startMark());
         assertThat(store.compareAndSave(ORDER, rewritten, stored.version())).as("the instance is rewritten").isTrue();
+    }
+
+    // Rewrites the stored instance so that the floor of the start's stream is raised, the way an instance stored before 0.35.0 counts versions as handled.
+    @SuppressWarnings("deprecation")
+    private void raiseTheFloorTo(long floor) {
+        SagaEnvelope<Order> stored = store.find(ORDER).orElseThrow();
+        StreamMarks marks = stored.streamMarks().get(ORDER_STREAM);
+        StreamMarks raised = new StreamMarks(floor, marks.byType(), marks.pending(), marks.legacyFailed(), marks.pendingSince());
+        Map<String, StreamMarks> streamMarks = new HashMap<>(stored.streamMarks());
+        streamMarks.put(ORDER_STREAM, raised);
+        SagaEnvelope<Order> rewritten = new SagaEnvelope<>(stored.sagaId(), stored.state(), stored.status(), stored.version() + 1, stored.timers(), stored.streamWatermarks(),
+                stored.positionWatermark(), stored.createdAt(), stored.updatedAt(), stored.completedAt(), stored.currentStep(), stored.started(), stored.failure(), streamMarks,
+                stored.heldEventsChecked(), stored.drainedHeldKeys(), stored.selfHeldKeys(), stored.startMark());
+        assertThat(store.compareAndSave(ORDER, rewritten, stored.version())).as("the floor is raised").isTrue();
     }
 
     @Nested
@@ -1639,7 +1761,8 @@ class SagaHeldEventTest {
      * What a saga with one start event type does when that type appears twice on the stream, which is a known limit and
      * not a feature. The stream holds the placement at version 3, the item at 4 and the placement again at 5. Only
      * reading the stream shows that the placement at 3 started the instance, so a saga that sees the one at 5 first
-     * takes the item at 4 for an event that committed before the start, and skips it.
+     * takes the item at 4 for an event that committed before the start, and skips it. The limit ends once the instance
+     * names the placement at 3, as applied or as failed, before the item arrives.
      */
     @Nested
     @DisplayName("when the one start event type appears twice on the stream")
@@ -1658,7 +1781,7 @@ class SagaHeldEventTest {
         }
 
         @Test
-        void the_reaction_of_the_item_does_not_run_when_the_later_placement_comes_first_then_the_earlier_placement_then_the_item() {
+        void the_reaction_of_the_item_runs_when_the_later_placement_comes_first_then_the_earlier_placement_then_the_item() {
             // Given
             SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaWhoseStartReactionNamesTheEvent());
 
@@ -1667,10 +1790,10 @@ class SagaHeldEventTest {
             deliver(execution, placedAt(3));
             deliver(execution, itemAt(4, "book"));
 
-            // Then the earlier placement runs as a late event of a start type, and the item is skipped
+            // Then the instance names the earlier placement as applied, so the item is not taken for an event below the start
             assertAll(
-                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "placed-3")),
-                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "placed-3"), new Reserve(ORDER, "book")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
                     () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
         }
 
@@ -1728,14 +1851,15 @@ class SagaHeldEventTest {
     }
 
     /**
-     * The same limit by a different route. The one start event type the saga declares is a concrete class that has a
+     * The same stream by a different route. The one start event type the saga declares is a concrete class that has a
      * subclass, so a rebooking at version 3 can start the instance although the saga takes the booking at 5, which it sees
-     * first, for the start. An abstract class or an interface as the start event type has no such limit, because the saga
-     * does not skip an event below the start then.
+     * first, for the start. The class is sealed, so it stands for several start event types as an abstract class or an
+     * interface does, and the saga does not skip an event below the start. A concrete class that is not sealed has the
+     * limit, and {@link WhenTheOneStartEventTypeIsANonSealedConcreteClassWithASubclassOnTheStream} covers it.
      */
     @Nested
-    @DisplayName("when the one start event type is a concrete class that has a subclass on the stream")
-    class WhenTheOneStartEventTypeIsAConcreteClassWithASubclassOnTheStream {
+    @DisplayName("when the one start event type is a sealed concrete class that has a subclass on the stream")
+    class WhenTheOneStartEventTypeIsASealedConcreteClassWithASubclassOnTheStream {
 
         /** The reaction of a booking names it, so that the rebooking at 3 can be told from the booking at 5. */
         private Saga<OrderEvent, Order, OrderCommand> sagaStartingOnTheConcreteClassBooking() {
@@ -1755,7 +1879,7 @@ class SagaHeldEventTest {
         }
 
         @Test
-        void the_reaction_of_the_item_does_not_run_when_the_booking_comes_first_then_the_rebooking_then_the_item() {
+        void the_reaction_of_the_item_runs_when_the_booking_comes_first_then_the_rebooking_then_the_item() {
             // Given
             SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheConcreteClassBooking());
 
@@ -1764,15 +1888,15 @@ class SagaHeldEventTest {
             deliver(execution, rebookingAt(3));
             deliver(execution, itemAt(4, "book"));
 
-            // Then the rebooking runs as a late event of the start type, and the item is skipped
+            // Then
             assertAll(
-                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "booking-5"), new Reserve(ORDER, "rebooking-3")),
-                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "booking-5"), new Reserve(ORDER, "rebooking-3"), new Reserve(ORDER, "book")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
                     () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
         }
 
         @Test
-        void the_reaction_of_the_item_does_not_run_when_the_booking_comes_first_then_the_item_then_the_rebooking() {
+        void the_reaction_of_the_item_runs_when_the_booking_comes_first_then_the_item_then_the_rebooking() {
             // Given
             SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheConcreteClassBooking());
 
@@ -1783,13 +1907,13 @@ class SagaHeldEventTest {
 
             // Then
             assertAll(
-                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "booking-5"), new Reserve(ORDER, "rebooking-3")),
-                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "booking-5"), new Reserve(ORDER, "book"), new Reserve(ORDER, "rebooking-3")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
                     () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
         }
 
         @Test
-        void the_reaction_of_the_item_does_not_run_when_the_item_is_held_before_the_booking_and_the_rebooking_comes_last() {
+        void the_reaction_of_the_item_runs_when_the_item_is_held_before_the_booking_and_the_rebooking_comes_last() {
             // Given
             SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnTheConcreteClassBooking());
 
@@ -1798,10 +1922,10 @@ class SagaHeldEventTest {
             deliver(execution, bookingAt(5));
             deliver(execution, rebookingAt(3));
 
-            // Then the drain releases the held item as an event below the start
+            // Then the drain applies the held item instead of releasing it as an event below the start
             assertAll(
-                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "booking-5"), new Reserve(ORDER, "rebooking-3")),
-                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "booking-5"), new Reserve(ORDER, "book"), new Reserve(ORDER, "rebooking-3")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
                     () -> assertThat(heldKeys()).isEmpty(),
                     () -> assertThat(store.find(ORDER).orElseThrow().startMark()).isEqualTo(new StartMark(ORDER_STREAM, 5, null)));
         }
@@ -2077,6 +2201,678 @@ class SagaHeldEventTest {
     }
 
     /**
+     * A copy of the start event type that is held for an instance whose start is above it, because the event failed and
+     * was kept, or because the instance was at the store's document limit. It is not an event that committed before the
+     * start, so the drain applies it, where it releases a copy of another type at the same version.
+     */
+    @Nested
+    @DisplayName("when a copy of the start event type held for the instance sits below the start and a drain reaches it")
+    class WhenACopyOfTheStartEventTypeHeldForTheInstanceSitsBelowTheStart {
+
+        private SagaExecution<OrderEvent, Order, OrderCommand> startedAtVersion5(SagaRunnerConfig config) {
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaWhoseReactionsNameTheEvent(), store, config);
+            deliver(execution, placedAt(5));
+            issued.clear();
+            return execution;
+        }
+
+        @Test
+        void a_self_held_copy_of_the_start_event_type_is_applied() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedAtVersion5(SagaRunnerConfig.defaults());
+            holdSelfHeld(3, placedAt(3));
+
+            // When
+            deliver(execution, itemAt(6, "six"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-3"), new Reserve(ORDER, "six")),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(selfHeldKeys()).isEmpty());
+        }
+
+        @Test
+        void a_self_held_copy_of_another_type_is_released_without_its_reaction_and_its_key_is_taken_off_the_instance() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedAtVersion5(SagaRunnerConfig.defaults());
+            holdSelfHeld(3, itemAt(3, "three"));
+            assertThat(selfHeldKeys()).as("the instance names the copy").containsExactly(ORDER_STREAM + "@3");
+
+            // When
+            deliver(execution, itemAt(6, "six"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "six")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("six"),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(selfHeldKeys()).isEmpty());
+        }
+
+        @Test
+        void an_outstanding_copy_of_the_start_event_type_is_applied_however_far_behind_the_reorder_window_it_is() {
+            // Given a window of 2 and the start event type applied up to version 7
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedAtVersion5(SagaRunnerConfig.defaults().withReorderWindow(2));
+            deliver(execution, placedAt(6));
+            deliver(execution, placedAt(7));
+            issued.clear();
+            holdOutstanding(3, placedAt(3));
+
+            // When
+            deliver(execution, itemAt(8, "eight"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-3"), new Reserve(ORDER, "eight")),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+
+        @Test
+        void a_self_held_copy_of_the_start_event_type_above_the_start_is_applied() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedAtVersion5(SagaRunnerConfig.defaults());
+            holdSelfHeld(7, placedAt(7));
+
+            // When
+            deliver(execution, itemAt(8, "eight"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-7"), new Reserve(ORDER, "eight")),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(selfHeldKeys()).isEmpty());
+        }
+
+        @Test
+        void a_copy_flagged_self_held_that_the_instance_does_not_name_is_applied_when_it_is_of_the_start_event_type() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedAtVersion5(SagaRunnerConfig.defaults());
+            CloudEvent copy = placedAt(3);
+            store.hold(ORDER, new HeldEvent(ORDER, new HeldEventRef(ORDER_STREAM + "@3", ORDER_STREAM, 3L, null, copy.getType(), now.get(), true, false), copy));
+            store.markHeldEvents(ORDER, null);
+
+            // When
+            deliver(execution, itemAt(6, "six"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-3"), new Reserve(ORDER, "six")),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+    }
+
+    /**
+     * A copy that the lookup of its own delivery applies as a new event is applied once, even when the release after the
+     * save fails and the event is replayed after later events have moved it behind the reorder window.
+     */
+    @Nested
+    @DisplayName("when the lookup applies the held copy of a new event and the release after the save fails")
+    class WhenTheLookupAppliesTheHeldCopyOfANewEventAndTheReleaseFails {
+
+        @Test
+        void the_reaction_runs_once_and_nothing_is_left_when_the_event_is_replayed_behind_the_reorder_window() {
+            // Given
+            ScriptedStore failing = new ScriptedStore(store);
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(failing, SagaRunnerConfig.defaults().withReorderWindow(5));
+            deliver(execution, placedAt(1));
+            deliver(execution, itemAt(2, "two"));
+            assertThat(store.find(ORDER).orElseThrow().heldEventsChecked()).as("no drain is due").isTrue();
+            holdWithoutMarkingADrain(9, itemAt(9, "nine"));
+            failing.failNextRelease(new IllegalStateException("cannot release"));
+            Throwable refused = catchThrowable(() -> execution.onCloudEvent(itemAt(9, "nine")));
+            assertThat(refused).as("the release fails after the save").hasMessage("cannot release");
+            assertThat(issuedReservationsOf("nine")).as("the first delivery applied the copy").hasSize(1);
+            for (long version = 11; version <= 16; version++) {
+                deliver(execution, itemAt(version, "later-" + version));
+            }
+
+            // When
+            deliver(execution, itemAt(9, "nine"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issuedReservationsOf("nine")).hasSize(1),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(store.find(ORDER).orElseThrow().drainedHeldKeys()).isEmpty());
+        }
+    }
+
+    /**
+     * The held copy that the lookup of its own delivery applies, because the event is behind the reorder window or below
+     * the floor of an instance stored before 0.35.0, and that fails in the saga. It is the input that failed, so it is
+     * kept under its own key and measured on its own clock, which is what quarantines the instance.
+     */
+    @Nested
+    @DisplayName("when the held copy that the lookup applies fails and the event is behind the reorder window or below the floor")
+    class WhenTheHeldCopyTheLookupAppliesFailsBehindTheReorderWindowOrBelowTheFloor {
+
+        private static final String KEY = ORDER_STREAM + "@2";
+
+        private SagaExecution<OrderEvent, Order, OrderCommand> executionWithACopyBehindTheWindow(SagaRunnerConfig config) {
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(store, config.withReorderWindow(1));
+            deliver(execution, placedAt(1));
+            deliver(execution, itemAt(3, "three"));
+            deliver(execution, itemAt(4, "four"));
+            deliver(execution, itemAt(5, "five"));
+            holdALateCopyOf(itemAt(2, "bad"));
+            deliver(execution, itemAt(6, "six"));
+            assertThat(heldKeys()).as("the drain leaves the copy held").containsExactly(KEY);
+            issued.clear();
+            failingItems.add("bad");
+            return execution;
+        }
+
+        private SagaExecution<OrderEvent, Order, OrderCommand> executionWithACopyBelowTheFloor(SagaRunnerConfig config) {
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(store, config);
+            deliver(execution, placedAt(1));
+            deliver(execution, itemAt(7, "seven"));
+            raiseTheFloorTo(5);
+            holdWithoutMarkingADrain(2, itemAt(2, "bad"));
+            issued.clear();
+            failingItems.add("bad");
+            return execution;
+        }
+
+        private void quarantinesAtTheKeyOfTheCopyOncePastTheBudget(SagaExecution<OrderEvent, Order, OrderCommand> execution) {
+            // When
+            Throwable first = deliverRefused(execution, itemAt(2, "bad"));
+            String afterTheFirstFailure = failureInput();
+            SagaStatus statusAfterTheFirstFailure = statusOfTheInstance();
+            now.updateAndGet(instant -> instant.plus(BUDGET).plusSeconds(1));
+            Throwable second = catchThrowable(() -> execution.onCloudEvent(itemAt(2, "bad")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(first).isSameAs(reservationFailure),
+                    () -> assertThat(afterTheFirstFailure).isEqualTo(KEY),
+                    () -> assertThat(statusAfterTheFirstFailure).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(second).isNull(),
+                    () -> assertThat(statusOfTheInstance()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(failureInput()).isEqualTo(KEY),
+                    () -> assertThat(heldKeys()).containsExactly(KEY));
+        }
+
+        @Test
+        void the_failure_record_names_the_copy_and_the_instance_is_quarantined_past_the_budget_when_the_event_is_behind_the_reorder_window() {
+            quarantinesAtTheKeyOfTheCopyOncePastTheBudget(executionWithACopyBehindTheWindow(SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET)));
+        }
+
+        @Test
+        void the_failure_record_names_the_copy_and_the_instance_is_quarantined_past_the_budget_when_the_event_is_below_the_floor_of_an_instance_stored_before_0_35_0() {
+            quarantinesAtTheKeyOfTheCopyOncePastTheBudget(executionWithACopyBelowTheFloor(SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET)));
+        }
+
+        @Test
+        void the_copy_stays_held_and_a_later_drain_applies_it_when_quarantine_is_off() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionWithACopyBehindTheWindow(SagaRunnerConfig.defaults());
+            deliverRefused(execution, itemAt(2, "bad"));
+            failingItems.clear();
+            assertAll(
+                    () -> assertThat(heldKeys()).as("the copy stays held").containsExactly(KEY),
+                    () -> assertThat(selfHeldKeys()).as("the instance names the copy").containsExactly(KEY),
+                    () -> assertThat(failureInput()).as("nothing is recorded").isNull());
+
+            // When
+            deliver(execution, itemAt(7, "seven"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "bad"), new Reserve(ORDER, "seven")),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(selfHeldKeys()).isEmpty());
+        }
+    }
+
+    /**
+     * Under best-effort detection a held copy with no stream key has no clock of its own, so its failure is measured on the
+     * delivery that drove the drain when that delivery has a key, and a driver with no key is refused as it always was.
+     */
+    @Nested
+    @DisplayName("when a held copy without a stream key fails in a drain and redelivery detection is best effort")
+    class WhenAHeldCopyWithoutAStreamKeyFailsInADrain {
+
+        private final SagaRunnerConfig bestEffort = SagaRunnerConfig.defaults().withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT);
+
+        private String keyOfTheFailingKeylessCopy() {
+            CloudEvent copy = unkeyedItem("bad");
+            String key = copy.getId() + " from " + copy.getSource() + " (no stream key)";
+            store.hold(ORDER, new HeldEvent(ORDER, new HeldEventRef(key, null, null, null, copy.getType(), now.get(), false, false), copy));
+            store.markHeldEvents(ORDER, null);
+            failingItems.add("bad");
+            return key;
+        }
+
+        @Test
+        void the_failure_record_names_the_keyed_delivery_that_drove_the_drain_and_the_instance_is_quarantined_past_the_budget() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(store, bestEffort.withQuarantineAfter(BUDGET));
+            deliver(execution, placedAt(1));
+            keyOfTheFailingKeylessCopy();
+
+            // When
+            Throwable first = deliverRefused(execution, itemAt(2, "two"));
+            String afterTheFirstFailure = failureInput();
+            SagaStatus statusAfterTheFirstFailure = statusOfTheInstance();
+            now.updateAndGet(instant -> instant.plus(BUDGET).plusSeconds(1));
+            Throwable second = catchThrowable(() -> execution.onCloudEvent(itemAt(2, "two")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(first).hasCause(reservationFailure),
+                    () -> assertThat(afterTheFirstFailure).isEqualTo(ORDER_STREAM + "@2"),
+                    () -> assertThat(statusAfterTheFirstFailure).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(second).isNull(),
+                    () -> assertThat(statusOfTheInstance()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(failureInput()).isEqualTo(ORDER_STREAM + "@2"));
+        }
+
+        @Test
+        void a_driver_without_a_stream_key_is_refused_and_nothing_is_recorded() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(store, bestEffort.withQuarantineAfter(BUDGET));
+            deliver(execution, placedAt(1));
+            String key = keyOfTheFailingKeylessCopy();
+
+            // When
+            Throwable refused = deliverRefused(execution, unkeyedItem("two"));
+            now.updateAndGet(instant -> instant.plus(BUDGET).plusSeconds(1));
+            Throwable refusedAgain = deliverRefused(execution, unkeyedItem("two"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(refused).hasCause(reservationFailure),
+                    () -> assertThat(refusedAgain).hasCause(reservationFailure),
+                    () -> assertThat(failureInput()).isNull(),
+                    () -> assertThat(statusOfTheInstance()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(pendingItemVersions()).isEmpty(),
+                    () -> assertThat(store.heldIndex(ORDER)).extracting(HeldEventRef::key).containsExactly(key));
+        }
+    }
+
+    /**
+     * The attempt of a due timer drains first, and a held event it applies can complete the instance, cancel the timer or
+     * arm it for later, so whether the timer is still due is asked of the instance the drain left.
+     */
+    @Nested
+    @DisplayName("when the drain a timer's attempt runs applies a held event that changes the timer")
+    class WhenTheDrainATimersAttemptRunsAppliesAHeldEventThatChangesTheTimer {
+
+        private static final String CANCEL = "cancel";
+        private static final String REARM = "rearm";
+        private static final Duration LATER = Duration.ofHours(1);
+
+        /** An item named cancel cancels the expiry timer and one named rearm arms it for an hour from the moment it is applied. */
+        private Saga<OrderEvent, Order, OrderCommand> sagaWhoseItemsChangeTheExpiryTimer() {
+            return Saga.<OrderEvent, Order, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new Order(List.of(), false))
+                    .react(OrderPlaced.class, (state, e) -> List.<SagaEffect<OrderCommand>>of(SagaEffect.issue(new OpenLedger(e.orderId())), SagaEffect.startTimeout(EXPIRY_TIMER, EXPIRY)))
+                    .evolveOnTimeout(EXPIRY_TIMER, (state, timeout) -> state)
+                    .reactOnTimeout(EXPIRY_TIMER, (state, timeout) -> List.of(SagaEffect.issue(new Expire(timeout.sagaId()))))
+                    .evolve(ItemAdded.class, (state, e) -> state.withItem(e.item()))
+                    .react(ItemAdded.class, (state, e) -> switch (e.item()) {
+                        case CANCEL -> List.<SagaEffect<OrderCommand>>of(SagaEffect.issue(new Reserve(e.orderId(), e.item())), SagaEffect.cancelTimeout(EXPIRY_TIMER));
+                        case REARM -> List.<SagaEffect<OrderCommand>>of(SagaEffect.issue(new Reserve(e.orderId(), e.item())), SagaEffect.startTimeout(EXPIRY_TIMER, LATER));
+                        default -> List.<SagaEffect<OrderCommand>>of(SagaEffect.issue(new Reserve(e.orderId(), e.item())));
+                    })
+                    .build();
+        }
+
+        /** A started instance with its expiry timer due and a held copy of version 2 that a hold left behind with a drain marked as due. */
+        private SagaExecution<OrderEvent, Order, OrderCommand> startedWithADueTimerAndAHeldCopy(Saga<OrderEvent, Order, OrderCommand> saga, CloudEvent copy) {
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(saga);
+            deliver(execution, placedAt(1));
+            holdALateCopyOf(copy);
+            now.updateAndGet(instant -> instant.plus(EXPIRY).plusSeconds(1));
+            return execution;
+        }
+
+        private List<TimerEntry> timers() {
+            return store.find(ORDER).orElseThrow().timers();
+        }
+
+        @Test
+        void the_timer_does_not_fire_when_the_held_event_completes_the_instance() {
+            // Given
+            startsAnExpiryTimer = true;
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedWithADueTimerAndAHeldCopy(orderSaga(), paymentAt(ORDER_STREAM, 2));
+
+            // When
+            execution.pollTimers();
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER), new Ship(ORDER)),
+                    () -> assertThat(statusOfTheInstance()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+
+        @Test
+        void the_timer_does_not_fire_when_the_held_event_cancels_it() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedWithADueTimerAndAHeldCopy(sagaWhoseItemsChangeTheExpiryTimer(), itemAt(2, CANCEL));
+
+            // When
+            execution.pollTimers();
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER), new Reserve(ORDER, CANCEL)),
+                    () -> assertThat(timers()).isEmpty(),
+                    () -> assertThat(statusOfTheInstance()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(SagaExecutionSupport.isDrainDue(store.find(ORDER).orElseThrow())).isFalse());
+        }
+
+        @Test
+        void the_timer_does_not_fire_and_stays_armed_for_later_when_the_held_event_arms_it_again() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedWithADueTimerAndAHeldCopy(sagaWhoseItemsChangeTheExpiryTimer(), itemAt(2, REARM));
+            long armedFor = now.get().plus(LATER).toEpochMilli();
+
+            // When
+            execution.pollTimers();
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER), new Reserve(ORDER, REARM)),
+                    () -> assertThat(timers()).extracting(TimerEntry::name, TimerEntry::firesAtEpochMilli).containsExactly(tuple(EXPIRY_TIMER, armedFor)),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(SagaExecutionSupport.isDrainDue(store.find(ORDER).orElseThrow())).isFalse());
+        }
+
+        @Test
+        void the_timer_that_the_held_event_armed_again_fires_once_it_is_due() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = startedWithADueTimerAndAHeldCopy(sagaWhoseItemsChangeTheExpiryTimer(), itemAt(2, REARM));
+            execution.pollTimers();
+            now.updateAndGet(instant -> instant.plus(LATER).plusSeconds(1));
+
+            // When
+            execution.pollTimers();
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new OpenLedger(ORDER), new Reserve(ORDER, REARM), new Expire(ORDER)),
+                    () -> assertThat(timers()).isEmpty());
+        }
+    }
+
+    /**
+     * An event whose hold failed while quarantine was on leaves a failure record and a pending entry on an instance that
+     * has not started. When the start above it arrives and the event is delivered again, the event is skipped as an event
+     * below the start, and the instance forgets that it failed.
+     */
+    @Nested
+    @DisplayName("when the hold of an event failed with quarantine on and the instance then started above it")
+    class WhenTheHoldOfAnEventFailedWithQuarantineOnAndTheInstanceThenStartedAboveIt {
+
+        private ScriptedStore holdFails() {
+            ScriptedStore failingHold = new ScriptedStore(store);
+            failingHold.beforeNextHold(() -> {
+                throw new IllegalStateException("cannot hold");
+            });
+            return failingHold;
+        }
+
+        @Test
+        void a_redelivery_of_the_event_is_skipped_and_the_record_the_pending_entry_and_its_instant_are_gone() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(holdFails(), SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET));
+            deliverRefused(execution, itemAt(4, "book"));
+            deliver(execution, placedAt(5));
+            issued.clear();
+            assertAll(
+                    () -> assertThat(failureInput()).as("the record names the event").isEqualTo(ORDER_STREAM + "@4"),
+                    () -> assertThat(pendingItemVersions()).as("the instance lists it pending").containsExactly(4L),
+                    () -> assertThat(versionsWithAPendingInstant()).as("with the instant it first failed").containsExactly(4L));
+
+            // When
+            Throwable thrown = catchThrowable(() -> deliver(execution, itemAt(4, "book")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(failureInput()).isNull(),
+                    () -> assertThat(pendingItemVersions()).isEmpty(),
+                    () -> assertThat(versionsWithAPendingInstant()).isEmpty(),
+                    () -> assertThat(statusOfTheInstance()).isEqualTo(SagaStatus.ACTIVE));
+        }
+
+        @Test
+        void a_failure_record_that_names_another_input_stays_when_the_event_is_skipped() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = execution();
+            deliver(execution, placedAt(5));
+            issued.clear();
+            String another = ORDER_STREAM + "@3";
+            listOnTheInstance(ITEM_ADDED_TYPE, List.of(4L), Set.of(), new SagaFailure(another, null, NOW, IllegalStateException.class.getName(), "cannot reserve"));
+
+            // When
+            deliver(execution, itemAt(4, "book"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(failureInput()).isEqualTo(another),
+                    () -> assertThat(pendingItemVersions()).isEmpty(),
+                    () -> assertThat(versionsWithAPendingInstant()).isEmpty());
+        }
+    }
+
+    /**
+     * The same stream as the sealed class, with a concrete start event type that is not sealed. The builder refuses it
+     * unless a replacement filter says what to subscribe to, because the subclasses it has cannot be enumerated, and a
+     * saga built that way takes the booking at 5 for the start, so it keeps the limit that a saga with one start event
+     * type has and skips an event below the start.
+     */
+    @Nested
+    @DisplayName("when the one start event type is a non-sealed concrete class that has a subclass on the stream")
+    class WhenTheOneStartEventTypeIsANonSealedConcreteClassWithASubclassOnTheStream {
+
+        private Saga.Builder<OrderEvent, Order, OrderCommand> builderStartingOnThePlainBooking() {
+            return Saga.<OrderEvent, Order, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(PlainBooking.class)
+                    .evolve(PlainBooking.class, (state, e) -> new Order(state == null ? List.of() : state.items(), false))
+                    .react(PlainBooking.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.eventId()))))
+                    .evolve(ItemAdded.class, (state, e) -> state.withItem(e.item()))
+                    .react(ItemAdded.class, (state, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.item()))));
+        }
+
+        private Saga<OrderEvent, Order, OrderCommand> sagaStartingOnThePlainBooking() {
+            return builderStartingOnThePlainBooking().replacementFilter(Filter.all()).build();
+        }
+
+        @Test
+        void the_builder_refuses_the_class_unless_a_replacement_filter_is_set() {
+            assertThatThrownBy(() -> builderStartingOnThePlainBooking().build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot all be enumerated");
+        }
+
+        @Test
+        void the_saga_declares_one_start_event_type() {
+            assertThat(sagaStartingOnThePlainBooking().startEventTypes()).containsExactly(PlainBooking.class);
+        }
+
+        @Test
+        void the_reaction_of_the_item_does_not_run_when_the_booking_comes_first_then_the_item_then_the_rebooking() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnThePlainBooking());
+
+            // When
+            deliver(execution, plainBookingAt(5));
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, plainRebookingAt(3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "plain-booking-5"), new Reserve(ORDER, "plain-rebooking-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty());
+        }
+
+        @Test
+        void the_drain_releases_the_held_item_as_an_event_below_the_start_when_the_item_is_held_before_the_booking() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionOf(sagaStartingOnThePlainBooking());
+
+            // When
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, plainBookingAt(5));
+            deliver(execution, plainRebookingAt(3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "plain-booking-5"), new Reserve(ORDER, "plain-rebooking-3")),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty(),
+                    () -> assertThat(heldKeys()).isEmpty());
+        }
+    }
+
+    /**
+     * A start event of the stream that failed before the instance started, and is named on the instance as pending, may be
+     * the real start. An event above it is then not below the start, which a saga with one start event type would
+     * otherwise take it for.
+     */
+    @Nested
+    @DisplayName("when the one start event type has an earlier event on the stream that failed")
+    class WhenTheOneStartEventTypeHasAnEarlierEventOnTheStreamThatFailed {
+
+        private SagaExecution<OrderEvent, Order, OrderCommand> executionWith(SagaStateStore<Order> stateStore, SagaRunnerConfig config) {
+            return executionOf(sagaWhoseReactionsNameTheEvent(), stateStore, config);
+        }
+
+        private void theEarlierStartFailsThenTheItemIsHeldThenTheLaterStartArrives(SagaExecution<OrderEvent, Order, OrderCommand> execution) {
+            failingItems.add("placed-3");
+            deliverRefused(execution, placedAt(3));
+            failingItems.clear();
+            assertThat(pendingVersionsOf(OrderPlaced.class)).as("the instance lists the earlier start as pending").containsExactly(3L);
+            deliver(execution, itemAt(4, "book"));
+            deliver(execution, placedAt(5));
+        }
+
+        @Test
+        void the_held_item_is_applied_and_the_earlier_start_is_applied_when_it_is_delivered_again_while_quarantine_is_off() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionWith(store, SagaRunnerConfig.defaults());
+            theEarlierStartFailsThenTheItemIsHeldThenTheLaterStartArrives(execution);
+
+            // When
+            deliver(execution, placedAt(3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "book"), new Reserve(ORDER, "placed-3")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(pendingVersionsOf(OrderPlaced.class)).isEmpty());
+        }
+
+        @Test
+        void the_held_item_is_applied_and_the_earlier_start_is_applied_when_it_is_delivered_again_while_quarantine_is_on() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionWith(store, SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET));
+            theEarlierStartFailsThenTheItemIsHeldThenTheLaterStartArrives(execution);
+
+            // When
+            deliver(execution, placedAt(3));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).containsExactly(new Reserve(ORDER, "placed-5"), new Reserve(ORDER, "book"), new Reserve(ORDER, "placed-3")),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("book"),
+                    () -> assertThat(heldKeys()).isEmpty(),
+                    () -> assertThat(failureInput()).isNull(),
+                    () -> assertThat(statusOfTheInstance()).isEqualTo(SagaStatus.ACTIVE));
+        }
+
+        @Test
+        void an_item_that_failed_its_hold_below_the_start_does_not_count_as_an_earlier_start_event_so_a_later_item_is_still_skipped_while_quarantine_is_on() {
+            // Given
+            ScriptedStore failingHold = new ScriptedStore(store);
+            failingHold.beforeNextHold(() -> {
+                throw new IllegalStateException("cannot hold");
+            });
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionWith(failingHold, SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET));
+            deliverRefused(execution, itemAt(2, "two"));
+            deliver(execution, placedAt(5));
+            issued.clear();
+
+            // When
+            deliver(execution, itemAt(4, "four"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty());
+        }
+
+        @Test
+        void an_item_that_failed_its_hold_below_the_start_does_not_count_as_an_earlier_start_event_so_a_later_item_is_still_skipped_while_quarantine_is_off() {
+            // Given
+            ScriptedStore failingHold = new ScriptedStore(store);
+            failingHold.beforeNextHold(() -> {
+                throw new IllegalStateException("cannot hold");
+            });
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionWith(failingHold, SagaRunnerConfig.defaults());
+            deliverRefused(execution, itemAt(2, "two"));
+            deliver(execution, placedAt(5));
+            issued.clear();
+
+            // When
+            deliver(execution, itemAt(4, "four"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty());
+        }
+
+        @Test
+        void an_item_below_the_pending_earlier_start_is_still_skipped() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionWith(store, SagaRunnerConfig.defaults());
+            failingItems.add("placed-3");
+            deliverRefused(execution, placedAt(3));
+            failingItems.clear();
+            deliver(execution, placedAt(5));
+            issued.clear();
+
+            // When
+            deliver(execution, itemAt(2, "two"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance().items()).isEmpty());
+        }
+
+        @Test
+        void an_item_above_a_pending_item_is_still_skipped_since_a_pending_event_of_another_type_is_not_an_earlier_start_event() {
+            // Given
+            SagaExecution<OrderEvent, Order, OrderCommand> execution = executionWith(store, SagaRunnerConfig.defaults());
+            deliver(execution, placedAt(5));
+            deliver(execution, itemAt(6, "six"));
+            issued.clear();
+            listOnTheInstance(ITEM_ADDED_TYPE, List.of(2L), Set.of(), null);
+
+            // When
+            deliver(execution, itemAt(4, "four"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateOfTheInstance().items()).containsExactly("six"));
+        }
+    }
+
+    /**
      * An in-memory store whose next read of the instance by {@code find} answers that there is none, as a read that
      * happened before another delivery wrote it would, and that can run something just before the next hold, as a
      * delivery that paused between its read and its hold would let other deliveries do. Every other read, and every
@@ -2091,6 +2887,7 @@ class SagaHeldEventTest {
         private final List<Set<String>> drainedHeldKeysOfEverySave = new CopyOnWriteArrayList<>();
         private final AtomicReference<@Nullable RuntimeException> failureOnNextRelease = new AtomicReference<>();
         private final AtomicReference<@Nullable RuntimeException> failureOnFind = new AtomicReference<>();
+        private volatile boolean losingEveryWriteWithoutState;
 
         ScriptedStore(InMemorySagaStateStore<Order> delegate) {
             this.delegate = delegate;
@@ -2104,6 +2901,11 @@ class SagaHeldEventTest {
         /** Makes every read of the instance with its state throw, as a store does whose converter no longer understands what it wrote. {@code findWithoutState} keeps answering. */
         void cannotDecodeTheState(RuntimeException failure) {
             failureOnFind.set(failure);
+        }
+
+        /** Makes every write without the state lose, as a failure record does when the instance keeps changing under it. */
+        void loseEveryWriteWithoutState(boolean losing) {
+            losingEveryWriteWithoutState = losing;
         }
 
         void nextFindMissesTheInstance() {
@@ -2137,6 +2939,11 @@ class SagaHeldEventTest {
         public boolean compareAndSave(String sagaId, SagaEnvelope<Order> envelope, long expectedVersion) {
             drainedHeldKeysOfEverySave.add(envelope.drainedHeldKeys());
             return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<Order> envelope, long expectedVersion) {
+            return !losingEveryWriteWithoutState && compareAndSave(sagaId, envelope, expectedVersion);
         }
 
         @Override
