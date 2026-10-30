@@ -551,11 +551,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                             if (condition != null) {
                                 conditionAndMarkers = enforceAppendCondition(condition, eventsToAppend, lastPosition);
                             } else {
-                                // An unconditional append still increments its events' markers, so a concurrent conditional
-                                // append whose criteria match one of these events, other than DcbCriteria.all() (ADR
-                                // 0030), shares a marker with it, serializes against it, and its consistency-token check
-                                // observes it. Without this, nothing forces a write-write conflict
-                                // and a concurrent conditional append's snapshot could miss this append (write skew). See ADR 0021.
+                                // An unconditional append still increments its events' markers, so a concurrent conditional append whose
+                                // criteria match one of these events, other than DcbCriteria.all() (ADR 0030), shares a marker with it,
+                                // serializes against it, and its consistency-token check observes it. Without this, nothing forces a
+                                // write-write conflict and a concurrent conditional append's snapshot could miss this append (write skew).
+                                // See ADR 0021.
                                 conditionAndMarkers = incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
                             }
                             return conditionAndMarkers.flatMap(markers -> {

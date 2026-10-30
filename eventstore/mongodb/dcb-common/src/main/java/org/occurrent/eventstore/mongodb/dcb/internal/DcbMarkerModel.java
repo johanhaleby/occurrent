@@ -95,8 +95,8 @@ public final class DcbMarkerModel {
 
     // A key per tag for an item with tags, since every event the item matches has all of them, and a key per type for
     // an item without tags. NEVER combine a tag and a type into a single "type:X+tag:t" key. Skew-safety (ADR 0021)
-    // depends on it, because an event that has only the tag, or only the type, would not touch a combined key. The
-    // derivation is shared with the in-memory store.
+    // depends on it, because an event's own keys are one per tag and one per type, so an unconditional append would
+    // never touch a combined key. The derivation is shared with the in-memory store.
     public static Set<String> queryMarkerKeys(DcbCriteria criteria) {
         return DcbMarkerVersionsSupport.queryMarkerKeys(criteria);
     }

@@ -50,7 +50,8 @@ other sections compile fine and behave differently, so read them first.
   `new DcbEventStream(events, head)` or `new DcbDomainEventStream(events, head)`, or call `value()`, which a
   `DcbEventStore` of your own usually does.
 - [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, an append that
-  only shares a type with a condition's tagged criteria no longer makes the condition refuse.
+  only shares a type with a criteria item that has tags no longer makes the condition refuse, unless it also changes a
+  marker of another item in the criteria.
 
 ### Subscriptions and catch-up
 
@@ -700,7 +701,8 @@ criteria than its read would then append on the read's criteria instead of throw
 ## Criteria with tags conflict on their tags
 
 On the MongoDB stores, the check of a conditional append reads only the tag markers of an item with tags, and no longer
-the markers of its types. An append that only shares a type with the criteria then no longer makes the check refuse.
+the markers of its types. An append that only shares a type with such an item then no longer makes the check refuse,
+unless it also changes a marker of another item in the criteria.
 Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this

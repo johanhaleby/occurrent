@@ -1053,12 +1053,12 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             assertThatThrownBy(() -> dcbEventStore().append(
                     List.of(taggedEvent(type, tagA)), failIfEventsMatch(token)))
                     .as("The control of the accepted case: the same type and the tag the criteria hold do match, "
-                            + "so a store that checks no marker for the tag would accept this append")
+                            + "so a store that checks no marker for this item at all would accept this append")
                     .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
         }
 
         @Test
-        void a_condition_on_a_type_and_a_tag_conflicts_on_a_match_committed_after_another_event_of_that_type_and_nothing_is_appended() {
+        void a_condition_on_a_type_and_a_tag_that_is_refused_appends_nothing() {
             String type = "TypeAndTagGuard";
             String tagA = "type-and-tag-guard:a";
             String tagB = "type-and-tag-guard:b";
@@ -1071,8 +1071,8 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             assertThatThrownBy(() -> dcbEventStore().append(
                     List.of(taggedEvent(type, tagA)), failIfEventsMatch(token)))
-                    .as("An event matching the criteria was committed after the read, so the event of the same type "
-                            + "that came before it and does not match must not hide it")
+                    .as("An event matching the type and the tag was committed after the read, so the append is refused "
+                            + "and the checks below can show that a refused append writes nothing")
                     .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
 
             DcbEventStream after = dcbEventStore().read(criteria);
