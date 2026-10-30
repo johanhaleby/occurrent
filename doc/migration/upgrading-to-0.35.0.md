@@ -931,10 +931,12 @@ blocking models, which also log it at `ERROR`, and `waitUntilStarted()` fails wi
 the handle `subscribe(..)` returns while the model is stopped, which never completes. See
 [#1371](https://github.com/johanhaleby/occurrent/issues/1371).
 
-The function is checked until a change stream of the subscription has opened. On the blocking models that means its
-cursor opened, so an answer from an opening that a pause or a failure stopped doesn't end the check. On the reactor
-model it means its `Flux` was subscribed to, so a pause after that, or an answer the server rejects, ends it. A position
-the function returns after that isn't checked. When its earlier answer was a resume token or an operation time and a
+The function is checked until a change stream of the subscription has opened. On the blocking models that means a run
+has reported its cursor open, so an answer from an opening that a pause or a failure stopped doesn't end the check. The
+reactor model counts a driver cursor that opened for a subscription with an id. A reactor `subscribe(..)` without an id,
+and a subscription with an id when the model can't read through the driver's cursor, count a `Flux` that was subscribed
+to instead, so a pause after that, or an answer the server rejects, ends the check. A position the function returns
+after that isn't checked. When its earlier answer was a resume token or an operation time and a
 change stream opens again before the first event, one of these checkpoints from the function opens at another position
 than that earlier answer. It can skip what the earlier answer would have delivered, or deliver what it wouldn't have.
 
@@ -943,7 +945,8 @@ than that earlier answer. It can skip what the earlier answer would have deliver
 Code that subscribes a MongoDB subscription model directly at a checkpoint a catch-up stored, or delivered with a
 replayed event, in a `StartAt` that names it or from a dynamic start that returns it. A
 resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, isn't refused. The blocking models go on
-from the position the subscription has read to. The reactor model opens at the moment of the resume, for such a
+from the position the subscription has read to. When `subscribe(..)` was given a dynamic start and no change stream has
+opened yet, that position is still the dynamic start, so it's asked, and refused when it returns one. The reactor model opens at the moment of the resume, for such a
 checkpoint and for a dynamic position that returns one, as it did in 0.34.0, and can skip what was written while the
 subscription was paused.
 
@@ -951,7 +954,9 @@ A blocking `DurableSubscriptionModel` hands the MongoDB model a dynamic start th
 `CheckpointStorage`. A subscription whose storage holds a catch-up's checkpoint now stops in the same
 way, where it skipped the history before. A Spring Boot starter subscription gets there when a catch-up's replay stopped
 before it went live and the subscription's start then changed to `DEFAULT`, as
-[#1346](https://github.com/johanhaleby/occurrent/issues/1346) describes.
+[#1346](https://github.com/johanhaleby/occurrent/issues/1346) describes. `ReactorDurableSubscriptionModel` hands the
+reactor model the stored checkpoint itself, so a subscription at the model default whose storage holds one of these
+stops too, its handle fails with the `UnsupportedStartAtException`, and the checkpoint stays in storage.
 
 A `TimeBasedCheckpoint` isn't refused. A catch-up writes one when it can't get a global position, and reads it back. A
 `DurableSubscriptionModel` with no catch-up around it and one of these in its storage still opens at the present.

@@ -475,8 +475,8 @@ public final class ChangeStreamSubscriptions {
                 throw e;
             } else if (cursor == null && e instanceof UnsupportedStartAtException unsupportedStartAt && MongoCommons.isCatchupPosition(unsupportedStartAt.startAt())) {
                 // Refused rather than retried, since a retry runs without end by default and the start never ends. Only
-                // a catch-up's position before the cursor exists, since an action or the function can throw this type too
-                // and restarts like any other failure
+                // a catch-up's position before the cursor exists, since an action can throw this type too, as can the
+                // function with another position, and those restart like any other failure
                 log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, e);
                 // Whoever takes the run out of the map first decides. A pause or a cancel that got there first owns what
                 // happens next, and a resume asks the start again. Recorded inside the map's atomic update, so whoever reads

@@ -23,6 +23,8 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.BsonDocument;
+import org.bson.BsonString;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
@@ -46,6 +48,7 @@ import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.DcbSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -644,6 +647,31 @@ public class ReactorMongoSubscriptionModelTest {
             } finally {
                 mayAnswer.countDown();
             }
+        }
+
+        @Test
+        void a_first_answer_the_server_rejects_does_not_end_the_check_of_a_named_subscription() throws Exception {
+            // Given a model that reads quiet positions, and a dynamic position whose first answer is a resume token the server rejects
+            assertThat(subscription.readsQuietPositions()).isTrue();
+            String subscriptionId = UUID.randomUUID().toString();
+            AtomicInteger answers = new AtomicInteger();
+            CountDownLatch askedAgain = new CountDownLatch(1);
+            StartAt startAt = StartAt.dynamic(ctx -> {
+                if (answers.incrementAndGet() == 1) {
+                    return StartAt.checkpoint(new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("not-a-token"))));
+                }
+                askedAgain.countDown();
+                return StartAt.checkpoint(GlobalCheckpoint.of(0));
+            });
+
+            // When it subscribes, so the retry asks the position again, and the answer is a catch-up's
+            subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.empty());
+            assertThat(askedAgain.await(10, SECONDS)).as("the position was asked again").isTrue();
+
+            // Then no stream had opened at the first answer, so the second is refused and the run is gone
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(subscription.isRunning(subscriptionId)).as("running after the second answer").isFalse());
+            assertThat(answers).hasValue(2);
         }
 
         @Test

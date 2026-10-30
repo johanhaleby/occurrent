@@ -413,7 +413,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
         return openingPosition(currentStartAt, internalSubscription.presentAt, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned), run::openedAt)
                 .flatMapMany(position -> Flux.usingWhen(
-                        changeStreamAt(position, internalSubscription.filter).flatMap(DriverChangeStreamCursor::open).doOnSubscribe(__ -> internalSubscription.opened(run)),
+                        changeStreamAt(position, internalSubscription.filter).flatMap(DriverChangeStreamCursor::open).doOnNext(__ -> internalSubscription.changeStreamOpened(run)).doOnSubscribe(__ -> run.opened()),
                         cursor -> Mono.defer(() -> nextBatch(internalSubscription, run, cursor)).repeat(),
                         cursor -> Mono.fromRunnable(cursor::close)))
                 .onErrorResume(DriverChangeStreamCursor.Unavailable.class, unavailable -> {
@@ -1059,12 +1059,16 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             this.action = action;
         }
 
-        // Not for a run a pause has closed, whose reads go on until the subscribe that started it has returned
         void opened(Run run) {
+            changeStreamOpened(run);
+            run.opened();
+        }
+
+        // Not for a run a pause has closed, whose reads go on until the subscribe that started it has returned
+        void changeStreamOpened(Run run) {
             if (run.isOpen()) {
                 opened.set(true);
             }
-            run.opened();
         }
     }
 
