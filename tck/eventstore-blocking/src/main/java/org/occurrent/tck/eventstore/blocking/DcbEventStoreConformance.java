@@ -823,6 +823,24 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
+        void a_token_holds_the_criteria_of_its_read_and_conflicts_on_a_match_of_any_alternative_committed_after_the_read() {
+            DcbCriteria criteria = DcbCriteria.anyOf(DcbCriteria.tags(tag(NAME_1)), DcbCriteria.tags(tag(NAME_2)));
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_2)));
+
+            assertAll(
+                    () -> assertThat(token.criteria())
+                            .as("The token holds the criteria the read was given, both alternatives")
+                            .isEqualTo(criteria),
+                    () -> assertThatThrownBy(() -> dcbEventStore().append(
+                            List.of(taggedEvent(CHANGED, NAME_1)), failIfEventsMatch(token)))
+                            .as("An event of the second alternative committed after the read must reject the append")
+                            .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class));
+        }
+
+        @Test
         void a_token_qualified_condition_conflicts_on_a_non_excluded_type_committed_after_the_read() {
             DcbCriterion criteria = DcbCriteria.tags(tag(NAME_1)).excludingTypes(SNAPSHOT);
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
