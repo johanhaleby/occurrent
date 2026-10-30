@@ -306,9 +306,10 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
             StepVerifier.create(subscription.waitUntilStarted())
                     .expectErrorSatisfies(throwable -> assertThat(throwable)
-                            .isInstanceOf(IllegalStateException.class)
+                            .isInstanceOf(CatchupCannotResumeException.class)
                             .hasMessageContaining("sub")
                             .hasMessageContaining("4 replays")
+                            .hasMessageMatching("(?s).*replays\\. The longest replay took \\d+ ms .*")
                             .hasMessageContaining("oplog"))
                     .verify(Duration.ofSeconds(20));
             assertThat(received).as("the whole history once for each of the 4 replays")

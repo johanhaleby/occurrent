@@ -32,6 +32,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.api.reactor.*;
 import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
@@ -2158,6 +2159,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // catch-up resumes from it with a live start read now, which misses an event whose position was reserved below
     // the stored one but written after the earlier replay read past it.
     private static void warnIfStoredWithoutLiveStart(String subscriptionId, Checkpoint stored) {
+        // A marked form always holds a live start, and GlobalCheckpoint.parse throws on it
+        if (CatchupCheckpoints.isMarked(stored)) {
+            return;
+        }
         if (GlobalCheckpoint.isGlobalCheckpoint(stored) && GlobalCheckpoint.parse(stored).liveFrom().isEmpty()) {
             log.warn("Subscription {} resumes from stored checkpoint \"{}\", which has no live start. If a catch-up subscription stored it, an event written to a position below it after the earlier replay read past that position is not delivered. See the 0.34.0 upgrade guide.",
                     subscriptionId, stored.asString());

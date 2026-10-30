@@ -35,6 +35,7 @@ import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -76,7 +77,8 @@ import static java.util.Objects.requireNonNull;
  * live subscription also sees it.
  * <p>
  * Each replayed event has a {@link GlobalCheckpoint} that also holds the live token, the position the replay started
- * from and the head the replay read. A durable model layered on top stores it, and a resume from it replays up to that
+ * from and the head the replay read, or the same in a marked {@link StringBasedCheckpoint} when that position is above
+ * zero. A durable model layered on top stores it, and a resume from it replays up to that
  * head and goes live from that same token, so an event whose position was reserved below the stored position but
  * written after the earlier replay read past it is still delivered. When the wrapped model no longer has the history
  * from the stored token, the replay starts over from the position the first attempt started from and redelivers the
@@ -278,7 +280,10 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             return namedSubscriptions.subscribeStraightToLive(subscriptionId, liveFilter, livePredicate, resolved == null ? startAt : resolved, action);
         }
-        GlobalCheckpoint start = GlobalCheckpoint.parse(position.checkpoint);
+        if (CatchupCheckpoints.isMarkedTime(position.checkpoint)) {
+            throw PositionCatchupPipeline.startsAtTime(subscriptionId, position.checkpoint);
+        }
+        CatchupCheckpoints.Position start = PositionCatchupPipeline.positionOf(position.checkpoint);
         return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, scopes(scoped), windowSize, handoverCacheSize, start, action);
     }
 

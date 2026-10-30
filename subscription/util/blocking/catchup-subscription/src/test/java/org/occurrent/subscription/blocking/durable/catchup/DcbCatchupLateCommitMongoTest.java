@@ -21,6 +21,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import org.awaitility.core.ConditionTimeoutException;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.junit.jupiter.api.*;
@@ -380,6 +381,44 @@ class DcbCatchupLateCommitMongoTest {
         }
     }
 
+    @Test
+    void a_catch_up_whose_start_resolves_to_nothing_for_the_live_model_delivers_an_event_that_commits_below_the_replay_before_the_handover() throws Exception {
+        // Given
+        Thread writerA = new Thread(() -> append(changedTo("A")), HELD_WRITER);
+        writerA.start();
+        assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
+        append(named("B"));
+        append(named("C"));
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        SpringMongoSubscriptionModel live = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        CatchupSubscriptionModel model = new CatchupSubscriptionModel(live, eventStore, CRITERIA, config);
+        StartAt resolvesToNothingForTheLiveModel = StartAt.dynamic(context ->
+                context.hasSubscriptionModelType(SpringMongoSubscriptionModel.class) ? null : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        try {
+            // When
+            model.subscribe("sub", resolvesToNothingForTheLiveModel, cloudEvent -> {
+                String name = nameOf(cloudEvent);
+                received.add(name);
+                if (name.equals("C")) {
+                    // A commits below the replay after the replay read past it and before the handover
+                    releaseA.countDown();
+                    join(writerA);
+                }
+            }).waitUntilStarted();
+            append(named("D"));
+            boolean deliveredAfterTheHandover = arrives(received, "D");
+
+            // Then
+            assertThat(writerA.isAlive()).as("writer A still committing").isFalse();
+            assertThat(deliveredAfterTheHandover).as("an event written after the handover is delivered live").isTrue();
+            assertThat(received).as("the event that committed below the replay before the handover").contains("A");
+        } finally {
+            model.shutdown();
+        }
+    }
+
     // The Spring Boot starter's default
     @Test
     void an_event_that_committed_below_a_position_the_application_stored_itself_is_delivered_by_a_catch_up_started_at_that_position() throws Exception {
@@ -421,6 +460,23 @@ class DcbCatchupLateCommitMongoTest {
     private void dropChangeStreamHistoryUpToNow() {
         BsonTimestamp now = requireNonNull(mongoClient.getDatabase(DATABASE).runCommand(new Document("hostInfo", 1)).get("operationTime", BsonTimestamp.class));
         ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, DATABASE, now);
+    }
+
+    private static boolean arrives(List<String> received, String name) {
+        try {
+            await().atMost(AT_MOST).until(() -> received.contains(name));
+            return true;
+        } catch (ConditionTimeoutException e) {
+            return false;
+        }
+    }
+
+    private static void join(Thread thread) {
+        try {
+            thread.join(20_000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static void block(CountDownLatch latch) {

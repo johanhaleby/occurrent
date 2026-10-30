@@ -41,6 +41,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 
 import java.net.URI;
 import java.time.Duration;
@@ -588,9 +589,9 @@ class DcbCatchupSubscriptionModelTest {
         StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("in-memory-global-position");
         assertThat(resumeProbes).containsExactly(agedOut, liveStartReadNow);
         assertThat(liveStarts).containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
-        assertThat(saved.stream().map(StringBasedCheckpoint::new).filter(GlobalCheckpoint::isGlobalCheckpoint).map(GlobalCheckpoint::parse))
+        assertThat(saved.stream().map(StringBasedCheckpoint::new).filter(CatchupCheckpoints::isMarked).map(Checkpoint::asString))
                 .as("the checkpoints the replay stores carry the new live start and the same origin")
-                .containsExactly(GlobalCheckpoint.of(2, liveStartReadNow, 1, 4), GlobalCheckpoint.of(3, liveStartReadNow, 1, 4), GlobalCheckpoint.of(4, liveStartReadNow, 1, 4));
+                .containsExactly(CatchupCheckpoints.format(2, 1, 4, liveStartReadNow), CatchupCheckpoints.format(3, 1, 4, liveStartReadNow), CatchupCheckpoints.format(4, 1, 4, liveStartReadNow));
     }
 
     static Stream<Checkpoint> catchUpCheckpointsOfTheTimeKind() {
@@ -654,9 +655,10 @@ class DcbCatchupSubscriptionModelTest {
             Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
 
             assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(20)))
-                    .isInstanceOf(IllegalStateException.class)
+                    .isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("4 replays")
+                    .hasMessageMatching("(?s).*replays\\. The longest replay took \\d+ ms .*")
                     .hasMessageContaining("oplog");
             assertThat(received).as("the whole history once for each of the 4 replays")
                     .containsExactlyElementsOf(Stream.generate(() -> history).limit(4).flatMap(List::stream).toList());

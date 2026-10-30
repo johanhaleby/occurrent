@@ -21,6 +21,8 @@ import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import org.assertj.core.api.InstanceOfAssertFactories;
+import org.awaitility.core.ConditionTimeoutException;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.junit.jupiter.api.*;
@@ -38,6 +40,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
@@ -83,10 +86,7 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @ExpectedGuaranteeViolation(
-        tests = {
-                "a_catch_up_that_only_replays_stores_a_position_without_a_live_start_and_a_restart_from_it_delivers_a_late_commit",
-                "a_position_stored_by_0_34_without_a_live_start_resumes_and_delivers_a_late_commit"
-        },
+        tests = "a_position_stored_by_0_34_without_a_live_start_resumes_and_delivers_a_late_commit",
         issue = "https://github.com/johanhaleby/occurrent/issues/1297")
 class StreamPositionCatchupLateCommitMongoTest {
 
@@ -436,9 +436,47 @@ class StreamPositionCatchupLateCommitMongoTest {
         }
     }
 
+    @Test
+    void a_catch_up_whose_start_resolves_to_nothing_for_the_live_model_delivers_an_event_that_commits_below_the_replay_before_the_handover() throws Exception {
+        // Given
+        Thread writerA = new Thread(() -> appendToStream("stream-a", named("A")), HELD_WRITER);
+        writerA.start();
+        assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
+        appendToStream("stream-b", named("B"));
+        appendToStream("stream-c", named("C"));
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        SpringMongoSubscriptionModel live = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        StreamCatchupSubscriptionModel model = new StreamCatchupSubscriptionModel(live, eventStore, config);
+        StartAt resolvesToNothingForTheLiveModel = StartAt.dynamic(context ->
+                context.hasSubscriptionModelType(SpringMongoSubscriptionModel.class) ? null : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        try {
+            // When
+            model.subscribe("sub", resolvesToNothingForTheLiveModel, cloudEvent -> {
+                String name = nameOf(cloudEvent);
+                received.add(name);
+                if (name.equals("C")) {
+                    // A commits at position 1 after the replay read past it and before the handover
+                    releaseA.countDown();
+                    join(writerA);
+                }
+            }).waitUntilStarted();
+            appendToStream("stream-d", named("D"));
+            boolean deliveredAfterTheHandover = arrives(received, "D");
+
+            // Then
+            assertThat(writerA.isAlive()).as("writer A still committing").isFalse();
+            assertThat(deliveredAfterTheHandover).as("an event written after the handover is delivered live").isTrue();
+            assertThat(received).as("the event that committed below the replay before the handover").contains("A");
+        } finally {
+            model.shutdown();
+        }
+    }
+
     // The Spring Boot starter's default
     @Test
-    void a_catch_up_that_only_replays_stores_a_position_without_a_live_start_and_a_restart_from_it_delivers_a_late_commit() throws Exception {
+    void a_catch_up_whose_start_resolves_to_nothing_for_the_live_model_stores_its_live_start_and_a_restart_from_it_delivers_a_late_commit() throws Exception {
         Thread writerA = new Thread(() -> appendToStream("stream-a", named("A")), HELD_WRITER);
         writerA.start();
         assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
@@ -449,15 +487,15 @@ class StreamPositionCatchupLateCommitMongoTest {
         CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
 
-        // First process: replays only, since it resolves to nothing for the live model, delivers B, stores position 2
-        // and dies while handling C
+        // First process: its start resolves to nothing for the live model, it delivers B, stores position 2 and dies
+        // while handling C
         SpringMongoSubscriptionModel firstLive = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
         StreamCatchupSubscriptionModel first = new StreamCatchupSubscriptionModel(firstLive, eventStore, config);
-        StartAt neverGoesLive = StartAt.dynamic(context ->
+        StartAt resolvesToNothingForTheLiveModel = StartAt.dynamic(context ->
                 context.hasSubscriptionModelType(SpringMongoSubscriptionModel.class) ? null : StartAt.checkpoint(GlobalCheckpoint.of(0)));
         CountDownLatch handlingC = new CountDownLatch(1);
         CountDownLatch crashed = new CountDownLatch(1);
-        first.subscribe("sub", neverGoesLive, cloudEvent -> {
+        first.subscribe("sub", resolvesToNothingForTheLiveModel, cloudEvent -> {
             String name = nameOf(cloudEvent);
             received.add(name);
             if (name.equals("C")) {
@@ -467,8 +505,10 @@ class StreamPositionCatchupLateCommitMongoTest {
         });
         assertThat(handlingC.await(20, TimeUnit.SECONDS)).isTrue();
         Checkpoint stored = requireNonNull(storage.read("sub"));
-        assertThat(GlobalCheckpoint.positionOf(stored)).isEqualTo(2);
-        assertThat(GlobalCheckpoint.parse(stored).liveFrom()).as("a replay that never goes live has no live start to store").isEmpty();
+        assertThat(CatchupCheckpoints.isMarked(stored)).as("stored in the marked form, which a version that would resume it without its live start refuses").isTrue();
+        assertThat(CatchupCheckpoints.parse(stored)).asInstanceOf(InstanceOfAssertFactories.type(CatchupCheckpoints.Position.class))
+                .satisfies(position -> assertThat(position.position()).as("position").isEqualTo(2))
+                .satisfies(position -> assertThat(position.liveFrom()).as("the live start the replay read").isNotNull());
         first.shutdown();
         crashed.countDown();
 
@@ -527,6 +567,23 @@ class StreamPositionCatchupLateCommitMongoTest {
     private void dropChangeStreamHistoryUpToNow() {
         BsonTimestamp now = requireNonNull(mongoClient.getDatabase(DATABASE).runCommand(new Document("hostInfo", 1)).get("operationTime", BsonTimestamp.class));
         ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, DATABASE, now);
+    }
+
+    private static boolean arrives(List<String> received, String name) {
+        try {
+            await().atMost(AT_MOST).until(() -> received.contains(name));
+            return true;
+        } catch (ConditionTimeoutException e) {
+            return false;
+        }
+    }
+
+    private static void join(Thread thread) {
+        try {
+            thread.join(20_000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static void block(CountDownLatch latch) {
