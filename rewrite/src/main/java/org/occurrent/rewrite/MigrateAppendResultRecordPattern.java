@@ -17,19 +17,8 @@ package org.occurrent.rewrite;
 
 import org.openrewrite.ExecutionContext;
 import org.openrewrite.Recipe;
-import org.openrewrite.Tree;
 import org.openrewrite.TreeVisitor;
-import org.openrewrite.java.JavaIsoVisitor;
-import org.openrewrite.java.VariableNameUtils;
-import org.openrewrite.java.VariableNameUtils.GenerationStrategy;
-import org.openrewrite.java.tree.J;
-import org.openrewrite.java.tree.JavaType;
-import org.openrewrite.java.tree.Space;
-import org.openrewrite.java.tree.TypeUtils;
-import org.openrewrite.marker.Markers;
 
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -45,9 +34,11 @@ import java.util.List;
  */
 public class MigrateAppendResultRecordPattern extends Recipe {
 
-    private static final String WRITE_RESULT = "org.occurrent.eventstore.api.WriteResult";
-    private static final String DCB_APPEND_RESULT = "org.occurrent.eventstore.api.dcb.DcbAppendResult";
-    private static final String APPEND_ID_BINDING_NAME = "appendId";
+    // Three is the only pre-upgrade arity. The shared mechanics leave four alone, since that pattern already names
+    // the append id (a second run of this recipe, or a caller who added it by hand).
+    private static final List<AddRecordPatternBindings.Target> TARGETS = List.of(
+            AddRecordPatternBindings.Target.of("org.occurrent.eventstore.api.WriteResult", 3, "appendId"),
+            AddRecordPatternBindings.Target.of("org.occurrent.eventstore.api.dcb.DcbAppendResult", 3, "appendId"));
 
     @Override
     public String getDisplayName() {
@@ -65,87 +56,6 @@ public class MigrateAppendResultRecordPattern extends Recipe {
 
     @Override
     public TreeVisitor<?, ExecutionContext> getVisitor() {
-        return new JavaIsoVisitor<>() {
-
-            @Override
-            public J.DeconstructionPattern visitDeconstructionPattern(J.DeconstructionPattern pattern, ExecutionContext ctx) {
-                J.DeconstructionPattern d = super.visitDeconstructionPattern(pattern, ctx);
-
-                if (!TypeUtils.isOfClassType(d.getType(), WRITE_RESULT) && !TypeUtils.isOfClassType(d.getType(), DCB_APPEND_RESULT)) {
-                    return d;
-                }
-
-                List<J> nested = d.getNested();
-                // Three is the only pre-upgrade arity; four means this pattern already names the append id (a
-                // second run of this recipe, or a caller who added it by hand), and anything else is not the shape
-                // this recipe knows how to extend, so it is left alone rather than guessed at.
-                if (nested.size() != 3) {
-                    return d;
-                }
-                if (!(nested.get(nested.size() - 1) instanceof J.VariableDeclarations last)) {
-                    return d;
-                }
-                if (last.getVariables().size() != 1) {
-                    return d;
-                }
-
-                J.VariableDeclarations.NamedVariable lastVar = last.getVariables().get(0);
-
-                // Resolved from the record's own member list rather than guessed, so the synthesized binding is
-                // fully type-attributed instead of leaving a gap in the LST for a later visitor to trip over.
-                JavaType appendIdType = appendIdComponentType(d.getType());
-
-                J.Identifier varKeyword = new J.Identifier(Tree.randomId(), Space.EMPTY, Markers.EMPTY,
-                        Collections.emptyList(), "var", appendIdType, null);
-
-                // Scope-checked rather than a bare "appendId" literal, so a pattern whose own first component is
-                // already named "appendId" (or an enclosing local of that name) gets a non-colliding binding
-                // instead of a rewrite that still fails to compile.
-                String bindingName = VariableNameUtils.generateVariableName(APPEND_ID_BINDING_NAME, getCursor(), GenerationStrategy.INCREMENT_NUMBER);
-
-                JavaType.Variable lastFieldType = lastVar.getName().getFieldType();
-                JavaType.Variable appendIdFieldType = lastFieldType == null ? null :
-                        lastFieldType.withName(bindingName).withType(appendIdType);
-                J.Identifier newName = lastVar.getName().withId(Tree.randomId())
-                        .withSimpleName(bindingName)
-                        .withType(appendIdType)
-                        .withFieldType(appendIdFieldType);
-
-                JavaType.Variable lastVariableType = lastVar.getVariableType();
-                JavaType.Variable appendIdVariableType = lastVariableType == null ? null :
-                        lastVariableType.withName(bindingName).withType(appendIdType);
-                J.VariableDeclarations.NamedVariable newVar = lastVar.withId(Tree.randomId())
-                        .withName(newName)
-                        .withInitializer(null)
-                        .withVariableType(appendIdVariableType);
-
-                // Cloned from the last binding rather than built from scratch, so the new element's own prefix (the
-                // space after the comma the printer inserts) matches every other non-first binding in the pattern.
-                // The type expression is always forced to var, never cloned, because the last binding may be
-                // explicitly typed and that type is never the append id's.
-                J.VariableDeclarations appendIdBinding = last.withId(Tree.randomId())
-                        .withLeadingAnnotations(Collections.emptyList())
-                        .withTypeExpression(varKeyword)
-                        .withVarargs(null)
-                        .withVariables(List.of(newVar));
-
-                List<J> withAppendId = new ArrayList<>(nested);
-                withAppendId.add(appendIdBinding);
-                return d.withNested(withAppendId);
-            }
-
-            private JavaType appendIdComponentType(JavaType recordType) {
-                JavaType.FullyQualified fullyQualified = TypeUtils.asFullyQualified(recordType);
-                if (fullyQualified == null) {
-                    return null;
-                }
-                for (JavaType.Variable member : fullyQualified.getMembers()) {
-                    if (APPEND_ID_BINDING_NAME.equals(member.getName())) {
-                        return member.getType();
-                    }
-                }
-                return null;
-            }
-        };
+        return AddRecordPatternBindings.visitor(TARGETS);
     }
 }

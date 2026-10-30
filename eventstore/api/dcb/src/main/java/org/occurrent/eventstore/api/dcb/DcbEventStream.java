@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
@@ -44,17 +45,34 @@ import static java.util.Objects.requireNonNull;
  *                             {@code lastSequencePosition}, it is sound under concurrent in-flight appends because the
  *                             store derives it from data that is only observable once committed. Round-trip it within
  *                             the same store; do not interpret or compare it across stores.
+ * @param markerVersions       the versions of the conflict markers of the read's criteria, in the same point-in-time
+ *                             view the events came from. Present only when the read asked for them with
+ *                             {@link DcbReadOptions#withVersions()} or {@link DcbReadOptions#afterVersions(DcbMarkerVersions)},
+ *                             had no limit, no skip, no position bound and didn't read backwards, had criteria other than
+ *                             {@link DcbCriteria.MatchAll}, and every marker of the criteria exists and has an epoch. A
+ *                             store that can't take such a view leaves it empty. Every constructor other than the
+ *                             canonical one leaves it empty.
  */
 @NullMarked
-public record DcbEventStream(List<CloudEvent> events, long lastSequencePosition, DcbConsistencyToken consistencyToken) {
+public record DcbEventStream(List<CloudEvent> events, long lastSequencePosition, DcbConsistencyToken consistencyToken,
+                             Optional<DcbMarkerVersions> markerVersions) {
 
     public DcbEventStream {
         requireNonNull(events, "Events cannot be null");
         requireNonNull(consistencyToken, "Consistency token cannot be null");
+        requireNonNull(markerVersions, "Marker versions cannot be null");
         if (lastSequencePosition < 0) {
             throw new IllegalArgumentException("Last sequence position cannot be negative");
         }
         events = List.copyOf(events);
+    }
+
+    /**
+     * Builds a stream with no marker versions. Use
+     * {@link #DcbEventStream(List, long, DcbConsistencyToken, Optional)} to report them.
+     */
+    public DcbEventStream(List<CloudEvent> events, long lastSequencePosition, DcbConsistencyToken consistencyToken) {
+        this(events, lastSequencePosition, consistencyToken, Optional.empty());
     }
 
     /**
