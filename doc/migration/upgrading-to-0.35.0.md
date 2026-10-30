@@ -970,9 +970,9 @@ goes straight to live and hands the function to the model it wraps, and `Reactor
 again on the thread of `subscribe(..)`. Code on that thread can cancel the id, and that cancel goes to the wrapped model
 at once. On another thread, a subscribe of the id throws `DuplicateSubscriptionIdException` while that `subscribe(..)`
 runs. A cancel of the id there returns without waiting for that `subscribe(..)`, and the `Mono` it returns completes once
-`subscribe(..)` has returned and the subscription is cancelled. So when the function for id A blocks on a cancel of B
-while the function for B does the same on a cancel of A on another thread, neither `subscribe(..)` returns until one of
-them stops blocking, by a timeout for example.
+`subscribe(..)` has returned and the subscription is cancelled. So when `ReactorMongoSubscriptionModel` calls the function
+for id A on the thread of `subscribe(..)` and it blocks on a cancel of B, while the function for B does the same on a
+cancel of A on another thread, neither `subscribe(..)` returns until one of them stops blocking, by a timeout for example.
 
 A `CatchupListener` given to `listenForCatchup` can still run while the catch-up holds a lock, so don't call the
 catch-up model from it. The listener is told that a catch-up started from inside an operation on a map the catch-up keeps.
