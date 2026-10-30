@@ -40,12 +40,12 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
@@ -210,7 +210,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
     class When_the_store_refuses_the_read {
 
         @Test
-        void the_refusal_reaches_the_caller_after_the_transaction_returned_normally() {
+        void the_refusal_reaches_the_caller_without_the_transaction_being_entered() {
             var store = new ScriptedStore(Optional.empty(), Optional.empty()).refusingTheFirstReads(1);
             var executor = new RecordingExecutor();
             var dispatcher = new RecordingDispatcher();
@@ -230,8 +230,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
                             () -> assertThat(refused.isBeforeAppendOf(domainFunction)).as("marked for the function it was given").isTrue(),
                             () -> assertThat(refused.isBeforeAppendOf(anotherFunction)).as("marked for another function").isFalse(),
                             () -> assertThat(refused.isBeforeAppendOf(options)).as("marked for the options it was given").isFalse())),
-                    () -> assertThat(executor.returned).as("transactions that returned normally").isEqualTo(1),
-                    () -> assertThat(executor.threw).as("transactions that saw an exception").isZero(),
+                    () -> assertThat(executor.entered).as("transactions entered").isZero(),
                     () -> assertThat(domainFunctionRan).as("domain function ran").isFalse(),
                     () -> assertThat(store.appendCalls).as("appends").isZero(),
                     () -> assertThat(dispatcher.dispatched).as("dispatched events").isEmpty()
@@ -259,7 +258,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Test
-        void a_refusal_thrown_by_the_domain_function_rolls_the_transaction_back() {
+        void a_refusal_thrown_by_the_domain_function_reaches_the_caller_without_the_transaction_being_entered() {
             var store = new ScriptedStore(Optional.empty(), Optional.empty());
             var executor = new RecordingExecutor();
             var refusal = new DcbSnapshotInvalidException(CRITERIA, versions("epoch-1", 2), "refused by the domain function");
@@ -270,8 +269,8 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
             assertAll(
                     () -> assertThat(thrown).as("what reached the caller").isSameAs(refusal),
-                    () -> assertThat(executor.threw).as("transactions that saw the exception").isEqualTo(1),
-                    () -> assertThat(executor.returned).as("transactions that returned normally").isZero()
+                    () -> assertThat(executor.entered).as("transactions entered").isZero(),
+                    () -> assertThat(store.appendCalls).as("appends").isZero()
             );
         }
 
@@ -316,12 +315,11 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Test
-        void a_refusal_from_an_earlier_run_of_the_action_is_not_thrown_when_the_executor_runs_it_again() {
+        void the_refusal_reaches_the_caller_when_the_executor_would_have_run_its_action_twice() {
             var store = new ScriptedStore(Optional.empty(), Optional.empty()).refusingTheFirstReads(1);
-            var dispatcher = new RecordingDispatcher();
             var service = GenericDcbApplicationService.builder(store, converter())
                     .tagGenerator(event -> Set.of(Tag.parse(event.name())))
-                    .synchronousSubscriptions(dispatcher)
+                    .synchronousSubscriptions(new RecordingDispatcher())
                     .transactionExecutor(new TransactionExecutor() {
                         @Override
                         public <T> T inTransaction(Supplier<T> action) {
@@ -331,9 +329,93 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
                     })
                     .build();
 
-            assertThatCode(() -> service.execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3), events -> List.of(new DomainEvent("Changed", "name:1"))))
-                    .doesNotThrowAnyException();
-            assertThat(store.appendCalls).as("appends").isEqualTo(1);
+            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3);
+            Throwable thrown = catchThrowable(() -> service.execute(CRITERIA, options, events -> List.of(new DomainEvent("Changed", "name:1"))));
+
+            assertAll(
+                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal), () -> assertThat(refused.isBeforeAppendOf(options)).as("marked as before the append").isTrue())),
+                    () -> assertThat(store.readOptions).as("reads, since a refusal isn't retried").hasSize(1),
+                    () -> assertThat(store.appendCalls).as("appends").isZero()
+            );
+        }
+    }
+
+    @Nested
+    @DisplayName("when synchronous subscriptions need a transaction")
+    class When_synchronous_subscriptions_need_a_transaction {
+
+        private final List<String> trace = new ArrayList<>();
+        private final RecordingDispatcher dispatcher = new RecordingDispatcher(trace);
+
+        @Test
+        void the_read_and_the_domain_function_run_outside_the_transaction_and_the_append_and_dispatch_inside_it() {
+            var store = new TracingStore(trace);
+
+            transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, events -> decide());
+
+            assertThat(trace).containsExactly("read", "decide", "begin", "append", "read", "dispatch", "commit");
+        }
+
+        @Test
+        void a_no_op_decision_never_enters_the_executor() {
+            var store = new TracingStore(trace);
+            var executor = new TracingExecutor(trace);
+
+            Optional<DcbAppendResult> result = transactionalService(store, executor, dispatcher).execute(CRITERIA, events -> {
+                trace.add("decide");
+                return List.of();
+            });
+
+            assertAll(
+                    () -> assertThat(result).as("append result").isEmpty(),
+                    () -> assertThat(executor.entered).as("transactions entered").isZero(),
+                    () -> assertThat(trace).containsExactly("read", "decide")
+            );
+        }
+
+        @Test
+        void an_executor_that_runs_its_action_again_repeats_only_the_append_with_the_same_token() {
+            var store = new TracingStore(trace).conflictingOnTheFirstAppends(1);
+            var executor = new TracingExecutor(trace).runningTheActionAgainAfterAConflict();
+            var decisions = new AtomicInteger();
+
+            transactionalService(store, executor, dispatcher).execute(CRITERIA, events -> {
+                decisions.incrementAndGet();
+                return decide();
+            });
+
+            DcbAppendCondition sameCondition = DcbAppendCondition.failIfEventsMatch(CRITERIA, DcbConsistencyToken.of(1));
+            assertAll(
+                    () -> assertThat(decisions).as("decisions").hasValue(1),
+                    () -> assertThat(store.conditions).as("append conditions").containsExactly(sameCondition, sameCondition),
+                    () -> assertThat(trace).containsExactly("read", "decide", "begin", "append", "append", "read", "dispatch", "commit")
+            );
+        }
+
+        @Test
+        void a_condition_failure_from_the_append_reaches_the_outer_retry_which_reads_and_decides_again() {
+            var store = new TracingStore(trace).conflictingOnTheFirstAppends(1);
+            var decisions = new AtomicInteger();
+
+            transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, events -> {
+                decisions.incrementAndGet();
+                return decide();
+            });
+
+            assertAll(
+                    () -> assertThat(decisions).as("decisions").hasValue(2),
+                    () -> assertThat(store.conditions).as("append conditions").containsExactly(
+                            DcbAppendCondition.failIfEventsMatch(CRITERIA, DcbConsistencyToken.of(1)),
+                            DcbAppendCondition.failIfEventsMatch(CRITERIA, DcbConsistencyToken.of(2))),
+                    () -> assertThat(trace).containsExactly(
+                            "read", "decide", "begin", "append", "rollback",
+                            "read", "decide", "begin", "append", "read", "dispatch", "commit")
+            );
+        }
+
+        private List<DomainEvent> decide() {
+            trace.add("decide");
+            return List.of(new DomainEvent("Changed", "name:1"));
         }
     }
 
@@ -487,7 +569,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             return stream(criteria);
         }
 
-        private DcbEventStream stream(DcbCriteria criteria) {
+        DcbEventStream stream(DcbCriteria criteria) {
             return new DcbEventStream(readEvents, 3, DcbConsistencyToken.of(criteria, 3), readVersions);
         }
 
@@ -508,11 +590,13 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
      * Counts how each run of the action ended, as a transaction manager sees it.
      */
     private static final class RecordingExecutor implements TransactionExecutor {
+        int entered;
         int returned;
         int threw;
 
         @Override
         public <T> T inTransaction(Supplier<T> action) {
+            entered++;
             try {
                 T result = action.get();
                 returned++;
@@ -527,9 +611,21 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
     private static final class RecordingDispatcher implements SynchronousEventDispatcher {
         final List<CloudEvent> dispatched = new ArrayList<>();
         @Nullable RuntimeException failure;
+        private final @Nullable List<String> trace;
+
+        RecordingDispatcher() {
+            this(null);
+        }
+
+        RecordingDispatcher(@Nullable List<String> trace) {
+            this.trace = trace;
+        }
 
         @Override
         public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+            if (trace != null) {
+                trace.add("dispatch");
+            }
             if (failure != null) {
                 throw failure;
             }
@@ -539,6 +635,95 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         @Override
         public boolean hasSubscriptions() {
             return true;
+        }
+    }
+
+    /**
+     * Notes each read and append in the order they happen, and hands every read its own consistency token.
+     */
+    private static final class TracingStore extends ScriptedStore {
+        final List<DcbAppendCondition> conditions = new ArrayList<>();
+        private final List<String> trace;
+        private int conflicts;
+        private int reads;
+
+        TracingStore(List<String> trace) {
+            super(Optional.empty(), Optional.empty());
+            this.trace = trace;
+        }
+
+        TracingStore conflictingOnTheFirstAppends(int appends) {
+            this.conflicts = appends;
+            return this;
+        }
+
+        @Override
+        public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+            trace.add("read");
+            return super.read(criteria, options);
+        }
+
+        @Override
+        public DcbEventStream read(DcbCriteria criteria) {
+            trace.add("read");
+            return super.read(criteria);
+        }
+
+        @Override
+        DcbEventStream stream() {
+            return new DcbEventStream(List.of(), 3, DcbConsistencyToken.of(++reads), Optional.empty());
+        }
+
+        @Override
+        public DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition) {
+            trace.add("append");
+            conditions.add(condition);
+            if (conflicts > 0) {
+                conflicts--;
+                throw new DcbAppendConditionNotFulfilledException(condition, 3);
+            }
+            return super.append(events, condition);
+        }
+    }
+
+    /**
+     * Notes where a transaction begins and how it ends. Like an executor that owns its transaction, it can run the action
+     * again on a conflict.
+     */
+    private static final class TracingExecutor implements TransactionExecutor {
+        int entered;
+        private final List<String> trace;
+        private boolean runAgainAfterAConflict;
+
+        TracingExecutor(List<String> trace) {
+            this.trace = trace;
+        }
+
+        TracingExecutor runningTheActionAgainAfterAConflict() {
+            this.runAgainAfterAConflict = true;
+            return this;
+        }
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            entered++;
+            trace.add("begin");
+            try {
+                T result;
+                try {
+                    result = action.get();
+                } catch (DcbAppendConditionNotFulfilledException conflict) {
+                    if (!runAgainAfterAConflict) {
+                        throw conflict;
+                    }
+                    result = action.get();
+                }
+                trace.add("commit");
+                return result;
+            } catch (RuntimeException e) {
+                trace.add("rollback");
+                throw e;
+            }
         }
     }
 

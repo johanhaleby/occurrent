@@ -17,9 +17,6 @@
 
 package org.occurrent.dsl.snapshot.reactor;
 
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
@@ -57,7 +54,6 @@ import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionMod
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
-import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
@@ -179,24 +175,34 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
     }
 
     @Test
-    void a_transaction_the_executor_owns_saves_no_snapshot_since_the_store_reports_no_marker_versions_inside_it() {
-        ListAppender<ILoggingEvent> logged = new ListAppender<>();
-        ch.qos.logback.classic.Logger serviceLog = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ReactiveSnapshotDcbDeciderApplicationService.class);
-        logged.start();
-        serviceLog.addAppender(logged);
-        try {
-            service.execute(new Add("first"), decider).block(TIMEOUT);
-            service.execute(new Add("second"), decider).block(TIMEOUT);
-        } finally {
-            serviceLog.detachAppender(logged);
-        }
+    void a_transaction_the_executor_owns_saves_a_snapshot_at_marker_versions_and_the_next_execute_resumes_from_it() {
+        appendSeed();
+        service.execute(new Add("first"), decider).block(TIMEOUT);
+
+        assertThat(snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria())).block(TIMEOUT)).as("the snapshot saved by the first execute").isNotNull();
+        Snapshot<List<String>> saved = snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria())).block(TIMEOUT);
+        snapshots.save(DcbSnapshotKeys.canonicalKey(criteria()), Snapshot.atMarkerVersions(List.of("snapshot-only"), saved.markerVersions().orElseThrow(), saved.highestFoldedPosition(), 1)).block(TIMEOUT);
+
+        List<String> state = service.executeAndReturnState(new Add("second"), decider).block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(state).as("the state, resumed from the snapshot so only the tail was read").containsExactly("snapshot-only", "second"),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored").hasSize(3),
+                () -> assertThat(seenBySubscription).as("events the subscription saw").hasSize(2),
+                () -> assertThat(snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria())).block(TIMEOUT).state()).as("the snapshot saved by the second execute").containsExactly("snapshot-only", "second")
+        );
+    }
+
+    @Test
+    void a_callers_own_transaction_still_saves_no_snapshot_since_the_store_reports_no_marker_versions_inside_it() {
+        appendSeed();
+
+        TransactionalOperator.create(transactionManager).execute(status -> service.execute(new Add("first"), decider)).collectList().block(TIMEOUT);
 
         assertAll(
                 () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored").hasSize(2),
-                () -> assertThat(seenBySubscription).as("events the subscription saw").hasSize(2),
-                () -> assertThat(snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria())).block(TIMEOUT)).as("the snapshot saved").isNull(),
-                () -> assertThat(logged.list.stream().filter(event -> event.getLevel() == Level.WARN && event.getFormattedMessage().contains("reported no marker versions")).count())
-                        .as("warnings about the missing marker versions").isEqualTo(1)
+                () -> assertThat(seenBySubscription).as("events the subscription saw").hasSize(1),
+                () -> assertThat(snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria())).block(TIMEOUT)).as("the snapshot saved").isNull()
         );
     }
 
@@ -204,9 +210,13 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
      * The snapshot holds a state the store doesn't, so a read that resumed from it would show up in the state.
      */
     private void saveASnapshotThatDisagreesWithTheStore() {
-        long position = eventStore.append(new ArrayList<>(converter.toCloudEvents(List.of(nameWasChanged("seed"))).stream().map(ce -> DcbCloudEvents.withTags(ce, List.of(tag()))).toList())).block(TIMEOUT).lastSequencePosition();
+        long position = appendSeed();
         DcbMarkerVersions versions = eventStore.read(criteria(), DcbReadOptions.fromBeginning().withVersions()).block(TIMEOUT).markerVersions().orElseThrow();
         snapshots.save(DcbSnapshotKeys.canonicalKey(criteria()), Snapshot.atMarkerVersions(List.of("snapshot-only"), versions, position, 1)).block(TIMEOUT);
+    }
+
+    private long appendSeed() {
+        return eventStore.append(new ArrayList<>(converter.toCloudEvents(List.of(nameWasChanged("seed"))).stream().map(ce -> DcbCloudEvents.withTags(ce, List.of(tag()))).toList())).block(TIMEOUT).lastSequencePosition();
     }
 
     private static NameWasChanged nameWasChanged(String name) {

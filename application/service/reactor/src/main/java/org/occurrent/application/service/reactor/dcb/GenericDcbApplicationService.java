@@ -34,7 +34,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -136,15 +135,12 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         @Nullable DcbReadOptions readOptions = readOptions(options);
         boolean versionsRequested = options.versionsRequested();
 
-        // The read, decide, append, and synchronous dispatch run as one unit inside the transaction executor and retry
-        // from a fresh read on a DCB conflict, so the decision always runs against the current events. The side-effect
-        // is composed after the retry so it runs once on success, not per attempt.
+        // The read and the decision run outside the transaction, since a store reports no marker versions inside one. A
+        // conflict in the append with this read's token retries from a fresh read, so the decision always runs against
+        // the current events. The side-effect is composed after the retry so it runs once on success, not per attempt.
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
-        Function<AtomicReference<@Nullable DcbSnapshotInvalidException>, Mono<Result<E>>> readDecideAppendUnit = refusal -> (readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions)).doOnNext(eventStream -> refuseEventBelowFoldedPosition(criteria, options, eventStream)).onErrorResume(DcbSnapshotInvalidException.class, refused -> {
-            refusal.set(refused.beforeAppend(functionThatCallsDomainModel));
-            return Mono.empty();
-        }).flatMap(eventStream -> {
+        Mono<Result<E>> readDecideAppend = Mono.defer(() -> readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions)).doOnNext(eventStream -> refuseEventBelowFoldedPosition(criteria, options, eventStream)).onErrorMap(DcbSnapshotInvalidException.class, refused -> refused.beforeAppend(functionThatCallsDomainModel)).flatMap(eventStream -> {
             List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
             List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
             if (newDomainEvents == null || newDomainEvents.isEmpty()) {
@@ -153,33 +149,21 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
             List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
             DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(eventStream.consistencyToken());
-            return eventStore.append(dcbEvents, appendCondition).flatMap(appendResult -> {
-                Result<E> result = new Result<>(withCheckedVersions(appendResult, versionsRequested, eventStream), newDomainEvents);
+            Supplier<Mono<DcbAppendResult>> appendAndDispatch = () -> eventStore.append(dcbEvents, appendCondition).flatMap(appendResult -> {
                 if (!dispatchSynchronously) {
-                    return Mono.just(result);
+                    return Mono.just(appendResult);
                 }
                 // A successful append is assigned a contiguous global-position block, so re-read exactly that block to
                 // get the events enriched with their positions, then dispatch inside the transaction.
                 return eventStore.read(DcbCriteria.all(), DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition()))
                         .flatMap(enrichedStream -> transactionExecutor.isTransactional()
                                 .flatMap(transactional -> synchronousEventDispatcher.dispatch(enrichedStream.events(), transactional))
-                                .thenReturn(result));
+                                .thenReturn(appendResult));
             });
-        });
-        // Enter the transaction executor only when synchronous dispatch must commit atomically with the append.
-        // Otherwise the append keeps exactly its prior semantics and no transaction overhead is added.
-        Mono<Result<E>> readDecideAppend = Mono.defer(() -> {
-            // A refused read changed nothing, so it's thrown after the transaction, as the blocking service does. Thrown
-            // inside, it would mark a transaction the caller owns rollback-only.
-            AtomicReference<@Nullable DcbSnapshotInvalidException> refusal = new AtomicReference<>();
-            Supplier<Mono<Result<E>>> attempt = () -> {
-                refusal.set(null);
-                return readDecideAppendUnit.apply(refusal);
-            };
-            return (dispatchSynchronously ? transactionExecutor.inTransaction(attempt) : Mono.defer(attempt)).switchIfEmpty(Mono.defer(() -> {
-                DcbSnapshotInvalidException refused = refusal.get();
-                return refused == null ? Mono.empty() : Mono.error(refused);
-            }));
+            // Enter the transaction executor only when synchronous dispatch must commit atomically with the append.
+            // Otherwise the append keeps exactly its prior semantics and no transaction overhead is added.
+            return (dispatchSynchronously ? transactionExecutor.inTransaction(appendAndDispatch) : Mono.defer(appendAndDispatch))
+                    .map(appendResult -> new Result<>(withCheckedVersions(appendResult, versionsRequested, eventStream), newDomainEvents));
         }).retryWhen(retry);
 
         return readDecideAppend.flatMap(result -> {

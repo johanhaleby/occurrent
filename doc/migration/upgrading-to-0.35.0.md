@@ -794,10 +794,14 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   resumes after the saved versions and doesn't read the older events the wider criteria now matches, and nothing reports
   it. A widening that changes the marker keys is refused, and the decider reads the whole boundary.
 - Inside a transaction of yours a read reports no versions, so a decider that runs in one reads the whole
-  boundary and saves no snapshot.
-- The same holds on an application service with synchronous subscriptions, since it runs every execute in its
-  transaction executor's transaction. A 0.34 decider in that setup saved snapshots, and a 0.35 one reads the whole
-  boundary on every command.
+  boundary and saves no snapshot. This is a known limitation, tracked in
+  [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
+- A DCB application service with synchronous subscriptions now reads and decides before it enters its transaction
+  executor's transaction, so a decider on it saves snapshots. Only the append, the re-read of the written block and the
+  dispatch run in that transaction. Your domain function no longer runs in it. An exception from it no longer marks a
+  transaction you own rollback-only, so if you catch it and continue, that transaction commits. The executor's conflict
+  retry re-runs only the append, with the token of the first read. When the condition then fails, the service's retry
+  strategy reads and decides again.
 
 ### Stored snapshots
 

@@ -6,6 +6,8 @@ Date: 2026-07-26
 
 Accepted
 
+[ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) moves the DCB service's read and decision out of the `TransactionExecutor`, so with synchronous subscriptions only the append, the re-read and the dispatch run through it. The decision below still holds.
+
 ## Context
 
 The DCB write path retries a conflict between concurrent appends. In the Spring Mongo stores that retry wrapped the whole transaction:
