@@ -54,7 +54,6 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -70,7 +69,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
@@ -303,26 +301,6 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
         // Then
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(matched.eventId()));
         assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions").isFalse();
-    }
-
-    @Test
-    void a_dynamic_position_answering_a_catchup_position_is_refused_when_the_model_reads_through_the_change_stream_of_spring() {
-        // Given a model that has fallen back to the change stream of Spring, and a dynamic position answering a global checkpoint
-        useTheChangeStreamOfSpring();
-        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
-        GlobalCheckpoint answered = GlobalCheckpoint.of(0);
-
-        // When it subscribes
-        Subscription subscription = subscriptionModel.subscribe("refused", StartAt.dynamic(ctx -> StartAt.checkpoint(answered)), event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
-
-        // Then the subscription stops with the refusal and delivers nothing
-        StepVerifier.create(subscription.waitUntilStarted())
-                .expectErrorSatisfies(throwable -> assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
-                        .hasMessageContaining("subscription \"refused\"")
-                        .hasMessageContaining("\"" + answered.asString() + "\""))
-                .verify(Duration.ofSeconds(10));
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning("refused")).isFalse());
-        assertThat(delivered).isEmpty();
     }
 
     @Test

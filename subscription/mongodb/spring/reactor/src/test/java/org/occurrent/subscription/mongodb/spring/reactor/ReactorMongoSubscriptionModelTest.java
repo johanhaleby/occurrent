@@ -710,6 +710,31 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
+        void a_resume_after_the_cursor_opened_is_not_refused_when_the_position_answers_a_catchup_position() throws Exception {
+            // Given a dynamic position that answers the present first and a global checkpoint after, and a listener the model asks only once the cursor has opened
+            String subscriptionId = UUID.randomUUID().toString();
+            AtomicInteger answers = new AtomicInteger();
+            CountDownLatch cursorOpened = new CountDownLatch(1);
+            subscription.addQuietPositionListener(id -> {
+                if (id.equals(subscriptionId)) {
+                    cursorOpened.countDown();
+                }
+                return Mono.empty();
+            });
+            subscription.subscribe(subscriptionId, StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.now() : StartAt.checkpoint(GlobalCheckpoint.of(0))), cloudEvent -> Mono.empty());
+            assertThat(cursorOpened.await(10, SECONDS)).as("the cursor opened").isTrue();
+
+            // When it is paused and resumed, so the position is asked again
+            subscription.pauseSubscription(subscriptionId);
+            Subscription resumed = subscription.resumeSubscription(subscriptionId);
+
+            // Then an opened cursor has ended the check, so the resume isn't refused and the subscription runs
+            assertThat(resumed.waitUntilStarted(Duration.ofSeconds(5)).block()).isTrue();
+            assertThat(answers).hasValue(2);
+            assertThat(subscription.isRunning(subscriptionId)).isTrue();
+        }
+
+        @Test
         void an_action_that_fails_with_the_refusal_type_on_a_delivering_subscription_is_delivered_the_event_again() {
             assertTheEventIsDeliveredAgainAfterTheActionFailsWith(new UnsupportedStartAtException(StartAt.now(), "failed by the action"));
         }
