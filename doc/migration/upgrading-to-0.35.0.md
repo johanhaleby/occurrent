@@ -1109,7 +1109,9 @@ already does for `BEGINNING_OF_TIME`.
 ### Who is affected
 
 Every application on the reactive starter with a `@StreamSubscription` that sets `startAt` to `BEGINNING_OF_TIME` or
-`NOW` and does not set `resumeBehavior`. A `@StreamSubscription` that does not set `startAt` is not affected.
+`NOW`. That includes one that sets `resumeBehavior = DEFAULT` explicitly. A `@StreamSubscription` that does not set
+`startAt` is not affected, and neither is one that sets `resumeBehavior = SAME_AS_START_AT`, except that
+`BEGINNING_OF_TIME` no longer stores a checkpoint.
 
 ### What changes
 
@@ -1120,13 +1122,23 @@ Every application on the reactive starter with a `@StreamSubscription` that sets
 - `SAME_AS_START_AT` starts at `startAt` on every restart, as the documentation says. `BEGINNING_OF_TIME` with
   `SAME_AS_START_AT` now stores no checkpoint, the way a reactive `@Subscription` already behaves.
 
+The checkpoint is the one the starter's durable subscription model stores. An application that supplies its own
+`FluxSubscriptionModel` or `Subscribable` gets no durable model from the starter, and `NOW` with `DEFAULT` then starts
+where that model's default start does.
+
+A subscription that handled an event before the upgrade normally has a checkpoint stored already, because the old start
+stored one after each event too. The first restart after the upgrade continues from it, and `startAt` is not looked at
+again for that subscription id. So changing `startAt` on an existing id has no effect until the id is new or its
+checkpoint is deleted. If the position of that checkpoint is no longer in the oplog, the subscription stops, see
+[a subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
+
 ### What to do
 
 Nothing, if the subscription is meant to continue where it stopped.
 
 If the subscription feeds an in-memory read model that has to be rebuilt on every boot, set
 `resumeBehavior = SAME_AS_START_AT` on it. Without it the read model now starts empty and receives only the events
-since the last restart.
+after the last checkpoint.
 
 A `NOW` subscription that has to skip the events written during downtime also needs `SAME_AS_START_AT`.
 

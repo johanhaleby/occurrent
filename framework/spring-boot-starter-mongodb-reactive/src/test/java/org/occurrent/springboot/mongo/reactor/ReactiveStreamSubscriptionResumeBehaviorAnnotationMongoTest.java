@@ -35,7 +35,6 @@ import org.occurrent.application.service.reactor.ApplicationService;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
@@ -107,7 +106,7 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
     @Test
     void now_with_default_resume_behavior_receives_events_written_while_down_after_a_first_boot_that_delivered_nothing() {
-        restart("reactive-resume-now-default-nothing-delivered", NowDefaultNothingDelivered.class, FirstBootEnds.WHEN_THE_SUBSCRIPTION_IS_RUNNING,
+        restart("reactive-resume-now-default-nothing-delivered", NowDefaultNothingDelivered.class, FirstBootEnds.WHEN_THE_INITIAL_CHECKPOINT_IS_STORED,
                 List.of(),
                 List.of("while-down-1", "live-2"));
     }
@@ -134,14 +133,15 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
         WHEN_THE_MARKER_IS_DELIVERED,
         // The marker reached the handler and its checkpoint is what the checkpoint storage holds.
         WHEN_THE_MARKER_IS_CHECKPOINTED,
-        // No event is written after the subscription starts, so there is no marker. The subscription is running.
-        WHEN_THE_SUBSCRIPTION_IS_RUNNING
+        // No event is written after the subscription starts, so there is no marker. The initial checkpoint is what the
+        // checkpoint storage holds, which is later than the subscription being registered as running.
+        WHEN_THE_INITIAL_CHECKPOINT_IS_STORED
     }
 
     // The subscription id doubles as the name of the database, so each scenario starts from an empty one.
     private static <S extends RecordingSubscriber> void restart(String subscriptionId, Class<S> subscriberType, FirstBootEnds firstBootEnds,
                                                                 List<String> expectedFirstBoot, List<String> expectedSecondBoot) {
-        String firstBootAfterStart = firstBootEnds == FirstBootEnds.WHEN_THE_SUBSCRIPTION_IS_RUNNING ? "" : "live-1";
+        String firstBootAfterStart = firstBootEnds == FirstBootEnds.WHEN_THE_INITIAL_CHECKPOINT_IS_STORED ? "" : "live-1";
         ConfigurableApplicationContext firstBoot = SpringApplication.run(RestartApplication.class,
                 bootArgs(subscriptionId, "historic-1,historic-2", firstBootAfterStart));
         try {
@@ -152,7 +152,7 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
                     awaitDelivered(subscriber, "live-1");
                     awaitCheckpointed(firstBoot, subscriptionId, subscriber, "live-1");
                 }
-                case WHEN_THE_SUBSCRIPTION_IS_RUNNING -> awaitRunning(firstBoot, subscriptionId);
+                case WHEN_THE_INITIAL_CHECKPOINT_IS_STORED -> awaitInitialCheckpoint(firstBoot, subscriptionId);
             }
             assertThat(subscriber.names()).containsExactlyElementsOf(expectedFirstBoot);
         } finally {
@@ -175,10 +175,12 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
                 assertThat(subscriber.names()).contains(marker));
     }
 
-    private static void awaitRunning(ConfigurableApplicationContext context, String subscriptionId) {
-        SubscriptionModelLifeCycle subscriptions = context.getBean(SubscriptionModelLifeCycle.class);
+    // The durable model registers the subscription as running before it writes the first position, so running does not
+    // mean the position a restart resumes from is stored.
+    private static void awaitInitialCheckpoint(ConfigurableApplicationContext context, String subscriptionId) {
+        CheckpointStorage storage = context.getBean(CheckpointStorage.class);
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                assertThat(subscriptions.isRunning(subscriptionId)).isTrue());
+                assertThat(storage.read(subscriptionId).blockOptional()).isPresent());
     }
 
     // The checkpoint is stored after the handler returned, so the marker being delivered does not mean it is stored.
