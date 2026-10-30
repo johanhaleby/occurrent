@@ -314,16 +314,17 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     /**
      * Keep a failed version the instance could not list as pending, so that it is not acknowledged unapplied. Where the
-     * delivery may hold events it gets a held copy. Anywhere else it is logged at ERROR, and the original failure is
-     * rethrown either way, so the source retries it in place, which is what a delivery in commit order does. Never throws
-     * what the store throws.
+     * delivery may hold events it gets a held copy, and so does a version overtaken in flight wherever the store can hold
+     * one, because a redelivery of it would be skipped. Anywhere else it is logged at ERROR. The original failure is rethrown
+     * either way, so the source retries it in place, which is what a delivery in commit order does. Never throws what the
+     * store throws.
      */
     private void keepUnlisted(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Unlisted unlisted, @Nullable Throwable storeFailure, Set<String> keysSeenNew) {
         if (storeFailure != null && storeFailure != failure) {
             failure.addSuppressed(storeFailure);
         }
         SagaHeldEvents<S> heldEvents = this.heldEvents;
-        if (heldEvents != null && holds) {
+        if (heldEvents != null && (holds || unlisted == Unlisted.OVERTAKEN)) {
             holdPlainCopy(heldEvents, sagaId, cloudEvent, meta, failure, keysSeenNew);
             return;
         }
@@ -715,19 +716,23 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             throw loadFailure;
         }
+        // Asked before anything else can fail or move the instance, because a later read can no longer say this event was new.
+        if (SagaExecutionSupport.isNewByPositionAlone(current, meta, config.reorderWindow())) {
+            keysSeenNew.add(Objects.requireNonNull(meta.redeliveryKey()));
+        }
         SagaHeldEvents<S> heldEvents = this.heldEvents;
         // Read after the instance, so a copy the instance does not show applied yet cannot have been forgotten by it.
         List<HeldEventRef> index = heldEvents == null ? List.of() : copiesToDecide(heldEvents, sagaId, current);
         boolean ownCopy = cloudEvent != null && index.stream().anyMatch(ref -> ref.key().equals(heldKey(meta, cloudEvent)));
-        if (!index.isEmpty()) {
-            noteWhetherTheSweepCanOvertake(Objects.requireNonNull(heldEvents), sagaId, current, input, meta, keysSeenNew);
+        if (!index.isEmpty() && hasCopy(Objects.requireNonNull(heldEvents), sagaId, meta)) {
+            keysSeenNew.remove(meta.redeliveryKey());
         }
         if (heldEvents != null) {
             try {
                 current = applyHeldCopies(heldEvents, sagaId, current, index);
             } catch (HeldCopyFailed failed) {
                 if (cloudEvent != null && !ownCopy) {
-                    keepTheDelivery(heldEvents, sagaId, current, input, cloudEvent, meta, keysSeenNew, failed);
+                    keepTheDelivery(heldEvents, sagaId, input, cloudEvent, meta, keysSeenNew, failed);
                 }
                 throw failed;
             }
@@ -748,15 +753,16 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return;
         }
         if (!outcome.processed()) {
+            if (SagaExecutionSupport.isBelowTheStart(saga, current, input, meta)) {
+                return;
+            }
             // An event this delivery saw as new on an earlier attempt, whose save lost, and which other
             // deliveries have since moved behind the reorder window. Skipping it would acknowledge an event
             // this delivery never applied, so it fails instead and is kept on the failure path.
             if (isOvertakenInFlight(current, meta, keysSeenNew)) {
                 throw new OvertakenInFlight(sagaId, meta);
             }
-            if (!SagaExecutionSupport.isBelowTheStart(saga, current, input, meta)) {
-                warnIfBehindTheReorderWindow(sagaId, current, meta);
-            }
+            warnIfBehindTheReorderWindow(sagaId, current, meta);
             return;
         }
         if (SagaExecutionSupport.isNewByPositionAlone(current, meta, config.reorderWindow())) {
@@ -820,39 +826,42 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         applyHeldCopies(heldEvents, sagaId, current, copiesToDecide(heldEvents, sagaId, current));
     }
 
-    // Asked before the sweep, because a held copy it applies can move the instance past this event. A copy of this event
-    // going from the list later means the copy applied, so a delivery with a copy has not been overtaken. Its copy can be
-    // one the attempt's own list leaves out for waiting, so the whole list is read, which only a sweep with work to do costs.
-    private void noteWhetherTheSweepCanOvertake(SagaHeldEvents<S> heldEvents, String sagaId, @Nullable SagaEnvelope<S> current, SagaInput<E> input, EventMeta meta,
-                                                Set<String> keysSeenNew) {
+    // A copy of this event going from the list later means the copy applied, so a delivery with a copy has not been
+    // overtaken. Its copy can be one the attempt's own list leaves out for waiting, so the whole list is read, which only a
+    // sweep with work to do costs.
+    private boolean hasCopy(SagaHeldEvents<S> heldEvents, String sagaId, EventMeta meta) {
         String key = meta.redeliveryKey();
-        if (key == null) {
-            return;
-        }
-        if (heldEvents.heldIndex(sagaId).stream().anyMatch(ref -> ref.key().equals(key))) {
-            keysSeenNew.remove(key);
-        } else if (SagaExecutionSupport.isNewByPositionAlone(current, meta, config.reorderWindow())
-                   && (holds || !SagaExecutionSupport.isBelowTheStart(saga, current, input, meta))) {
-            keysSeenNew.add(key);
-        }
+        return key != null && heldEvents.heldIndex(sagaId).stream().anyMatch(ref -> ref.key().equals(key));
     }
 
     // A delivery that met a failing held copy is refused, and a source may park it and move on, so it is kept first. Not
-    // one the instance would skip anyway. An event below the start waits whatever its type's marks say about it.
-    private void keepTheDelivery(SagaHeldEvents<S> heldEvents, String sagaId, @Nullable SagaEnvelope<S> current, SagaInput<E> input, CloudEvent cloudEvent, EventMeta meta,
+    // one the instance would skip anyway, which is asked of a new read, since the copies applied before the failure can
+    // have moved the start or the marks. An event below the start waits whatever its type's marks say about it.
+    private void keepTheDelivery(SagaHeldEvents<S> heldEvents, String sagaId, SagaInput<E> input, CloudEvent cloudEvent, EventMeta meta,
                                  Set<String> keysSeenNew, HeldCopyFailed failed) {
-        boolean skips = SagaExecutionSupport.isBelowTheStart(saga, current, input, meta)
-                ? !holds
-                : current != null && !isOvertakenInFlight(current, meta, keysSeenNew) && SagaExecutionSupport.classify(current, meta, config.reorderWindow()) != Delivery.NEW;
-        if (skips) {
-            return;
+        try {
+            SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
+            boolean skips = SagaExecutionSupport.isBelowTheStart(saga, current, input, meta)
+                    ? !holds
+                    : current != null && !isOvertakenInFlight(current, meta, keysSeenNew) && SagaExecutionSupport.classify(current, meta, config.reorderWindow()) != Delivery.NEW;
+            if (skips) {
+                return;
+            }
+        } catch (Throwable readFailure) {
+            // A copy is safe whatever the instance holds, since the next attempt reads the marks before it applies one.
+            rethrowIfNotTheInstances(readFailure);
+            failed.addSuppressed(readFailure);
         }
         try {
             heldEvents.hold(sagaId, heldEvent(sagaId, cloudEvent, meta));
         } catch (Throwable storeFailure) {
             rethrowIfNotTheInstances(storeFailure);
             failed.deliveryNotKept = true;
-            logCouldNotKeep(sagaId, meta, failed, storeFailure);
+            failed.addSuppressed(storeFailure);
+            log.warn("Saga '{}' instance '{}' refuses the event '{}' for a held event that failed and could not hold it, so it lists the event as pending instead, and only a redelivery applies it.",
+                    subscriptionId, sagaId, meta.redeliveryKey(), storeFailure);
+            // Listed instead, so a redelivery past the window still applies it. What can't be listed reaches keepUnlisted.
+            recordPending(sagaId, cloudEvent, meta, failed, keysSeenNew);
         }
     }
 
@@ -867,7 +876,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         Throwable cause = failed.getCause();
         Duration budget = config.quarantineAfter().orElse(null);
         SagaHeldEvents<S> heldEvents = this.heldEvents;
-        if (budget == null || heldEvents == null) {
+        // A failed release says nothing about the reaction, so no clock runs on it.
+        if (budget == null || heldEvents == null || failed.onlyTheRelease) {
             log.warn("Saga '{}' instance '{}' could not apply or release the held event '{}', and tries again on the next input.", subscriptionId, sagaId, ref.key(), cause);
             return false;
         }
@@ -1022,7 +1032,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             heldEvents.release(sagaId, ref.key());
         } catch (Throwable failure) {
             rethrowIfNotTheInstances(failure);
-            throw new HeldCopyFailed(sagaId, ref, failure);
+            HeldCopyFailed failed = new HeldCopyFailed(sagaId, ref, failure);
+            failed.onlyTheRelease = true;
+            throw failed;
         }
     }
 
@@ -1129,10 +1141,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         private final transient HeldEventRef ref;
         // Whether the hold of the delivery's own event failed too, so acknowledging the delivery would lose it.
         private boolean deliveryNotKept;
+        private boolean onlyTheRelease;
 
         private HeldCopyFailed(String sagaId, HeldEventRef ref, Throwable cause) {
             super("Saga instance '" + sagaId + "' could not apply or release the held event '" + ref.key() + "', so the delivery that tried to apply it first is refused. "
-                  + "That delivery's event is held and applies after it, so it needs no replay, unless an error logged beside this says it could not be held.", cause);
+                  + "That delivery's event is held and applies after it, so it needs no replay, unless a log line beside this says it could not be held.", cause);
             this.ref = ref;
         }
     }

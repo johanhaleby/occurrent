@@ -461,7 +461,7 @@ saga until one does. A saga on a model that answers true holds nothing and keeps
 - An event on the start's own stream, below the start's version, that is not a start event, is stored and does nothing
   yet, whether it arrived before the start or after it. It runs when a start event of that stream below it applies. If
   none does, it never reacts, as on 0.34.0, and completing the instance removes the copy. A copy whose removal fails there
-  stays as storage until the next input to the instance or `delete`. A replay of a stream's history from before its start
+  stays as storage until a later input to the instance or `delete` removes it. A replay of a stream's history from before its start
   stores one copy per event until then.
 - A failed event that the instance cannot list as pending is held too, and the next input applies it. That covers an
   instance at its limit of 10 000 pending versions, a pending write that keeps losing its compare-and-set or fails in the

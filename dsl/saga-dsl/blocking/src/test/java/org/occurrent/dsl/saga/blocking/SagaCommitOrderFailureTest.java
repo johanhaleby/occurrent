@@ -28,8 +28,10 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.saga.HeldEventRef;
+import org.occurrent.dsl.saga.InMemorySagaStateStore;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
+import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.blocking.HeldOrderSaga.Order;
 import org.occurrent.dsl.saga.blocking.HeldOrderSaga.OrderCommand;
 import org.occurrent.dsl.saga.blocking.HeldOrderSaga.OrderEvent;
@@ -37,7 +39,9 @@ import org.occurrent.dsl.saga.blocking.HeldOrderSaga.OpenLedger;
 import org.occurrent.dsl.saga.blocking.HeldOrderSaga.RecordingDispatcher;
 
 import java.util.ArrayList;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -53,8 +57,9 @@ import static org.slf4j.LoggerFactory.getLogger;
 /**
  * What a failed version costs on a feed that delivers in commit order and on one that does not. A feed in commit order
  * redelivers a failed event in place, so a version the instance cannot list as pending is logged at ERROR and not
- * kept, while a held copy that failed is kept on any feed, because the copy exists only if some delivery
- * held it. The window of two puts version 2 behind it once versions 3 to 8 are applied.
+ * kept, except where the store holds events and the version was overtaken in flight, which is kept as a plain copy
+ * because a redelivery of it would be skipped. A held copy that failed is kept on any feed, because the copy exists
+ * only if some delivery held it. The window of two puts version 2 behind it once versions 3 to 8 are applied.
  */
 @DisplayName("SagaCommitOrderFailure")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -197,7 +202,7 @@ class SagaCommitOrderFailureTest {
     class WhenAWindowOfTheFailedEventsTypeIsAppliedBeforeTheFailureIsKept {
 
         @Test
-        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_not_held_and_its_failure_is_rethrown() {
+        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_held_as_a_plain_copy_and_its_failure_is_rethrown() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
@@ -211,25 +216,35 @@ class SagaCommitOrderFailureTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(dispatcher.failure),
-                    () -> assertThat(heldIndex()).isEmpty(),
+                    () -> assertThat(onlyHeldRef()).satisfies(ref -> assertAll(
+                            () -> assertThat(ref.key()).isEqualTo(KEY_OF_TWO),
+                            () -> assertThat(ref.startEvent()).isFalse(),
+                            () -> assertThat(ref.failingSince()).isNull())),
                     () -> assertThat(pending()).isEmpty()
             );
         }
 
         @Test
-        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_logged_at_error() {
+        void an_event_that_failed_after_its_delivery_saw_it_as_new_logs_no_error_and_reacts_once_when_it_is_delivered_again() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
             model.deliver(ID, placedAt(1));
             dispatcher.failReservationOf("two");
             dispatcher.beforeReservationOf("two", () -> deliverItems(model, 3, 8));
+            catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
+            dispatcher.stopFailingReservationOf("two");
 
             // When
-            catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
+            Throwable redelivery = catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
 
             // Then
-            assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("saw as new").contains(KEY_OF_TWO));
+            assertAll(
+                    () -> assertThat(errors()).isEmpty(),
+                    () -> assertThat(redelivery).isNull(),
+                    () -> assertThat(dispatcher.issued()).containsOnlyOnce(reserve("two")),
+                    () -> assertThat(heldIndex()).isEmpty()
+            );
         }
 
         @Test
@@ -256,7 +271,7 @@ class SagaCommitOrderFailureTest {
         }
 
         @Test
-        void an_event_whose_first_save_lost_to_a_window_is_not_held_and_the_overtaken_delivery_is_rethrown() {
+        void an_event_whose_first_save_lost_to_a_window_is_held_as_a_plain_copy_and_the_overtaken_delivery_is_rethrown() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
@@ -269,24 +284,33 @@ class SagaCommitOrderFailureTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isNotNull().hasMessageContaining(KEY_OF_TWO),
-                    () -> assertThat(heldIndex()).isEmpty(),
+                    () -> assertThat(onlyHeldRef()).satisfies(ref -> assertAll(
+                            () -> assertThat(ref.key()).isEqualTo(KEY_OF_TWO),
+                            () -> assertThat(ref.startEvent()).isFalse(),
+                            () -> assertThat(ref.failingSince()).isNull())),
                     () -> assertThat(pending()).isEmpty()
             );
         }
 
         @Test
-        void an_event_whose_first_save_lost_to_a_window_is_logged_at_error() {
+        void an_event_whose_first_save_lost_to_a_window_logs_no_error_and_is_applied_once_when_it_is_delivered_again() {
             // Given
             CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
             run(model);
             model.deliver(ID, placedAt(1));
             store.beforeNextCompareAndSave(() -> deliverItems(model, 3, 8));
-
-            // When
             catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
 
+            // When
+            Throwable redelivery = catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
+
             // Then
-            assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("saw as new").contains(KEY_OF_TWO));
+            assertAll(
+                    () -> assertThat(errors()).isEmpty(),
+                    () -> assertThat(redelivery).isNull(),
+                    () -> assertThat(stored().state().items()).containsOnlyOnce("two"),
+                    () -> assertThat(heldIndex()).isEmpty()
+            );
         }
 
         @Test
@@ -308,6 +332,54 @@ class SagaCommitOrderFailureTest {
                             () -> assertThat(ref.startEvent()).isFalse(),
                             () -> assertThat(ref.failingSince()).isNull())),
                     () -> assertThat(errors()).isEmpty()
+            );
+        }
+    }
+
+    @Nested
+    @DisplayName("when the store holds no events and a window of the failed event's type is applied before the failure is kept")
+    class WhenTheStoreHoldsNoEventsAndAWindowOfTheFailedEventsTypeIsAppliedBeforeTheFailureIsKept {
+
+        private CommitOrderStubSubscriptionModel afterVersionTwoFailedAndVersionsThreeToEightWereApplied(StoreWithoutHeldEvents<Order> storeWithoutHeldEvents, List<Throwable> thrown) {
+            CommitOrderStubSubscriptionModel model = CommitOrderStubSubscriptionModel.declaringEveryEventInCommitOrder();
+            subscriptions.add(SagaRunner.<OrderEvent, OrderCommand>agnostic(model, HeldOrderSaga.converter())
+                    .run(ID, HeldOrderSaga.saga(), storeWithoutHeldEvents, dispatcher, null, WINDOW_OF_2));
+            model.deliver(ID, placedAt(1));
+            dispatcher.failReservationOf("two");
+            dispatcher.beforeReservationOf("two", () -> deliverItems(model, 3, 8));
+            thrown.add(catchThrowable(() -> model.deliver(ID, itemAt(2, "two"))));
+            return model;
+        }
+
+        @Test
+        void an_event_that_failed_after_its_delivery_saw_it_as_new_is_rethrown_and_logged_at_error() {
+            // Given
+            List<Throwable> thrown = new ArrayList<>();
+
+            // When
+            afterVersionTwoFailedAndVersionsThreeToEightWereApplied(new StoreWithoutHeldEvents<>(), thrown);
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).singleElement().isSameAs(dispatcher.failure),
+                    () -> assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("saw as new").contains(KEY_OF_TWO))
+            );
+        }
+
+        @Test
+        void the_redelivery_of_that_event_is_skipped_as_behind_the_reorder_window_and_its_reaction_never_runs() {
+            // Given
+            List<Throwable> thrown = new ArrayList<>();
+            CommitOrderStubSubscriptionModel model = afterVersionTwoFailedAndVersionsThreeToEightWereApplied(new StoreWithoutHeldEvents<>(), thrown);
+            dispatcher.stopFailingReservationOf("two");
+
+            // When
+            Throwable redelivery = catchThrowable(() -> model.deliver(ID, itemAt(2, "two")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(redelivery).isNull(),
+                    () -> assertThat(dispatcher.issued()).doesNotContain(reserve("two"))
             );
         }
     }
@@ -399,6 +471,31 @@ class SagaCommitOrderFailureTest {
 
             // Then
             assertThat(dispatcher.issued()).containsOnlyOnce(reserve("two"));
+        }
+    }
+
+    /** Stores instances and nothing else, so it cannot hold an event. */
+    private static final class StoreWithoutHeldEvents<S> implements SagaStateStore<S> {
+        private final InMemorySagaStateStore<S> delegate = new InMemorySagaStateStore<>();
+
+        @Override
+        public Optional<SagaEnvelope<S>> find(String sagaId) {
+            return delegate.find(sagaId);
+        }
+
+        @Override
+        public boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
+            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
+            return delegate.findWithDueTimers(now, limit);
+        }
+
+        @Override
+        public void delete(String sagaId) {
+            delegate.delete(sagaId);
         }
     }
 }

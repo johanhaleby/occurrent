@@ -94,7 +94,7 @@ doesn't show applied was not forgotten by that read. A save can only forget a ve
 the attempt that makes the save has swept on the instance it read, or its compare-and-set fails because that instance
 changed. So a copy is released before the marks that prove it can go. A release that fails in the sweep fails the
 attempt and its input isn't saved. The failure counts as the copy's, so the delivery is kept and not blamed. An apply
-save the sweep already made stands, and the next attempt releases the copy on the marks.
+save the sweep already made stands, and the next attempt tries the release again on the marks.
 
 A copy can apply behind the reorder window, and the marks don't remember a version behind the window. So the save that
 applies a version keeps it in `applied`, even behind the window, until the next save of its type. That next save's
@@ -177,14 +177,19 @@ own while it fails.
 
 **The delivery that drove the sweep is held before it is refused**, so a delivery is never refused for another event's
 failure with nothing keeping it. A delivery that isn't itself the copy that failed, and that the instance doesn't already
-count as handled, is held as a plain copy, and the next sweep applies it. When that hold itself fails, an ERROR names the event and the store
-failure, and the delivery is refused.
+count as handled, is held as a plain copy, and the next sweep applies it. When that hold itself fails, a WARN says so, the instance lists the
+delivery as pending as it would any failed input, so a redelivery applies it, and the delivery is refused. When the listing
+can't be made either, it takes the path of the next section, and an ERROR names the event and the store failure when
+nothing keeps it.
 
 Then the failure is rethrown, and the subscription's retry or parking runs as for any failing input. When quarantine is on
 and the copy's clock has run past `quarantineAfter`, the instance is quarantined with the copy's key on its failure
 record and the delivery is acknowledged, unless the delivery could not be held. That charge reads the instance and the
 index again first, and quarantines nothing when the copy is gone or the marks prove it applied. A copy with no key has no
-marks, so a save of it whose response was lost counts as the failure it looks like. A timer's attempt that fails on a copy
+marks, so a save of it whose response was lost counts as the failure it looks like. A failed release starts no clock
+and quarantines nothing, since it says nothing about the reaction. A copy with no key whose save returned and whose
+release then failed is applied again by the next attempt, because nothing records that save, so its reaction runs again.
+A store that can never remove a copy refuses every delivery to that instance until it can, and holds each of them. A timer's attempt that fails on a copy
 charges the same clock, and the timer stays due. [ADR 157](0157-a-sagas-quarantine-budget-runs-per-input.md) has the budget
 per input, and the copy's clock is how a held event takes part in it.
 
@@ -220,12 +225,12 @@ it applied. A delivery whose first successful read already finds the version beh
 empty set, so it is an arrival behind the window, ADR 154's own row, and gets no copy. A read that fails on the failure
 path can't tell, so the copy is written.
 
-Where the delivery does not hold, causes 1 to 4 rethrow as in 0.34.0, and cause 5 logs an ERROR naming the key and the
-instance, then rethrows. On a feed that keeps the commit-order contract, a window can pass a version only after some
-deliverer applied it, so that ERROR shows a model that broke the contract. The exception is a copy held before the
-subscription declared commit order, which can apply and pass the version. That event is then lost, with that ERROR. It
-takes a deploy that changes the subscription's order while copies are still held, and the runbook's query finds them
-first.
+Where the delivery does not hold, causes 1 to 4 rethrow as in 0.34.0, since the source retries in place and the event is
+still new when it does. Cause 5 is different, because the redelivery would be skipped, so it writes the copy too when the
+store has held events. A copy held before the subscription declared commit order is how that happens on one thread, since
+it can apply and pass the version. Where the store has no held events, cause 5 logs an ERROR naming the key and the
+instance, then rethrows. No copy can pass a version there, so a window can pass one only after some deliverer applied it,
+and that ERROR shows a model that broke the commit-order contract.
 
 ### Completion, quarantine and delete
 

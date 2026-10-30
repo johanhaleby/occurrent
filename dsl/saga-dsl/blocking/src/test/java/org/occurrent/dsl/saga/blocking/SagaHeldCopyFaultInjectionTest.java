@@ -48,6 +48,7 @@ import org.occurrent.dsl.saga.blocking.SagaHeldEventTest.Reserve;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -72,6 +73,7 @@ class SagaHeldCopyFaultInjectionTest {
     final CloudEventConverter<OrderEvent> converter = new JacksonCloudEventConverter.Builder<OrderEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(OrderEvent::eventId).build();
     final AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
     final Set<String> failing = new HashSet<>();
+    final Set<String> poisoned = new HashSet<>();
     final List<String> issued = new CopyOnWriteArrayList<>();
     final FaultInjectingStore<Order> store = new FaultInjectingStore<>();
     final ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -93,17 +95,26 @@ class SagaHeldCopyFaultInjectionTest {
         return appender.list.stream().filter(e -> e.getLevel() == Level.ERROR).map(ILoggingEvent::getFormattedMessage).toList();
     }
 
+    List<String> warnings() {
+        return appender.list.stream().filter(e -> e.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
     Saga<OrderEvent, Order, OrderCommand> saga() {
         return Saga.<OrderEvent, Order, OrderCommand>builder(null)
                 .correlateAll(OrderEvent::orderId)
                 .startsOn(OrderPlaced.class)
-                .evolve(OrderPlaced.class, (st, e) -> (st == null ? new Order(List.of(), false) : st).withItem(e.eventId()))
+                .evolve(OrderPlaced.class, (st, e) -> (st == null ? new Order(List.of(), false) : st).withItem(evolvable(e.eventId())))
                 .react(OrderPlaced.class, (st, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.eventId()))))
-                .evolve(ItemAdded.class, (st, e) -> st.withItem(e.eventId()))
+                .evolve(ItemAdded.class, (st, e) -> st.withItem(evolvable(e.eventId())))
                 .react(ItemAdded.class, (st, e) -> List.of(SagaEffect.issue(new Reserve(e.orderId(), e.eventId()))))
                 .evolve(PaymentReceived.class, (st, e) -> new Order(st.withItem(e.eventId()).items(), true))
                 .isTerminal(Order::paid)
                 .build();
+    }
+
+    String evolvable(String eventId) {
+        if (poisoned.contains(eventId)) throw new IllegalStateException("evolve fails on " + eventId);
+        return eventId;
     }
 
     SagaExecution<OrderEvent, Order, OrderCommand> ex(SagaRunnerConfig config) {
@@ -888,7 +899,7 @@ class SagaHeldCopyFaultInjectionTest {
     }
 
     @Test
-    void an_event_on_a_feed_in_commit_order_that_a_copy_held_before_the_deploy_passes_by_the_window_is_refused_with_an_error_and_never_reacts() {
+    void an_event_on_a_feed_in_commit_order_that_a_copy_held_before_the_deploy_passes_by_the_window_is_refused_and_held_as_a_plain_copy_and_reacts_once() {
         // Given copies at 10 and 11 of another stream held by a holding feed, the one at 10 failing, and a feed in commit order after the deploy
         SagaExecution<OrderEvent, Order, OrderCommand> holding = ex(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2));
         failing.add("T10");
@@ -900,15 +911,16 @@ class SagaHeldCopyFaultInjectionTest {
 
         // When
         Throwable first = send(commitOrder, otherStream(8));
-        List<String> errorsAfterTheFirst = errors();
+        List<String> heldAfterTheFirst = heldKeys();
         Throwable redelivery = send(commitOrder, otherStream(8));
 
         // Then
         assertAll(
                 () -> assertThat(first).as("the delivery is refused since its own sweep passed it by the window").isNotNull(),
-                () -> assertThat(errorsAfterTheFirst).as("the ERROR names the event").anySatisfy(message -> assertThat(message).contains("t@8")),
+                () -> assertThat(heldAfterTheFirst).as("a plain copy of the event is held").contains("t@8"),
+                () -> assertThat(errors()).as("nothing is logged as lost").isEmpty(),
                 () -> assertThat(redelivery).as("the redelivery is acknowledged").isNull(),
-                () -> assertThat(reactionsTo("T8")).as("the reaction of the event, which never ran").isZero(),
+                () -> assertThat(reactionsTo("T8")).as("the reaction of the event").isEqualTo(1),
                 () -> assertThat(reactionsTo("T11")).as("the reaction of the copy the sweep applied").isEqualTo(1)
         );
     }
@@ -1072,7 +1084,7 @@ class SagaHeldCopyFaultInjectionTest {
         send(ex, placed(1));
         now.updateAndGet(i -> i.plus(BUDGET).plusSeconds(1));
         store.failHeldRead.set(1);
-        store.failFindWithoutState.set(1);
+        store.failFindWithoutState.set(2);
 
         // When
         Throwable delivery = send(ex, item(2));
@@ -1106,6 +1118,571 @@ class SagaHeldCopyFaultInjectionTest {
                 () -> assertThat(delivery).as("the delivery is acknowledged").isNull(),
                 () -> assertThat(instance().status()).as("the instance status").isEqualTo(SagaStatus.ACTIVE),
                 () -> assertThat(heldKeys()).as("the held index").isEmpty()
+        );
+    }
+
+    // A delivery that read the instance as new and then fails on a read of the held events
+
+    @Test
+    void a_delivery_whose_read_of_the_held_events_fails_after_other_deliveries_passed_it_by_the_window_is_refused_and_reacts_once() {
+        // Given s@2 reads the instance as new, and s@3 to s@5 move the instance past it before the read of the held events fails
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = started(SagaRunnerConfig.defaults().withReorderWindow(2));
+        store.interleaveAt = "afterFind";
+        store.interleaveAction = () -> {
+            for (long v = 3; v <= 5; v++) {
+                assertThat(send(ex, item(v))).isNull();
+            }
+            store.interleaveAt = "afterHeldIndex";
+            store.interleaveAction = () -> {
+                throw new IllegalStateException("cannot read the held index");
+            };
+        };
+
+        // When
+        Throwable first = send(ex, item(2));
+        boolean theReadFailed = store.interleaveAt == null;
+        Throwable redelivery = send(ex, item(2));
+        send(ex, item(6));
+
+        // Then
+        assertAll(
+                () -> assertThat(theReadFailed).as("the read of the held events failed").isTrue(),
+                () -> assertThat(first).as("the delivery is refused").isNotNull().hasMessageContaining("cannot read the held index"),
+                () -> assertThat(redelivery).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I2")).as("the reaction of the delivery").isEqualTo(1),
+                () -> assertThat(heldKeys()).as("nothing is left held").isEmpty()
+        );
+    }
+
+    // A delivery that cannot be held after a held copy failed
+
+    private SagaExecution<OrderEvent, Order, OrderCommand> refusedForACopyThatCannotBeReleasedWhileTheDeliveryCannotBeHeld() {
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = started(SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET).withReorderWindow(2));
+        holdACopyOfAnotherStream(1);
+        store.failRelease.set(1);
+        return ex;
+    }
+
+    @Test
+    void a_delivery_refused_for_a_held_copy_that_fails_and_that_cannot_be_held_is_listed_as_pending_and_reacts_once_on_redelivery_past_the_window() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = refusedForACopyThatCannotBeReleasedWhileTheDeliveryCannotBeHeld();
+        store.failHold.set(1);
+
+        // When
+        Throwable first = send(ex, item(6));
+        List<String> heldAfterTheFirst = heldKeys();
+        send(ex, item(7));
+        send(ex, item(8));
+        send(ex, item(9));
+        Throwable redelivery = send(ex, item(6));
+
+        // Then
+        assertAll(
+                () -> assertThat(first).as("the delivery is refused for the copy").isNotNull().hasMessageContaining("t@1"),
+                () -> assertThat(heldAfterTheFirst).as("no copy of the delivery could be held").doesNotContain(S + "@6"),
+                () -> assertThat(warnings()).as("the WARN says the event is listed as pending instead")
+                        .anySatisfy(message -> assertThat(message).contains("'" + S + "@6'").contains("lists the event as pending")),
+                () -> assertThat(errors()).as("the event was listed, so nothing is logged as lost").isEmpty(),
+                () -> assertThat(redelivery).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I6")).as("the reaction of the delivery").isEqualTo(1),
+                () -> assertThat(reactionsTo("T1")).as("the reaction of the copy").isEqualTo(1)
+        );
+    }
+
+    @Test
+    void a_delivery_refused_for_a_held_copy_that_fails_and_that_can_neither_be_held_nor_listed_is_logged_at_error_with_its_event() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = refusedForACopyThatCannotBeReleasedWhileTheDeliveryCannotBeHeld();
+        store.failHold.set(2);
+        store.interleaveAt = "beforeCasWithoutState";
+        store.interleaveAction = () -> {
+            throw new IllegalStateException("cannot list");
+        };
+
+        // When
+        Throwable first = send(ex, item(6));
+
+        // Then
+        assertAll(
+                () -> assertThat(first).as("the delivery is refused for the copy").isNotNull().hasMessageContaining("t@1"),
+                () -> assertThat(heldKeys()).as("no copy of the delivery could be held").doesNotContain(S + "@6"),
+                () -> assertThat(errors()).as("the ERROR names the event").singleElement()
+                        .satisfies(message -> assertThat(message).contains("'" + S + "@6'").contains("could not keep it"))
+        );
+    }
+
+    // A keyless copy whose release fails after its save, which nothing can prove applied
+
+    private SagaExecution<OrderEvent, Order, OrderCommand> withAKeylessCopyHeldBeforeTheStart() {
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = ex(SagaRunnerConfig.defaults().withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT).withQuarantineAfter(BUDGET));
+        assertThat(send(ex, keyless("K"))).as("the keyless event is held").isNull();
+        return ex;
+    }
+
+    @Test
+    void a_keyless_copy_whose_save_took_effect_and_whose_release_failed_reacts_again_on_the_next_attempt_which_is_the_named_limit_of_a_copy_with_no_redelivery_key() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = withAKeylessCopyHeldBeforeTheStart();
+        store.failRelease.set(1);
+
+        // When
+        Throwable start = send(ex, placed(1));
+        Throwable next = send(ex, item(2));
+
+        // Then
+        assertAll(
+                () -> assertThat(start).as("the start is refused since the release failed").isNotNull(),
+                () -> assertThat(next).as("the next delivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("K")).as("the reaction of the copy, once for the save that stood and once for the next attempt").isEqualTo(2),
+                () -> assertThat(reactionsTo("I2")).as("the reaction of the next delivery").isEqualTo(1),
+                () -> assertThat(heldKeys()).as("the copy is released by the next attempt").isEmpty()
+        );
+    }
+
+    @Test
+    void a_keyless_copy_whose_release_keeps_failing_past_the_budget_never_quarantines_the_instance_which_is_the_named_limit_of_a_copy_with_no_redelivery_key() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = withAKeylessCopyHeldBeforeTheStart();
+        store.failRelease.set(1);
+        send(ex, placed(1));
+        List<Throwable> refusals = new ArrayList<>();
+
+        // When
+        for (int i = 0; i < 3; i++) {
+            now.updateAndGet(t -> t.plus(BUDGET).plusSeconds(1));
+            store.failRelease.set(1);
+            refusals.add(send(ex, placed(1)));
+        }
+
+        // Then
+        assertAll(
+                () -> assertThat(refusals).as("every attempt is refused for the release").allSatisfy(refusal -> assertThat(refusal).isNotNull()),
+                () -> assertThat(instance().status()).as("the instance status").isEqualTo(SagaStatus.ACTIVE),
+                () -> assertThat(instance().failure()).as("the failure record").isNull(),
+                () -> assertThat(reactionsTo("K")).as("the reaction of the copy, once for each attempt").isEqualTo(4)
+        );
+    }
+
+    // The probes of the sweep, the reads around it, and the delivery that a sweep passes
+
+    private void holdDirect(String key, String stream, long version, CloudEvent event, boolean startEvent) {
+        store.d.hold(ORDER, new HeldEvent(ORDER, new HeldEventRef(key, stream, version, null, event.getType(), now.get(), startEvent, null), event));
+        now.updateAndGet(i -> i.plusSeconds(1));
+    }
+
+    private void passedByTheNextDelivery(SagaExecution<OrderEvent, Order, OrderCommand> ex, long version) {
+        store.interleaveAt = "afterFind";
+        store.interleaveAction = () -> assertThat(send(ex, item(version))).isNull();
+    }
+
+    @Test
+    void an_item_whose_evolve_throws_while_another_delivery_passes_it_by_the_window_is_refused_and_reacts_once_on_redelivery() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = started(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2));
+        poisoned.add("I2");
+        passedByTheNextDelivery(ex, 5);
+
+        // When
+        Throwable first = send(ex, item(2));
+        poisoned.clear();
+        Throwable replay = send(ex, item(2));
+        send(ex, item(6));
+
+        // Then
+        assertAll(
+                () -> assertThat(first).as("the evolve failure refuses the delivery").isNotNull().hasMessageContaining("evolve fails on I2"),
+                () -> assertThat(replay).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I2")).as("the reaction of the delivery").isEqualTo(1)
+        );
+    }
+
+    @Test
+    void an_item_whose_evolve_throws_while_another_delivery_passes_it_by_the_window_and_quarantine_is_on_is_refused_and_reacts_once_on_redelivery() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = started(SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET).withReorderWindow(2));
+        poisoned.add("I2");
+        passedByTheNextDelivery(ex, 5);
+
+        // When
+        Throwable first = send(ex, item(2));
+        poisoned.clear();
+        Throwable replay = send(ex, item(2));
+        send(ex, item(6));
+
+        // Then
+        assertAll(
+                () -> assertThat(first).as("the delivery is refused").isNotNull(),
+                () -> assertThat(replay).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I2")).as("the reaction of the delivery").isEqualTo(1)
+        );
+    }
+
+    @Test
+    void a_start_whose_evolve_throws_while_a_later_start_passes_it_by_the_window_is_refused_and_reacts_once_on_redelivery() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = ex(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2));
+        poisoned.add("P5");
+        store.interleaveAt = "afterFind";
+        store.interleaveAction = () -> assertThat(send(ex, placed(8))).isNull();
+
+        // When
+        Throwable first = send(ex, placed(5));
+        poisoned.clear();
+        Throwable replay = send(ex, placed(5));
+        send(ex, item(9));
+
+        // Then
+        assertAll(
+                () -> assertThat(first).as("the delivery is refused").isNotNull(),
+                () -> assertThat(replay).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("P5")).as("the reaction of the start").isEqualTo(1)
+        );
+    }
+
+    @Test
+    void an_item_whose_evolve_throws_while_a_held_copy_is_listed_and_another_delivery_passes_it_by_the_window_is_refused_and_reacts_once_on_redelivery() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = started(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2));
+        holdDirect("t@1", "t", 1, otherStream(1), false);
+        poisoned.add("I2");
+        store.interleaveAt = "afterRelease";
+        store.interleaveAction = () -> assertThat(send(ex, item(5))).isNull();
+
+        // When
+        Throwable first = send(ex, item(2));
+        poisoned.clear();
+        Throwable replay = send(ex, item(2));
+        send(ex, item(6));
+
+        // Then
+        assertAll(
+                () -> assertThat(first).as("the delivery is refused").isNotNull(),
+                () -> assertThat(replay).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I2")).as("the reaction of the delivery").isEqualTo(1)
+        );
+    }
+
+    private SagaExecution<OrderEvent, Order, OrderCommand> startedAtFiveWithCopiesAboveAndBelowIt(SagaRunnerConfig config, long startOfTheCopies) {
+        SagaExecution<OrderEvent, Order, OrderCommand> holding = ex(config);
+        failing.add("I6");
+        send(holding, item(6));
+        send(holding, item(7));
+        send(holding, item(8));
+        assertThat(send(holding, placed(5))).as("the start is refused for I6").isNotNull();
+        holdDirect(S + "@" + startOfTheCopies, S, startOfTheCopies, placed(startOfTheCopies), true);
+        failing.clear();
+        return ex(config, false);
+    }
+
+    @Test
+    void an_event_below_the_start_on_a_feed_in_commit_order_that_its_sweep_lifts_above_the_start_and_passes_by_the_window_is_refused_and_held_and_reacts_once() {
+        // Given a start at 5 refused for I6, a start copy at 3 that the sweep applies, and a feed in commit order
+        SagaRunnerConfig config = SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2);
+        SagaExecution<OrderEvent, Order, OrderCommand> commitOrder = startedAtFiveWithCopiesAboveAndBelowIt(config, 3);
+
+        // When
+        Throwable first = send(commitOrder, item(4));
+        List<String> heldAfterTheFirst = heldKeys();
+        Throwable redelivery = send(commitOrder, item(4));
+
+        // Then
+        assertAll(
+                () -> assertThat(instance().startMark().version()).as("the sweep lowered the start below the event").isEqualTo(3),
+                () -> assertThat(first).as("the delivery is refused").isNotNull(),
+                () -> assertThat(heldAfterTheFirst).as("a plain copy of the event is held").contains(S + "@4"),
+                () -> assertThat(redelivery).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I4")).as("the reaction of the event").isEqualTo(1),
+                () -> assertThat(reactionsTo("I8")).as("the reaction of the copy the sweep applied").isEqualTo(1),
+                () -> assertThat(errors()).as("nothing is logged as lost").isEmpty()
+        );
+    }
+
+    @Test
+    void an_event_below_the_start_on_a_feed_in_commit_order_that_deliveries_lowered_below_it_and_whose_sweep_passes_it_is_refused_and_held_and_reacts_once() {
+        // Given a start at 5 refused for I6, then a lower start at 3 kept beside it by the same failure
+        SagaRunnerConfig config = SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(3);
+        SagaExecution<OrderEvent, Order, OrderCommand> holding = ex(config);
+        failing.add("I6");
+        send(holding, item(6));
+        send(holding, item(7));
+        send(holding, item(8));
+        assertThat(send(holding, placed(5))).as("the start is refused for I6").isNotNull();
+        assertThat(send(holding, placed(3))).as("the lower start is refused for I6 and kept").isNotNull();
+        assertThat(heldKeys()).contains(S + "@3");
+        failing.clear();
+        SagaExecution<OrderEvent, Order, OrderCommand> commitOrder = ex(config, false);
+
+        // When
+        Throwable first = send(commitOrder, item(4));
+        List<String> heldAfterTheFirst = heldKeys();
+        Throwable redelivery = send(commitOrder, item(4));
+
+        // Then
+        assertAll(
+                () -> assertThat(instance().startMark().version()).as("the sweep lowered the start below the event").isEqualTo(3),
+                () -> assertThat(first).as("the delivery is refused").isNotNull(),
+                () -> assertThat(heldAfterTheFirst).as("a plain copy of the event is held").contains(S + "@4"),
+                () -> assertThat(redelivery).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I4")).as("the reaction of the event").isEqualTo(1),
+                () -> assertThat(errors()).as("nothing is logged as lost").isEmpty()
+        );
+    }
+
+    @Test
+    void an_event_on_a_feed_in_commit_order_that_its_sweep_lifts_above_the_start_is_kept_when_a_later_copy_quarantines_the_instance() {
+        // Given
+        SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET).withReorderWindow(3);
+        SagaExecution<OrderEvent, Order, OrderCommand> holding = ex(config);
+        failing.add("I6");
+        send(holding, item(6));
+        assertThat(send(holding, placed(5))).as("the start is refused for I6").isNotNull();
+        assertThat(send(holding, placed(3))).as("the lower start is refused for I6 and kept").isNotNull();
+        SagaExecution<OrderEvent, Order, OrderCommand> commitOrder = ex(config, false);
+        now.updateAndGet(i -> i.plus(BUDGET).plusSeconds(1));
+
+        // When
+        Throwable delivery = send(commitOrder, item(4));
+
+        // Then
+        assertAll(
+                () -> assertThat(instance().startMark().version()).as("the sweep lowered the start below the event").isEqualTo(3),
+                () -> assertThat(instance().status()).as("the instance status").isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(delivery).as("the quarantine lets the delivery past").isNull(),
+                () -> assertThat(heldKeys()).as("the event is kept beside the copy").contains(S + "@4")
+        );
+    }
+
+    @Test
+    void a_delivery_whose_waiting_copy_its_own_sweep_applied_before_a_later_copy_failed_is_not_kept_again_and_reacts_once() {
+        // Given a copy of the delivery waiting below the start 5, a start copy at 3 and copies at 6 to 8 of which 8 fails
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = ex(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2));
+        assertThat(send(ex, placed(5))).isNull();
+        assertThat(send(ex, item(4))).as("I4 waits below the start").isNull();
+        assertThat(heldKeys()).containsExactly(S + "@4");
+        holdDirect(S + "@3", S, 3, placed(3), true);
+        holdDirect(S + "@6", S, 6, item(6), false);
+        holdDirect(S + "@7", S, 7, item(7), false);
+        holdDirect(S + "@8", S, 8, item(8), false);
+        failing.add("I8");
+
+        // When
+        Throwable refused = send(ex, item(4));
+        failing.clear();
+        send(ex, item(9));
+
+        // Then
+        assertAll(
+                () -> assertThat(refused).as("the delivery is refused for I8").isNotNull().hasMessageContaining(S + "@8"),
+                () -> assertThat(reactionsTo("I4")).as("the reaction of the delivery").isEqualTo(1)
+        );
+    }
+
+    @Test
+    void a_delivery_whose_waiting_copy_its_own_sweep_applied_before_the_release_of_a_later_copy_failed_is_not_kept_again_and_reacts_once() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = ex(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2));
+        assertThat(send(ex, placed(5))).isNull();
+        assertThat(send(ex, item(4))).as("I4 waits below the start").isNull();
+        holdDirect(S + "@3", S, 3, placed(3), true);
+        holdDirect(S + "@6", S, 6, item(6), false);
+        holdDirect(S + "@7", S, 7, item(7), false);
+        // The copies are released as P3, I4, I6 and I7, and the fourth release fails
+        store.interleaveAt = "afterRelease";
+        store.interleaveAction = () -> {
+            store.interleaveAt = "afterRelease";
+            store.interleaveAction = () -> {
+                store.interleaveAt = "afterRelease";
+                store.interleaveAction = () -> store.failRelease.set(1);
+            };
+        };
+
+        // When
+        Throwable refused = send(ex, item(4));
+        send(ex, item(9));
+
+        // Then
+        assertAll(
+                () -> assertThat(refused).as("the delivery is refused for the release of I7").isNotNull(),
+                () -> assertThat(reactionsTo("I4")).as("the reaction of the delivery").isEqualTo(1)
+        );
+    }
+
+    @Test
+    void a_delivery_whose_waiting_copy_was_applied_by_its_sweep_and_kept_with_the_start_it_lowered_reacts_once_when_a_later_copy_is_fixed() {
+        // Given a start at 5 refused for I6, an item below the start kept, and a lower start kept, all by the same failure
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = ex(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(3));
+        failing.add("I6");
+        send(ex, item(6));
+        send(ex, item(7));
+        send(ex, item(8));
+        assertThat(send(ex, placed(5))).as("the start is refused for I6").isNotNull();
+        assertThat(send(ex, item(4))).as("I4 below the start is held and refused for I6").isNotNull();
+        assertThat(send(ex, placed(3))).as("the lower start is refused for I6 and kept").isNotNull();
+        assertThat(heldKeys()).contains(S + "@3", S + "@4");
+        failing.clear();
+        failing.add("I8");
+
+        // When
+        Throwable refused = send(ex, item(4));
+        failing.clear();
+        Throwable redelivery = send(ex, item(4));
+        send(ex, item(9));
+
+        // Then
+        assertAll(
+                () -> assertThat(refused).as("the delivery is refused for I8").isNotNull().hasMessageContaining(S + "@8"),
+                () -> assertThat(redelivery).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I4")).as("the reaction of the delivery").isEqualTo(1)
+        );
+    }
+
+    @Test
+    void a_keyless_copy_with_a_clock_older_than_the_budget_whose_release_fails_once_after_it_applied_does_not_quarantine_the_instance() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = ex(SagaRunnerConfig.defaults().withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT).withQuarantineAfter(BUDGET));
+        failing.add("K");
+        send(ex, keyless("K"));
+        send(ex, placed(1));
+        assertThat(store.d.heldIndex(ORDER).getFirst().failingSince()).as("the copy has a clock").isNotNull();
+        failing.clear();
+        now.updateAndGet(i -> i.plus(BUDGET).plusSeconds(1));
+        store.failRelease.set(1);
+
+        // When
+        Throwable delivery = send(ex, item(2));
+
+        // Then
+        assertAll(
+                () -> assertThat(delivery).as("the delivery is refused for the release").isNotNull(),
+                () -> assertThat(reactionsTo("K")).as("the reaction of the copy, whose save stands").isEqualTo(1),
+                () -> assertThat(instance().status()).as("the instance status").isEqualTo(SagaStatus.ACTIVE)
+        );
+    }
+
+    @Test
+    void a_copy_that_completes_the_instance_and_whose_release_fails_is_released_by_the_redelivery_which_logs_no_error() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = started(SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET));
+        holdDirect(S + "@3", S, 3, keyed(3, new PaymentReceived("Z3", ORDER)), false);
+        store.failRelease.set(1);
+
+        // When
+        Throwable refused = send(ex, item(2));
+        List<String> heldAfterTheRefusal = heldKeys();
+        Throwable redelivery = send(ex, item(2));
+
+        // Then
+        assertAll(
+                () -> assertThat(refused).as("the delivery is refused for the release").isNotNull(),
+                () -> assertThat(heldAfterTheRefusal).as("the delivery is kept beside the copy").contains(S + "@2", S + "@3"),
+                () -> assertThat(instance().status()).as("the instance status").isEqualTo(SagaStatus.COMPLETED),
+                () -> assertThat(redelivery).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(heldKeys()).as("nothing is left held").isEmpty(),
+                () -> assertThat(errors()).as("nothing is logged as an error").isEmpty()
+        );
+    }
+
+    @Test
+    void a_delivery_passed_by_its_own_sweep_whose_later_release_fails_is_kept_and_reacts_once() {
+        // Given copies at 5 and 6 that the sweep applies and the window of 2 passes version 2 with
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = started(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2));
+        holdDirect(S + "@5", S, 5, item(5), false);
+        holdDirect(S + "@6", S, 6, item(6), false);
+        store.interleaveAt = "afterRelease";
+        store.interleaveAction = () -> store.failRelease.set(1);
+
+        // When
+        Throwable refused = send(ex, item(2));
+        List<String> heldAfterTheRefusal = heldKeys();
+        Throwable redelivery = send(ex, item(2));
+        send(ex, item(7));
+
+        // Then
+        assertAll(
+                () -> assertThat(refused).as("the delivery is refused for the release of I6").isNotNull().hasMessageContaining(S + "@6"),
+                () -> assertThat(heldAfterTheRefusal).as("the delivery is kept beside the copy").contains(S + "@2", S + "@6"),
+                () -> assertThat(redelivery).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I2")).as("the reaction of the delivery").isEqualTo(1),
+                () -> assertThat(reactionsTo("I5")).as("the reaction of the first copy").isEqualTo(1),
+                () -> assertThat(reactionsTo("I6")).as("the reaction of the second copy").isEqualTo(1),
+                () -> assertThat(heldKeys()).as("nothing is left held").isEmpty()
+        );
+    }
+
+    @Test
+    void a_keyed_copy_behind_the_window_whose_release_fails_is_not_applied_twice_by_later_deliveries_of_its_type() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = started(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2));
+        for (long v = 3; v <= 6; v++) {
+            assertThat(send(ex, item(v))).isNull();
+        }
+        holdDirect(S + "@2", S, 2, item(2), false);
+        store.failRelease.set(1);
+
+        // When
+        Throwable first = send(ex, item(7));
+        send(ex, item(8));
+        send(ex, item(7));
+        send(ex, item(9));
+
+        // Then
+        assertAll(
+                () -> assertThat(first).as("the delivery is refused for the release").isNotNull(),
+                () -> assertThat(reactionsTo("I2")).as("the reaction of the copy behind the window").isEqualTo(1),
+                () -> assertThat(reactionsTo("I7")).as("the reaction of the first delivery").isEqualTo(1),
+                () -> assertThat(reactionsTo("I8")).as("the reaction of the second delivery").isEqualTo(1),
+                () -> assertThat(heldKeys()).as("nothing is left held").isEmpty()
+        );
+    }
+
+    @Test
+    void a_copy_behind_the_window_whose_release_fails_with_a_kept_delivery_of_another_stream_reacts_once_for_each() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = started(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2));
+        for (long v = 7; v <= 10; v++) {
+            assertThat(send(ex, item(v))).isNull();
+        }
+        holdDirect(S + "@6", S, 6, item(6), false);
+        store.failRelease.set(1);
+
+        // When
+        Throwable refused = send(ex, otherStream(1));
+        List<String> heldAfterTheRefusal = heldKeys();
+        Throwable again = send(ex, otherStream(1));
+
+        // Then
+        assertAll(
+                () -> assertThat(refused).as("the delivery is refused for the release").isNotNull(),
+                () -> assertThat(heldAfterTheRefusal).as("the delivery is kept beside the copy").contains(S + "@6", "t@1"),
+                () -> assertThat(again).as("the redelivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I6")).as("the reaction of the copy").isEqualTo(1),
+                () -> assertThat(reactionsTo("T1")).as("the reaction of the delivery").isEqualTo(1),
+                () -> assertThat(heldKeys()).as("nothing is left held").isEmpty()
+        );
+    }
+
+    @Test
+    void a_delivery_with_a_waiting_copy_whose_sweep_applies_every_copy_and_lowers_the_start_reacts_once_and_logs_no_error() {
+        // Given
+        SagaExecution<OrderEvent, Order, OrderCommand> ex = ex(SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2));
+        assertThat(send(ex, placed(5))).isNull();
+        assertThat(send(ex, item(4))).isNull();
+        holdDirect(S + "@3", S, 3, placed(3), true);
+        holdDirect(S + "@6", S, 6, item(6), false);
+        holdDirect(S + "@7", S, 7, item(7), false);
+        holdDirect(S + "@8", S, 8, item(8), false);
+
+        // When
+        Throwable delivery = send(ex, item(4));
+        send(ex, item(9));
+
+        // Then
+        assertAll(
+                () -> assertThat(delivery).as("the delivery is acknowledged").isNull(),
+                () -> assertThat(reactionsTo("I4")).as("the reaction of the delivery").isEqualTo(1),
+                () -> assertThat(errors()).as("nothing is logged as an error").isEmpty(),
+                () -> assertThat(heldKeys()).as("nothing is left held").isEmpty()
         );
     }
 }
