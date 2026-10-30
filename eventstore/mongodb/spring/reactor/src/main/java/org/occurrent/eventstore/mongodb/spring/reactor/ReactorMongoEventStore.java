@@ -578,8 +578,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         final Mono<Boolean> conflictMono;
         if (expectedToken.isPresent()) {
             // The condition carries the consistency token the command observed when it read the query. If the
-            // query's markers have advanced since, a matching append committed after the read, so the condition
-            // fails. Immune to read-watermark overshoot because marker versions bump inside the append
+            // query's markers have advanced since, an append that shares one of them committed after the read, so
+            // the condition fails, also when that append's events don't match the query. Immune to read-watermark
+            // overshoot because marker versions bump inside the append
             // transaction (ADR 0021).
             conflictMono = consistencyToken(condition.criteria(), mongoTemplate).map(actual -> actual != expectedToken.get().version());
         } else {
@@ -592,8 +593,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 return currentPosition().flatMap(position -> Mono.<Map<String, Document>>error(new DcbAppendConditionNotFulfilledException(condition, position)));
             }
             // Increment a marker per key for the union of the query's keys and the appended events' keys. Always
-            // increment the query's markers so a concurrent matching append is serialized even when this append's own
-            // events do not match the query.
+            // increment the query's markers so a concurrent append whose events match the query is serialized even
+            // when this append's own events do not match it. A query with DcbCriteria.all() is the exception, since no
+            // event has the match-all key among its own keys (ADR 0030).
             TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.criteria()));
             markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
             return incrementConflictMarkers(markerKeys, lastPosition);

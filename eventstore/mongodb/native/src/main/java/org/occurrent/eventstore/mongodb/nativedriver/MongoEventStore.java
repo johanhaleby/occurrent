@@ -700,8 +700,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         final boolean conflict;
         if (expectedToken.isPresent()) {
             // The condition carries the consistency token the command observed when it read the query
-            // (DcbEventStream.consistencyToken()). If the query's markers have advanced since, a matching append
-            // committed after the read, so the condition fails. This is immune to read-watermark overshoot,
+            // (DcbEventStream.consistencyToken()). If the query's markers have advanced since, an append that shares
+            // one of them committed after the read, so the condition fails, also when that append's events don't
+            // match the query. This is immune to read-watermark overshoot,
             // unlike a position-based check, because marker versions bump inside the append transaction at
             // commit, not when positions are reserved (ADR 0021).
             conflict = consistencyToken(clientSession, condition.criteria()) != expectedToken.get().version();
@@ -718,7 +719,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // Increment a marker per key for the union of the query's keys and the appended events' keys. The increment
         // forces a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs
         // this check against the winner's committed increment. The query's markers are always incremented, so a
-        // concurrent matching append is serialized even when this append's own events do not match the query.
+        // concurrent append whose events match the query is serialized even when this append's own events do not
+        // match it. A query with DcbCriteria.all() is the exception, since no event has the match-all key among its
+        // own keys (ADR 0030).
         TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.criteria()));
         markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
         return incrementConflictMarkers(clientSession, markerKeys, lastPosition);
@@ -726,10 +729,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     // Increment a conflict marker per key. An event that matches a condition has at least one of the condition's
     // query keys among its own keys (ADR 0021), so appending that event and the conditional append increment a
-    // common marker. The in-transaction increment forces a MongoDB write-write conflict and they serialize. The
-    // monotonically increasing version is also the optimistic-concurrency token (see consistencyToken): a reader
-    // snapshots a query's marker versions, and an append fails if any changed since. The stored lastPosition is
-    // informational.
+    // common marker. A condition with DcbCriteria.all() is the exception, since no event has the match-all key
+    // among its own keys (ADR 0030). The in-transaction increment forces a MongoDB write-write conflict and they
+    // serialize. The monotonically increasing version is also the optimistic-concurrency token (see
+    // consistencyToken): a reader snapshots a query's marker versions, and an append fails if any changed since. The
+    // stored lastPosition is informational.
     // The marker collection holds one document per distinct tag and type that has taken part in an append, and
     // nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection
     // without bound. An operator can prune markers during quiescence, a later append recreates any it still needs.

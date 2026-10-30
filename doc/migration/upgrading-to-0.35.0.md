@@ -729,9 +729,9 @@ describes it.
 - **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
   succeed, so a store that still reads the type marker for an item with tags fails the case.
-- **Code that saved a token value.** For criteria with tags, a 0.34.0 token value is a sum over tag and type markers,
-  and 0.35.0 compares it against the tag markers only. An old value can then let an append through that should have
-  been refused. Read again instead, as
+- **Code that saved a token value.** For an item with both types and tags, a 0.34.0 token value is a sum over its tag
+  and type markers, and 0.35.0 compares it against the tag markers only. An old value can then let an append through
+  that should have been refused. Read again instead, as
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
   says.
 
