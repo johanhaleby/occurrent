@@ -409,7 +409,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
                 return decide();
             }).block();
 
-            DcbAppendCondition sameCondition = DcbAppendCondition.failIfEventsMatch(CRITERIA, DcbConsistencyToken.of(1));
+            DcbAppendCondition sameCondition = DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken.of(CRITERIA, 1));
             assertAll(
                     () -> assertThat(decisions).as("decisions").hasValue(1),
                     () -> assertThat(store.conditions).as("append conditions").containsExactly(sameCondition, sameCondition),
@@ -430,8 +430,8 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             assertAll(
                     () -> assertThat(decisions).as("decisions").hasValue(2),
                     () -> assertThat(store.conditions).as("append conditions").containsExactly(
-                            DcbAppendCondition.failIfEventsMatch(CRITERIA, DcbConsistencyToken.of(1)),
-                            DcbAppendCondition.failIfEventsMatch(CRITERIA, DcbConsistencyToken.of(2))),
+                            DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken.of(CRITERIA, 1)),
+                            DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken.of(CRITERIA, 2))),
                     () -> assertThat(trace).containsExactly(
                             "read", "decide", "begin", "append", "rollback",
                             "read", "decide", "begin", "append", "read", "dispatch", "commit")
@@ -695,8 +695,8 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Override
-        DcbEventStream stream() {
-            return new DcbEventStream(List.of(), 3, DcbConsistencyToken.of(++reads), Optional.empty());
+        DcbEventStream stream(DcbCriteria criteria) {
+            return new DcbEventStream(List.of(), 3, DcbConsistencyToken.of(criteria, ++reads), Optional.empty());
         }
 
         @Override
