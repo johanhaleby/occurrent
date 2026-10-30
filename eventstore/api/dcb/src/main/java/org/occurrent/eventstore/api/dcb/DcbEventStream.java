@@ -45,8 +45,7 @@ import static java.util.Objects.requireNonNull;
  *                             {@link DcbCriteria#all()}, the MongoDB stores don't refuse the append for an event
  *                             committed after the read by an append with no condition on {@code all()}, which
  *                             {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} describes. A store can
- *                             also refuse the append when no matching event was committed, and a marker prune can
- *                             make a MongoDB store let a conflicting one through, both of which
+ *                             also refuse the append when no matching event was committed, which
  *                             {@link DcbAppendCondition} describes. Unlike
  *                             {@code lastSequencePosition}, it protects an append while other appends are still
  *                             committing, because the store derives it from data a reader can only see once it's

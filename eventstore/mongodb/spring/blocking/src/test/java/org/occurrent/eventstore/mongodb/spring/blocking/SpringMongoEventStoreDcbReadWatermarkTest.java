@@ -112,7 +112,7 @@ class SpringMongoEventStoreDcbReadWatermarkTest {
                         new SimpleMongoClientDatabaseFactory(readerClient, databaseName))));
 
         // A reads an empty boundary and appends a matching event conditionally.
-        DcbAppendCondition appenderCondition = failIfEventsMatch(tags(Tag.parse(tag)), DcbConsistencyToken.of(tags(Tag.parse(tag)), 0));
+        DcbAppendCondition appenderCondition = failIfEventsMatch(appenderStore.read(tags(Tag.parse(tag))).consistencyToken());
         Thread appender = new Thread(
                 () -> appenderStore.append(List.of(taggedEvent("AppenderEvent", tag)), appenderCondition),
                 "appender");
