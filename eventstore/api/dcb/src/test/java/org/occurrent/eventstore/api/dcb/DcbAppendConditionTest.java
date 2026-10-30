@@ -92,7 +92,32 @@ class DcbAppendConditionTest {
 
         Throwable thrown = catchThrowable(() -> DcbAppendCondition.failIfEventsMatch(A, tokenReadWithAll));
 
-        assertThat(thrown).isExactlyInstanceOf(IllegalArgumentException.class);
+        assertAll(
+                () -> assertThat(thrown).isExactlyInstanceOf(IllegalArgumentException.class),
+                () -> assertThat(thrown)
+                        .as("A token read with all() is a whole-store lock, so the message must say so")
+                        .hasMessageContaining("whole-store lock"),
+                () -> assertThat(thrown)
+                        .as("The message must say that the MongoDB stores don't conflict a whole-store lock with a scoped append")
+                        .hasMessageContaining("MongoDB")
+        );
+    }
+
+    @Test
+    void a_token_read_with_scoped_criteria_is_refused_without_the_whole_store_lock_sentence() {
+        DcbConsistencyToken tokenReadWithA = DcbConsistencyToken.of(A, 3);
+
+        Throwable thrown = catchThrowable(() -> DcbAppendCondition.failIfEventsMatch(B, tokenReadWithA));
+
+        assertAll(
+                () -> assertThat(thrown).isExactlyInstanceOf(IllegalArgumentException.class),
+                () -> assertThat(thrown)
+                        .as("A token read with scoped criteria is not a whole-store lock, so the message must not describe one")
+                        .hasMessageNotContaining("whole-store lock"),
+                () -> assertThat(thrown)
+                        .as("A token read with scoped criteria is not subject to the MongoDB whole-store limit")
+                        .hasMessageNotContaining("MongoDB")
+        );
     }
 
     @Test

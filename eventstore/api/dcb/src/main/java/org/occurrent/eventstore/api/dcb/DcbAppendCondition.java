@@ -131,10 +131,15 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
                     + " DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken). On the MongoDB stores a whole-store lock"
                     + " doesn't conflict with a tag-scoped or type-scoped append.";
         }
-        return "The consistency token was read with " + tokenCriteria + ", which isn't the same criteria as the append"
+        String message = "The consistency token was read with " + tokenCriteria + ", which isn't the same criteria as the append"
                 + " condition's " + conditionCriteria + ". If the append needs the condition's criteria, read with them"
                 + " before you decide, and decide from that read. A token read after the decision can hide an event"
                 + " committed in between. If the append needs the read's criteria, use"
                 + " DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken), which takes the criteria from the token.";
+        if (tokenCriteria instanceof DcbCriteria.MatchAll) {
+            return message + " With a token read with DcbCriteria.all() that's a whole-store lock, and on the MongoDB stores"
+                    + " a whole-store lock doesn't conflict with a tag-scoped or type-scoped append.";
+        }
+        return message;
     }
 }
