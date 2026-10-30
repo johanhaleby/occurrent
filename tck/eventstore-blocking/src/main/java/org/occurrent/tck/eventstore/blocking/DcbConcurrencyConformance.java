@@ -270,6 +270,32 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
 
     @Test
     @Timeout(120)
+    void two_type_and_tag_scoped_conditions_that_each_match_only_the_other_writers_event_cannot_both_win() {
+        for (int iteration = 0; iteration < ITERATIONS; iteration++) {
+            String typeX = RESERVED + iteration;
+            String typeY = RELEASED + iteration;
+            String tagA = "show:" + iteration;
+            String tagB = "row:" + iteration;
+
+            // Write skew across a type and a tag together. The first writer reads type X with tag A and appends type Y
+            // with tag B. The second reads type Y with tag B and appends type X with tag A. Each event falls inside the
+            // other writer's condition and outside its own. The two events share neither a type nor a tag, so nothing
+            // common serialises them whatever the condition covers. The committed read is the union of both
+            // conditions, since each one alone misses the other event.
+            DcbCriteria readByFirst = DcbCriteria.type(typeX).tags(tag(tagA));
+            DcbCriteria readBySecond = DcbCriteria.type(typeY).tags(tag(tagB));
+            DcbAppendCondition onFirst = failIfEventsMatch(dcbEventStore().read(readByFirst).consistencyToken());
+            DcbAppendCondition onSecond = failIfEventsMatch(dcbEventStore().read(readBySecond).consistencyToken());
+
+            assertExactlyOneWinnerOfTwo(iteration, "two type-and-tag-scoped conditions that each match the other writer's event",
+                    DcbCriteria.anyOf(readByFirst, readBySecond),
+                    taggedEventWithId("writes-y-b-" + iteration, typeY, tagB), onFirst,
+                    taggedEventWithId("writes-x-a-" + iteration, typeX, tagA), onSecond);
+        }
+    }
+
+    @Test
+    @Timeout(120)
     void appends_to_a_boundary_spanning_two_tags_leave_exactly_one_winner() {
         int threadCount = 8;
 

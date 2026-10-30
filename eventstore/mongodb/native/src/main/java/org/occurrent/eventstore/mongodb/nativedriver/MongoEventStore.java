@@ -731,7 +731,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // query keys among its own keys (ADR 0021), so appending that event and the conditional append increment a
     // common marker. A condition with DcbCriteria.all() is the exception, since no event has the match-all key
     // among its own keys (ADR 0030). The in-transaction increment forces a MongoDB write-write conflict and they
-    // serialize. The monotonically increasing version is also the optimistic-concurrency token (see
+    // serialize. The version is also the optimistic-concurrency token (see
     // consistencyToken): a reader snapshots a query's marker versions, and an append fails if any changed since. The
     // stored lastPosition is informational.
     // The marker collection holds one document per distinct tag and type that has taken part in an append, and
