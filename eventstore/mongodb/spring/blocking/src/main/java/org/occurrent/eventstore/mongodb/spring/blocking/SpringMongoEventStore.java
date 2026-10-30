@@ -759,16 +759,19 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * because Spring wraps the {@link MongoException}. {@link DcbAppendConditionNotFulfilledException} is deliberately
      * NOT retried here: it propagates to the application service, which re-reads and retries the whole command.
      * <p>
-     * Exponential backoff with generous attempts, since several appends placed in the same partition stream serialize
-     * on stream_version, so the last writer can need to retry past all the others before it commits. A
-     * DuplicateKeyException is retried too: it is either two transactions first-creating the same conflict marker at
-     * once, or two disjoint DCB boundaries hashing to the same partition stream and losing on the unique
-     * streamid+streamversion index, and both are safe to rerun. A genuine duplicate CloudEvent is translated to a
-     * domain exception in insertAllDcb and never reaches here.
+     * Exponential backoff from 10 ms up to 500 ms over 240 attempts, which is about two minutes. That matches the
+     * budget the MongoDB driver's {@code ClientSession.withTransaction} gives the native store, so a command that
+     * contends on one marker document is not failed sooner here than there. {@code MongoTransactionManager} retries
+     * nothing itself, so these attempts are the whole budget. Appends that write one marker document, or that land in
+     * the same partition stream and serialize on stream_version, commit one at a time, so the last writer can need to
+     * retry past all the others. A DuplicateKeyException is retried too: it is either two transactions
+     * first-creating the same conflict marker at once, or two disjoint DCB boundaries hashing to the same partition
+     * stream and losing on the unique streamid+streamversion index, and both are safe to rerun. A genuine duplicate
+     * CloudEvent is translated to a domain exception in insertAllDcb and never reaches here.
      */
     private static final RetryStrategy TRANSIENT_CONFLICT_RETRY = RetryStrategy
             .exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
-            .maxAttempts(15)
+            .maxAttempts(240)
             .retryIf(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable));
 
     private static final RetryStrategy COLD_START_COUNTER_RETRY = RetryStrategy.retry()
