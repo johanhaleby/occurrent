@@ -39,6 +39,7 @@ import reactor.core.publisher.Mono;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -180,15 +181,19 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
             Decider<C, S, E> decider = dcbDecider.decider();
 
             return ReactiveSnapshotSupport.resolveDcbBase(store, key, options.schemaVersion(), decider::initialState)
-                    .flatMap(base -> executeFrom(base, criteria, commands, dcbDecider, refuseNullState)
+                    .flatMap(base -> {
+                        AtomicBoolean decided = new AtomicBoolean();
+                        return executeFrom(base, criteria, commands, dcbDecider, refuseNullState, decided)
                             .onErrorResume(DcbSnapshotInvalidException.class, e -> {
-                                if (base.markerVersions().isEmpty()) {
+                                // After a decision the append may have committed, and reading in full would run the
+                                // command twice
+                                if (base.markerVersions().isEmpty() || decided.get()) {
                                     return Mono.error(e);
                                 }
-                                // The store refuses at the read, before the domain function runs, so nothing was appended
                                 log.debug("Reading the whole boundary of snapshot '{}' since the store can't read after its marker versions: {}", key, e.getMessage());
-                                return executeFrom(SnapshotSupport.DcbBase.initial(decider::initialState), criteria, commands, dcbDecider, refuseNullState);
-                            }))
+                                return executeFrom(SnapshotSupport.DcbBase.initial(decider::initialState), criteria, commands, dcbDecider, refuseNullState, new AtomicBoolean());
+                            });
+                    })
                     .flatMap(executed -> {
                         Optional<DcbAppendResult> appendResult = executed.appendResult();
                         if (appendResult.isEmpty()) {
@@ -217,7 +222,7 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
     }
 
     private <C, S extends @Nullable Object> Mono<Executed<S, E>> executeFrom(SnapshotSupport.DcbBase<S> base, DcbCriteria criteria, List<C> commands,
-                                                                            DcbDecider<C, S, E> dcbDecider, boolean refuseNullState) {
+                                                                            DcbDecider<C, S, E> dcbDecider, boolean refuseNullState, AtomicBoolean decided) {
         return Mono.defer(() -> {
             Decider<C, S, E> decider = dcbDecider.decider();
             DcbExecuteOptions<E> withTags = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
@@ -236,6 +241,7 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
                                     requireNonNullState(decision);
                                 }
                                 decisionRef.set(decision);
+                                decided.set(true);
                                 return decision.events();
                             })
                     .map(result -> new Executed<>(Optional.of(result), requireDecision(decisionRef), tailSize.get()))

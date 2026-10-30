@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -159,15 +160,17 @@ public final class SnapshotDcbDeciderApplicationService<E> {
 
         SnapshotSupport.DcbBase<S> base = SnapshotSupport.resolveDcbBase(store.findLatest(key), options.schemaVersion(), decider::initialState);
         Executed<S, E> executed;
+        AtomicBoolean decided = new AtomicBoolean();
         try {
-            executed = executeFrom(base, criteria, commands, dcbDecider);
+            executed = executeFrom(base, criteria, commands, dcbDecider, decided);
         } catch (DcbSnapshotInvalidException e) {
-            if (base.markerVersions().isEmpty()) {
+            // After a decision the append may have committed, for example when a synchronous subscription throws this
+            // without a transaction, and reading in full would run the command twice
+            if (base.markerVersions().isEmpty() || decided.get()) {
                 throw e;
             }
-            // The store refuses at the read, before the domain function runs, so nothing was appended
             log.debug("Reading the whole boundary of snapshot '{}' since the store can't read after its marker versions: {}", key, e.getMessage());
-            executed = executeFrom(SnapshotSupport.DcbBase.initial(decider::initialState), criteria, commands, dcbDecider);
+            executed = executeFrom(SnapshotSupport.DcbBase.initial(decider::initialState), criteria, commands, dcbDecider, new AtomicBoolean());
         }
 
         Decider.Decision<S, E> decision = executed.decision();
@@ -188,7 +191,7 @@ public final class SnapshotDcbDeciderApplicationService<E> {
         return executed;
     }
 
-    private <C, S extends @Nullable Object> Executed<S, E> executeFrom(SnapshotSupport.DcbBase<S> base, DcbCriteria criteria, List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+    private <C, S extends @Nullable Object> Executed<S, E> executeFrom(SnapshotSupport.DcbBase<S> base, DcbCriteria criteria, List<C> commands, DcbDecider<C, S, E> dcbDecider, AtomicBoolean decided) {
         Decider<C, S, E> decider = dcbDecider.decider();
         DcbExecuteOptions<E> executeOptions = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
         executeOptions = base.markerVersions().map(executeOptions::fromVersions).orElseGet(executeOptions::withVersions);
@@ -200,6 +203,7 @@ public final class SnapshotDcbDeciderApplicationService<E> {
                     S current = decider.evolve(base.state(), tail);
                     Decider.Decision<S, E> decision = decider.decideOnState(current, commands);
                     decisionRef.set(decision);
+                    decided.set(true);
                     return decision.events();
                 });
         Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");

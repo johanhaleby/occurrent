@@ -25,6 +25,8 @@ import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.*;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
+import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
 import org.occurrent.domain.DomainEvent;
@@ -59,6 +61,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -264,6 +267,48 @@ class SnapshotDcbDeciderApplicationServiceTest {
     }
 
     @Test
+    void a_refusal_after_the_append_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
+        // A synchronous subscription without a transaction throws after the append has committed
+        AtomicBoolean refuseAfterAppend = new AtomicBoolean();
+        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by a synchronous subscription (test double)");
+        SynchronousEventDispatcher refusingDispatcher = new SynchronousEventDispatcher() {
+            @Override
+            public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+                if (refuseAfterAppend.get()) {
+                    throw refusal;
+                }
+            }
+
+            @Override
+            public boolean hasSubscriptions() {
+                return true;
+            }
+        };
+        var dispatchingService = new SnapshotDcbDeciderApplicationService<>(GenericDcbApplicationService.builder(eventStore, converter)
+                .tagGenerator((DomainEvent event) -> Set.of(tag()))
+                .synchronousSubscriptions(refusingDispatcher)
+                .transactionExecutor(TransactionExecutor.noTransaction())
+                .build());
+        AtomicInteger decideCount = new AtomicInteger();
+        var account = SnapshotDcbDecider.from(DcbDecider.from(decideCounting(countingDecider(evolveCount, time), decideCount), command -> criteria(), event -> Set.of(tag())), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+        dispatchingService.execute(new Define("A"), account);
+        decideCount.set(0);
+        refuseAfterAppend.set(true);
+
+        Throwable thrown = catchThrowable(() -> dispatchingService.execute(new Change("B"), account));
+
+        assertAll(
+                () -> assertThat(thrown).isSameAs(refusal),
+                () -> assertThat(decideCount.get()).as("times the command was decided").isEqualTo(1),
+                // The seed, A and the one B that committed before the refusal
+                () -> assertThat(eventStore.read(criteria()).events()).as("events in the boundary").hasSize(3),
+                // The refusal escapes before the snapshot is saved, so the one from A is left in place
+                () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("A")
+        );
+    }
+
+    @Test
     void an_unconfirmed_append_saves_no_snapshot_and_warns_once_per_service_then_logs_at_debug() {
         ControlledStore controlled = new ControlledStore(eventStore);
         controlled.confirms = false;
@@ -441,6 +486,27 @@ class SnapshotDcbDeciderApplicationServiceTest {
             public String evolve(String state, @NonNull DomainEvent event) {
                 evolveCount.incrementAndGet();
                 return event.name();
+            }
+        };
+    }
+
+    private static Decider<Cmd, String, DomainEvent> decideCounting(Decider<Cmd, String, DomainEvent> delegate, AtomicInteger decideCount) {
+        return new Decider<>() {
+            @Override
+            public String initialState() {
+                return delegate.initialState();
+            }
+
+            @NonNull
+            @Override
+            public List<DomainEvent> decide(@NonNull Cmd command, String state) {
+                decideCount.incrementAndGet();
+                return delegate.decide(command, state);
+            }
+
+            @Override
+            public String evolve(String state, @NonNull DomainEvent event) {
+                return delegate.evolve(state, event);
             }
         };
     }
