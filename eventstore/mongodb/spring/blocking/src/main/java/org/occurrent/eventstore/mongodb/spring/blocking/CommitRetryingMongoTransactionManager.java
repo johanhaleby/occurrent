@@ -35,9 +35,9 @@ import static java.util.Objects.requireNonNull;
  * A plain {@code MongoTransactionManager} reports such a commit as a failure, although the transaction may have been
  * saved, and retrying the append then either writes the events twice or is refused as a duplicate. This manager retries
  * the commit while the error carries the {@code UnknownTransactionCommitResult} label, for up to two minutes from the
- * first attempt, as {@code ClientSession.withTransaction} does for the native event store. A {@code MaxTimeMSExpired}
- * error is not retried, which is also what the driver does. When the time is up, the last error is thrown from the
- * commit as usual.
+ * first attempt, as {@code ClientSession.withTransaction} does for the native event store. A top-level {@code MaxTimeMSExpired}
+ * error ({@code MongoExecutionTimeoutException}) is not retried, and a write concern error with that code is, which is
+ * also what the driver does. When the time is up, the last error is thrown from the commit as usual.
  * <p>
  * Use it for the {@link EventStoreConfig.Builder#transactionConfig(org.springframework.transaction.PlatformTransactionManager) event store's}
  * transaction manager. The Occurrent Spring Boot starter creates one unless the application defines its own

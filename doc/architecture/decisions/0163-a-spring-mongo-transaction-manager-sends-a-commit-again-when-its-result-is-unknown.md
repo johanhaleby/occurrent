@@ -31,8 +31,9 @@ The retry follows the driver's `withTransaction`:
 
 - It retries a commit that fails with the `UnknownTransactionCommitResult` label, found on the exception or on one of
   its causes.
-- It does not retry `MongoExecutionTimeoutException` (`MaxTimeMSExpired`) or `MongoOperationTimeoutException`, which the
-  driver does not retry either.
+- It does not retry a top-level `MaxTimeMSExpired` error (`MongoExecutionTimeoutException`) or
+  `MongoOperationTimeoutException`, which the driver does not retry either. It does retry a `MongoWriteConcernException`
+  with the `MaxTimeMSExpired` code (50) when it has the label, as the driver does.
 - It stops retrying 120 seconds after the first commit was sent, the driver's `MAX_RETRY_TIME_LIMIT_MS`, and throws or
   emits the last error. The caller sees the same failure it sees today, and the append may or may not be saved.
 - It sends the next commit at once, as the driver does.
