@@ -176,11 +176,26 @@ class ReactorMongoEventStoreUnknownCommitResultTest {
                 .append("data", new Document("failCommands", List.of("commitTransaction"))
                         .append("writeConcernError", new Document("code", WRITE_CONCERN_FAILED).append("errmsg", "the result of the commit is unknown"))));
 
+        long start = System.nanoTime();
         assertThatThrownBy(() -> eventStore.write(STREAM_ID, Flux.just(event("NameDefined"))).block())
                 .isInstanceOf(TransactionSystemException.class)
                 .cause()
                 .isInstanceOf(MongoException.class)
                 .satisfies(cause -> assertThat(((MongoException) cause).hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)).isTrue());
+        // The commit is sent again until the limit, and not given up on after the first retry.
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isGreaterThanOrEqualTo(Duration.ofMillis(250));
+    }
+
+    @Test
+    void a_commit_that_has_an_unknown_result_three_times_in_a_row_is_committed_on_the_fourth_attempt() {
+        ReactorMongoEventStore eventStore = storeOn(new CommitRetryingReactiveMongoTransactionManager(databaseFactory));
+        configureFailPoint(new Document("mode", new Document("times", 3))
+                .append("data", new Document("failCommands", List.of("commitTransaction"))
+                        .append("writeConcernError", new Document("code", WRITE_CONCERN_FAILED).append("errmsg", "the result of the commit is unknown"))));
+
+        eventStore.write(STREAM_ID, Flux.just(event("NameDefined"))).block();
+
+        assertThat(eventStore.count(Filter.streamId(STREAM_ID)).block()).isEqualTo(1L);
     }
 
     @Test
