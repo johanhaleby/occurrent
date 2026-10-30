@@ -62,7 +62,7 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * need to wait out all the others, and a smaller budget is not enough. 240 attempts is about two minutes of
      * waiting, like the 120 seconds a native {@code withTransaction} call gives the native store. Five attempts,
      * borrowed from the unrelated append-condition retry, failed a six-way contention test. An executor that uses this
-     * default also stops retrying 120 seconds after the call started, so attempts that are slow themselves, for
+     * default also schedules no retry once 120 seconds have passed since the call started, so attempts that are slow themselves, for
      * example while MongoDB has no primary, don't stretch the budget to hours. A retry passed to a constructor is
      * used as given, this default included.
      * <p>

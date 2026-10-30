@@ -60,10 +60,10 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * global position counter, but only when this executor opened the transaction. The event store joins this
      * transaction rather than opening its own, so it cannot retry a conflict itself: an aborted transaction can only
      * be started again by whoever owns it. Attempt count and backoff match the event store's own transient-conflict
-     * retry, which this stands in for, and the blocking {@code SpringTransactionExecutor}, so retry behaviour is
-     * identical across the two stacks (ADR 0053). That is 320 retries, 321 attempts in all, about two minutes of
-     * waiting, since Reactor's jitter makes the average wait at the 500 ms cap 375 ms. An executor that uses this
-     * default also stops retrying 120 seconds after the subscription started, so attempts that are slow themselves,
+     * retry, which this stands in for. The waiting matches the blocking {@code SpringTransactionExecutor} (ADR 0053),
+     * about two minutes, and the count is higher to make up for it: 320 retries, 321 attempts in all, since Reactor's
+     * jitter makes the average wait at the 500 ms cap 375 ms. An executor that uses this
+     * default also schedules no retry once 120 seconds have passed since the subscription started, so attempts that are slow themselves,
      * for example while MongoDB has no primary, don't stretch the budget to hours. A retry passed to a constructor is
      * used as given, this default included. See ADR 0074.
      */

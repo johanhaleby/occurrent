@@ -19,6 +19,8 @@ package org.occurrent.application.service.spring.reactor;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.reactive.AbstractReactiveTransactionManager;
 import org.springframework.transaction.reactive.GenericReactiveTransaction;
@@ -27,6 +29,10 @@ import org.springframework.transaction.reactive.TransactionalOperator;
 import org.springframework.transaction.support.DefaultTransactionDefinition;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SpringReactiveTransactionExecutorTest {
@@ -92,6 +98,48 @@ class SpringReactiveTransactionExecutorTest {
         StepVerifier.create(transactional)
                 .expectNext(false)
                 .verifyComplete();
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_when_it_fails_with_a_transient_data_access_exception() {
+        // Given
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(new StubReactiveTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Mono<String> result = executor.inTransaction(() -> Mono.fromCallable(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        }));
+
+        // Then
+        StepVerifier.create(result)
+                .expectNext("done")
+                .verifyComplete();
+        assertThat(attempts).hasValue(4);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_when_it_fails_with_a_data_integrity_violation() {
+        // Given
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(new StubReactiveTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Mono<String> result = executor.inTransaction(() -> Mono.fromCallable(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw new DataIntegrityViolationException("write conflict");
+            }
+            return "done";
+        }));
+
+        // Then
+        StepVerifier.create(result)
+                .expectNext("done")
+                .verifyComplete();
+        assertThat(attempts).hasValue(4);
     }
 
     // A transaction manager with no real resource to manage: doBegin/doCommit/doRollback are no-ops, and

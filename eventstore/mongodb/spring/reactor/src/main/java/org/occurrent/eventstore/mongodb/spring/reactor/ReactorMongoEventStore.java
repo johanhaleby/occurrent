@@ -139,8 +139,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // each attempt takes on top. The reactive driver has no withTransaction and
     // ReactiveMongoTransactionManager retries no transient transaction error, so these retries are the whole budget.
     // Reactor's default jitter makes each wait between 250 and 500 ms once the backoff reaches its 500 ms cap, 375 ms on
-    // average, so 320 retries (321 attempts in all) take about 120 s. transientConflictRetryWithDeadline() also stops
-    // them 120 s after the append started, so attempts that are slow themselves don't stretch the budget to hours.
+    // average, so 320 retries (321 attempts in all) take about 120 s. transientConflictRetryWithDeadline() also
+    // schedules no retry once 120 s have passed since the first attempt began, so attempts that are slow themselves don't stretch the budget to hours.
     static final RetryBackoffSpec TRANSIENT_CONFLICT_RETRY = Retry.backoff(320, Duration.ofMillis(10))
             .maxBackoff(Duration.ofMillis(500))
             .filter(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))

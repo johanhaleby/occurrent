@@ -19,10 +19,14 @@ package org.occurrent.application.service.spring;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
+
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -79,6 +83,44 @@ class SpringTransactionExecutorTest {
 
         // Then
         assertThat(transactional).isFalse();
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_when_it_fails_with_a_transient_data_access_exception() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(4);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_when_it_fails_with_a_data_integrity_violation() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw new DataIntegrityViolationException("write conflict");
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(4);
     }
 
     // A transaction manager with no real resource to manage: doBegin/doCommit/doRollback are no-ops, and
