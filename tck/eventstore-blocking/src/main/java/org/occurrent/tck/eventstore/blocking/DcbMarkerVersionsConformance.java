@@ -322,6 +322,22 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
                     .as("An event of the second alternative committed after the resumed read must reject the append")
                     .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
         }
+
+        @Test
+        void holds_all_criteria_for_a_read_of_everything_with_versions_and_conflicts_on_a_whole_store_append_committed_after_it() {
+            DcbEventStream read = dcbEventStore().read(DcbCriteria.all(), DcbReadOptions.fromBeginning().withVersions());
+
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)), DcbAppendCondition.wholeStoreLock());
+
+            Throwable thrown = catchThrowable(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_B)), DcbAppendCondition.wholeStoreLock(read.consistencyToken())));
+            assertThat(read.consistencyToken().criteria())
+                    .as("The token of a read of everything that asked for versions holds all criteria, not other criteria")
+                    .isEqualTo(DcbCriteria.all());
+            assertThat(thrown)
+                    .as("A whole-store append committed after the read must reject a whole-store lock built from its token")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
     }
 
     @Nested
