@@ -49,7 +49,11 @@ import static java.util.Objects.requireNonNull;
  *                             {@link DcbAppendCondition} describes. Unlike
  *                             {@code lastSequencePosition}, it protects an append while other appends are still
  *                             committing, because the store derives it from data a reader can only see once it's
- *                             committed. Use it only with the store that returned it.
+ *                             committed. Use it only with the store that returned it. With a store that reads inside
+ *                             a caller's transaction, such as {@code SpringMongoEventStore}, don't use a token read
+ *                             after that transaction's own append once the transaction has rolled back. The token can
+ *                             hold a marker version that a later append gets again, and a condition with that token
+ *                             can then pass when an event matching it was committed.
  * @param markerVersions       the versions of the conflict markers of the read's criteria, in the same point-in-time
  *                             view the events came from. Present only when the read asked for them with
  *                             {@link DcbReadOptions#withVersions()} or {@link DcbReadOptions#afterVersions(DcbMarkerVersions)},

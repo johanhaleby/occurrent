@@ -705,8 +705,9 @@ On MongoDB, a token also holds what the read saw of each marker. An event with o
 longer fails the condition.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
-finds no event with its tag or type, and not during a rolling upgrade. Earlier versions said pruning during
-quiescence was harmless. It isn't, because a token can be held across the prune.
+finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
+read concern snapshot. Earlier versions said pruning during quiescence was harmless. It isn't, because a token can be
+held across the prune.
 
 A `DcbEventStore` of your own needs no change, and `DcbConsistencyToken.of(criteria, version)` keeps working for it.
 A MongoDB store throws `IllegalArgumentException` for a token built that way, unless its criteria has no marker keys.
