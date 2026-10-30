@@ -640,10 +640,12 @@ stacks, so it isn't affected on a store that returns the criteria it was given.
   so does a record pattern over `DcbConsistencyToken`, since the token is no longer a record.
 - **A `DcbEventStore` decorator that rewrites criteria**, adding a tenant tag for example, and passes the inner store's
   token through. It compiles, but the token holds the rewritten criteria, so a condition on the caller's criteria throws
-  `IllegalArgumentException`. In `read`, return the inner stream with
-  `DcbConsistencyToken.of(criteria, innerToken.version())` as its token, and keep its `markerVersions`, which
-  `new DcbEventStream(events, head, token)` sets to empty. In `append`, rewrite the criteria the same way, and give the
-  inner store a condition with
+  `IllegalArgumentException`. In `read`, return
+  `new DcbEventStream(inner.events(), inner.lastSequencePosition(), DcbConsistencyToken.of(criteria, innerToken.version()), inner.markerVersions())`,
+  since the three-argument constructor sets `markerVersions` to empty. Those versions hold the rewritten criteria's
+  markers, the added tag's included, so pass them back to the inner store unchanged with the rewritten criteria. A read
+  with `all()` reports no versions, so when `all()` becomes a tag, use the three-argument constructor there. In `append`,
+  rewrite the criteria the same way, and give the inner store a condition with
   `DcbConsistencyToken.of(rewrittenCriteria, token.version())`. On MongoDB the added tag then counts in the check like
   any other tag, so appending any event with that tag can make the check refuse, whether or not the event matches.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the

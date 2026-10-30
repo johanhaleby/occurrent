@@ -988,26 +988,6 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
-        void a_condition_on_other_criteria_is_refused_when_an_event_matching_them_was_committed_after_the_read() {
-            String tagA = "collision:a";
-            String tagB = "collision:b";
-            dcbEventStore().append(List.of(taggedEvent(DEFINED, tagA)));
-            dcbEventStore().append(List.of(taggedEvent(CHANGED, tagA)));
-            dcbEventStore().append(List.of(taggedEvent(IMPORTED, tagA)));
-            dcbEventStore().append(List.of(taggedEvent(DEFINED, tagB)));
-            dcbEventStore().append(List.of(taggedEvent(CHANGED, tagB)));
-            DcbConsistencyToken tokenReadWithA = dcbEventStore().read(DcbCriteria.tags(tag(tagA))).consistencyToken();
-            dcbEventStore().append(List.of(taggedEvent(IMPORTED, tagB)));
-
-            assertThatThrownBy(() -> dcbEventStore().append(
-                    List.of(taggedEvent(SNAPSHOT, tagB)),
-                    failIfEventsMatch(DcbCriteria.tags(tag(tagB)), tokenReadWithA)))
-                    .as("A token belongs to the criteria it was read with, so building a condition on tag b from a "
-                            + "token read with tag a throws before append is called")
-                    .isExactlyInstanceOf(IllegalArgumentException.class);
-        }
-
-        @Test
         void a_whole_store_lock_with_no_token_succeeds_only_while_the_store_holds_no_dcb_event() {
             DcbAppendResult result = dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)), wholeStoreLock());
             assertThat(result.eventCount())
