@@ -1171,6 +1171,122 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
+        void a_condition_on_a_type_and_two_tags_ignores_an_event_of_that_type_carrying_only_one_of_the_tags_committed_after_the_read() {
+            String type = "TwoTagsAccepted";
+            String course = "two-tags-accepted-course:c1";
+            String student = "two-tags-accepted-student:s1";
+            String otherStudent = "two-tags-accepted-student:s2";
+            DcbCriteria criteria = DcbCriteria.type(type).tags(tag(course), tag(student));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(type, course, otherStudent)));
+
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(type, course, student)), failIfEventsMatch(token)))
+                    .as("The event committed after the read carries the course tag but not the student tag, so it "
+                            + "does not match a criterion that needs both. Sharing one of two tags with the criteria "
+                            + "is not sharing the boundary")
+                    .doesNotThrowAnyException();
+
+            assertThat(dcbEventStore().read(criteria).events().size())
+                    .as("The accepted append must have written its event, and the event with the other student is not selected")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void a_condition_on_a_type_and_two_tags_conflicts_on_an_event_of_that_type_carrying_both_tags_committed_after_the_read() {
+            String type = "TwoTagsControl";
+            String course = "two-tags-control-course:c1";
+            String student = "two-tags-control-student:s1";
+            DcbCriteria criteria = DcbCriteria.type(type).tags(tag(course), tag(student));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(type, course, student)));
+
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(type, course, student)), failIfEventsMatch(token)))
+                    .as("The control of the accepted case: an event of the type that carries both tags does match, "
+                            + "so a store that never refuses an event that shares only some of its markers with the "
+                            + "criteria would accept this append")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
+        void a_condition_on_two_tag_alternatives_conflicts_on_an_event_carrying_only_the_tag_of_the_second_alternative() {
+            String tagA = "alternatives-conflict:a";
+            String tagB = "alternatives-conflict:b";
+            DcbCriteria criteria = DcbCriteria.anyOf(DcbCriteria.tags(tag(tagA)), DcbCriteria.tags(tag(tagB)));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(CHANGED, tagB)));
+            DcbEventStream before = dcbEventStore().read(criteria);
+
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(SNAPSHOT, "alternatives-conflict:unrelated")), failIfEventsMatch(token)))
+                    .as("The event committed after the read matches the second alternative, and the tag of the first "
+                            + "alternative did not move. Each alternative is judged on its own tags, so the unmoved "
+                            + "tag of one must not clear the other")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+
+            assertThat(positionsOf(dcbEventStore().read(criteria).events()))
+                    .as("The refused append must not have added an event the criteria select")
+                    .isEqualTo(positionsOf(before.events()));
+        }
+
+        @Test
+        void a_condition_on_a_type_alternative_and_a_two_tag_alternative_ignores_an_event_of_another_type_carrying_one_of_the_tags() {
+            String type = "AlternativesAcceptedType";
+            String otherType = "AlternativesAcceptedOther";
+            String tagA = "alternatives-accepted:a";
+            String tagB = "alternatives-accepted:b";
+            DcbCriteria criteria = DcbCriteria.anyOf(DcbCriteria.type(type), DcbCriteria.tags(tag(tagA), tag(tagB)));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(otherType, tagA)));
+
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(otherType, "alternatives-accepted:unrelated")), failIfEventsMatch(token)))
+                    .as("The event committed after the read has neither the type of the first alternative nor both "
+                            + "tags of the second, so it matches neither. A store that cannot tell this from a match "
+                            + "of the type alternative, or of the tag alternative, would refuse")
+                    .doesNotThrowAnyException();
+
+            assertThat(dcbEventStore().read(criteria).events())
+                    .as("No event of the type or with both tags exists, so the accepted append wrote none either")
+                    .isEmpty();
+        }
+
+        @Test
+        void a_token_read_on_a_tag_no_event_carried_ignores_an_append_that_does_not_carry_it() {
+            String tagZ = "unused-tag-accepted:z";
+            DcbCriteria criteria = DcbCriteria.tags(tag(tagZ));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, "unused-tag-accepted:other")));
+
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(CHANGED, tagZ)), failIfEventsMatch(token)))
+                    .as("The tag the read looked for still has no event, so nothing matching was committed after the "
+                            + "read. A store that counts a tag it has never seen as having changed would refuse")
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        void a_token_read_on_a_tag_no_event_carried_conflicts_on_an_append_that_carries_it() {
+            String tagZ = "unused-tag-control:z";
+            DcbCriteria criteria = DcbCriteria.tags(tag(tagZ));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, tagZ)));
+
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(CHANGED, tagZ)), failIfEventsMatch(token)))
+                    .as("The control of the accepted case: the first event with the tag is a match committed after "
+                            + "the read, so a store that treats a tag it had not seen as unchanged would accept this append")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
         void a_whole_store_lock_with_no_token_succeeds_only_while_the_store_holds_no_dcb_event() {
             DcbAppendResult result = dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)), wholeStoreLock());
             assertThat(result.eventCount())

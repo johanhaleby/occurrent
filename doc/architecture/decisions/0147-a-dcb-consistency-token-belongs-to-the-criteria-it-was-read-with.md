@@ -172,11 +172,10 @@ catch that.
   unconditional append that only shares a type. Appends of one type that run at the same time still write the same
   `type:X` document on MongoDB, whatever their tags, and the TCK test below runs its appends one after another, so it
   doesn't show that they stop conflicting.
-- For a criteria item with both types and tags, the token no longer includes the versions of its type markers, so a
-  prune between the read and the append can let through a conflicting append that 0.34 refused, until
-  [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. After a prune of only the tag marker, no type
-  marker is left in the sum to refuse the append. After a prune of both, matching appends can bring the tag marker
-  back to the version the token holds.
+- For a criteria item with both types and tags, the token no longer includes the versions of its type markers. A
+  prune between the read and the append can't let a conflicting append through because of that, since
+  [ADR 149](0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md) compares each marker's
+  epoch and version instead of a sum.
 - A read with `afterVersions` can't tell versions saved from other criteria when the marker keys are the same. Versions
   from a read on `type("X").tags(a)` have the key `tag:a`, like a read on `tags(a)`, so that read no longer throws
   `DcbSnapshotInvalidException` and returns only what comes after the versions, with no exception. The javadoc and the

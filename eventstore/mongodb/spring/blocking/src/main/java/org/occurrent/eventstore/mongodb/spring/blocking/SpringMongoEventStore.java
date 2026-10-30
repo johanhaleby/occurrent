@@ -54,6 +54,7 @@ import org.occurrent.eventstore.api.internal.UpdateEventRepairValidator;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
@@ -284,11 +285,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     // The token, the head, the template and the query options are passed in so a catch-up read scope can read all of them
     // through its own session at its own read concern
-    private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, LongSupplier consistencyToken, LongSupplier currentPosition, MongoTemplate template, Function<Query, Query> readQueryOptions) {
+    private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Supplier<DcbConsistencyToken> consistencyToken, LongSupplier currentPosition, MongoTemplate template, Function<Query, Query> readQueryOptions) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
         // false conflict that retries) rather than miss the conflict.
-        long consistencyTokenValue = consistencyToken.getAsLong();
+        DcbConsistencyToken readToken = consistencyToken.get();
         long highWatermark = currentPosition.getAsLong();
         long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
         Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
@@ -306,7 +307,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (backward) {
             Collections.reverse(events);
         }
-        return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(criteria, consistencyTokenValue));
+        return new DcbEventStream(events, highWatermark, readToken);
     }
 
     // Markers, counter and events come from one point in time, so the reported versions cover exactly the events read
@@ -369,10 +370,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private DcbEventStream readMarkerVersionsWith(MongoTemplate template, DcbCriteria criteria, DcbReadOptions options) {
         Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
         Map<String, Document> markers = DcbMarkerVersionsDocuments.markersByKey(template.find(markersQuery(markerKeys), Document.class, dcbCheckpointCollectionName));
-        Map<String, DcbMarkerVersionsSupport.ObservedMarker> observed = DcbMarkerVersionsDocuments.observe(markers);
+        Map<String, DcbConsistencyToken.MarkerObservation> observed = DcbMarkerVersionsDocuments.observe(markerKeys, markers);
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         afterVersions.ifPresent(saved -> DcbMarkerVersionsSupport.requireResumable(criteria, saved, observed));
-        long consistencyTokenValue = DcbMarkerVersionsDocuments.consistencyToken(markerKeys, markers);
 
         Document counter = template.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName);
         long highWatermark = counter == null ? 0 : ((Number) counter.get(DcbMarkerModel.COUNTER_POSITION)).longValue();
@@ -395,7 +395,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             Collections.reverse(events);
         }
         Optional<DcbMarkerVersions> markerVersions = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(markerKeys, observed) : Optional.empty();
-        return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(criteria, consistencyTokenValue), markerVersions);
+        return new DcbEventStream(events, highWatermark, DcbMarkerVersionsDocuments.consistencyToken(criteria, markers), markerVersions);
     }
 
     private DcbEventStream markerVersionsReadFailed(DcbCriteria criteria, DcbReadOptions options, String phase, RuntimeException cause) {
@@ -821,12 +821,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         final boolean conflict;
         if (expectedToken.isPresent()) {
             // The condition carries the consistency token the command observed when it read the query
-            // (DcbEventStream.consistencyToken()). If the query's markers have advanced since, an append that shares
-            // one of them committed after the read, so the condition fails, also when that append's events don't
-            // match the query. This is immune to read-watermark overshoot,
-            // unlike a position-based check, because marker versions bump inside the append transaction at
-            // commit, not when positions are reserved (ADR 0021).
-            conflict = consistencyToken(condition.criteria(), mongoTemplate) != expectedToken.get().version();
+            // (DcbEventStream.consistencyToken()). The check compares each of the query's markers with what the read
+            // saw of it (ADR 0149). This is immune to read-watermark overshoot, unlike a position-based check, because
+            // marker versions bump inside the append transaction at commit, not when positions are reserved. The check
+            // can't yet ask the events, so an item the markers don't settle refuses the append.
+            Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), queryMarkers(condition.criteria(), mongoTemplate));
+            conflict = !(DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current) instanceof DcbAppendConditionCheck.Pass);
         } else {
             // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than
             // marker versions, so it means "currently exists" (surviving deletes and marker pruning) rather than
@@ -857,8 +857,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // stored lastPosition is informational.
     // The marker collection holds one document per distinct tag and type that has taken part in an append, and
     // nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection
-    // without bound. An operator can prune markers when no command holds a token it can still append with, and a later
-    // append recreates any it still needs.
+    // without bound. A marker may be deleted only in a transaction that also finds no event with its tag or type
+    // (ADR 149), and a later append recreates any it still needs.
     // Returns the incremented markers as this transaction left them, keyed by marker key, so the append stamps its
     // events with the versions it gave them (ADR 148).
     private Map<String, Document> incrementConflictMarkers(Set<String> markerKeys, long lastPosition) {
@@ -884,28 +884,21 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return DcbMarkerVersionsDocuments.markersByKey(mongoTemplate.find(markersQuery(markerKeys), Document.class, dcbCheckpointCollectionName));
     }
 
-    // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. While the markers
-    // exist the sum only grows, so it changes when an append touches one of the query's markers after the reader
-    // observed it. A prune can bring the sum back to a value a reader holds (#1300). Because versions bump inside the
-    // append transaction, not when positions are reserved, this token reflects only committed appends and is
-    // immune to the read-watermark overshoot a position-based check suffers (ADR 0021).
-    private long consistencyToken(DcbCriteria criteria, MongoTemplate template) {
+    // The optimistic-concurrency token for a query: what the read saw of each of its conflict markers. Because versions
+    // bump inside the append transaction, not when positions are reserved, this token reflects only committed appends
+    // and is immune to the read-watermark overshoot a position-based check suffers (ADR 0021).
+    private DcbConsistencyToken consistencyToken(DcbCriteria criteria, MongoTemplate template) {
+        return DcbMarkerVersionsDocuments.consistencyToken(criteria, queryMarkers(criteria, template));
+    }
+
+    // Read the query's markers in one query so their versions come from a single consistent snapshot. Reading them one by
+    // one could tear across a concurrent append and capture a token that masks a real conflict (ADR 0031).
+    private Map<String, Document> queryMarkers(DcbCriteria criteria, MongoTemplate template) {
         Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
         if (markerKeys.isEmpty()) {
-            return 0;
+            return Map.of();
         }
-        // Read the query's markers in one query so their versions come from a single consistent snapshot. Reading
-        // them one by one could tear across a concurrent append and capture a sum that masks a real conflict
-        // (ADR 0031).
-        List<String> markerIds = markerKeys.stream().map(DcbMarkerModel::markerId).toList();
-        long sum = 0;
-        for (Document marker : template.find(new Query(where(ID).in(markerIds)), Document.class, dcbCheckpointCollectionName)) {
-            Number version = (Number) marker.get(DcbMarkerModel.CHECKPOINT_VERSION);
-            if (version != null) {
-                sum += version.longValue();
-            }
-        }
-        return sum;
+        return DcbMarkerVersionsDocuments.markersByKey(template.find(markersQuery(markerKeys), Document.class, dcbCheckpointCollectionName));
     }
 
     /**

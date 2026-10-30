@@ -19,8 +19,11 @@ package org.occurrent.eventstore.api.dcb;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken.MarkerObservation;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -133,6 +136,60 @@ class DcbConsistencyTokenTest {
     @Test
     void the_same_criteria_with_a_different_version_is_not_equal() {
         assertThat(DcbConsistencyToken.of(A, 3)).isNotEqualTo(DcbConsistencyToken.of(A, 4));
+    }
+
+    @Test
+    void of_with_a_version_only_gives_an_empty_marker_map() {
+        assertThat(DcbConsistencyToken.of(A, 3).markers()).isEmpty();
+    }
+
+    @Test
+    void of_with_a_version_only_is_the_same_token_as_of_with_an_empty_marker_map() {
+        assertThat(DcbConsistencyToken.of(A, 3)).isEqualTo(DcbConsistencyToken.of(A, 3, Map.of()));
+        assertThat(DcbConsistencyToken.of(A, 3)).hasSameHashCodeAs(DcbConsistencyToken.of(A, 3, Map.of()));
+    }
+
+    @Test
+    void of_exposes_the_markers_it_was_given_and_keeps_its_own_copy_of_them() {
+        Map<String, MarkerObservation> markers = new HashMap<>(Map.of("tag:a:1", new MarkerObservation("e1", 2, 0)));
+
+        DcbConsistencyToken token = DcbConsistencyToken.of(A, 2, markers);
+        markers.put("tag:b:1", MarkerObservation.absent());
+
+        assertThat(token.markers()).containsExactly(Map.entry("tag:a:1", new MarkerObservation("e1", 2, 0)));
+    }
+
+    @Test
+    void of_throws_NullPointerException_when_the_markers_are_null() {
+        Throwable thrown = catchThrowable(() -> DcbConsistencyToken.of(A, 1, null));
+
+        assertThat(thrown).isExactlyInstanceOf(NullPointerException.class).hasMessage("Markers cannot be null");
+    }
+
+    @Test
+    void a_marker_that_was_not_found_is_observed_as_no_epoch_version_0_and_unstamped_0() {
+        assertThat(MarkerObservation.absent()).isEqualTo(new MarkerObservation(null, 0, 0));
+    }
+
+    @Test
+    void tokens_with_the_same_criteria_version_and_markers_are_equal() {
+        DcbConsistencyToken first = DcbConsistencyToken.of(A, 3, Map.of("tag:a:1", new MarkerObservation("e1", 3, 1)));
+        DcbConsistencyToken second = DcbConsistencyToken.of(A, 3, Map.of("tag:a:1", new MarkerObservation("e1", 3, 1)));
+
+        assertThat(first).isEqualTo(second);
+        assertThat(first).hasSameHashCodeAs(second);
+    }
+
+    @Test
+    void tokens_that_differ_only_in_what_they_saw_of_a_marker_are_not_equal() {
+        DcbConsistencyToken token = DcbConsistencyToken.of(A, 3, Map.of("tag:a:1", new MarkerObservation("e1", 3, 1)));
+
+        assertThat(token).as("epoch").isNotEqualTo(DcbConsistencyToken.of(A, 3, Map.of("tag:a:1", new MarkerObservation("e2", 3, 1))));
+        assertThat(token).as("version").isNotEqualTo(DcbConsistencyToken.of(A, 3, Map.of("tag:a:1", new MarkerObservation("e1", 4, 1))));
+        assertThat(token).as("unstamped").isNotEqualTo(DcbConsistencyToken.of(A, 3, Map.of("tag:a:1", new MarkerObservation("e1", 3, 0))));
+        assertThat(token).as("marker key").isNotEqualTo(DcbConsistencyToken.of(A, 3, Map.of("tag:b:1", new MarkerObservation("e1", 3, 1))));
+        assertThat(token).as("no markers").isNotEqualTo(DcbConsistencyToken.of(A, 3));
+        assertThat(DcbConsistencyToken.of(A, 3)).as("no markers, the other way").isNotEqualTo(token);
     }
 
     @Test
