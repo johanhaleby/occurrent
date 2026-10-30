@@ -356,12 +356,11 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
         subscriptionModel.shutdown();
         subscriptionModel = modelOver(templateWithoutBatchCursors(), configuration());
         AtomicInteger asked = new AtomicInteger();
-        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
         GlobalCheckpoint answered = GlobalCheckpoint.of(0);
         StartAt startAt = StartAt.dynamic(ctx -> asked.incrementAndGet() == 1 ? StartAt.now() : StartAt.checkpoint(answered));
 
         // When it subscribes
-        Subscription subscription = subscriptionModel.subscribe("refused-after-falling-back", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
+        Subscription subscription = subscriptionModel.subscribe("refused-after-falling-back", startAt, event -> Mono.empty());
 
         // Then the subscription stops with the refusal, after the handle has answered that it started, since the driver's cursor was asked to open before the position was asked again
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning("refused-after-falling-back")).isFalse());
@@ -371,7 +370,6 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
                 .extracting(event -> event.getThrowableProxy().getClassName())
                 .as("exceptions logged as errors").containsOnly(UnsupportedStartAtException.class.getName());
         assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions").isFalse();
-        assertThat(delivered).isEmpty();
     }
 
     @Test

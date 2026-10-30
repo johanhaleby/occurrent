@@ -1157,8 +1157,7 @@ the exception can stop the application from starting.
 
 The `Subscription` that `NativeMongoSubscriptionModel.subscribe(..)` returns is a `NativeMongoSubscription`, and it
 now holds a supplier of the failure that `waitUntilStarted(..)` throws, as a third record component called
-`startFailure`. A record
-pattern has to name every component of the canonical constructor:
+`startFailure`. A record pattern has to name every component of the canonical constructor:
 
 ```java
 // Before, stops compiling
