@@ -18,6 +18,7 @@ package org.occurrent.eventstore.api.dcb;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.util.List;
 import java.util.Optional;
@@ -86,5 +87,21 @@ public record DcbEventStream(List<CloudEvent> events, long lastSequencePosition,
      */
     public Stream<CloudEvent> stream() {
         return events.stream();
+    }
+
+    /**
+     * Whether an event returned by the read has a position below {@code position}. A read after marker versions can
+     * return one, since a store can assign a position before the event commits.
+     */
+    public boolean hasEventBelow(long position) {
+        return events.stream().anyMatch(event -> OccurrentCloudEventExtension.getPosition(event) < position);
+    }
+
+    /**
+     * The highest position among the events returned by the read, or {@code 0} when it returned none. It isn't
+     * {@link #lastSequencePosition()}, which is the head of the whole store.
+     */
+    public long highestEventPosition() {
+        return events.stream().mapToLong(OccurrentCloudEventExtension::getPosition).max().orElse(0);
     }
 }

@@ -25,6 +25,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.eventstore.api.AppendId;
@@ -82,7 +83,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             var store = new ScriptedStore(Optional.empty(), Optional.empty());
             DcbMarkerVersions saved = versions("epoch-1", 2);
 
-            service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(saved), events -> List.of(new DomainEvent("Changed", "name:1")));
+            service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(saved, 3), events -> List.of(new DomainEvent("Changed", "name:1")));
 
             assertThat(store.readOptions).containsExactly(Optional.of(DcbReadOptions.afterVersions(saved)));
         }
@@ -214,7 +215,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             var dispatcher = new RecordingDispatcher();
             var domainFunctionRan = new AtomicBoolean();
 
-            Throwable thrown = catchThrowable(() -> transactionalService(store, executor, dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2)), events -> {
+            Throwable thrown = catchThrowable(() -> transactionalService(store, executor, dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3), events -> {
                 domainFunctionRan.set(true);
                 return List.of(new DomainEvent("Changed", "name:1"));
             }));
@@ -233,7 +234,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         void the_refusal_reaches_the_caller_without_a_transaction_when_there_are_no_synchronous_subscriptions() {
             var store = new ScriptedStore(Optional.empty(), Optional.empty()).refusingTheFirstReads(1);
 
-            Throwable thrown = catchThrowable(() -> service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2)), events -> List.of(new DomainEvent("Changed", "name:1"))));
+            Throwable thrown = catchThrowable(() -> service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3), events -> List.of(new DomainEvent("Changed", "name:1"))));
 
             assertAll(
                     () -> assertThat(thrown).as("what reached the caller").isSameAs(store.refusal),
@@ -293,8 +294,64 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
                     })
                     .build();
 
-            assertThatCode(() -> service.execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2)), events -> List.of(new DomainEvent("Changed", "name:1"))))
+            assertThatCode(() -> service.execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3), events -> List.of(new DomainEvent("Changed", "name:1"))))
                     .doesNotThrowAnyException();
+            assertThat(store.appendCalls).as("appends").isEqualTo(1);
+        }
+    }
+
+    @Nested
+    @DisplayName("when the read returns an event below the highest folded position")
+    class When_the_read_returns_an_event_below_the_highest_folded_position {
+
+        @Test
+        void the_read_is_refused_before_the_domain_function_runs() {
+            var store = new ScriptedStore(Optional.empty(), Optional.empty()).returningOnRead(eventAt(41));
+            var domainFunctionRan = new AtomicBoolean();
+
+            Throwable thrown = catchThrowable(() -> service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 42), events -> {
+                domainFunctionRan.set(true);
+                return List.of(new DomainEvent("Changed", "name:1"));
+            }));
+
+            assertAll(
+                    () -> assertThat(thrown).isInstanceOf(DcbSnapshotInvalidException.class).hasMessageContaining("below position 42"),
+                    () -> assertThat(domainFunctionRan).as("domain function ran").isFalse(),
+                    () -> assertThat(store.appendCalls).as("appends").isZero()
+            );
+        }
+
+        @Test
+        void the_refusal_is_not_retried() {
+            var store = new ScriptedStore(Optional.empty(), Optional.empty()).returningOnRead(eventAt(41));
+
+            catchThrowable(() -> service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 42), events -> List.of(new DomainEvent("Changed", "name:1"))));
+
+            assertThat(store.readOptions).as("reads").hasSize(1);
+        }
+
+        @Test
+        void the_domain_function_sees_the_events_when_all_of_them_are_above_the_highest_folded_position() {
+            var store = new ScriptedStore(Optional.empty(), Optional.empty()).returningOnRead(eventAt(43));
+            var seen = new ArrayList<DomainEvent>();
+
+            service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 42), events -> {
+                seen.addAll(events);
+                return List.of(new DomainEvent("Changed", "name:1"));
+            });
+
+            assertAll(
+                    () -> assertThat(seen).as("events seen by the domain function").hasSize(1),
+                    () -> assertThat(store.appendCalls).as("appends").isEqualTo(1)
+            );
+        }
+
+        @Test
+        void a_read_of_the_whole_boundary_is_never_refused_for_an_event_below_a_position() {
+            var store = new ScriptedStore(Optional.empty(), Optional.empty()).returningOnRead(eventAt(1));
+
+            service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> List.of(new DomainEvent("Changed", "name:1")));
+
             assertThat(store.appendCalls).as("appends").isEqualTo(1);
         }
     }
@@ -313,6 +370,10 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
     private static GenericDcbApplicationService<DomainEvent> service(DcbEventStore store) {
         return new GenericDcbApplicationService<>(store, converter(), event -> Set.of(Tag.parse(event.name())), GenericDcbApplicationService.defaultRetryStrategy());
+    }
+
+    private static CloudEvent eventAt(long position) {
+        return OccurrentCloudEventExtension.withPosition(converter().toCloudEvent(new DomainEvent("Changed", "name:1")), position);
     }
 
     private static DcbMarkerVersions versions(String epoch, long version) {
@@ -355,11 +416,17 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         final DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(CRITERIA, versions("epoch-1", 2), "refused (test double)");
         int appendCalls;
         private int refusedReads;
+        private List<CloudEvent> readEvents = List.of();
         private final Optional<DcbMarkerVersions> readVersions;
 
         ScriptedStore(Optional<DcbMarkerVersions> readVersions, Optional<DcbMarkerVersions> appendVersions) {
             this.readVersions = readVersions;
             this.appended = new DcbAppendResult(4, 4, 1, Optional.of(new AppendId(UUID.randomUUID())), appendVersions);
+        }
+
+        ScriptedStore returningOnRead(CloudEvent... events) {
+            this.readEvents = List.of(events);
+            return this;
         }
 
         ScriptedStore refusingTheFirstReads(int reads) {
@@ -384,7 +451,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         private DcbEventStream stream() {
-            return new DcbEventStream(List.of(), 3, DcbConsistencyToken.of(3), readVersions);
+            return new DcbEventStream(readEvents, 3, DcbConsistencyToken.of(3), readVersions);
         }
 
         @Override

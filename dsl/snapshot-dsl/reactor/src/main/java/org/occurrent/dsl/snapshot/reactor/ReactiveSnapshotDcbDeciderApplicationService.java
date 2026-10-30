@@ -55,8 +55,11 @@ import java.util.function.Function;
  * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}), the spec's key function overrides it. The snapshot is
  * saved at the marker versions the append reported ({@link DcbAppendResult#markerVersions()}), and the next execute
  * reads only the events appended after them. The resume read still captures the whole boundary's consistency token, so
- * the append condition is unaffected and a stale snapshot only lengthens the tail. It loads one snapshot per execute,
- * and costs nothing when no snapshot is used.
+ * the append condition is unaffected. It loads one snapshot per execute, and costs nothing when no snapshot is used.
+ * <p>
+ * The snapshot also keeps the position of the append. An event that reserved a position below it can commit after the
+ * snapshot was saved, and folding that event last could give another state than a read in position order, so the
+ * execute treats it as a refused read.
  * <p>
  * A snapshot is saved only when the store reported marker versions for the append and confirms that the append is
  * committed ({@link DcbApplicationService#isAppendConfirmed(DcbAppendResult)}). Otherwise the save is skipped, and the
@@ -213,7 +216,7 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
                                                     skippedSaves.skip(key, SkippedSaves.Reason.UNCONFIRMED);
                                                     return Mono.empty();
                                                 }
-                                                return Mono.just(Snapshot.atMarkerVersions(snapshotDecision.newState(), result.markerVersions().get(), options.schemaVersion()));
+                                                return Mono.just(Snapshot.atMarkerVersions(snapshotDecision.newState(), result.markerVersions().get(), result.lastSequencePosition(), options.schemaVersion()));
                                             });
                                         })
                                 .thenReturn(executed);
@@ -226,7 +229,7 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
         return Mono.defer(() -> {
             Decider<C, S, E> decider = dcbDecider.decider();
             DcbExecuteOptions<E> withTags = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
-            DcbExecuteOptions<E> executeOptions = base.markerVersions().map(withTags::fromVersions).orElseGet(withTags::withVersions);
+            DcbExecuteOptions<E> executeOptions = base.markerVersions().map(markerVersions -> withTags.fromVersions(markerVersions, base.highestFoldedPosition())).orElseGet(withTags::withVersions);
             AtomicReference<Decider.Decision<S, E>> decisionRef = new AtomicReference<>();
             AtomicInteger tailSize = new AtomicInteger();
             return applicationService.execute(criteria, executeOptions,

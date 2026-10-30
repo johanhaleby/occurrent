@@ -42,8 +42,15 @@ class SnapshotTest {
     }
 
     @Test
+    void a_snapshot_without_marker_versions_has_highest_folded_position_zero() {
+        Snapshot<String> snapshot = new Snapshot<>("state", 7, 2);
+
+        assertThat(snapshot.highestFoldedPosition()).isZero();
+    }
+
+    @Test
     void a_snapshot_at_marker_versions_has_version_zero() {
-        Snapshot<String> snapshot = Snapshot.atMarkerVersions("state", VERSIONS, 2);
+        Snapshot<String> snapshot = Snapshot.atMarkerVersions("state", VERSIONS, 41, 2);
 
         assertThat(snapshot.version()).isZero();
         assertThat(snapshot.markerVersions()).contains(VERSIONS);
@@ -51,10 +58,38 @@ class SnapshotTest {
     }
 
     @Test
+    void a_snapshot_at_marker_versions_keeps_the_highest_folded_position() {
+        Snapshot<String> snapshot = Snapshot.atMarkerVersions("state", VERSIONS, 42, 2);
+
+        assertThat(snapshot.highestFoldedPosition()).isEqualTo(42);
+    }
+
+    @Test
+    void a_snapshot_at_marker_versions_accepts_highest_folded_position_zero_for_a_boundary_without_events() {
+        Snapshot<String> snapshot = Snapshot.atMarkerVersions("state", VERSIONS, 0, 2);
+
+        assertThat(snapshot.highestFoldedPosition()).isZero();
+    }
+
+    @Test
     void marker_versions_and_a_version_cannot_be_combined() {
-        assertThatThrownBy(() -> new Snapshot<>("state", 7, 2, Optional.of(VERSIONS)))
+        assertThatThrownBy(() -> new Snapshot<>("state", 7, 2, Optional.of(VERSIONS), 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("version must be 0 for a snapshot with marker versions");
+    }
+
+    @Test
+    void a_negative_highest_folded_position_is_refused() {
+        assertThatThrownBy(() -> Snapshot.atMarkerVersions("state", VERSIONS, -1, 2))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("highestFoldedPosition cannot be negative");
+    }
+
+    @Test
+    void a_highest_folded_position_without_marker_versions_is_refused() {
+        assertThatThrownBy(() -> new Snapshot<>("state", 7, 2, Optional.empty(), 5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("highestFoldedPosition must be 0 for a snapshot without marker versions");
     }
 
     @Test
@@ -66,17 +101,17 @@ class SnapshotTest {
 
     @Test
     void a_negative_schema_version_is_refused() {
-        assertThatThrownBy(() -> Snapshot.atMarkerVersions("state", VERSIONS, -1))
+        assertThatThrownBy(() -> Snapshot.atMarkerVersions("state", VERSIONS, 0, -1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("schemaVersion cannot be negative");
     }
 
     @Test
     void null_marker_versions_are_refused() {
-        assertThatThrownBy(() -> Snapshot.atMarkerVersions("state", null, 2))
+        assertThatThrownBy(() -> Snapshot.atMarkerVersions("state", null, 0, 2))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("markerVersions cannot be null");
-        assertThatThrownBy(() -> new Snapshot<>("state", 0, 2, null))
+        assertThatThrownBy(() -> new Snapshot<>("state", 0, 2, null, 0))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("markerVersions cannot be null");
     }

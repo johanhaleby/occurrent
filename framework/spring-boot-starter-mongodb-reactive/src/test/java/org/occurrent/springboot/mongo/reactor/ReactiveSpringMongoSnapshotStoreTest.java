@@ -91,7 +91,7 @@ class ReactiveSpringMongoSnapshotStoreTest {
                 "tag:account:a.b", new MarkerVersion("epoch-1", 3, 1),
                 "type:Deposited", new MarkerVersion("epoch-2", 8, 0)));
         ReactiveSpringMongoSnapshotStore<Balance> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, Balance.class, "reactive-snapshot-marker-versions");
-        store.save("account-4", Snapshot.atMarkerVersions(new Balance(40, false), versions, 3)).block();
+        store.save("account-4", Snapshot.atMarkerVersions(new Balance(40, false), versions, 41, 3)).block();
 
         Optional<Snapshot<Balance>> found = store.findLatest("account-4").blockOptional();
 
@@ -104,14 +104,38 @@ class ReactiveSpringMongoSnapshotStoreTest {
     }
 
     @Test
+    void round_trips_the_highest_folded_position() {
+        DcbMarkerVersions versions = DcbMarkerVersions.of(Map.of("tag:account:6", new MarkerVersion("epoch-1", 3, 0)));
+        ReactiveSpringMongoSnapshotStore<Balance> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, Balance.class, "reactive-snapshot-highest-folded-position");
+        store.save("account-8", Snapshot.atMarkerVersions(new Balance(40, false), versions, 4_000_000_000L, 3)).block();
+
+        Optional<Snapshot<Balance>> found = store.findLatest("account-8").blockOptional();
+
+        assertThat(found).hasValueSatisfying(snapshot -> assertThat(snapshot.highestFoldedPosition()).isEqualTo(4_000_000_000L));
+    }
+
+    @Test
+    void degrades_to_empty_when_the_stored_marker_versions_have_no_highest_folded_position() {
+        String collection = "reactive-snapshot-no-highest-folded-position";
+        DcbMarkerVersions versions = DcbMarkerVersions.of(Map.of("tag:account:9", new MarkerVersion("epoch-1", 3, 0)));
+        ReactiveSpringMongoSnapshotStore<Balance> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, Balance.class, collection);
+        store.save("account-9", Snapshot.atMarkerVersions(new Balance(40, false), versions, 41, 3)).block();
+        Document stored = mongoOperations.findById("account-9", Document.class, collection).block();
+        stored.remove("highestFoldedPosition");
+        mongoOperations.save(stored, collection).block();
+
+        assertThat(store.findLatest("account-9").blockOptional()).isEmpty();
+    }
+
+    @Test
     void stores_a_snapshot_at_marker_versions_without_a_version_field() {
         ReactiveSpringMongoSnapshotStore<Balance> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, Balance.class, "reactive-snapshot-no-version");
-        store.save("account-5", Snapshot.atMarkerVersions(new Balance(1, false), DcbMarkerVersions.of(Map.of("tag:account:5", new MarkerVersion("epoch-1", 1, 0))), 1)).block();
+        store.save("account-5", Snapshot.atMarkerVersions(new Balance(1, false), DcbMarkerVersions.of(Map.of("tag:account:5", new MarkerVersion("epoch-1", 1, 0))), 1, 1)).block();
 
         Document stored = mongoOperations.findById("account-5", Document.class, "reactive-snapshot-no-version").block();
 
         assertThat(stored).isNotNull();
-        assertThat(stored.keySet()).as("a node that reads only the version must find none").doesNotContain("version").contains("markerVersions");
+        assertThat(stored.keySet()).as("a node that reads only the version must find none").doesNotContain("version").contains("markerVersions", "highestFoldedPosition");
     }
 
     @Test

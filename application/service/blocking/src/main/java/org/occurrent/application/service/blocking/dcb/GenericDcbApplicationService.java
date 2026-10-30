@@ -152,6 +152,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 final DcbEventStream eventStream;
                 try {
                     eventStream = readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions);
+                    refuseEventBelowFoldedPosition(criteria, options, eventStream);
                 } catch (DcbSnapshotInvalidException refused) {
                     refusal.set(refused);
                     return new Tuple<>(Optional.empty(), List.of());
@@ -201,6 +202,13 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     public boolean isAppendConfirmed(DcbAppendResult appendResult) {
         Objects.requireNonNull(appendResult, "appendResult cannot be null");
         return eventStore instanceof DcbAppendConfirmation confirmation && confirmation.isConfirmed(appendResult);
+    }
+
+    private static void refuseEventBelowFoldedPosition(DcbCriteria criteria, DcbExecuteOptions<?> options, DcbEventStream eventStream) {
+        @Nullable DcbMarkerVersions fromVersions = options.fromVersions();
+        if (fromVersions != null && eventStream.hasEventBelow(options.highestFoldedPosition())) {
+            throw DcbSnapshotInvalidException.eventBelowFoldedPosition(criteria, fromVersions, options.highestFoldedPosition());
+        }
     }
 
     @SuppressWarnings("removal")

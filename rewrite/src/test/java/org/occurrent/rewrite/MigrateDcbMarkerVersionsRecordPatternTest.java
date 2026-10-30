@@ -821,7 +821,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
      * guessing.
      */
     @Test
-    void addsTheMarkerVersionsBindingToAVarSnapshotSwitchPattern() {
+    void addsTheMarkerVersionsAndHighestFoldedPositionBindingsToAVarSnapshotSwitchPattern() {
         rewriteRun(
                 java(
                         """
@@ -846,7 +846,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
                         class Reader {
                             String describe(Object snapshot) {
                                 return switch (snapshot) {
-                                    case Snapshot(var state, var version, var schemaVersion, var markerVersions) -> state + "@" + version + "/" + schemaVersion;
+                                    case Snapshot(var state, var version, var schemaVersion, var markerVersions, var highestFoldedPosition) -> state + "@" + version + "/" + schemaVersion;
                                     default -> "unknown";
                                 };
                             }
@@ -857,7 +857,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
     }
 
     @Test
-    void addsTheMarkerVersionsBindingToAnExplicitlyTypedSnapshotInstanceofPattern() {
+    void addsTheMarkerVersionsAndHighestFoldedPositionBindingsToAnExplicitlyTypedSnapshotInstanceofPattern() {
         rewriteRun(
                 java(
                         """
@@ -881,7 +881,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
 
                         class Reader {
                             long versionOf(Snapshot<String> snapshot) {
-                                if (snapshot instanceof Snapshot<String>(String state, long version, int schemaVersion, var markerVersions)) {
+                                if (snapshot instanceof Snapshot<String>(String state, long version, int schemaVersion, var markerVersions, var highestFoldedPosition)) {
                                     return version;
                                 }
                                 return 0;
@@ -893,7 +893,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
     }
 
     @Test
-    void leavesASnapshotPatternWithFourBindingsAlone() {
+    void leavesASnapshotPatternWithFiveBindingsAlone() {
         rewriteRun(
                 java(
                         """
@@ -904,7 +904,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
                         class Reader {
                             String describe(Object snapshot) {
                                 return switch (snapshot) {
-                                    case Snapshot(var state, var version, var schemaVersion, var markerVersions) -> state + ":" + markerVersions;
+                                    case Snapshot(var state, var version, var schemaVersion, var markerVersions, var highestFoldedPosition) -> state + ":" + markerVersions + ":" + highestFoldedPosition;
                                     default -> "unknown";
                                 };
                             }
@@ -938,7 +938,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
     }
 
     @Test
-    void stampsTheMarkerVersionsBindingWithTheOptionalMarkerVersionsTypeOfTheSnapshotComponent() {
+    void stampsEachSnapshotBindingWithTheTypeOfItsOwnComponent() {
         rewriteRun(
                 java(
                         """
@@ -959,12 +959,15 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
 
                         class Reader {
                             boolean matches(Object snapshot) {
-                                return snapshot instanceof Snapshot(var state, var version, var schemaVersion, var markerVersions);
+                                return snapshot instanceof Snapshot(var state, var version, var schemaVersion, var markerVersions, var highestFoldedPosition);
                             }
                         }
                         """,
-                        spec -> spec.afterRecipe(cu -> assertThat(bindingTypes(cu, "markerVersions"))
-                                .containsExactly("java.util.Optional<org.occurrent.eventstore.api.dcb.DcbMarkerVersions>"))
+                        spec -> spec.afterRecipe(cu -> {
+                            assertThat(bindingTypes(cu, "markerVersions"))
+                                    .containsExactly("java.util.Optional<org.occurrent.eventstore.api.dcb.DcbMarkerVersions>");
+                            assertThat(bindingTypes(cu, "highestFoldedPosition")).containsExactly("long");
+                        })
                 )
         );
     }

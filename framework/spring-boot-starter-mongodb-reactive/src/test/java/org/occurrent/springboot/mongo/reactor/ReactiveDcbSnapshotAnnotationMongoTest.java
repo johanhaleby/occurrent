@@ -33,6 +33,7 @@ import org.occurrent.dsl.snapshot.DcbSnapshotView;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.dsl.snapshot.mongodb.spring.reactor.ReactiveSpringMongoSnapshotStore;
 import org.occurrent.dsl.snapshot.reactor.ReactiveSnapshotStore;
+import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
@@ -97,6 +98,7 @@ class ReactiveDcbSnapshotAnnotationMongoTest {
     private static final String RANGE_TAG = "account:range-meta";
     private static final String HELD_TAG = "account:held";
     private static final String LEGACY_TAG = "account:legacy";
+    private static final String LAST_VALUE_TAG = "account:last-value";
     private static final int SCHEMA_VERSION = 5;
 
     @Autowired
@@ -167,6 +169,42 @@ class ReactiveDcbSnapshotAnnotationMongoTest {
     }
 
     @Test
+    void folds_an_event_that_commits_below_a_later_folded_event_in_position_order_when_the_fold_keeps_the_last_value() {
+        ReactiveSnapshotStore<LastValue> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, LastValue.class, "occurrent-snapshot-reactive-last-value-dcb");
+        String key = DcbSnapshotKeys.canonicalKey(DcbCriteria.tagsAnyOf(Tag.parse(LAST_VALUE_TAG)));
+        appendTagged(dcbEventStore, converter, LAST_VALUE_TAG, new Incremented(1));
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> assertThat(store.findLatest(key).blockOptional()).hasValueSatisfying(snapshot -> assertThat(snapshot.state().folded()).isEqualTo(1)));
+        CompletableFuture<Void> held = new CompletableFuture<>();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        AtomicBoolean first = new AtomicBoolean(true);
+        ReactorMongoEventStore holding = new ReactorMongoEventStore(mongoTemplate, new EventStoreConfig.Builder()
+                .eventStoreCollectionName(eventStoreConfig.eventStoreCollectionName)
+                .transactionConfig(new HoldingTransactionalOperator(TransactionalOperator.create(transactionManager), () -> {
+                    if (!first.compareAndSet(true, false)) {
+                        return Mono.empty();
+                    }
+                    held.complete(null);
+                    return Mono.fromFuture(release).timeout(ofSeconds(30));
+                }))
+                .timeRepresentation(eventStoreConfig.timeRepresentation)
+                .eventStoreCapabilities(eventStoreConfig.eventStoreCapabilities)
+                .build());
+        CompletableFuture<Void> heldAppend = appendTaggedAsync(holding, converter, LAST_VALUE_TAG, new Incremented(5));
+        held.orTimeout(30, java.util.concurrent.TimeUnit.SECONDS).join();
+        DcbAppendResult overtaking = appendTagged(dcbEventStore, converter, LAST_VALUE_TAG, new Incremented(10));
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> assertThat(store.findLatest(key).blockOptional()).hasValueSatisfying(snapshot -> assertThat(snapshot.state().folded()).isEqualTo(2)));
+        release.complete(null);
+        heldAppend.orTimeout(30, java.util.concurrent.TimeUnit.SECONDS).join();
+
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> assertThat(store.findLatest(key).blockOptional()).hasValueSatisfying(snapshot -> assertThat(snapshot.state().folded()).as("events folded once the late one committed").isEqualTo(3)));
+        org.occurrent.dsl.snapshot.Snapshot<LastValue> saved = store.findLatest(key).block();
+        List<CounterEvent> inPositionOrder = dcbEventStore.read(DcbCriteria.tagsAnyOf(Tag.parse(LAST_VALUE_TAG))).block().events().stream().map(converter::toDomainEvent).toList();
+        assertThat(inPositionOrder.getLast().amount()).as("the value of a read in position order").isEqualTo(10);
+        assertThat(saved.state().value()).as("the value the snapshot resumed to").isEqualTo(10);
+        assertThat(saved.highestFoldedPosition()).as("the highest position folded into the snapshot").isEqualTo(overtaking.lastSequencePosition());
+    }
+
+    @Test
     void replaces_a_snapshot_saved_at_a_position_with_one_at_marker_versions_read_from_the_whole_boundary() {
         String collection = "occurrent-snapshot-reactive-legacy-dcb-counter";
         String key = DcbSnapshotKeys.canonicalKey(DcbCriteria.tagsAnyOf(Tag.parse(LEGACY_TAG)));
@@ -210,12 +248,12 @@ class ReactiveDcbSnapshotAnnotationMongoTest {
         appendTagged(dcbEventStore, converter, TAG, events);
     }
 
-    private static void appendTagged(DcbEventStore dcbEventStore, CloudEventConverter<CounterEvent> converter, String tag, CounterEvent... events) {
+    private static DcbAppendResult appendTagged(DcbEventStore dcbEventStore, CloudEventConverter<CounterEvent> converter, String tag, CounterEvent... events) {
         List<CloudEvent> cloudEvents = Arrays.stream(events)
                 .map(converter::toCloudEvent)
                 .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(tag))))
                 .toList();
-        dcbEventStore.append(cloudEvents).block();
+        return dcbEventStore.append(cloudEvents).block();
     }
 
     @TestConfiguration(proxyBeanMethods = false)
@@ -283,6 +321,18 @@ class ReactiveDcbSnapshotAnnotationMongoTest {
         }
 
         @Component
+        static class LastValueSnapshot {
+            @Snapshot(id = "reactive-last-value-dcb")
+            DcbSnapshotView<LastValue, CounterEvent> lastValueSnapshot() {
+                return new DcbSnapshotView<>(
+                        SnapshotView.<LastValue, CounterEvent>builder(new LastValue(0, 0))
+                                .on(Incremented.class, (state, event) -> new LastValue(event.amount(), state.folded() + 1))
+                                .build(),
+                        DcbCriteria.tagsAnyOf(Tag.parse(LAST_VALUE_TAG)));
+            }
+        }
+
+        @Component
         static class HeldCounterSnapshot {
             @Snapshot(id = "reactive-held-dcb-counter")
             DcbSnapshotView<Counter, CounterEvent> heldCounterSnapshot() {
@@ -299,6 +349,9 @@ class ReactiveDcbSnapshotAnnotationMongoTest {
     }
 
     record MetaRangeCounter(int total, long streamVersionSum) {
+    }
+
+    record LastValue(int value, int folded) {
     }
 
     sealed interface CounterEvent {

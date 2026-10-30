@@ -237,12 +237,13 @@ class SnapshotAnnotationRegistrar {
                 SnapshotSupport.DcbBase<S> saved = SnapshotSupport.resolveDcbBase(loaded, schemaVersion, view::initialState);
                 Mono<Tuple2<SnapshotSupport.DcbBase<S>, DcbEventStream>> baseAndRead = dcbEventStore
                         .read(criteria, saved.markerVersions().map(DcbReadOptions::afterVersions).orElseGet(() -> DcbReadOptions.fromBeginning().withVersions()))
+                        .doOnNext(read -> SnapshotSupport.refuseEventBelowFoldedPosition(criteria, saved, read))
                         .map(read -> Tuples.of(saved, read))
                         .onErrorResume(DcbSnapshotInvalidException.class, e -> {
                             if (saved.markerVersions().isEmpty()) {
                                 return Mono.error(e);
                             }
-                            log.debug("@Snapshot '{}' reads the whole boundary since the store can't read after the saved marker versions: {}", id, e.getMessage());
+                            log.debug("@Snapshot '{}' reads the whole boundary since it can't resume from the saved marker versions: {}", id, e.getMessage());
                             return dcbEventStore.read(criteria, DcbReadOptions.fromBeginning().withVersions())
                                     .map(read -> Tuples.of(SnapshotSupport.DcbBase.initial(view::initialState), read));
                         });
@@ -257,7 +258,7 @@ class SnapshotAnnotationRegistrar {
                         skippedSaves.skip(key, SkippedSaves.Reason.NO_MARKER_VERSIONS);
                         return Mono.<Void>empty();
                     }
-                    return store.save(key, Snapshot.atMarkerVersions(foldWithMetadata(view, base.state(), events, converter), read.markerVersions().get(), schemaVersion));
+                    return store.save(key, Snapshot.atMarkerVersions(foldWithMetadata(view, base.state(), events, converter), read.markerVersions().get(), Math.max(base.highestFoldedPosition(), read.highestEventPosition()), schemaVersion));
                 });
             });
         };

@@ -17,7 +17,7 @@ package org.occurrent.rewrite;
 
 /**
  * The 0.35.0 shape of {@code DcbAppendResult}, {@code DcbEventStream}, {@code DcbReadOptions} and the snapshot DSL's
- * {@code Snapshot}, five, four, six and four components (ADR 148), for the record-pattern migration tests. Handed to the parser as a compiled dependency, the
+ * {@code Snapshot}, five, four, six and five components (ADR 148), for the record-pattern migration tests. Handed to the parser as a compiled dependency, the
  * same reason {@link AppendResultStubs} exists, which stays at the 0.34.0 shape for the 0.34.0 tests. The source
  * under test is a 0.34.0 caller's record pattern, unchanged, meeting the 0.35.0 classpath whose canonical arity it no
  * longer matches. Reuse {@link AppendResultStubs#APPEND_ID} for the append id and {@link AppendResultStubs#WRITE_RESULT}
@@ -120,7 +120,7 @@ final class DcbMarkerVersionsStubs {
 
             import java.util.Optional;
 
-            public record Snapshot<S>(S state, long version, int schemaVersion, Optional<DcbMarkerVersions> markerVersions) {
+            public record Snapshot<S>(S state, long version, int schemaVersion, Optional<DcbMarkerVersions> markerVersions, long highestFoldedPosition) {
             }
             """;
 }

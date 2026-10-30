@@ -765,14 +765,16 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 
 ### What changes
 
-- A decider executes with `DcbExecuteOptions.fromVersions(saved)`, or `withVersions()` when it has no snapshot, and
-  saves at the versions its append reported. It saves only when `DcbApplicationService.isAppendConfirmed(..)` returns
+- A decider executes with `DcbExecuteOptions.fromVersions(saved, position)`, or `withVersions()` when it has no snapshot,
+  and saves at the versions and the last position its append reported. It saves only when `DcbApplicationService.isAppendConfirmed(..)` returns
   `true`. `GenericDcbApplicationService` asks the event store, and returns `false` when the store doesn't implement
   `DcbAppendConfirmation`.
 - A `@Snapshot` DCB view reads the events after the saved versions on each matching event, and saves at the versions of
   that read. `everyNEvents` counts the events of that read.
 - When the store refuses to read after the saved versions, for example because a marker was pruned, the decider and the
   view read the whole boundary from the initial state and save a new snapshot.
+- They do the same when that read returns an event below the highest position folded into the snapshot. It committed
+  late, and folding it last could give another state than a read in position order.
 - When the store reported no versions, or didn't confirm the append, the snapshot isn't saved. The first skip for each
   reason logs a warning, and later ones log at debug.
 - A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot and logs a warning at start, since a read of every event
@@ -785,27 +787,30 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 
 ### Stored snapshots
 
-- `Snapshot` gains a component, `Optional<DcbMarkerVersions> markerVersions`. The three-argument constructor stays and
-  sets it to empty, and `Snapshot.atMarkerVersions(..)` creates a DCB snapshot, whose `version` is 0.
-- `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` array
-  and no `version` field. A stream snapshot is stored as before.
+- `Snapshot` gains two components, `Optional<DcbMarkerVersions> markerVersions` and `long highestFoldedPosition`. The
+  three-argument constructor stays and sets them to empty and 0, and `Snapshot.atMarkerVersions(..)` creates a DCB
+  snapshot, whose `version` is 0.
+- `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` array, a
+  `highestFoldedPosition` field and no `version` field. A stream snapshot is stored as before.
 - A DCB snapshot that 0.34.0 saved at a position is never used. The first execute or delivery after the upgrade reads
   the whole boundary and saves over it, so nothing needs migrating.
 - A 0.34.0 node that reads a snapshot 0.35.0 saved, during a rolling upgrade or after a rollback, finds no `version`. It
   reads the whole boundary and saves a snapshot at a position, which 0.35.0 then doesn't use.
-- A snapshot store of your own has to persist `Snapshot.markerVersions()`. If it doesn't, every execute and delivery
-  reads the whole boundary.
+- A snapshot store of your own has to persist `Snapshot.markerVersions()` and `Snapshot.highestFoldedPosition()`. If it
+  drops the versions, every execute and delivery reads the whole boundary. If it loads a lower position than it was
+  given, a resumed state can differ from a read in position order.
 
 ### What to do
 
 - If you have a `DcbApplicationService` of your own that wraps another one, override `isAppendConfirmed(..)` and
   delegate it. Without that the deciders save no snapshot.
 - Replace `DcbExecuteOptions.fromPosition(..)`, which is deprecated for removal, with `fromVersions(..)`. Save the
-  `DcbAppendResult.markerVersions()` of an execute with `withVersions()` and pass them on the next one.
+  `DcbAppendResult.markerVersions()` and `lastSequencePosition()` of an execute with `withVersions()` and pass both on
+  the next one.
 - `DomainEventQueries.afterPosition(..)` is deprecated, since a position isn't a safe place to resume from on MongoDB.
   To process every event, resume a catch-up subscription from the checkpoint it stores.
 - A record pattern over `Snapshot` with three bindings stops compiling. `UpgradeToOccurrent_0_35` adds
-  `var markerVersions`.
+  `var markerVersions, var highestFoldedPosition`.
 
 ## A catch-up needs the event store itself
 

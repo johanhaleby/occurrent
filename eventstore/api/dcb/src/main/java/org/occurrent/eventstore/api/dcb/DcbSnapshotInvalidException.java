@@ -31,6 +31,9 @@ import java.util.StringJoiner;
  * epoch differs from the saved one, when a saved version is above the store's, when a marker was incremented by a
  * writer that wrote no marker versions, when the criteria is {@link DcbCriteria.MatchAll}, when resuming from marker
  * versions is turned off for the store, and when the store couldn't take a consistent snapshot to compare against.
+ * <p>
+ * The stores don't check the order of what they return, so an application service and a snapshot view throw it too, via
+ * {@link #eventBelowFoldedPosition(DcbCriteria, DcbMarkerVersions, long)}.
  */
 @NullMarked
 public class DcbSnapshotInvalidException extends RuntimeException {
@@ -60,6 +63,19 @@ public class DcbSnapshotInvalidException extends RuntimeException {
         super(message, cause);
         this.criteria = criteria;
         this.afterVersions = afterVersions;
+    }
+
+    /**
+     * Creates an exception for a read after {@code afterVersions} that returned an event below the highest position
+     * folded into the saved state. Folding that event last could give another state than a read in position order.
+     *
+     * @param criteria              the criteria of the refused read
+     * @param afterVersions         the versions the read was asked to resume after
+     * @param highestFoldedPosition the highest position folded into the saved state
+     * @return the exception to throw
+     */
+    public static DcbSnapshotInvalidException eventBelowFoldedPosition(DcbCriteria criteria, DcbMarkerVersions afterVersions, long highestFoldedPosition) {
+        return new DcbSnapshotInvalidException(criteria, afterVersions, "The read returned an event below position " + highestFoldedPosition + ", the highest position folded into the saved state");
     }
 
     /**

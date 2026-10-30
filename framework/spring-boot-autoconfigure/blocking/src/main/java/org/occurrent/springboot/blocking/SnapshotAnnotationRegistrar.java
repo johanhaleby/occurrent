@@ -194,11 +194,12 @@ class SnapshotAnnotationRegistrar {
             DcbEventStream read;
             try {
                 read = dcbEventStore.read(criteria, base.markerVersions().map(DcbReadOptions::afterVersions).orElseGet(() -> DcbReadOptions.fromBeginning().withVersions()));
+                SnapshotSupport.refuseEventBelowFoldedPosition(criteria, base, read);
             } catch (DcbSnapshotInvalidException e) {
                 if (base.markerVersions().isEmpty()) {
                     throw e;
                 }
-                log.debug("@Snapshot '{}' reads the whole boundary since the store can't read after the saved marker versions: {}", id, e.getMessage());
+                log.debug("@Snapshot '{}' reads the whole boundary since it can't resume from the saved marker versions: {}", id, e.getMessage());
                 base = SnapshotSupport.DcbBase.initial(view::initialState);
                 read = dcbEventStore.read(criteria, DcbReadOptions.fromBeginning().withVersions());
             }
@@ -211,7 +212,7 @@ class SnapshotAnnotationRegistrar {
                 return;
             }
             S newState = foldWithMetadata(view, base.state(), events, converter);
-            store.save(key, org.occurrent.dsl.snapshot.Snapshot.atMarkerVersions(newState, read.markerVersions().get(), schemaVersion));
+            store.save(key, org.occurrent.dsl.snapshot.Snapshot.atMarkerVersions(newState, read.markerVersions().get(), Math.max(base.highestFoldedPosition(), read.highestEventPosition()), schemaVersion));
         });
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {

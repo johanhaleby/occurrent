@@ -141,7 +141,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // is composed after the retry so it runs once on success, not per attempt.
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
-        Function<AtomicReference<@Nullable DcbSnapshotInvalidException>, Mono<Result<E>>> readDecideAppendUnit = refusal -> (readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions)).onErrorResume(DcbSnapshotInvalidException.class, refused -> {
+        Function<AtomicReference<@Nullable DcbSnapshotInvalidException>, Mono<Result<E>>> readDecideAppendUnit = refusal -> (readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions)).doOnNext(eventStream -> refuseEventBelowFoldedPosition(criteria, options, eventStream)).onErrorResume(DcbSnapshotInvalidException.class, refused -> {
             refusal.set(refused);
             return Mono.empty();
         }).flatMap(eventStream -> {
@@ -194,6 +194,13 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     public Mono<Boolean> isAppendConfirmed(DcbAppendResult appendResult) {
         Objects.requireNonNull(appendResult, "appendResult cannot be null");
         return eventStore instanceof DcbAppendConfirmation confirmation ? confirmation.isConfirmed(appendResult) : Mono.just(false);
+    }
+
+    private static void refuseEventBelowFoldedPosition(DcbCriteria criteria, DcbExecuteOptions<?> options, DcbEventStream eventStream) {
+        @Nullable DcbMarkerVersions fromVersions = options.fromVersions();
+        if (fromVersions != null && eventStream.hasEventBelow(options.highestFoldedPosition())) {
+            throw DcbSnapshotInvalidException.eventBelowFoldedPosition(criteria, fromVersions, options.highestFoldedPosition());
+        }
     }
 
     @SuppressWarnings("removal")

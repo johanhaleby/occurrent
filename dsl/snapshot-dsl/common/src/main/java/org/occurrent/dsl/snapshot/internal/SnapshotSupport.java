@@ -18,7 +18,10 @@ package org.occurrent.dsl.snapshot.internal;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.snapshot.Snapshot;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
+import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -53,9 +56,11 @@ public final class SnapshotSupport {
      *
      * @param state          the state to start folding the events read after {@code markerVersions} onto
      * @param markerVersions the marker versions to read after, empty to read the whole boundary
+     * @param highestFoldedPosition the highest position among the events folded into {@code state}, {@code 0} when
+     *                       starting from the initial state
      * @param <S>            the state type
      */
-    public record DcbBase<S extends @Nullable Object>(S state, Optional<DcbMarkerVersions> markerVersions) {
+    public record DcbBase<S extends @Nullable Object>(S state, Optional<DcbMarkerVersions> markerVersions, long highestFoldedPosition) {
         public DcbBase {
             requireNonNull(markerVersions, "markerVersions cannot be null");
         }
@@ -65,7 +70,7 @@ public final class SnapshotSupport {
          */
         public static <S extends @Nullable Object> DcbBase<S> initial(Supplier<? extends S> initialState) {
             requireNonNull(initialState, "initialState cannot be null");
-            return new DcbBase<>(initialState.get(), Optional.empty());
+            return new DcbBase<>(initialState.get(), Optional.empty(), 0);
         }
     }
 
@@ -79,9 +84,24 @@ public final class SnapshotSupport {
         requireNonNull(loaded, "loaded cannot be null");
         requireNonNull(initialState, "initialState cannot be null");
         if (loaded.isPresent() && loaded.get().schemaVersion() == expectedSchemaVersion && loaded.get().markerVersions().isPresent()) {
-            return new DcbBase<>(loaded.get().state(), loaded.get().markerVersions());
+            return new DcbBase<>(loaded.get().state(), loaded.get().markerVersions(), loaded.get().highestFoldedPosition());
         }
         return DcbBase.initial(initialState);
+    }
+
+    /**
+     * Refuses a read after the marker versions of {@code base} when it returned an event below the highest position
+     * folded into the state of {@code base}, so the caller reads the whole boundary as it does for any refused read.
+     *
+     * @throws DcbSnapshotInvalidException when {@code read} holds such an event
+     */
+    public static void refuseEventBelowFoldedPosition(DcbCriteria criteria, DcbBase<?> base, DcbEventStream read) {
+        requireNonNull(criteria, "criteria cannot be null");
+        requireNonNull(base, "base cannot be null");
+        requireNonNull(read, "read cannot be null");
+        if (base.markerVersions().isPresent() && read.hasEventBelow(base.highestFoldedPosition())) {
+            throw DcbSnapshotInvalidException.eventBelowFoldedPosition(criteria, base.markerVersions().get(), base.highestFoldedPosition());
+        }
     }
 
     /**

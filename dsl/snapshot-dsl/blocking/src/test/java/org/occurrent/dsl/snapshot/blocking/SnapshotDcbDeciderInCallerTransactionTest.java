@@ -197,9 +197,9 @@ class SnapshotDcbDeciderInCallerTransactionTest {
      * The snapshot holds a state the store doesn't, so a read that resumed from it would show up in the state.
      */
     private void saveASnapshotThatDisagreesWithTheStore() {
-        eventStore.append(new ArrayList<>(converter.toCloudEvents(List.of(nameWasChanged("seed"))).stream().map(ce -> DcbCloudEvents.withTags(ce, List.of(tag()))).toList()));
+        long position = eventStore.append(new ArrayList<>(converter.toCloudEvents(List.of(nameWasChanged("seed"))).stream().map(ce -> DcbCloudEvents.withTags(ce, List.of(tag()))).toList())).lastSequencePosition();
         DcbMarkerVersions versions = eventStore.read(criteria(), DcbReadOptions.fromBeginning().withVersions()).markerVersions().orElseThrow();
-        snapshots.save(DcbSnapshotKeys.canonicalKey(criteria()), Snapshot.atMarkerVersions(List.of("snapshot-only"), versions, 1));
+        snapshots.save(DcbSnapshotKeys.canonicalKey(criteria()), Snapshot.atMarkerVersions(List.of("snapshot-only"), versions, position, 1));
     }
 
     private static NameWasChanged nameWasChanged(String name) {

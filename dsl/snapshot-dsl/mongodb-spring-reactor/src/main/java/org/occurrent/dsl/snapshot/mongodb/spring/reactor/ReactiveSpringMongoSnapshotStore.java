@@ -38,7 +38,8 @@ import java.util.Objects;
  * A reactive {@link ReactiveSnapshotStore} backed by MongoDB, the reactive counterpart to {@code
  * SpringMongoSnapshotStore}. Each snapshot is one document in the store's collection, keyed by the snapshot key,
  * carrying the folded {@code state}, the {@code version} it was folded up to, and the {@code schemaVersion}. A DCB
- * snapshot stores its {@code markerVersions} instead of a {@code version}. The state is (de)serialized with the same
+ * snapshot stores its {@code markerVersions} and {@code highestFoldedPosition} instead of a {@code version}, and a
+ * document with marker versions but no position is treated as unreadable. The state is (de)serialized with the same
  * {@code MongoConverter} the rest of the application uses, so a scalar (a number, string, enum) and a POJO or record
  * both round-trip.
  *
@@ -51,6 +52,7 @@ public final class ReactiveSpringMongoSnapshotStore<S extends @Nullable Object> 
 
     private static final String VERSION = "version";
     private static final String MARKER_VERSIONS = "markerVersions";
+    private static final String HIGHEST_FOLDED_POSITION = "highestFoldedPosition";
     private static final String SCHEMA_VERSION = "schemaVersion";
     private static final String STATE = "state";
 
@@ -89,7 +91,7 @@ public final class ReactiveSpringMongoSnapshotStore<S extends @Nullable Object> 
                     S state = readState(mongoOperations.getConverter(), document.get(STATE));
                     List<?> markerVersions = document.getList(MARKER_VERSIONS, Object.class);
                     if (markerVersions != null) {
-                        return Snapshot.atMarkerVersions(state, SnapshotMarkerVersionsFields.fromFields(markerVersions), schemaVersion);
+                        return Snapshot.atMarkerVersions(state, SnapshotMarkerVersionsFields.fromFields(markerVersions), document.getLong(HIGHEST_FOLDED_POSITION), schemaVersion);
                     }
                     long version = document.getLong(VERSION);
                     return new Snapshot<>(state, version, schemaVersion);
@@ -110,7 +112,7 @@ public final class ReactiveSpringMongoSnapshotStore<S extends @Nullable Object> 
         // A snapshot with marker versions is stored without a version, so a node that reads only the version treats
         // it as unreadable and reads in full instead of folding onto it
         snapshot.markerVersions().ifPresentOrElse(
-                markerVersions -> document.append(MARKER_VERSIONS, SnapshotMarkerVersionsFields.toFields(markerVersions).stream().map(Document::new).toList()),
+                markerVersions -> document.append(MARKER_VERSIONS, SnapshotMarkerVersionsFields.toFields(markerVersions).stream().map(Document::new).toList()).append(HIGHEST_FOLDED_POSITION, snapshot.highestFoldedPosition()),
                 () -> document.append(VERSION, snapshot.version()));
         document.append(SCHEMA_VERSION, snapshot.schemaVersion());
         S state = snapshot.state();

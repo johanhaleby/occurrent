@@ -560,7 +560,7 @@ The consumers, on both stacks:
 
 - `GenericDcbApplicationService` gets `DcbExecuteOptions.withVersions()`, which asks for versions with no base, and
   `DcbExecuteOptions.fromVersions(...)`, which implies it. It passes them on as `withVersions()` and `afterVersions`.
-- The snapshot deciders store a `DcbMarkerVersions` as their version and read with `fromVersions(base)`, or with
+- The snapshot deciders store a `DcbMarkerVersions` as their version and read with `fromVersions(base, position)`, or with
   `withVersions()` when they have no snapshot. `GenericDcbApplicationService` returns the append's versions only when
   the read of the same attempt reported every key of them, each with the same epoch as the append's, because a prune
   between the read and the append can leave an equal sum
@@ -586,12 +586,35 @@ The consumers, on both stacks:
 `PositionBackfill` only gives positions to events that have none, and every DCB event gets its position when it is
 written, so it isn't part of this.
 
+### An event below the folded position means a full read
+
+Marker versions say which events a snapshot hasn't folded. They say nothing about where those events sit in position
+order, so a resumed state can differ from a full read even when no event is missing. `DcbLateCommitConformance` runs the
+sequence. Event A reserves position 41, event B reserves 42 and commits, a snapshot folds B, and then A commits. Take a
+fold that keeps the last value, where A sets 5 and B sets 10. Resuming folds A onto B's state and gets 5, and a full read
+in position order gets 10. That follows from ADR 84, which says a position isn't commit order.
+
+So a snapshot keeps `highestFoldedPosition` next to its marker versions. A decider saves its append's
+`lastSequencePosition`, which is above every event it folded, because the append reserved that position after the read.
+A view saves the highest of the saved position and the positions of the events it folded. A read after the versions that
+returns an event below the saved position is treated as `DcbSnapshotInvalid`, so the decider and the view read the
+boundary in full, and the next save replaces the snapshot.
+
+`GenericDcbApplicationService` makes the check for the decider, because the decider's domain function only receives
+domain events. It runs before the domain function, so a refused read decides nothing. `fromVersions` takes the position
+as a required argument, since a caller that folds onto saved state has the same problem as the decider.
+`SnapshotSupport.refuseEventBelowFoldedPosition` makes the check for the view.
+
+A resumed state now equals a full read in position order. Every event in the tail is above every folded event, so
+position order folds the tail last as well. A fold that doesn't depend on order pays for this with full reads it didn't
+need, from the late event until the next save. Both Spring Mongo snapshot stores treat a DCB document without the field
+as unreadable, which also means a full read.
+
 ### The decider confirms its append before it saves
 
-The snapshot decider saves after `applicationService.execute` returns (`SnapshotDcbDeciderApplicationService.java:197`,
-`:175-187`). Without synchronous subscriptions the store reads the events and their versions in a transaction of its
+The snapshot decider saves after `applicationService.execute` returns. Without synchronous subscriptions the store reads the events and their versions in a transaction of its
 own, so the state the decider saves is complete. With synchronous subscriptions, `execute` runs the read, the decision
-and the append in the executor's transaction (`GenericDcbApplicationService.java:138`, `:150-179`, `:184`). The store
+and the append in the executor's transaction. The store
 can't tell that transaction from one the caller owns, so the read reports no versions and the decider saves no snapshot
 in that configuration. The seventh review's first blocker came from building the watermark after commit, and this
 design never does that.

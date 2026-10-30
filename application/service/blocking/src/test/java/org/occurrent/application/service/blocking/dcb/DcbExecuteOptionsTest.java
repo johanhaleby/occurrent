@@ -88,21 +88,36 @@ class DcbExecuteOptionsTest {
 
         @Test
         void differs_when_from_versions_differ() {
-            var first = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2));
-            var second = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 3));
+            var first = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 40);
+            var second = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 3), 40);
 
             assertThat(first).isNotEqualTo(second);
         }
 
         @Test
         void options_with_same_from_versions_are_equal_and_share_hash_code() {
-            var first = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2));
-            var second = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2));
+            var first = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 40);
+            var second = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 40);
 
             assertAll(
                     () -> assertThat(first).isEqualTo(second),
                     () -> assertThat(first.hashCode()).isEqualTo(second.hashCode())
             );
+        }
+
+        @Test
+        void differs_when_the_highest_folded_position_differs() {
+            var first = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 40);
+            var second = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 41);
+
+            assertThat(first).isNotEqualTo(second);
+        }
+
+        @Test
+        void the_highest_folded_position_is_part_of_the_string_form() {
+            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 40);
+
+            assertThat(options.toString()).contains("highestFoldedPosition=40");
         }
 
         @Test
@@ -156,7 +171,7 @@ class DcbExecuteOptionsTest {
         void fromVersions_requests_versions_and_reads_after_the_given_ones() {
             DcbMarkerVersions saved = versions("epoch-1", 2);
 
-            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(saved);
+            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(saved, 40);
 
             assertAll(
                     () -> assertThat(options.versionsRequested()).isTrue(),
@@ -165,23 +180,56 @@ class DcbExecuteOptionsTest {
         }
 
         @Test
+        void fromVersions_keeps_the_highest_folded_position() {
+            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 40);
+
+            assertThat(options.highestFoldedPosition()).isEqualTo(40);
+        }
+
+        @Test
+        void the_highest_folded_position_is_zero_when_no_versions_are_given() {
+            assertAll(
+                    () -> assertThat(DcbExecuteOptions.<DomainEvent>options().highestFoldedPosition()).isZero(),
+                    () -> assertThat(DcbExecuteOptions.<DomainEvent>options().withVersions().highestFoldedPosition()).isZero()
+            );
+        }
+
+        @Test
+        void fromVersions_accepts_highest_folded_position_zero_for_a_boundary_without_events() {
+            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 0);
+
+            assertThat(options.highestFoldedPosition()).isZero();
+        }
+
+        @Test
+        void fromVersions_rejects_a_negative_highest_folded_position() {
+            var options = DcbExecuteOptions.<DomainEvent>options();
+
+            assertThatThrownBy(() -> options.fromVersions(versions("epoch-1", 2), -1)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("highestFoldedPosition");
+        }
+
+        @Test
         void withVersions_after_fromVersions_keeps_the_versions_to_read_after() {
             DcbMarkerVersions saved = versions("epoch-1", 2);
 
-            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(saved).withVersions();
+            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(saved, 40).withVersions();
 
-            assertThat(options.fromVersions()).isEqualTo(saved);
+            assertAll(
+                    () -> assertThat(options.fromVersions()).isEqualTo(saved),
+                    () -> assertThat(options.highestFoldedPosition()).isEqualTo(40)
+            );
         }
 
         @Test
         void the_versions_survive_adding_a_side_effect_and_a_tag_generator() {
             DcbMarkerVersions saved = versions("epoch-1", 2);
 
-            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(saved).sideEffect(SIDE_EFFECT).tagGenerator(event -> Set.of(Tag.parse("name:1")));
+            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(saved, 40).sideEffect(SIDE_EFFECT).tagGenerator(event -> Set.of(Tag.parse("name:1")));
 
             assertAll(
                     () -> assertThat(options.versionsRequested()).isTrue(),
-                    () -> assertThat(options.fromVersions()).isEqualTo(saved)
+                    () -> assertThat(options.fromVersions()).isEqualTo(saved),
+                    () -> assertThat(options.highestFoldedPosition()).isEqualTo(40)
             );
         }
 
@@ -196,7 +244,7 @@ class DcbExecuteOptionsTest {
         @Test
         @SuppressWarnings("removal")
         void fromPosition_after_fromVersions_is_refused() {
-            var fromVersions = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2));
+            var fromVersions = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 40);
 
             assertThatThrownBy(() -> fromVersions.fromPosition(5L)).isInstanceOf(IllegalStateException.class);
         }
@@ -214,14 +262,14 @@ class DcbExecuteOptionsTest {
         void fromVersions_after_fromPosition_is_refused() {
             var fromPosition = DcbExecuteOptions.<DomainEvent>options().fromPosition(5L);
 
-            assertThatThrownBy(() -> fromPosition.fromVersions(versions("epoch-1", 2))).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> fromPosition.fromVersions(versions("epoch-1", 2), 40)).isInstanceOf(IllegalStateException.class);
         }
 
         @Test
         void fromVersions_rejects_null() {
             var options = DcbExecuteOptions.<DomainEvent>options();
 
-            assertThatThrownBy(() -> options.fromVersions(null)).isInstanceOf(NullPointerException.class).hasMessageContaining("markerVersions");
+            assertThatThrownBy(() -> options.fromVersions(null, 0)).isInstanceOf(NullPointerException.class).hasMessageContaining("markerVersions");
         }
 
         @Test

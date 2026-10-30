@@ -54,8 +54,11 @@ import java.util.function.Function;
  * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}), the spec's key function overrides it. The snapshot is
  * saved at the marker versions the append reported ({@link DcbAppendResult#markerVersions()}), and the next execute
  * reads only the events appended after them. The resume read still captures the whole boundary's consistency token, so
- * the append condition is unaffected and a stale snapshot only lengthens the tail. It loads one snapshot per execute,
- * and costs nothing when no snapshot is used.
+ * the append condition is unaffected. It loads one snapshot per execute, and costs nothing when no snapshot is used.
+ * <p>
+ * The snapshot also keeps the position of the append. An event that reserved a position below it can commit after the
+ * snapshot was saved, and folding that event last could give another state than a read in position order, so the
+ * execute treats it as a refused read.
  * <p>
  * A snapshot is saved only when the store reported marker versions for the append and confirms that the append is
  * committed ({@link DcbApplicationService#isAppendConfirmed(DcbAppendResult)}). Otherwise the save is skipped, and the
@@ -186,15 +189,15 @@ public final class SnapshotDcbDeciderApplicationService<E> {
                                 skippedSaves.skip(key, SkippedSaves.Reason.UNCONFIRMED);
                                 return Optional.empty();
                             }
-                            return Optional.of(Snapshot.atMarkerVersions(snapshotDecision.newState(), result.markerVersions().get(), options.schemaVersion()));
+                            return Optional.of(Snapshot.atMarkerVersions(snapshotDecision.newState(), result.markerVersions().get(), result.lastSequencePosition(), options.schemaVersion()));
                         }));
         return executed;
     }
 
     private <C, S extends @Nullable Object> Executed<S, E> executeFrom(SnapshotSupport.DcbBase<S> base, DcbCriteria criteria, List<C> commands, DcbDecider<C, S, E> dcbDecider, AtomicBoolean decided) {
         Decider<C, S, E> decider = dcbDecider.decider();
-        DcbExecuteOptions<E> executeOptions = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
-        executeOptions = base.markerVersions().map(executeOptions::fromVersions).orElseGet(executeOptions::withVersions);
+        DcbExecuteOptions<E> withTags = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
+        DcbExecuteOptions<E> executeOptions = base.markerVersions().map(markerVersions -> withTags.fromVersions(markerVersions, base.highestFoldedPosition())).orElseGet(withTags::withVersions);
         AtomicReference<Decider.Decision<S, E>> decisionRef = new AtomicReference<>();
         AtomicInteger tailSize = new AtomicInteger();
         Optional<DcbAppendResult> appendResult = applicationService.execute(criteria, executeOptions,

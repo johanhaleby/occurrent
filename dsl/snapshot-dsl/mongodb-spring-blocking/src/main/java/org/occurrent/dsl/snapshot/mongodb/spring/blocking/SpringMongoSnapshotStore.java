@@ -37,7 +37,8 @@ import java.util.Optional;
 /**
  * A {@link SnapshotStore} backed by MongoDB. Each snapshot is stored as one document in the store's collection, keyed
  * by the snapshot key, carrying the folded {@code state}, the {@code version} it was folded up to, and the {@code
- * schemaVersion}. A DCB snapshot stores its {@code markerVersions} instead of a {@code version}. The state is
+ * schemaVersion}. A DCB snapshot stores its {@code markerVersions} and {@code highestFoldedPosition} instead of a {@code version}, and a
+ * document with marker versions but no position is treated as unreadable. The state is
  * serialized with the same {@code MongoConverter} the rest of the application uses, so any type Spring Data can map is
  * supported.
  *
@@ -50,6 +51,7 @@ public final class SpringMongoSnapshotStore<S extends @Nullable Object> implemen
 
     private static final String VERSION = "version";
     private static final String MARKER_VERSIONS = "markerVersions";
+    private static final String HIGHEST_FOLDED_POSITION = "highestFoldedPosition";
     private static final String SCHEMA_VERSION = "schemaVersion";
     private static final String STATE = "state";
 
@@ -82,7 +84,7 @@ public final class SpringMongoSnapshotStore<S extends @Nullable Object> implemen
             S state = readState(mongoOperations.getConverter(), document.get(STATE));
             List<?> markerVersions = document.getList(MARKER_VERSIONS, Object.class);
             if (markerVersions != null) {
-                return Optional.of(Snapshot.atMarkerVersions(state, SnapshotMarkerVersionsFields.fromFields(markerVersions), schemaVersion));
+                return Optional.of(Snapshot.atMarkerVersions(state, SnapshotMarkerVersionsFields.fromFields(markerVersions), document.getLong(HIGHEST_FOLDED_POSITION), schemaVersion));
             }
             long version = document.getLong(VERSION);
             return Optional.of(new Snapshot<>(state, version, schemaVersion));
@@ -103,7 +105,7 @@ public final class SpringMongoSnapshotStore<S extends @Nullable Object> implemen
         // A snapshot with marker versions is stored without a version, so a node that reads only the version treats
         // it as unreadable and reads in full instead of folding onto it
         snapshot.markerVersions().ifPresentOrElse(
-                markerVersions -> document.append(MARKER_VERSIONS, SnapshotMarkerVersionsFields.toFields(markerVersions).stream().map(Document::new).toList()),
+                markerVersions -> document.append(MARKER_VERSIONS, SnapshotMarkerVersionsFields.toFields(markerVersions).stream().map(Document::new).toList()).append(HIGHEST_FOLDED_POSITION, snapshot.highestFoldedPosition()),
                 () -> document.append(VERSION, snapshot.version()));
         document.append(SCHEMA_VERSION, snapshot.schemaVersion());
         S state = snapshot.state();
