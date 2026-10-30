@@ -37,7 +37,11 @@ The retry follows the driver's `withTransaction`:
 - It stops retrying 120 seconds after the first commit was sent, and throws or emits the last error. The number is the
   driver's `MAX_RETRY_TIME_LIMIT_MS`, but the driver counts it from the start of its `withTransaction` call, before the
   transaction body runs, so the driver's window can be shorter than ours by the time the body takes. The caller sees the same failure it sees today, and the append may or may not be saved.
-- It sends the next commit at once, as the driver does.
+- It checks the time between attempts, as the driver does, so a commit that has started is not interrupted and ends on
+  the driver's own timeouts.
+- It sends the next commit at once, as the driver does. The second `commitTransaction` call on the same session is the
+  one that makes the driver send the commit with a majority write concern, so the resend is not acknowledged by the
+  primary alone, whatever write concern the transaction started with.
 
 Both Spring Boot starters create these managers instead of the plain ones. They still back off when the application
 defines its own `MongoTransactionManager` or `ReactiveMongoTransactionManager`, and the blocking one still passes the

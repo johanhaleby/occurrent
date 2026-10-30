@@ -43,8 +43,9 @@ import static java.util.Objects.requireNonNull;
  * from the first commit, the limit that the driver's {@code withTransaction} gives the native event store. The driver
  * counts its two minutes from the start of the {@code withTransaction} call instead. A
  * top-level {@code MaxTimeMSExpired} error ({@code MongoExecutionTimeoutException}) is not retried, and a write concern
- * error with that code is, which is also what the driver does. When the time is up, the last error is emitted from the
- * commit as usual.
+ * error with that code is, which is also what the driver does. The time is checked between attempts, so a commit that
+ * has started is not interrupted and ends on the driver's own timeouts. When the time is up, the last error is emitted
+ * from the commit as usual.
  * <p>
  * Use it for the {@link EventStoreConfig.Builder#transactionConfig(org.springframework.transaction.ReactiveTransactionManager) event store's}
  * transaction manager. The Occurrent Spring Boot starter creates one unless the application defines its own
