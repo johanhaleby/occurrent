@@ -58,7 +58,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link ReactorDurableSubscriptionModel} it records where the feed is when it registers. When the model it wraps
  * cannot say where that is, because the read fails or answers nothing, the registration is refused. A subscription
  * registered at startup that waits until it has started then fails the application context, which is the default setup.
- * {@code startWhenNoStartPositionCanBeRecorded} starts it anyway, and {@code startupMode = BACKGROUND} leaves it to be
+ * {@code startWhenNoStartPositionCanBeRecorded} starts it anyway when the read answers nothing, which is not the case
+ * when it fails, and {@code startupMode = BACKGROUND} leaves it to be
  * refused without anything waiting for it. A {@code resumeBehavior} of {@code SAME_AS_START_AT} makes the start NOW, a
  * start of its own that the durable model does not refuse. The wrapped model here never reads a clock, so this class says
  * nothing about what the MongoDB model does with a start at the present.

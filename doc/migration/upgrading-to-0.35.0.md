@@ -105,9 +105,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
   On the reactive stack a restart no longer replays the history of a `BEGINNING_OF_TIME` `@StreamSubscription`, and a
   `NOW` subscription no longer misses the events written while the application was down. On the blocking stack `NOW` with
   `SAME_AS_START_AT` starts at the present on every restart and no longer competes with the other instances, so every
-  instance is delivered every event. A reactive `NOW` subscription also reads the position of the feed when it
-  registers with no stored checkpoint, so in `auto` subscription mode the application does not start when the MongoDB
-  server cannot answer. Compiles unchanged.
+  instance is delivered every event. A reactive `NOW` subscription with the default `resumeBehavior` also reads the
+  position of the feed when it registers with no stored checkpoint, so when it waits for its start, which is the default
+  in `auto` subscription mode, the application does not start when the MongoDB server cannot answer. Compiles unchanged.
 
 ### Brokers
 
@@ -1145,8 +1145,8 @@ with `DEFAULT` starts where its default start does, and whether `BEGINNING_OF_TI
 again depends on whether it stores a checkpoint.
 
 With the starter's durable model, `NOW` with `DEFAULT` also records where the feed is when a subscription with no stored
-checkpoint registers, the way any start from the model default does. The reactive MongoDB model reads it from the
-server's clock, so a server that cannot be asked, or that replies without a clock, makes the model refuse the
+checkpoint registers, the way any start from the model default does. The reactive MongoDB model reads it by asking the
+server, so a server that cannot be asked, or that replies without a clock, makes the model refuse the
 registration. Such a subscription waits for its start by default when `occurrent.subscription.mode` is `auto`, so
 the application does not start. With `startupMode = BACKGROUND`, with mode `manual`, or on a bean built after startup,
 the refusal does not hold up startup, and the subscription is not running.
