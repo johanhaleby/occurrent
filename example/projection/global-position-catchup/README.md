@@ -11,8 +11,8 @@ with position tracking enabled. It shows three things.
 
 1. `events_written_to_different_streams_can_be_read_back_in_a_single_global_position_order`
    writes events to three different streams (one per person) and reads them back through
-   `DomainEventQueries`, using `readInPositionOrder` with a `PositionRange` and `afterPosition`,
-   and shows the events come back in write order across streams rather than per stream.
+   `DomainEventQueries`, using `readInPositionOrder` with a `PositionRange`, and shows the events
+   come back in write order across streams rather than per stream.
 
 2. `a_projection_can_be_rebuilt_from_scratch_by_replaying_events_in_global_position_order_across_streams`
    rebuilds a small read model, `NameProjection`, by replaying events read in global position
@@ -24,6 +24,11 @@ with position tracking enabled. It shows three things.
    carry a position on its events, and the position-based read APIs on `DomainEventQueries`
    throw `UnsupportedOperationException` instead of silently doing the wrong thing. Ordinary
    reads are unaffected.
+
+A position read is a range query with no promise about resuming. On MongoDB an event can
+reserve a position below the one you kept and commit after you read it, and a read after your
+position never returns it. To process every event, resume a catch-up subscription from the
+checkpoint it stores instead of keeping a position.
 
 Run the test with:
 

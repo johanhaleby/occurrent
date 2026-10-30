@@ -17,17 +17,12 @@
 package org.occurrent.tck.latecommit;
 
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.tck.internal.scaffolding.GuaranteeViolated;
 
 import java.util.function.Supplier;
 
 /**
- * The one place a late-commit suite states that a guarantee holds. A guarantee that does not hold throws
- * {@link GuaranteeViolated}, which is how a store still carrying its open violation is told apart from a test that
- * failed for another reason.
- * <p>
- * Internal to the stack that fixes issues 1230 and 1297. The fix layer that deletes the scaffolding package rewrites
- * this method to an ordinary assertion.
+ * The one place a late-commit suite states that a guarantee holds. A guarantee that does not hold throws an
+ * {@link AssertionError} that names what was expected and what was seen.
  */
 @NullMarked
 public final class LateCommitGuarantee {
@@ -37,7 +32,7 @@ public final class LateCommitGuarantee {
 
     public static void require(boolean holds, String expected, Supplier<String> seen) {
         if (!holds) {
-            throw new GuaranteeViolated(expected, seen.get());
+            throw new AssertionError("Expected: " + expected + ". Seen: " + seen.get());
         }
     }
 }

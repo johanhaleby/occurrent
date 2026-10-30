@@ -829,6 +829,37 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - A `SnapshotPolicy` of your own that reads `SnapshotDecision.newVersion()` gets 0 from a DCB decider, where 0.34.0 gave
   it the position of the append. Use `eventsSinceSnapshot()`.
 
+## A read by position makes no promise about resuming
+
+`readInPositionOrder(..)` on `PositionOrderedReader` and `DomainEventQueries` is a range query. It returns the events in
+the range that have committed when it runs. On MongoDB an append takes its position before its transaction commits, so
+an event can reserve a position below the one you kept and commit after you read it, and a read after your position
+never returns it. See [#1297](https://github.com/johanhaleby/occurrent/issues/1297).
+
+### Who is affected
+
+A loop that keeps the last position it read, or the value of `currentPosition()`, and reads after it the next time
+round. It compiles and runs on 0.35.0 as it did on 0.34, and it can skip an event the same way:
+
+```java
+try (Stream<DomainEvent> events = domainEventQueries.afterPosition(lastPosition)) {
+    events.forEach(this::handle);
+}
+```
+
+`DomainEventQueries.afterPosition(..)` gives you a deprecation warning and nothing more. The same loop written with
+`readInPositionOrder(filter, PositionRange.afterPosition(lastPosition))` gives you no warning at all. The store can't
+tell where a position came from, so it can't refuse the read the way a catch-up refuses a start after a position.
+
+A read that doesn't continue from an earlier one, such as a report over a range, isn't affected.
+
+### What to do
+
+Replace the loop with a catch-up subscription and resume from the checkpoint it stores, as
+[A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from) describes.
+A read model the loop has already built can be missing such an event, and only a rebuild from the beginning finds it.
+Keep `readInPositionOrder(filter, PositionRange.afterPosition(p))` for range reads.
+
 ## A catch-up needs the event store itself
 
 A catch-up subscription reads the point where its live subscription takes over, and every event it replays, through
