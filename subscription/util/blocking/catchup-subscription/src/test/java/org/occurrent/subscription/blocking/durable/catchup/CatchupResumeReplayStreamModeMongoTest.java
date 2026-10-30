@@ -42,6 +42,8 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filter.Filter;
@@ -2924,7 +2926,7 @@ class CatchupResumeReplayStreamModeMongoTest {
     /**
      * Reads the event store as it is, except that the history read of a replay fails a set number of times.
      */
-    private static final class FlakyReader implements EventStoreQueries, PositionOrderedReader {
+    private static final class FlakyReader implements EventStoreQueries, PositionOrderedReader, CatchupReads {
         private final SpringMongoEventStore delegate;
         private final AtomicInteger failuresLeft = new AtomicInteger();
         final AtomicInteger failures = new AtomicInteger();
@@ -2940,12 +2942,28 @@ class CatchupResumeReplayStreamModeMongoTest {
 
         @Override
         public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            failIfScheduledTo();
+            return delegate.readInPositionOrder(filter, range);
+        }
+
+        private void failIfScheduledTo() {
             if (Thread.currentThread().getName().startsWith(REPLAY_THREAD_PREFIX) && failuresLeft.getAndUpdate(left -> left > 0 ? left - 1 : 0) > 0) {
                 failures.incrementAndGet();
                 lastFailedOn = Thread.currentThread();
                 throw new IllegalStateException("The event store is unavailable");
             }
-            return delegate.readInPositionOrder(filter, range);
+        }
+
+        // The history read of a replay goes through the scope the delegate opens, so the failure applies to it
+        @Override
+        public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+            return new ForwardingCatchupReadScope(delegate.openCatchupReadScope(notBefore)) {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    failIfScheduledTo();
+                    return super.readInPositionOrder(filter, range);
+                }
+            };
         }
 
         @Override

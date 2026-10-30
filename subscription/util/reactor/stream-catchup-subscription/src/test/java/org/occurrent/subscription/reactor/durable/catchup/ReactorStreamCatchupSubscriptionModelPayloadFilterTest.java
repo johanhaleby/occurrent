@@ -128,7 +128,7 @@ class ReactorStreamCatchupSubscriptionModelPayloadFilterTest {
         }
     }
 
-    private static final class ReplayingPositionOrderedReader implements PositionOrderedReader {
+    private static final class ReplayingPositionOrderedReader implements UnscopedPositionOrderedReader {
         private final CloudEvent[] history;
 
         private ReplayingPositionOrderedReader(CloudEvent... history) {
@@ -151,7 +151,7 @@ class ReactorStreamCatchupSubscriptionModelPayloadFilterTest {
         }
     }
 
-    private static final class UnusedPositionOrderedReader implements PositionOrderedReader {
+    private static final class UnusedPositionOrderedReader implements UnscopedPositionOrderedReader {
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
             return Flux.error(new AssertionError("readInPositionOrder must not be called on the straight-to-live branch"));

@@ -23,6 +23,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -165,7 +166,7 @@ class CatchupOverDurableResumeAtPositionLockOrderTest {
 
         private Stack() {
             DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
-            catchup = new StreamCatchupSubscriptionModel(durable, unused(EventStoreQueries.class), new CatchupSubscriptionModelConfig(100));
+            catchup = new StreamCatchupSubscriptionModel(durable, unused(EventStoreQueries.class, CatchupReads.class), new CatchupSubscriptionModelConfig(100));
         }
 
         static Stack withRunningSubscription() {
@@ -353,8 +354,11 @@ class CatchupOverDurableResumeAtPositionLockOrderTest {
 
     // An implementation of the interface that fails every call
     @SuppressWarnings("unchecked")
-    private static <T> T unused(Class<T> type) {
-        return (T) Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (proxy, method, args) -> {
+    private static <T> T unused(Class<T> type, Class<?>... moreTypes) {
+        Class<?>[] interfaces = new Class<?>[1 + moreTypes.length];
+        interfaces[0] = type;
+        System.arraycopy(moreTypes, 0, interfaces, 1, moreTypes.length);
+        return (T) Proxy.newProxyInstance(type.getClassLoader(), interfaces, (proxy, method, args) -> {
             if (method.isDefault()) {
                 return InvocationHandler.invokeDefault(proxy, method, args);
             }

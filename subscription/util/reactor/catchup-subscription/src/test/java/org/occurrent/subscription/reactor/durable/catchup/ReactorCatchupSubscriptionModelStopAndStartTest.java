@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.reactor.durable.catchup;
 
+import org.occurrent.eventstore.api.reactor.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
@@ -88,7 +92,12 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
         assertThat(catchup.isPaused("d")).isTrue();
     }
 
-    private static final class OneEventReader implements PositionOrderedReader {
+    private static final class OneEventReader implements PositionOrderedReader, CatchupReads {
+        @Override
+        public Mono<CatchupReadScope> openCatchupReadScope(@Nullable String notBefore) {
+            return CatchupReads.unscoped(this).openCatchupReadScope(notBefore);
+        }
+
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
             long from = range.afterPosition().orElse(0L) + 1;
@@ -108,7 +117,12 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
     }
 
     // Counts the reads and answers none, so a replay that started stays in its first read
-    private static final class DcbStoreThatNeverAnswers implements DcbEventStore {
+    private static final class DcbStoreThatNeverAnswers implements DcbEventStore, DcbCatchupReads {
+        @Override
+        public Mono<DcbCatchupReadScope> openDcbCatchupReadScope(@Nullable String notBefore) {
+            return DcbCatchupReads.unscoped(this).openDcbCatchupReadScope(notBefore);
+        }
+
         final AtomicInteger reads = new AtomicInteger();
 
         @Override

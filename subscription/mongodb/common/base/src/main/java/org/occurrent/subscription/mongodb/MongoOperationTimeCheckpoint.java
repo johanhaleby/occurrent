@@ -18,9 +18,9 @@ package org.occurrent.subscription.mongodb;
 
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
-import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.eventstore.mongodb.internal.OperationTimeLiveStart;
 import org.occurrent.subscription.Checkpoint;
 
 import java.util.Objects;
@@ -63,6 +63,6 @@ public class MongoOperationTimeCheckpoint implements Checkpoint {
 
     @Override
     public String asString() {
-        return new Document("operationTime", operationTime).toJson();
+        return OperationTimeLiveStart.format(operationTime);
     }
 }

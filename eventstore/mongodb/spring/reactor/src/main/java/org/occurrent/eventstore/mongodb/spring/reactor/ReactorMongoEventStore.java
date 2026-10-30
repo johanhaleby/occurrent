@@ -31,6 +31,7 @@ import com.mongodb.client.model.Projections;
 import com.mongodb.reactivestreams.client.ClientSession;
 import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.bson.types.ObjectId;
@@ -42,6 +43,8 @@ import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads;
 import org.occurrent.eventstore.api.dcb.reactor.DcbAppendConfirmation;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
@@ -50,6 +53,8 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.api.reactor.*;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
@@ -60,6 +65,7 @@ import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
+import org.occurrent.eventstore.mongodb.internal.OperationTimeLiveStart;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
@@ -100,6 +106,7 @@ import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator
 import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter.convertToSpringSort;
 import static org.springframework.data.domain.Sort.Direction.DESC;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
+import static org.springframework.data.mongodb.SessionSynchronization.NEVER;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 
 /**
@@ -122,7 +129,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * isn't supported for DCB snapshot deciders.
  */
 @NullMarked
-public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation {
+public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation, CatchupReads, DcbCatchupReads {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ReactorMongoEventStore.class);
     private static final String ID = "_id";
@@ -293,12 +300,18 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        return readWithoutMarkerVersions(criteria, options, consistencyToken(criteria, mongoTemplate), currentPosition(), mongoTemplate, queryOptions);
+    }
+
+    // The token, the head, the template and the query options are passed in so a catch-up read scope can read all of them
+    // through its own session at its own read concern
+    private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Mono<Long> consistencyToken, Mono<Long> currentPosition, ReactiveMongoOperations template, Function<Query, Query> readQueryOptions) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads,
         // the events may include it while the token does not, which only makes a later conditional append
         // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The token read
         // and the position read are independent, so zip them concurrently rather than sequencing them, while
         // keeping both strictly before the event read below.
-        return Mono.zip(consistencyToken(criteria), currentPosition())
+        return Mono.zip(consistencyToken, currentPosition)
                 .flatMap(tokenAndHighWatermark -> {
                     long token = tokenAndHighWatermark.getT1();
                     long highWatermark = tokenAndHighWatermark.getT2();
@@ -308,7 +321,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     mongoQuery.with(Sort.by(backward ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
                     mongoQuery.skip(options.skip());
                     options.limit().ifPresent(mongoQuery::limit);
-                    Flux<CloudEvent> cloudEvents = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName)
+                    Flux<CloudEvent> cloudEvents = template.find(readQueryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName)
                             .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
                     Mono<List<CloudEvent>> events = backward
                             ? cloudEvents.collectList().map(list -> {
@@ -567,7 +580,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // query's markers have advanced since, a matching append committed after the read, so the condition
             // fails. Immune to read-watermark overshoot because marker versions bump inside the append
             // transaction (ADR 0021).
-            conflictMono = consistencyToken(condition.criteria()).map(actual -> actual != expectedToken.get().value());
+            conflictMono = consistencyToken(condition.criteria(), mongoTemplate).map(actual -> actual != expectedToken.get().value());
         } else {
             // No token: an absolute "fail if any matching event exists" guard. The marker increments below still
             // serialize concurrent unconditional guards on the same boundary so two of them cannot both pass.
@@ -615,13 +628,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. Read the markers
     // in one query so their versions come from a single consistent snapshot.
-    private Mono<Long> consistencyToken(DcbCriteria criteria) {
+    private Mono<Long> consistencyToken(DcbCriteria criteria, ReactiveMongoOperations template) {
         Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
         if (markerKeys.isEmpty()) {
             return Mono.just(0L);
         }
         List<String> markerIds = markerKeys.stream().map(DcbMarkerModel::markerId).toList();
-        return mongoTemplate.find(new Query(where(ID).in(markerIds)), Document.class, dcbCheckpointCollectionName)
+        return template.find(new Query(where(ID).in(markerIds)), Document.class, dcbCheckpointCollectionName)
                 .map(marker -> {
                     Number version = (Number) marker.get(DcbMarkerModel.CHECKPOINT_VERSION);
                     return version == null ? 0L : version.longValue();
@@ -741,16 +754,134 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         if (!writesPosition()) {
             return Flux.error(positionError());
         }
-        return currentPosition().flatMapMany(highWatermark -> {
+        return readInPositionOrder(filter, range, currentPosition(), mongoTemplate, queryOptions);
+    }
+
+    // The head, the template and the query options are passed in so a catch-up read scope can read through its own
+    // session at its own read concern
+    private Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range, Mono<Long> currentPosition, ReactiveMongoOperations template, Function<Query, Query> readQueryOptions) {
+        return currentPosition.flatMapMany(highWatermark -> {
             long upperBound = Math.min(highWatermark, range.upToPosition().orElse(highWatermark));
             long lowerBound = range.afterPosition().orElse(0L);
             Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(lowerBound).lte(upperBound);
             Criteria filterCriteria = FilterConverter.convertFilterToCriteria(null, timeRepresentation, filter);
             Query query = new Query(new Criteria().andOperator(positionCriteria, filterCriteria))
                     .with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
-            return mongoTemplate.find(queryOptions.apply(query), Document.class, eventStoreCollectionName)
+            return template.find(readQueryOptions.apply(query), Document.class, eventStoreCollectionName)
                     .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
         });
+    }
+
+    /**
+     * Internal. Opens a {@link CatchupReadScope}, see {@link CatchupReads#openCatchupReadScope(String)}. The scope
+     * reads through a causally consistent session of its own, never the caller's transaction, and every read in it uses
+     * read concern majority. The session is closed with the scope.
+     */
+    @Override
+    public Mono<CatchupReadScope> openCatchupReadScope(@Nullable String notBefore) {
+        return openScope(notBefore).cast(CatchupReadScope.class);
+    }
+
+    /**
+     * Internal. Opens a {@link DcbCatchupReadScope}, see {@link DcbCatchupReads#openDcbCatchupReadScope(String)}.
+     * Errors with an {@link UnsupportedOperationException} if this store does not have the DCB capability.
+     */
+    @Override
+    public Mono<DcbCatchupReadScope> openDcbCatchupReadScope(@Nullable String notBefore) {
+        if (!eventStoreCapabilities.contains(DCB)) {
+            return Mono.error(capabilityError(DCB));
+        }
+        return openScope(notBefore).cast(DcbCatchupReadScope.class);
+    }
+
+    private Mono<ReactorCatchupReadScope> openScope(@Nullable String notBefore) {
+        return mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().causallyConsistent(true).build())
+                .flatMap(session -> {
+                    ReactiveMongoOperations template = mongoTemplate.withSession(session);
+                    // Never the session of a transaction the caller has open, since that transaction may abort
+                    if (!(template instanceof ReactiveMongoTemplate sessionTemplate)) {
+                        session.close();
+                        return Mono.error(new IllegalStateException("Cannot open a catch-up read scope, because the session-bound template is a " + template.getClass().getName() + " and not a ReactiveMongoTemplate, so it can't be kept out of a transaction the caller has open."));
+                    }
+                    sessionTemplate.setSessionSynchronization(NEVER);
+                    if (notBefore != null) {
+                        // Advances to just before the live start and not to it, since the cluster time may not have reached it yet
+                        // and the replay only needs what committed before it
+                        OperationTimeLiveStart.tryParse(notBefore).map(OperationTimeLiveStart::oneIncrementBefore).ifPresent(session::advanceOperationTime);
+                    }
+                    // The read only moves the session's operation time to the one the live start is taken from
+                    return counterRead(template)
+                            .then(Mono.fromSupplier(() -> {
+                                BsonTimestamp t0 = session.getOperationTime();
+                                return new ReactorCatchupReadScope(session, template, OperationTimeLiveStart.liveStartAfterRead(t0));
+                            }))
+                            .doOnError(__ -> session.close())
+                            .doOnCancel(session::close);
+                });
+    }
+
+    private Mono<Document> counterRead(ReactiveMongoOperations template) {
+        Query counter = new Query(where(ID).is(DcbMarkerModel.POSITION_DOCUMENT_ID)).withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary());
+        return template.findOne(counter, Document.class, dcbPositionCollectionName);
+    }
+
+    // One causally consistent session for one replay attempt. The live start is the operation time of a majority read of
+    // the position counter on the primary, plus one increment, and every replay read is a majority read in the same
+    // session, so each of them sees every write that was majority-committed by then. The read concern is set after the
+    // configured query options, so they can't lower it, and a read preference they set is kept for the replay reads.
+    private final class ReactorCatchupReadScope implements CatchupReadScope, DcbCatchupReadScope {
+        private final ClientSession session;
+        private final ReactiveMongoOperations template;
+        private final @Nullable String liveStart;
+
+        private ReactorCatchupReadScope(ClientSession session, ReactiveMongoOperations template, @Nullable String liveStart) {
+            this.session = session;
+            this.template = template;
+            this.liveStart = liveStart;
+        }
+
+        private Query majority(Query query) {
+            return queryOptions.apply(query).withReadConcern(ReadConcern.MAJORITY);
+        }
+
+        @Override
+        public @Nullable String liveStart() {
+            return liveStart;
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            if (!writesPosition()) {
+                return Mono.error(positionError());
+            }
+            return counterRead(template)
+                    .map(document -> ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue())
+                    .defaultIfEmpty(0L);
+        }
+
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            requireNonNull(filter, "Filter cannot be null");
+            requireNonNull(range, "Range cannot be null");
+            if (!writesPosition()) {
+                return Flux.error(positionError());
+            }
+            return ReactorMongoEventStore.this.readInPositionOrder(filter, range, currentPosition(), template, this::majority);
+        }
+
+        @Override
+        public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
+            requireNonNull(criteria, "Criteria cannot be null");
+            return Mono.defer(() -> {
+                org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope.requirePositionRange(options);
+                return readWithoutMarkerVersions(criteria, options, consistencyToken(criteria, template), currentPosition(), template, this::majority);
+            });
+        }
+
+        @Override
+        public Mono<Void> close() {
+            return Mono.fromRunnable(session::close);
+        }
     }
 
     private static boolean isTransientTransactionError(Throwable throwable) {

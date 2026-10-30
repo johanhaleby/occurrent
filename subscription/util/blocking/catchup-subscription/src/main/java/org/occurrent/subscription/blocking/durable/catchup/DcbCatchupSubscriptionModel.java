@@ -24,6 +24,8 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -60,6 +62,9 @@ import java.util.stream.Stream;
 class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
     private final DcbEventStore dcbEventStore;
+    // The same object as dcbEventStore. A catch-up reads its live start and every replay read through the scope it
+    // opens, so the store has to implement the SPI, which a decorator around the store doesn't.
+    private final DcbCatchupReads dcbCatchupReads;
     private final DcbCriteria dcbQuery;
 
     public DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config) {
@@ -87,6 +92,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, AbstractCatchupSubscriptionModel.SharedCatchupState sharedState) {
         super(subscriptionModel, config, subscriptionModelContextType, sharedState);
         this.dcbEventStore = Objects.requireNonNull(dcbEventStore, "dcbEventStore cannot be null");
+        this.dcbCatchupReads = requireCatchupReads(dcbEventStore, DcbCatchupReads.class);
         this.dcbQuery = Objects.requireNonNull(dcbQuery, "dcbQuery cannot be null");
     }
 
@@ -171,7 +177,6 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // a long replay is not handed over (replayUntilLiveStartHolds).
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        PositionReplayStart replayStart = positionReplayStart(subscriptionId, checkpoint, delegatedStartAt);
 
         // Page through the DCB sequence from the resume position to the head seen at start, in windows so a large
         // rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
@@ -179,20 +184,23 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // after the reconciliation loop stabilises is newer than the live resume position and arrives live.
         BoundedIdCache<CatchupEventKey> catchupPhaseCache = new BoundedIdCache<>(config.cacheSize);
         Predicate<CloudEvent> persistDuringCatchup = persistDuringCatchupForOneAttempt();
-        PositionCatchupPipeline.Reader dcbReader = new PositionCatchupPipeline.Reader() {
-            @Override
-            public long currentHead() {
-                return dcbEventStore.read(dcbQuery, DcbReadOptions.between(0, 0)).lastSequencePosition();
-            }
+        PositionReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, this::openScope, storedPositionLiveStart(checkpoint),
+                liveStart -> positionReplayStart(subscriptionId, checkpoint, liveStart, delegatedStartAt), delegatedStartAt,
+                (start, scope) -> {
+                    // Reads the head and every window through the scope of this attempt
+                    PositionCatchupPipeline.Reader dcbReader = new PositionCatchupPipeline.Reader() {
+                        @Override
+                        public long currentHead() {
+                            return scope.read(dcbQuery, DcbReadOptions.between(0, 0)).lastSequencePosition();
+                        }
 
-            @Override
-            public Stream<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
-                return dcbEventStore.read(dcbQuery, DcbReadOptions.between(fromExclusive, toInclusive)).stream();
-            }
-        };
-        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(dcbReader, windowSize);
-        PositionReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, replayStart, delegatedStartAt,
-                start -> replayPositions(subscriptionId, action, pipeline, dcbReader, start, catchupPhaseCache, persistDuringCatchup));
+                        @Override
+                        public Stream<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
+                            return scope.read(dcbQuery, DcbReadOptions.between(fromExclusive, toInclusive)).stream();
+                        }
+                    };
+                    replayPositions(subscriptionId, action, new PositionCatchupPipeline(dcbReader, windowSize), dcbReader, start, catchupPhaseCache, persistDuringCatchup);
+                });
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // blocking stream catch-up. Unlocked, a cancelSubscription or a fresh subscribe for this id could land in
@@ -228,6 +236,11 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             }
             return subscription;
         });
+    }
+
+    private ReplayScope<DcbCatchupReadScope> openScope(@Nullable String notBefore) {
+        DcbCatchupReadScope scope = dcbCatchupReads.openDcbCatchupReadScope(notBefore);
+        return new ReplayScope<>(scope, scope.liveStart(), scope::close);
     }
 
     // One pass of the position replay from replayStart

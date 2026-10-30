@@ -24,6 +24,8 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
@@ -360,11 +362,17 @@ class CatchupSubscriptionModelStopPropagationTest {
 
     // Ignores filter and sort order (neither is exercised by these tests) and simply serves the fixed event list, so
     // a real (non-Mongo) catch-up replay has something to read.
-    private static final class InMemoryEventStoreQueries implements EventStoreQueries {
+    private static final class InMemoryEventStoreQueries implements EventStoreQueries, CatchupReads {
         private final List<CloudEvent> events;
 
         private InMemoryEventStoreQueries(CloudEvent... events) {
             this.events = List.of(events);
+        }
+
+        // The fake serves its list directly and has no position, so the scope reads it as the time-ordered path does
+        @Override
+        public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+            return TimeOrderedCatchupReads.over(this).openCatchupReadScope(notBefore);
         }
 
         @Override

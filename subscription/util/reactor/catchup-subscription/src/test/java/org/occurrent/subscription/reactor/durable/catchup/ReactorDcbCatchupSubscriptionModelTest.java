@@ -16,6 +16,8 @@
 
 package org.occurrent.subscription.reactor.durable.catchup;
 
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -108,7 +110,12 @@ class ReactorDcbCatchupSubscriptionModelTest {
         }
     }
 
-    private static final class UnusedDcbEventStore implements DcbEventStore {
+    private static final class UnusedDcbEventStore implements DcbEventStore, DcbCatchupReads {
+        @Override
+        public Mono<DcbCatchupReadScope> openDcbCatchupReadScope(@Nullable String notBefore) {
+            return DcbCatchupReads.unscoped(this).openDcbCatchupReadScope(notBefore);
+        }
+
         @Override
         public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
             return Mono.error(new AssertionError("read must not be called when the catch-up fails loudly"));

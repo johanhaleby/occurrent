@@ -530,7 +530,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     // Events at positions 1 to head, where a read can be blocked or failed
-    private static final class ScriptedReader implements PositionOrderedReader {
+    private static final class ScriptedReader implements UnscopedPositionOrderedReader {
         volatile long head = 3;
         private final AtomicReference<Mono<Void>> beforeEachRead = new AtomicReference<>(Mono.empty());
 
