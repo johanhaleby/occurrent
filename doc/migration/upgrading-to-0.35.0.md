@@ -935,7 +935,8 @@ The function is checked until a change stream of the subscription has opened. On
 cursor opened, so an answer from an opening that a pause or a failure stopped doesn't end the check. On the reactor
 model it means its `Flux` was subscribed to, so a pause after that, or an answer the server rejects, ends it. A position
 the function returns after that isn't checked. When its earlier answer was a resume token or an operation time and a
-change stream opens again before the first event, one of these checkpoints from the function opens at the present.
+change stream opens again before the first event, one of these checkpoints from the function opens later than that
+earlier answer, and can skip what was written between the two.
 
 ### Who is affected
 
@@ -943,7 +944,7 @@ Code that subscribes a MongoDB subscription model directly at a checkpoint a cat
 replayed event, in a `StartAt` that names it or from a dynamic start that returns it. A
 resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, isn't refused. The blocking models go on
 from the position the subscription has read to. The reactor model opens at the moment of the resume, for such a
-checkpoint and for a dynamic position that returns one, as it did in 0.34.0, and skips what was written while the
+checkpoint and for a dynamic position that returns one, as it did in 0.34.0, and can skip what was written while the
 subscription was paused.
 
 A blocking `DurableSubscriptionModel` hands the MongoDB model a dynamic start that returns the checkpoint in its
@@ -956,8 +957,9 @@ A `TimeBasedCheckpoint` isn't refused. A catch-up writes one when it can't get a
 `DurableSubscriptionModel` with no catch-up around it and one of these in its storage still opens at the present.
 
 A `CompetingConsumerSubscriptionModel` wrapping one of these models doesn't see a refusal of a dynamic start, since it
-comes after `subscribe(..)` has returned. The node goes on holding the lease and the subscription id, and it delivers
-nothing. Cancel the subscription to free them.
+comes after `subscribe(..)` has returned. The node holds the lease and the subscription id, and it delivers nothing. A
+pause, a stop or a lost lease gives the lease back, and the node then delivers nothing either, and may log warnings as
+it tries to resume the subscription. Cancel the subscription to free the id.
 
 ### What to do
 

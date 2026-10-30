@@ -1662,14 +1662,48 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void the_id_of_a_refused_run_is_free_when_its_waiters_are_released() throws Exception {
+            // Given a run whose position waits to answer a global checkpoint, and a started latch that looks at the model
+            // as the waiters of the run are released
+            String subscriptionId = UUID.randomUUID().toString();
+            CountDownLatch positionAsked = new CountDownLatch(1);
+            CountDownLatch positionMayAnswer = new CountDownLatch(1);
+            CompletableFuture<Boolean> runningAtTheRelease = new CompletableFuture<>();
+            CompletableFuture<Throwable> subscribedAgainAtTheRelease = new CompletableFuture<>();
+            Subscription refused = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
+                positionAsked.countDown();
+                awaitUpToTenSeconds(positionMayAnswer);
+                return StartAt.checkpoint(GlobalCheckpoint.of(7));
+            }), __ -> {
+            });
+            assertThat(positionAsked.await(10, SECONDS)).isTrue();
+            replaceLatchOfTheRunOf(subscriptionModel, subscriptionId, "startedLatch", own -> new LooksBeforeItReleasesTheWaiters(own, () -> {
+                runningAtTheRelease.complete(subscriptionModel.isRunning(subscriptionId));
+                subscribedAgainAtTheRelease.complete(catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+                })));
+            }));
+
+            // When the position answers and the refusal releases the waiters of the run
+            positionMayAnswer.countDown();
+            Throwable thrown = catchThrowable(() -> refused.waitUntilStarted(Duration.ofSeconds(5)));
+
+            // Then the handle throws the refusal
+            assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessageContaining("subscription \"" + subscriptionId + "\"");
+            // And the run was no longer running as they were released, and the id could be subscribed to again
+            assertThat(runningAtTheRelease).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(false);
+            assertThat(subscribedAgainAtTheRelease).succeedsWithin(Duration.ofSeconds(5)).isNull();
+        }
+
+        @Test
         void a_refused_run_stays_known_until_its_failure_is_recorded() throws Exception {
-            // Given a run whose position waits to answer a global checkpoint, and a started latch that holds the thread
-            // recording the failure of the run until released
+            // Given a run whose position waits to answer a global checkpoint, and a started latch whose first read, made
+            // while the failure of the run is recorded, holds the thread until released
             String subscriptionId = UUID.randomUUID().toString();
             CountDownLatch positionAsked = new CountDownLatch(1);
             CountDownLatch positionMayAnswer = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
-            AtomicReference<HoldsTheRecordingOfTheFailure> holdsTheRecording = new AtomicReference<>();
+            AtomicReference<HoldsTheFirstReadOfTheStartedLatch> holdsTheRead = new AtomicReference<>();
             Subscription refused = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
                 positionAsked.countDown();
                 awaitUpToTenSeconds(positionMayAnswer);
@@ -1679,13 +1713,13 @@ public class SpringMongoSubscriptionModelTest {
             try {
                 assertThat(positionAsked.await(10, SECONDS)).isTrue();
                 replaceLatchOfTheRunOf(subscriptionModel, subscriptionId, "startedLatch", own -> {
-                    holdsTheRecording.set(new HoldsTheRecordingOfTheFailure(own, release));
-                    return holdsTheRecording.get();
+                    holdsTheRead.set(new HoldsTheFirstReadOfTheStartedLatch(own, release));
+                    return holdsTheRead.get();
                 });
 
                 // When the refusal is recording the failure of the run
                 positionMayAnswer.countDown();
-                assertThat(holdsTheRecording.get().reached.await(10, SECONDS)).isTrue();
+                assertThat(holdsTheRead.get().reached.await(10, SECONDS)).isTrue();
 
                 // Then the run is still known, so nobody reads it as gone before its failure can be read
                 assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
@@ -2715,23 +2749,53 @@ public class SpringMongoSubscriptionModelTest {
         }
     }
 
-    // Replaces the latch a run counts down when it has started or failed to. Counting it down waits until released, which
-    // holds the thread that records the failure of a refused run
-    private static final class HoldsTheRecordingOfTheFailure extends CountDownLatch {
+    // Replaces the latch of a run that its failure to start is read from and counted down on. The first read waits until
+    // released, which holds the thread that is recording the failure of a refused run
+    private static final class HoldsTheFirstReadOfTheStartedLatch extends CountDownLatch {
         private final CountDownLatch own;
         private final CountDownLatch release;
         private final CountDownLatch reached = new CountDownLatch(1);
+        private final AtomicBoolean first = new AtomicBoolean(true);
 
-        private HoldsTheRecordingOfTheFailure(CountDownLatch own, CountDownLatch release) {
+        private HoldsTheFirstReadOfTheStartedLatch(CountDownLatch own, CountDownLatch release) {
             super(1);
             this.own = own;
             this.release = release;
         }
 
         @Override
+        public long getCount() {
+            if (first.getAndSet(false)) {
+                reached.countDown();
+                awaitUpToTenSeconds(release);
+            }
+            return own.getCount();
+        }
+
+        @Override
         public void countDown() {
-            reached.countDown();
-            awaitUpToTenSeconds(release);
+            own.countDown();
+        }
+    }
+
+    // Replaces the latch of a run that its waiters are released by. Runs the look once, as the waiters are released and
+    // before they are
+    private static final class LooksBeforeItReleasesTheWaiters extends CountDownLatch {
+        private final CountDownLatch own;
+        private final Runnable look;
+        private final AtomicBoolean first = new AtomicBoolean(true);
+
+        private LooksBeforeItReleasesTheWaiters(CountDownLatch own, Runnable look) {
+            super(1);
+            this.own = own;
+            this.look = look;
+        }
+
+        @Override
+        public void countDown() {
+            if (first.getAndSet(false)) {
+                look.run();
+            }
             own.countDown();
         }
 

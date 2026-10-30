@@ -37,6 +37,9 @@ public interface Subscribable extends SubscriptionModelCapability {
      *                                               A model that hears of the refusal only once the call has returned reports it
      *                                               through {@link Subscription#waitUntilStarted(java.time.Duration)} instead.
      * @throws UnsupportedStartAtException            If this model does not accept that start position.
+     *                                                A model that hears of the refusal only once the call has returned
+     *                                                reports it through
+     *                                                {@link Subscription#waitUntilStarted(java.time.Duration)} instead.
      */
     Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action);
 
@@ -51,6 +54,9 @@ public interface Subscribable extends SubscriptionModelCapability {
      *                                          it through {@link Subscription#waitUntilStarted(java.time.Duration)}
      *                                          instead.
      * @throws UnsupportedStartAtException      If this model does not accept that start position.
+     *                                          A model that hears of the refusal only once the call has returned
+     *                                          reports it through
+     *                                          {@link Subscription#waitUntilStarted(java.time.Duration)} instead.
      */
     default Subscription subscribe(String subscriptionId, StartAt startAt, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, null, startAt, action);
