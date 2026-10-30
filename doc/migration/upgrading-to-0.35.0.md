@@ -1122,9 +1122,13 @@ Every application on the reactive starter with a `@StreamSubscription` that sets
 - `SAME_AS_START_AT` starts at `startAt` on every restart, as the documentation says. `BEGINNING_OF_TIME` with
   `SAME_AS_START_AT` now stores no checkpoint, the way a reactive `@Subscription` already behaves.
 
+`NOW` with `SAME_AS_START_AT` still stores a checkpoint after each event, as before, and ignores it on restart. Changing
+that subscription to `DEFAULT` later continues from the checkpoint it stored.
+
 The checkpoint is the one the starter's durable subscription model stores. An application that supplies its own
-`FluxSubscriptionModel` or `Subscribable` gets no durable model from the starter, and `NOW` with `DEFAULT` then starts
-where that model's default start does.
+`FluxSubscriptionModel` or `Subscribable` gets no durable model from the starter. A `RegisteringSubscribable`, such as
+`SynchronousSubscriptionModel`, does not count. With its own model, `NOW` with `DEFAULT` starts where that model's default start does, and `BEGINNING_OF_TIME` with `DEFAULT`
+replays the history again after every restart, because nothing stores a checkpoint.
 
 A subscription that handled an event before the upgrade normally has a checkpoint stored already, because the old start
 stored one after each event too. The first restart after the upgrade continues from it, and `startAt` is not looked at
