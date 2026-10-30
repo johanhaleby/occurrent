@@ -39,6 +39,7 @@ import static org.occurrent.rewrite.DcbMarkerVersionsStubs.DCB_EVENT_STREAM;
 import static org.occurrent.rewrite.DcbMarkerVersionsStubs.DCB_MARKER_VERSIONS;
 import static org.occurrent.rewrite.DcbMarkerVersionsStubs.DCB_READ_OPTIONS;
 import static org.occurrent.rewrite.DcbMarkerVersionsStubs.POSITION_RANGE;
+import static org.occurrent.rewrite.DcbMarkerVersionsStubs.SNAPSHOT;
 import static org.openrewrite.java.Assertions.java;
 
 /**
@@ -57,7 +58,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
     public void defaults(RecipeSpec spec) {
         spec.recipe(new MigrateDcbMarkerVersionsRecordPattern())
                 .parser(JavaParser.fromJavaVersion().dependsOn(APPEND_ID, WRITE_RESULT, CLOUD_EVENT, POSITION_RANGE,
-                        DCB_CONSISTENCY_TOKEN, DCB_MARKER_VERSIONS, DCB_APPEND_RESULT, DCB_EVENT_STREAM, DCB_READ_OPTIONS))
+                        DCB_CONSISTENCY_TOKEN, DCB_MARKER_VERSIONS, DCB_APPEND_RESULT, DCB_EVENT_STREAM, DCB_READ_OPTIONS, SNAPSHOT))
                 .typeValidationOptions(TypeValidation.builder().identifiers(false).build());
     }
 
@@ -819,6 +820,155 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
      * DcbConsistencyToken(var value), has no plain binding for the recipe to copy. The recipe skips it instead of
      * guessing.
      */
+    @Test
+    void addsTheMarkerVersionsBindingToAVarSnapshotSwitchPattern() {
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.snapshot.Snapshot;
+
+                        class Reader {
+                            String describe(Object snapshot) {
+                                return switch (snapshot) {
+                                    case Snapshot(var state, var version, var schemaVersion) -> state + "@" + version + "/" + schemaVersion;
+                                    default -> "unknown";
+                                };
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.snapshot.Snapshot;
+
+                        class Reader {
+                            String describe(Object snapshot) {
+                                return switch (snapshot) {
+                                    case Snapshot(var state, var version, var schemaVersion, var markerVersions) -> state + "@" + version + "/" + schemaVersion;
+                                    default -> "unknown";
+                                };
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void addsTheMarkerVersionsBindingToAnExplicitlyTypedSnapshotInstanceofPattern() {
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.snapshot.Snapshot;
+
+                        class Reader {
+                            long versionOf(Snapshot<String> snapshot) {
+                                if (snapshot instanceof Snapshot<String>(String state, long version, int schemaVersion)) {
+                                    return version;
+                                }
+                                return 0;
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.snapshot.Snapshot;
+
+                        class Reader {
+                            long versionOf(Snapshot<String> snapshot) {
+                                if (snapshot instanceof Snapshot<String>(String state, long version, int schemaVersion, var markerVersions)) {
+                                    return version;
+                                }
+                                return 0;
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void leavesASnapshotPatternWithFourBindingsAlone() {
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.snapshot.Snapshot;
+
+                        class Reader {
+                            String describe(Object snapshot) {
+                                return switch (snapshot) {
+                                    case Snapshot(var state, var version, var schemaVersion, var markerVersions) -> state + ":" + markerVersions;
+                                    default -> "unknown";
+                                };
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void leavesAThreeComponentRecordNamedSnapshotInAnotherPackageAlone() {
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        class Reader {
+                            record Snapshot(String state, long version, int schemaVersion) {
+                            }
+
+                            String describe(Object o) {
+                                return switch (o) {
+                                    case Snapshot(var state, var version, var schemaVersion) -> state + "@" + version;
+                                    default -> "unknown";
+                                };
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void stampsTheMarkerVersionsBindingWithTheOptionalMarkerVersionsTypeOfTheSnapshotComponent() {
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.snapshot.Snapshot;
+
+                        class Reader {
+                            boolean matches(Object snapshot) {
+                                return snapshot instanceof Snapshot(var state, var version, var schemaVersion);
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.snapshot.Snapshot;
+
+                        class Reader {
+                            boolean matches(Object snapshot) {
+                                return snapshot instanceof Snapshot(var state, var version, var schemaVersion, var markerVersions);
+                            }
+                        }
+                        """,
+                        spec -> spec.afterRecipe(cu -> assertThat(bindingTypes(cu, "markerVersions"))
+                                .containsExactly("java.util.Optional<org.occurrent.eventstore.api.dcb.DcbMarkerVersions>"))
+                )
+        );
+    }
+
     @Test
     void leavesADcbEventStreamPatternWhoseLastElementIsANestedRecordPatternAlone() {
         rewriteRun(

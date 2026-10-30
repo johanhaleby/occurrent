@@ -1241,7 +1241,7 @@ class LateRegistrationOnANonBlockingThreadTest {
     static class DcbSnapshotHolder implements Marker {
         @Snapshot(id = "late-dcb-snapshot", startAt = StartPosition.NOW, startupMode = StartupMode.WAIT_UNTIL_STARTED)
         DcbSnapshotView<Integer, TestEvent> snapshot() {
-            return new DcbSnapshotView<>(countSnapshot(), DcbCriteria.all());
+            return new DcbSnapshotView<>(countSnapshot(), DcbCriteria.tags(Tag.of("name", "late")));
         }
     }
 

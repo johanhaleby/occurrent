@@ -16,10 +16,14 @@
 
 package org.occurrent.dsl.snapshot.reactor;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
@@ -37,10 +41,17 @@ import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
 import org.occurrent.dsl.snapshot.Snapshot;
+import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
+import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.reactor.DcbAppendConfirmation;
+import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -52,6 +63,7 @@ import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Signal;
@@ -60,7 +72,10 @@ import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -100,6 +115,26 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
 
+    private ListAppender<ILoggingEvent> logAppender;
+    private ch.qos.logback.classic.Logger log;
+    private Level originalLevel;
+
+    @BeforeEach
+    void attach_log_appender() {
+        log = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ReactiveSnapshotDcbDeciderApplicationService.class);
+        originalLevel = log.getLevel();
+        log.setLevel(Level.DEBUG);
+        logAppender = new ListAppender<>();
+        logAppender.start();
+        log.addAppender(logAppender);
+    }
+
+    @AfterEach
+    void detach_log_appender() {
+        log.detachAppender(logAppender);
+        log.setLevel(originalLevel);
+    }
+
     @BeforeEach
     void create_instances() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactivesnapshotdcb");
@@ -124,23 +159,145 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     }
 
     @Test
-    void first_execute_appends_and_saves_a_snapshot_keyed_by_criteria() {
-        service.execute(new Define("A"), ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()))).block();
+    void first_execute_on_an_empty_boundary_appends_but_saves_no_snapshot() {
+        // The read of an empty boundary has no marker to compare the append's epoch with
+        DcbAppendResult result = service.execute(new Define("A"), ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()))).block();
 
         assertAll(
-                () -> assertThat(store.findLatest(key).blockOptional()).isPresent(),
-                () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("A")
+                () -> assertThat(result).isNotNull(),
+                () -> assertThat(store.findLatest(key).blockOptional()).isEmpty()
         );
     }
 
     @Test
-    void first_execute_with_the_default_key_function_resolves_the_canonical_criteria_key() {
+    void execute_on_a_non_empty_boundary_saves_a_snapshot_keyed_by_criteria_at_marker_versions() {
+        seed();
+
+        service.execute(new Define("A"), ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()))).block();
+
+        Snapshot<String> snapshot = store.findLatest(key).blockOptional().orElseThrow();
+        assertAll(
+                () -> assertThat(snapshot.state()).isEqualTo("A"),
+                () -> assertThat(snapshot.markerVersions()).isEqualTo(requireNonNull(eventStore.read(criteria(), DcbReadOptions.fromBeginning().withVersions()).block(TIMEOUT)).markerVersions()),
+                () -> assertThat(snapshot.version()).isZero()
+        );
+    }
+
+    @Test
+    void execute_with_the_default_key_function_resolves_the_canonical_criteria_key() {
         // The 3-arg from(...) defaults keyFunction to DcbSnapshotKeys::canonicalKey; observe the same key as an explicit one.
         var account = ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
 
         service.execute(new Define("A"), account).block();
 
         assertThat(store.findLatest(DcbSnapshotKeys.canonicalKey(criteria())).blockOptional()).hasValueSatisfying(s -> assertThat(s.state()).isEqualTo("A"));
+    }
+
+    @Test
+    void a_snapshot_saved_at_a_position_by_0_34_is_not_used_and_is_replaced_by_one_with_marker_versions() {
+        seed();
+        store.save(key, new Snapshot<>("stale", 1000, 1)).block();
+
+        evolveCount.set(0);
+        service.execute(new Change("B"), ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()))).block();
+
+        Snapshot<String> replaced = store.findLatest(key).blockOptional().orElseThrow();
+        assertAll(
+                // The seed (1) and the produced B (1) are folded, so the boundary was read in full
+                () -> assertThat(evolveCount.get()).isEqualTo(2),
+                () -> assertThat(replaced.state()).isEqualTo("B"),
+                () -> assertThat(replaced.markerVersions()).isPresent(),
+                () -> assertThat(replaced.version()).isZero()
+        );
+    }
+
+    @Test
+    void a_store_that_refuses_to_read_after_the_saved_marker_versions_is_read_in_full_and_the_snapshot_replaced() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        var refusingService = new ReactiveSnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry()));
+        var account = ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+        refusingService.execute(new Define("A"), account).block(TIMEOUT);
+        DcbMarkerVersions savedVersions = store.findLatest(key).blockOptional().orElseThrow().markerVersions().orElseThrow();
+        controlled.refuseReadsAfterVersions = true;
+        controlled.reads.clear();
+
+        evolveCount.set(0);
+        refusingService.execute(new Change("B"), account).block(TIMEOUT);
+
+        Snapshot<String> replaced = store.findLatest(key).blockOptional().orElseThrow();
+        assertAll(
+                () -> assertThat(controlled.reads).containsExactly(DcbReadOptions.afterVersions(savedVersions), DcbReadOptions.fromBeginning().withVersions()),
+                // The seed (1), A (1) and the produced B (1), so the state was folded from the initial state
+                () -> assertThat(evolveCount.get()).isEqualTo(3),
+                () -> assertThat(replaced.state()).isEqualTo("B"),
+                () -> assertThat(replaced.markerVersions()).isPresent().isNotEqualTo(Optional.of(savedVersions))
+        );
+    }
+
+    @Test
+    void a_refusal_to_read_without_a_saved_snapshot_is_not_swallowed() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.refuseEveryRead = true;
+        var refusingService = new ReactiveSnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry()));
+
+        Throwable thrown = catchThrowable(() -> refusingService.execute(new Define("A"), ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()))).block(TIMEOUT));
+
+        assertThat(thrown).isInstanceOf(DcbSnapshotInvalidException.class);
+    }
+
+    @Test
+    void an_unconfirmed_append_saves_no_snapshot_and_warns_once_per_service_then_logs_at_debug() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.confirms = false;
+        var unconfirmingService = new ReactiveSnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry()));
+        var account = ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+
+        unconfirmingService.execute(new Define("A"), account).block(TIMEOUT);
+        unconfirmingService.execute(new Change("B"), account).block(TIMEOUT);
+        unconfirmingService.execute(new Change("C"), account).block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(store.findLatest(key).blockOptional()).isEmpty(),
+                () -> assertThat(logged(Level.WARN)).singleElement().asString().contains("isn't confirmed as committed").contains(key),
+                () -> assertThat(logged(Level.DEBUG)).hasSize(2)
+        );
+    }
+
+    @Test
+    void an_append_without_marker_versions_saves_no_snapshot_and_warns_once_per_service_then_logs_at_debug() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.reportsVersions = false;
+        var unversionedService = new ReactiveSnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry()));
+        var account = ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+
+        unversionedService.execute(new Define("A"), account).block(TIMEOUT);
+        unversionedService.execute(new Change("B"), account).block(TIMEOUT);
+        unversionedService.execute(new Change("C"), account).block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(store.findLatest(key).blockOptional()).isEmpty(),
+                () -> assertThat(logged(Level.WARN)).singleElement().asString().contains("reported no marker versions").contains(key),
+                () -> assertThat(logged(Level.DEBUG)).hasSize(2)
+        );
+    }
+
+    @Test
+    void a_new_service_warns_again_for_the_same_reason() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.confirms = false;
+        var account = ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+
+        for (int i = 0; i < 2; i++) {
+            new ReactiveSnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry()))
+                    .execute(new Change("B" + i), account).block(TIMEOUT);
+        }
+
+        assertThat(logged(Level.WARN)).hasSize(2);
     }
 
     @Test
@@ -155,6 +312,7 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
 
     private void assertSnapshotSaveThrowingBeforeReturningAMonoIsSwallowed(Throwable saveFailure) {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
+        AtomicInteger saveAttempts = new AtomicInteger();
         ReactiveSnapshotStore<String> failingStore = new ReactiveSnapshotStore<>() {
             @Override
             public Mono<Snapshot<String>> findLatest(String key) {
@@ -163,17 +321,21 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
 
             @Override
             public Mono<Void> save(String key, Snapshot<String> snapshot) {
+                saveAttempts.incrementAndGet();
                 throw ReactiveSnapshotDcbDeciderApplicationServiceTest.<RuntimeException>sneakyThrow(saveFailure);
             }
         };
         AtomicReference<DcbAppendResult> result = new AtomicReference<>();
+        // A snapshot is saved only on a boundary that already has a marker, so the save is reached
+        seed();
 
         Throwable thrown = catchThrowable(() -> result.set(service.execute(new Define("A"), ReactiveSnapshotDcbDecider.from(dcbDecider, failingStore, options)).block(TIMEOUT)));
 
         evolveCount.set(0);
         service.execute(new Change("B"), ReactiveSnapshotDcbDecider.from(dcbDecider, store, options)).block(TIMEOUT);
-        // A (1) folded from the boundary plus the produced B (1) = 2, so A was appended before the save failed
-        assertThat(evolveCount.get()).as("events folded by the next command").isEqualTo(2);
+        // The seed (1) and A (1) folded from the boundary plus the produced B (1) = 3, so A was appended before the save failed
+        assertThat(evolveCount.get()).as("events folded by the next command").isEqualTo(3);
+        assertThat(saveAttempts.get()).as("attempted saves").isEqualTo(1);
         assertThat(thrown).as("what escaped execute after the append committed").isNull();
         assertThat(result.get()).isNotNull();
     }
@@ -182,13 +344,14 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     void second_execute_resumes_from_the_snapshot_and_folds_only_the_tail() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
         var account = ReactiveSnapshotDcbDecider.from(dcbDecider, store, options);
+        seed();
         service.execute(new Define("A"), account).block();
 
         evolveCount.set(0);
         service.execute(new Change("B"), account).block();
 
         assertAll(
-                // Empty tail after the snapshot, so only the produced event is folded (1), not a full replay.
+                // Empty tail after the snapshot's marker versions, so only the produced event is folded (1), not a full replay.
                 () -> assertThat(evolveCount.get()).isEqualTo(1),
                 () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("B")
         );
@@ -198,6 +361,7 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     void the_resume_read_folds_events_appended_after_the_snapshot_by_another_writer() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
         var account = ReactiveSnapshotDcbDecider.from(dcbDecider, store, options);
+        seed();
         service.execute(new Define("A"), account).block();
 
         // An event lands in the same boundary out-of-band, so the snapshot is now behind the boundary head.
@@ -215,14 +379,15 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
 
     @Test
     void a_schema_version_bump_ignores_the_old_snapshot() {
+        seed();
         service.execute(new Define("A"), ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()))).block();
 
         evolveCount.set(0);
         service.execute(new Change("B"), ReactiveSnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(2, SnapshotPolicy.always()))).block();
 
         assertAll(
-                // Old schema-1 snapshot ignored, whole boundary replayed: A (1) plus produced B (1) = 2.
-                () -> assertThat(evolveCount.get()).isEqualTo(2),
+                // Old schema-1 snapshot ignored, whole boundary replayed: seed (1) and A (1) plus produced B (1) = 3.
+                () -> assertThat(evolveCount.get()).isEqualTo(3),
                 () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().schemaVersion()).isEqualTo(2),
                 () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("B")
         );
@@ -364,6 +529,14 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     private record FoldToNull() implements MultiFoldCmd {
     }
 
+    private void seed() {
+        appendOutOfBand(new NameDefined(UUID.randomUUID().toString(), time, "name", "seed"));
+    }
+
+    private List<String> logged(Level level) {
+        return logAppender.list.stream().filter(event -> event.getLevel() == level).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
     private void appendOutOfBand(DomainEvent event) {
         List<Tag> tags = List.of(tag());
         eventStore.append(converter.toCloudEvents(List.of(event)).stream().map(ce -> DcbCloudEvents.withTags(ce, tags)).toList()).block();
@@ -413,5 +586,46 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
         throw (T) failure;
+    }
+
+    /**
+     * Delegates to the Mongo store and can refuse a resume, drop the marker versions of a read or decline to confirm.
+     */
+    private static final class ControlledStore implements DcbEventStore, DcbAppendConfirmation {
+        final List<DcbReadOptions> reads = new ArrayList<>();
+        volatile boolean refuseReadsAfterVersions;
+        volatile boolean refuseEveryRead;
+        volatile boolean reportsVersions = true;
+        volatile boolean confirms = true;
+        private final ReactorMongoEventStore delegate;
+
+        ControlledStore(ReactorMongoEventStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
+            reads.add(options);
+            if (refuseEveryRead || (refuseReadsAfterVersions && options.afterVersions().isPresent())) {
+                DcbMarkerVersions refused = options.afterVersions().orElseGet(() -> DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))));
+                return Mono.error(new DcbSnapshotInvalidException(criteria, refused, "refused (test double)"));
+            }
+            return delegate.read(criteria, options).map(stream -> reportsVersions ? stream : new DcbEventStream(stream.events(), stream.lastSequencePosition(), stream.consistencyToken()));
+        }
+
+        @Override
+        public Mono<DcbAppendResult> append(List<CloudEvent> events) {
+            return delegate.append(events);
+        }
+
+        @Override
+        public Mono<DcbAppendResult> append(List<CloudEvent> events, DcbAppendCondition condition) {
+            return delegate.append(events, condition);
+        }
+
+        @Override
+        public Mono<Boolean> isConfirmed(DcbAppendResult appendResult) {
+            return confirms ? delegate.isConfirmed(appendResult) : Mono.just(false);
+        }
     }
 }

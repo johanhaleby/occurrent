@@ -16,7 +16,11 @@
 
 package org.occurrent.dsl.snapshot.blocking;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.*;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -29,18 +33,29 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.dsl.dcb.DcbDecider;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
+import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
+import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.DcbAppendConfirmation;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
+import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URI;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -67,6 +82,25 @@ class SnapshotDcbDeciderApplicationServiceTest {
     private DcbDecider<Cmd, String, DomainEvent> dcbDecider;
     private String key;
     private LocalDateTime time;
+    private ListAppender<ILoggingEvent> logAppender;
+    private ch.qos.logback.classic.Logger log;
+    private Level originalLevel;
+
+    @BeforeEach
+    void attachLogAppender() {
+        log = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SnapshotDcbDeciderApplicationService.class);
+        originalLevel = log.getLevel();
+        log.setLevel(Level.DEBUG);
+        logAppender = new ListAppender<>();
+        logAppender.start();
+        log.addAppender(logAppender);
+    }
+
+    @AfterEach
+    void detachLogAppender() {
+        log.detachAppender(logAppender);
+        log.setLevel(originalLevel);
+    }
 
     @BeforeEach
     void setup() {
@@ -104,19 +138,35 @@ class SnapshotDcbDeciderApplicationServiceTest {
     }
 
     @Test
-    void first_execute_appends_and_saves_a_snapshot_keyed_by_criteria() {
-        service.execute(new Define("A"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always())));
+    void first_execute_on_an_empty_boundary_appends_but_saves_no_snapshot() {
+        // The read of an empty boundary has no marker to compare the append's epoch with
+        Optional<DcbAppendResult> result = service.execute(new Define("A"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always())));
 
         assertAll(
-                () -> assertThat(store.findLatest(key)).isPresent(),
-                () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("A")
+                () -> assertThat(result).isPresent(),
+                () -> assertThat(store.findLatest(key)).isEmpty()
         );
     }
 
     @Test
-    void first_execute_with_the_default_key_function_resolves_the_canonical_criteria_key() {
+    void execute_on_a_non_empty_boundary_saves_a_snapshot_keyed_by_criteria_at_marker_versions() {
+        seed();
+
+        service.execute(new Define("A"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always())));
+
+        Snapshot<String> snapshot = store.findLatest(key).orElseThrow();
+        assertAll(
+                () -> assertThat(snapshot.state()).isEqualTo("A"),
+                () -> assertThat(snapshot.markerVersions()).isEqualTo(eventStore.read(criteria(), DcbReadOptions.fromBeginning().withVersions()).markerVersions()),
+                () -> assertThat(snapshot.version()).isZero()
+        );
+    }
+
+    @Test
+    void execute_with_the_default_key_function_resolves_the_canonical_criteria_key() {
         // The 3-arg from(...) defaults keyFunction to DcbSnapshotKeys::canonicalKey; observe the same key as an explicit one.
         var account = SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
 
         service.execute(new Define("A"), account);
 
@@ -127,13 +177,14 @@ class SnapshotDcbDeciderApplicationServiceTest {
     void second_execute_resumes_from_the_snapshot_and_folds_only_the_tail() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
         var account = SnapshotDcbDecider.from(dcbDecider, store, options);
+        seed();
         service.execute(new Define("A"), account);
 
         evolveCount.set(0);
         service.execute(new Change("B"), account);
 
         assertAll(
-                // Empty tail after the snapshot, so only the produced event is folded (1), not a full replay.
+                // Empty tail after the snapshot's marker versions, so only the produced event is folded (1), not a full replay.
                 () -> assertThat(evolveCount.get()).isEqualTo(1),
                 () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("B")
         );
@@ -143,6 +194,7 @@ class SnapshotDcbDeciderApplicationServiceTest {
     void the_resume_read_folds_events_appended_after_the_snapshot_by_another_writer() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
         var account = SnapshotDcbDecider.from(dcbDecider, store, options);
+        seed();
         service.execute(new Define("A"), account);
 
         // An event lands in the same boundary out-of-band, so the snapshot is now behind the boundary head.
@@ -159,6 +211,112 @@ class SnapshotDcbDeciderApplicationServiceTest {
     }
 
     @Test
+    void a_snapshot_saved_at_a_position_by_0_34_is_not_used_and_is_replaced_by_one_with_marker_versions() {
+        seed();
+        store.save(key, new Snapshot<>("stale", 1000, 1));
+
+        evolveCount.set(0);
+        service.execute(new Change("B"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always())));
+
+        Snapshot<String> replaced = store.findLatest(key).orElseThrow();
+        assertAll(
+                // The seed (1) and the produced B (1) are folded, so the boundary was read in full
+                () -> assertThat(evolveCount.get()).isEqualTo(2),
+                () -> assertThat(replaced.state()).isEqualTo("B"),
+                () -> assertThat(replaced.markerVersions()).isPresent(),
+                () -> assertThat(replaced.version()).isZero()
+        );
+    }
+
+    @Test
+    void a_store_that_refuses_to_read_after_the_saved_marker_versions_is_read_in_full_and_the_snapshot_replaced() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        var refusingService = new SnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetryStrategy()));
+        var account = SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+        refusingService.execute(new Define("A"), account);
+        DcbMarkerVersions savedVersions = store.findLatest(key).orElseThrow().markerVersions().orElseThrow();
+        controlled.refuseReadsAfterVersions = true;
+        controlled.reads.clear();
+
+        evolveCount.set(0);
+        refusingService.execute(new Change("B"), account);
+
+        Snapshot<String> replaced = store.findLatest(key).orElseThrow();
+        assertAll(
+                () -> assertThat(controlled.reads).containsExactly(DcbReadOptions.afterVersions(savedVersions), DcbReadOptions.fromBeginning().withVersions()),
+                // The seed (1), A (1) and the produced B (1), so the state was folded from the initial state
+                () -> assertThat(evolveCount.get()).isEqualTo(3),
+                () -> assertThat(replaced.state()).isEqualTo("B"),
+                () -> assertThat(replaced.markerVersions()).isPresent().isNotEqualTo(Optional.of(savedVersions))
+        );
+    }
+
+    @Test
+    void a_refusal_to_read_without_a_saved_snapshot_is_not_swallowed() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.refuseEveryRead = true;
+        var refusingService = new SnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetryStrategy()));
+
+        Throwable thrown = catchThrowable(() -> refusingService.execute(new Define("A"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()))));
+
+        assertThat(thrown).isInstanceOf(DcbSnapshotInvalidException.class);
+    }
+
+    @Test
+    void an_unconfirmed_append_saves_no_snapshot_and_warns_once_per_service_then_logs_at_debug() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.confirms = false;
+        var unconfirmingService = new SnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetryStrategy()));
+        var account = SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+
+        unconfirmingService.execute(new Define("A"), account);
+        unconfirmingService.execute(new Change("B"), account);
+        unconfirmingService.execute(new Change("C"), account);
+
+        assertAll(
+                () -> assertThat(store.findLatest(key)).isEmpty(),
+                () -> assertThat(logged(Level.WARN)).singleElement().asString().contains("isn't confirmed as committed").contains(key),
+                () -> assertThat(logged(Level.DEBUG)).hasSize(2)
+        );
+    }
+
+    @Test
+    void an_append_without_marker_versions_saves_no_snapshot_and_warns_once_per_service_then_logs_at_debug() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.reportsVersions = false;
+        var unversionedService = new SnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetryStrategy()));
+        var account = SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+
+        unversionedService.execute(new Define("A"), account);
+        unversionedService.execute(new Change("B"), account);
+        unversionedService.execute(new Change("C"), account);
+
+        assertAll(
+                () -> assertThat(store.findLatest(key)).isEmpty(),
+                () -> assertThat(logged(Level.WARN)).singleElement().asString().contains("reported no marker versions").contains(key),
+                () -> assertThat(logged(Level.DEBUG)).hasSize(2)
+        );
+    }
+
+    @Test
+    void a_new_service_warns_again_for_the_same_reason() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.confirms = false;
+        var account = SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+
+        for (int i = 0; i < 2; i++) {
+            new SnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetryStrategy()))
+                    .execute(new Change("B" + i), account);
+        }
+
+        assertThat(logged(Level.WARN)).hasSize(2);
+    }
+
+    @Test
     void a_snapshot_save_that_throws_a_runtime_exception_does_not_fail_execute_and_the_append_is_committed() {
         assertSnapshotSaveFailureIsSwallowed(new IllegalStateException("snapshot store save failed (test double)"));
     }
@@ -171,27 +329,32 @@ class SnapshotDcbDeciderApplicationServiceTest {
     private void assertSnapshotSaveFailureIsSwallowed(Throwable saveFailure) {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
         AtomicReference<Optional<DcbAppendResult>> result = new AtomicReference<>();
+        ThrowingSnapshotStore<String> throwingStore = new ThrowingSnapshotStore<>(saveFailure);
+        // A snapshot is saved only on a boundary that already has a marker, so the save is reached
+        seed();
 
-        Throwable thrown = catchThrowable(() -> result.set(service.execute(new Define("A"), SnapshotDcbDecider.from(dcbDecider, new ThrowingSnapshotStore<>(saveFailure), options))));
+        Throwable thrown = catchThrowable(() -> result.set(service.execute(new Define("A"), SnapshotDcbDecider.from(dcbDecider, throwingStore, options))));
 
         evolveCount.set(0);
         service.execute(new Change("B"), SnapshotDcbDecider.from(dcbDecider, store, options));
-        // A (1) folded from the boundary plus the produced B (1) = 2, so A was appended before the save failed
-        assertThat(evolveCount.get()).as("events folded by the next command").isEqualTo(2);
+        // The seed (1) and A (1) folded from the boundary plus the produced B (1) = 3, so A was appended before the save failed
+        assertThat(evolveCount.get()).as("events folded by the next command").isEqualTo(3);
+        assertThat(throwingStore.saveAttempts()).as("attempted saves").isEqualTo(1);
         assertThat(thrown).as("what escaped execute after the append committed").isNull();
         assertThat(result.get()).isPresent();
     }
 
     @Test
     void a_schema_version_bump_ignores_the_old_snapshot() {
+        seed();
         service.execute(new Define("A"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always())));
 
         evolveCount.set(0);
         service.execute(new Change("B"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(2, SnapshotPolicy.always())));
 
         assertAll(
-                // Old schema-1 snapshot ignored, whole boundary replayed: A (1) plus produced B (1) = 2.
-                () -> assertThat(evolveCount.get()).isEqualTo(2),
+                // Old schema-1 snapshot ignored, whole boundary replayed: seed (1) and A (1) plus produced B (1) = 3.
+                () -> assertThat(evolveCount.get()).isEqualTo(3),
                 () -> assertThat(store.findLatest(key).orElseThrow().schemaVersion()).isEqualTo(2),
                 () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("B")
         );
@@ -226,6 +389,14 @@ class SnapshotDcbDeciderApplicationServiceTest {
         assertThatThrownBy(() -> SnapshotDcbDecider.from(dcbDecider, store, options, null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("keyFunction");
+    }
+
+    private void seed() {
+        appendOutOfBand(new NameDefined(UUID.randomUUID().toString(), time, "name", "seed"));
+    }
+
+    private List<String> logged(Level level) {
+        return logAppender.list.stream().filter(event -> event.getLevel() == level).map(ILoggingEvent::getFormattedMessage).toList();
     }
 
     private void appendOutOfBand(DomainEvent event) {
@@ -272,5 +443,47 @@ class SnapshotDcbDeciderApplicationServiceTest {
                 return event.name();
             }
         };
+    }
+
+    /**
+     * Delegates to an in-memory store and can refuse a resume, drop the marker versions of a read or decline to confirm.
+     */
+    private static final class ControlledStore implements DcbEventStore, DcbAppendConfirmation {
+        final List<DcbReadOptions> reads = new ArrayList<>();
+        boolean refuseReadsAfterVersions;
+        boolean refuseEveryRead;
+        boolean reportsVersions = true;
+        boolean confirms = true;
+        private final InMemoryEventStore delegate;
+
+        ControlledStore(InMemoryEventStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+            reads.add(options);
+            if (refuseEveryRead || (refuseReadsAfterVersions && options.afterVersions().isPresent())) {
+                DcbMarkerVersions refused = options.afterVersions().orElseGet(() -> DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))));
+                throw new DcbSnapshotInvalidException(criteria, refused, "refused (test double)");
+            }
+            DcbEventStream stream = delegate.read(criteria, options);
+            return reportsVersions ? stream : new DcbEventStream(stream.events(), stream.lastSequencePosition(), stream.consistencyToken());
+        }
+
+        @Override
+        public DcbAppendResult append(List<CloudEvent> events) {
+            return delegate.append(events);
+        }
+
+        @Override
+        public DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition) {
+            return delegate.append(events, condition);
+        }
+
+        @Override
+        public boolean isConfirmed(DcbAppendResult appendResult) {
+            return confirms && delegate.isConfirmed(appendResult);
+        }
     }
 }

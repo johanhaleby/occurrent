@@ -18,7 +18,10 @@ package org.occurrent.dsl.snapshot;
 
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
 
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -111,5 +114,48 @@ class SnapshotSupportTest {
 
         // The head is at 7, the snapshot is at 7, and version 5 was already folded: a genuine redelivery to skip.
         assertThat(SnapshotSupport.isRedelivery(loaded, 1, 5, 7)).isTrue();
+    }
+
+    @Test
+    void resolve_dcb_base_uses_the_state_and_marker_versions_of_the_snapshot_when_the_schema_matches() {
+        DcbMarkerVersions versions = versions("tag:a", 4);
+        Optional<Snapshot<Integer>> loaded = Optional.of(Snapshot.atMarkerVersions(42, versions, 1));
+
+        SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.resolveDcbBase(loaded, 1, () -> 0);
+
+        assertThat(base.state()).isEqualTo(42);
+        assertThat(base.markerVersions()).contains(versions);
+    }
+
+    @Test
+    void resolve_dcb_base_ignores_a_snapshot_saved_at_a_position_since_it_has_no_marker_versions() {
+        Optional<Snapshot<Integer>> loaded = Optional.of(new Snapshot<>(42, 7, 1));
+
+        SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.resolveDcbBase(loaded, 1, () -> 0);
+
+        assertThat(base.state()).isEqualTo(0);
+        assertThat(base.markerVersions()).isEmpty();
+    }
+
+    @Test
+    void resolve_dcb_base_falls_back_to_initial_state_on_a_schema_mismatch() {
+        Optional<Snapshot<Integer>> loaded = Optional.of(Snapshot.atMarkerVersions(42, versions("tag:a", 4), 1));
+
+        SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.resolveDcbBase(loaded, 2, () -> 0);
+
+        assertThat(base.state()).isEqualTo(0);
+        assertThat(base.markerVersions()).isEmpty();
+    }
+
+    @Test
+    void resolve_dcb_base_falls_back_to_initial_state_when_no_snapshot_exists() {
+        SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.resolveDcbBase(Optional.empty(), 1, () -> 5);
+
+        assertThat(base.state()).isEqualTo(5);
+        assertThat(base.markerVersions()).isEmpty();
+    }
+
+    private static DcbMarkerVersions versions(String key, long version) {
+        return DcbMarkerVersions.of(Map.of(key, new MarkerVersion("epoch-1", version, 0)));
     }
 }

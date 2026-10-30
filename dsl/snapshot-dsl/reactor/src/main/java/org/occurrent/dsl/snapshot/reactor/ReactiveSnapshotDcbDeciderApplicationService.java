@@ -24,10 +24,16 @@ import org.occurrent.application.service.reactor.dcb.DcbExecuteOptions;
 import org.occurrent.dsl.dcb.DcbDecider;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
+import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
+import org.occurrent.dsl.snapshot.internal.SkippedSaves;
+import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -45,10 +51,18 @@ import java.util.function.Function;
  * <p>
  * Because DCB has no stream id, the snapshot is keyed by the decider's read boundary. By default the key is a canonical,
  * order-insensitive rendering of the {@link DcbCriteria} that {@link DcbDecider#criteriaFor(List)} resolves for the
- * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}), the spec's key function overrides it. The snapshot's
- * version is the global DCB position the append landed at ({@link DcbAppendResult#lastSequencePosition()}), and the
- * resume read still captures the whole boundary's consistency token, so the append condition is unaffected and a stale
- * snapshot only lengthens the tail. It loads one snapshot per execute, and costs nothing when no snapshot is used.
+ * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}), the spec's key function overrides it. The snapshot is
+ * saved at the marker versions the append reported ({@link DcbAppendResult#markerVersions()}), and the next execute
+ * reads only the events appended after them. The resume read still captures the whole boundary's consistency token, so
+ * the append condition is unaffected and a stale snapshot only lengthens the tail. It loads one snapshot per execute,
+ * and costs nothing when no snapshot is used.
+ * <p>
+ * A snapshot is saved only when the store reported marker versions for the append and confirms that the append is
+ * committed ({@link DcbApplicationService#isAppendConfirmed(DcbAppendResult)}). Otherwise the save is skipped, and the
+ * first skip for each reason is logged as a warning. When the store refuses to read after the saved versions, for
+ * example because a marker was pruned, the execute reads the whole boundary from the initial state instead. A snapshot
+ * that 0.34 saved at a DCB position is never used, so the first execute after an upgrade reads the whole boundary and
+ * saves over it.
  * <p>
  * An empty result Mono from {@link #execute} means the domain function produced no new events, so nothing is appended and
  * no snapshot is written. {@link #executeAndReturnDecision} still emits the decided state for a no-op, nullable or not.
@@ -66,7 +80,10 @@ import java.util.function.Function;
 @NullMarked
 public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
 
+    private static final Logger log = LoggerFactory.getLogger(ReactiveSnapshotDcbDeciderApplicationService.class);
+
     private final DcbApplicationService<E> applicationService;
+    private final SkippedSaves skippedSaves = new SkippedSaves(log);
 
     public ReactiveSnapshotDcbDeciderApplicationService(DcbApplicationService<E> applicationService) {
         this.applicationService = Objects.requireNonNull(applicationService, "applicationService cannot be null");
@@ -162,40 +179,69 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
             String key = Objects.requireNonNull(keyFunction.apply(criteria), "snapshot key cannot be null");
             Decider<C, S, E> decider = dcbDecider.decider();
 
-            return ReactiveSnapshotSupport.resolveBase(store, key, options.schemaVersion(), decider::initialState).flatMap(base -> {
-                AtomicReference<Decider.Decision<S, E>> decisionRef = new AtomicReference<>();
-                AtomicInteger tailSize = new AtomicInteger();
-                return applicationService.execute(criteria,
-                                DcbExecuteOptions.<E>options().fromPosition(base.version()).tagGenerator(dcbDecider.tags()),
-                                tail -> {
-                                    tailSize.set(tail.size());
-                                    S current = decider.evolve(base.state(), tail);
-                                    Decider.Decision<S, E> decision = decider.decideOnState(current, commands);
-                                    // The decision is known before functionThatCallsDomainModel returns, which is before
-                                    // the application service appends anything, so refusing a null state here (rather
-                                    // than after the append) keeps a rejected command from ever being committed.
-                                    if (refuseNullState) {
-                                        requireNonNullState(decision);
-                                    }
-                                    decisionRef.set(decision);
-                                    return decision.events();
-                                })
-                        .flatMap(result -> {
-                            Decider.Decision<S, E> decision = requireDecision(decisionRef);
-                            // DCB positions are global and monotonic, they never reset, so a snapshot can never be ahead
-                            // of the head: no head guard or self-heal is needed here, and eventsSinceSnapshot
-                            // (tail + events) cannot go negative. The Supplier-based best-effort is used only for
-                            // symmetry with the stream executor.
-                            return ReactiveSnapshotSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(), () -> {
-                                        int eventsSinceSnapshot = tailSize.get() + decision.events().size();
-                                        return new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), eventsSinceSnapshot);
-                                    })
-                                    .thenReturn(new Executed<>(Optional.of(result), decision));
-                        })
-                        // The domain function produced no events, so nothing was appended, but the decider still folded a
-                        // decision, so return it for executeAndReturnState/Decision (execute filters it back to empty).
-                        .switchIfEmpty(Mono.fromSupplier(() -> new Executed<>(Optional.empty(), requireDecision(decisionRef))));
-            });
+            return ReactiveSnapshotSupport.resolveDcbBase(store, key, options.schemaVersion(), decider::initialState)
+                    .flatMap(base -> executeFrom(base, criteria, commands, dcbDecider, refuseNullState)
+                            .onErrorResume(DcbSnapshotInvalidException.class, e -> {
+                                if (base.markerVersions().isEmpty()) {
+                                    return Mono.error(e);
+                                }
+                                // The store refuses at the read, before the domain function runs, so nothing was appended
+                                log.debug("Reading the whole boundary of snapshot '{}' since the store can't read after its marker versions: {}", key, e.getMessage());
+                                return executeFrom(SnapshotSupport.DcbBase.initial(decider::initialState), criteria, commands, dcbDecider, refuseNullState);
+                            }))
+                    .flatMap(executed -> {
+                        Optional<DcbAppendResult> appendResult = executed.appendResult();
+                        if (appendResult.isEmpty()) {
+                            return Mono.just(executed);
+                        }
+                        DcbAppendResult result = appendResult.get();
+                        Decider.Decision<S, E> decision = executed.decision();
+                        return ReactiveSnapshotSupport.maybeSaveBestEffort(store, key, options.policy(),
+                                        () -> new SnapshotDecision<>(decision.state(), decision.events(), 0, executed.tailSize() + decision.events().size()),
+                                        snapshotDecision -> {
+                                            if (result.markerVersions().isEmpty()) {
+                                                skippedSaves.skip(key, SkippedSaves.Reason.NO_MARKER_VERSIONS);
+                                                return Mono.empty();
+                                            }
+                                            return applicationService.isAppendConfirmed(result).flatMap(confirmed -> {
+                                                if (!confirmed) {
+                                                    skippedSaves.skip(key, SkippedSaves.Reason.UNCONFIRMED);
+                                                    return Mono.empty();
+                                                }
+                                                return Mono.just(Snapshot.atMarkerVersions(snapshotDecision.newState(), result.markerVersions().get(), options.schemaVersion()));
+                                            });
+                                        })
+                                .thenReturn(executed);
+                    });
+        });
+    }
+
+    private <C, S extends @Nullable Object> Mono<Executed<S, E>> executeFrom(SnapshotSupport.DcbBase<S> base, DcbCriteria criteria, List<C> commands,
+                                                                            DcbDecider<C, S, E> dcbDecider, boolean refuseNullState) {
+        return Mono.defer(() -> {
+            Decider<C, S, E> decider = dcbDecider.decider();
+            DcbExecuteOptions<E> withTags = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
+            DcbExecuteOptions<E> executeOptions = base.markerVersions().map(withTags::fromVersions).orElseGet(withTags::withVersions);
+            AtomicReference<Decider.Decision<S, E>> decisionRef = new AtomicReference<>();
+            AtomicInteger tailSize = new AtomicInteger();
+            return applicationService.execute(criteria, executeOptions,
+                            tail -> {
+                                tailSize.set(tail.size());
+                                S current = decider.evolve(base.state(), tail);
+                                Decider.Decision<S, E> decision = decider.decideOnState(current, commands);
+                                // The decision is known before functionThatCallsDomainModel returns, which is before
+                                // the application service appends anything, so refusing a null state here (rather
+                                // than after the append) keeps a rejected command from ever being committed.
+                                if (refuseNullState) {
+                                    requireNonNullState(decision);
+                                }
+                                decisionRef.set(decision);
+                                return decision.events();
+                            })
+                    .map(result -> new Executed<>(Optional.of(result), requireDecision(decisionRef), tailSize.get()))
+                    // The domain function produced no events, so nothing was appended, but the decider still folded a
+                    // decision, so return it for executeAndReturnState/Decision (execute filters it back to empty).
+                    .switchIfEmpty(Mono.fromSupplier(() -> new Executed<>(Optional.empty(), requireDecision(decisionRef), tailSize.get())));
         });
     }
 
@@ -203,6 +249,6 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
         return Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
     }
 
-    private record Executed<S extends @Nullable Object, E>(Optional<DcbAppendResult> appendResult, Decider.Decision<S, E> decision) {
+    private record Executed<S extends @Nullable Object, E>(Optional<DcbAppendResult> appendResult, Decider.Decision<S, E> decision, int tailSize) {
     }
 }

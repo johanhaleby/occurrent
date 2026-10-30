@@ -5,7 +5,9 @@ Date: 2026-10-24
 ## Status
 
 Accepted. Fixes [#1230](https://github.com/johanhaleby/occurrent/issues/1230) and settles the 0.35 contract for
-[#1297](https://github.com/johanhaleby/occurrent/issues/1297). Applies to the three MongoDB event stores
+[#1297](https://github.com/johanhaleby/occurrent/issues/1297). The store side is in
+[#1315](https://github.com/johanhaleby/occurrent/pull/1315), and the snapshot deciders and the `@Snapshot` view are in
+the pull request that closes #1230. Applies to the three MongoDB event stores
 (`SpringMongoEventStore`, `MongoEventStore` and `ReactorMongoEventStore`), `InMemoryEventStore`, the snapshot DSL on
 both stacks and the DCB `@Snapshot` view. Amends [ADR 61](0061-first-class-snapshot-support.md), whose DCB snapshot
 version is a position. Amends [ADR 21](0021-dcb-write-path-query-scoped-concurrency.md) on what pruning markers costs.
@@ -348,7 +350,7 @@ after E, so it doesn't deliver E either. The checkpoint moves past 50, and E is 
 
 The three major findings were about caller transactions and a write path. Inside a caller's transaction the two rules
 can't both hold for a DCB read. If the events are read in the store's own majority session, the re-read
-`GenericDcbApplicationService` does of its own uncommitted block (`GenericDcbApplicationService.java:161-162`) comes
+`GenericDcbApplicationService` does of its own uncommitted block (`GenericDcbApplicationService.java:173-174`) comes
 back empty and the synchronous handlers get nothing. If the events are read in the caller's transaction and CT in the
 store's session, CT can cover events the read didn't return. So the only consistent answer is no CT inside a caller's
 transaction. With synchronous subscriptions, `GenericDcbApplicationService` always runs in the executor's transaction
@@ -478,7 +480,7 @@ The read path:
    store's default read concern, joining a caller's transaction when there is one. That includes every plain
    `read(criteria)` a command or a query does, the DCB catch-up's head and window reads
    (`DcbCatchupSubscriptionModel.java:185`, `:190`, `ReactorDcbCatchupSubscriptionModel.java:324`, `:332`) and the
-   re-read `GenericDcbApplicationService` does of its own block (`GenericDcbApplicationService.java:161-162`). So this
+   re-read `GenericDcbApplicationService` does of its own block (`GenericDcbApplicationService.java:173-174`). So this
    design changes neither the catch-up's read concern nor what a synchronous handler sees, and the seventh review's
    third blocker and its caller-transaction findings can't be reached through it.
 3. A read that asks for versions takes the marker documents, the consistency token, the position counter and the events
@@ -559,21 +561,26 @@ The consumers, on both stacks:
 - `GenericDcbApplicationService` gets `DcbExecuteOptions.withVersions()`, which asks for versions with no base, and
   `DcbExecuteOptions.fromVersions(...)`, which implies it. It passes them on as `withVersions()` and `afterVersions`.
 - The snapshot deciders store a `DcbMarkerVersions` as their version and read with `fromVersions(base)`, or with
-  `withVersions()` when they have no snapshot. Before saving at the append result's versions, a decider checks two
-  things. The read has to have reported every key of the append's versions, each with the same epoch as the append's,
-  because a prune between the read and the append can leave an equal sum
-  ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)). A key the read reported without an epoch counts as a
-  mismatch. And the append has to be majority-committed, which the next section covers. If either check fails, or the
-  result has no versions, it skips the save. On `DcbSnapshotInvalid` it reads the boundary in full with
-  `withVersions()`, so it can save a fresh map.
+  `withVersions()` when they have no snapshot. `GenericDcbApplicationService` returns the append's versions only when
+  the read of the same attempt reported every key of them, each with the same epoch as the append's, because a prune
+  between the read and the append can leave an equal sum
+  ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)). Otherwise it returns the append result without
+  versions. The service checks it because only the service pairs the last attempt's read with its append across
+  retries. Before saving at the append result's versions, a decider checks that the append is majority-committed, which
+  the next section covers. If that check fails, or the result has no versions, it skips the save. On
+  `DcbSnapshotInvalid` it reads the boundary in full with `withVersions()`, so it can save a fresh map.
 - On every delivery the `@Snapshot` view reads `afterVersions` from its saved versions, applies what it read, and saves
   at the read's versions. A redelivered event is at or below the saved versions, so the read doesn't return it, and the
   view doesn't look at the delivered event's `mv`. When the read's snapshot doesn't have the delivered event yet, the
   view saves below it and applies it on the next delivery for that boundary. That's a delay, never a loss.
   `everyNEvents` counts events since the snapshot instead of positions.
-- A `@Snapshot` view over `MatchAll` logs a warning when it's registered and runs without a snapshot. I chose not to
+- A `@Snapshot` view over `MatchAll` logs a warning when it's registered and keeps no snapshot. I chose not to
   refuse it, because `@Snapshot` shipped in 0.34.0 and refusing it would stop an application that starts today. A
   decider or view that gets no versions from a store that can't give them logs one warning.
+- `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot's versions as a
+  `markerVersions` array of `{k, e, v, u}` elements, since a marker key can contain a dot, and write no `version` field
+  for it. A 0.34 node that loads such a snapshot finds no version and reads the boundary in full. A DCB snapshot that
+  0.34 saved has no marker versions, so a 0.35 decider or view never uses it, and saves over it after a full read.
 - `InMemoryEventStore` keeps a counter and an epoch per key under its existing lock and reports the same versions.
 
 `PositionBackfill` only gives positions to events that have none, and every DCB event gets its position when it is
@@ -581,12 +588,13 @@ written, so it isn't part of this.
 
 ### The decider confirms its append before it saves
 
-The snapshot decider saves after `applicationService.execute` returns (`SnapshotDcbDeciderApplicationService.java:144`,
-`:158-162`). With synchronous subscriptions, `execute` runs the read, the decision and the append in the executor's
-transaction (`GenericDcbApplicationService.java:137`, `:146-163`, `:172`). The read, the token check, the marker
-increments and the read-back of the versions then all happen in one transaction's snapshot, so the state the decider
-saves is complete in every mode. The seventh review's first blocker came from building the watermark after commit, and
-this design never does that.
+The snapshot decider saves after `applicationService.execute` returns (`SnapshotDcbDeciderApplicationService.java:197`,
+`:175-187`). Without synchronous subscriptions the store reads the events and their versions in a transaction of its
+own, so the state the decider saves is complete. With synchronous subscriptions, `execute` runs the read, the decision
+and the append in the executor's transaction (`GenericDcbApplicationService.java:138`, `:150-179`, `:184`). The store
+can't tell that transaction from one the caller owns, so the read reports no versions and the decider saves no snapshot
+in that configuration. The seventh review's first blocker came from building the watermark after commit, and this
+design never does that.
 
 Completeness isn't durability. Versions from an append that rolls back after a failover are handed out again to other
 events, and a snapshot saved at them skips those events. The same happens without a failover when the caller owns the
@@ -647,8 +655,8 @@ skips the save. An error from the confirmation counts as not found, so the decid
 doesn't fail.
 
 Saving after the caller's transaction commits isn't in 0.35.0, and I record it as a known limitation, tracked in
-[#1307](https://github.com/johanhaleby/occurrent/issues/1307). The warning names an active caller transaction when the
-store can detect one.
+[#1307](https://github.com/johanhaleby/occurrent/issues/1307). The warning lists a transaction the caller owns as one of
+the causes.
 
 That is the split the seventh review itself suggested, completeness from the transaction and durability from a majority
 read. It isn't the seventh review's first blocker again, because the versions still come from the read-back inside the
@@ -883,8 +891,9 @@ For 0.35, a bare position is documented as unsafe to resume from on MongoDB:
 - The entry points that take a bare position as a place to resume from are deprecated. Those I know of are the
   `startAtGlobalPosition` annotation attribute and `DcbStartAt.afterPosition` (`DcbStartAt.java:74-75`).
   `GlobalCheckpoint.of(long)` (`GlobalCheckpoint.java:88`) isn't deprecated. It gets javadoc saying that a bare position
-  is no place to resume from. `DcbExecuteOptions.fromPosition` and
-  `DomainEventQueries.afterPosition` are deprecated in favour of the version forms above. The pull request that adds the
+  is no place to resume from. `DcbExecuteOptions.fromPosition` is deprecated for
+  removal in favour of `fromVersions(...)`, and `DomainEventQueries.afterPosition` is deprecated. The pull request that
+  adds the
   deprecations lists every public method that takes a position as a lower bound for reading or subscribing, and every
   method that hands out a position meant to resume from.
 - A catch-up that only replays and never goes live promises "everything committed before I started". Every event that
@@ -934,27 +943,32 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
   the changelog names the setting and its default.
 - The first command on a boundary that existed before the upgrade reads in full and saves nothing, because its markers
   have no epoch yet. Its append gives them one, and the next command can save.
+- A decider on an application service with synchronous subscriptions never saves a snapshot, since the service runs
+  every execute in its transaction executor's transaction and the store reports no versions inside a transaction. A
+  0.34 decider in that configuration did save snapshots, at positions.
 - A decider inside a transaction the caller owns never saves a snapshot. Saving after that transaction commits isn't in
-  0.35.0, and this is a known limitation, tracked in #1307. The warning names an active caller transaction when the
-  store can detect one.
+  0.35.0, and this is a known limitation, tracked in #1307. The warning lists a transaction the caller owns as one of
+  the causes.
 - The stores already require transactions. A durable snapshot also needs `writeConcernMajorityJournalDefault` set to
   `true` and no `j: false`.
 - The public API breaks. `DcbEventStream` and `DcbAppendResult` get a new record component, so a record deconstruction
   pattern with the old number of components stops compiling. Their compatibility constructors leave the versions absent.
   `DcbReadOptions` gets `withVersions()` and `afterVersions(...)`, and `DcbExecuteOptions` gets `withVersions()` and
   `fromVersions(...)`. The stores get the `DcbAppendConfirmation` SPI, a setting for the commit bound and the setting
-  that turns resuming from versions off. The DCB snapshot version changes type from `long` to a structured version. The
-  stream snapshot keeps its version. The position entry points listed above are deprecated. The changelog, the migration
-  guide and an OpenRewrite recipe for the record patterns cover it.
-- Existing DCB snapshots are invalid. They are ignored or deleted and rebuilt from a full read on the next command.
+  that turns resuming from versions off. A DCB snapshot saves a `DcbMarkerVersions` in a new `Snapshot` component
+  instead of its `long` version, which is 0 for it. The stream snapshot keeps its version. The position entry points
+  listed above are deprecated. The changelog, the migration guide and an OpenRewrite recipe for the record patterns
+  cover it.
+- Existing DCB snapshots are ignored. The next command or delivery on their boundary reads in full and saves over them.
 - Criteria that are `MatchAll` get no DCB snapshot. A `@Snapshot` view over `MatchAll` logs a warning when it's
-  registered and runs without one, so an application written against 0.34.0 still starts. Selecting by version would
+  registered and keeps no snapshot, so an application written against 0.34.0 still starts. Selecting by version would
   need a marker that every append increments, which ADR 21 already calls a whole-store lock.
 - Pruning markers (ADR 21) now costs more than resetting counters. Every DCB snapshot on a pruned boundary is refused
   with `DcbSnapshotInvalid` and rebuilt from a full read on its next use.
 - [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is a related open problem. A consistency token read
-  before a prune can let a conflicting append through after it. The marker epoch is one of the fixes it lists. The
-  decider compares epochs before it saves, and whether the token uses the epoch too is decided in #1300.
+  before a prune can let a conflicting append through after it. The marker epoch is one of the fixes it lists. 
+  `GenericDcbApplicationService` compares epochs before it returns the versions a decider saves, and whether the token
+  uses the epoch too is decided in #1300.
 - `updateEvent` keeps `mv`. An event whose tags or type change through `updateEvent`, or that `delete(Filter)` removes,
   can still move between boundaries without a marker increment. The consistency token has the same blind spot today, and
   this ADR doesn't change it.

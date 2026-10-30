@@ -111,6 +111,8 @@ fun <T : Any> DomainEventQueries<in T>.queryForList(
  * ascending position order.
  * @see DomainEventQueries.afterPosition
  */
+@Deprecated("A position isn't a safe place to resume from on MongoDB. Resume a catch-up subscription from the checkpoint it stores instead.")
+@Suppress("DEPRECATION")
 fun <T : Any> DomainEventQueries<T>.afterPositionForList(position: Long): Mono<List<T>> =
     afterPosition(position).collectList()
 

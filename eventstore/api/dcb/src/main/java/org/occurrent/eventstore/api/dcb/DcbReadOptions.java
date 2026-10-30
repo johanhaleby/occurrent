@@ -178,6 +178,10 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
 
     /**
      * Reads only events after the supplied DCB sequence position (exclusive).
+     * <p>
+     * A position isn't a safe place to resume from on MongoDB. An event can reserve a position below the one you kept and
+     * commit after you read it, and a read after your position never returns it. To resume a read, use
+     * {@link #afterVersions(DcbMarkerVersions)} instead.
      */
     public static DcbReadOptions afterPosition(long position) {
         return new DcbReadOptions(PositionRange.afterPosition(position));

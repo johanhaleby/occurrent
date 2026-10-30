@@ -16,12 +16,13 @@
 ---
 type: specs.openrewrite.org/v1beta/recipe
 name: org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35
-displayName: Add the marker version bindings to a DcbAppendResult/DcbEventStream/DcbReadOptions record pattern
+displayName: Add the marker version bindings to a DcbAppendResult/DcbEventStream/DcbReadOptions/Snapshot record pattern
 description: >-
-  DcbAppendResult, DcbEventStream and DcbReadOptions's canonical constructors grew components for marker
-  versions (ADR 148), so a record pattern naming only the original components stops compiling. Rewrites a
+  DcbAppendResult, DcbEventStream, DcbReadOptions and the snapshot DSL's Snapshot canonical constructors grew
+  components for marker versions (ADR 148), so a record pattern naming only the original components stops compiling. Rewrites a
   four-binding DcbAppendResult pattern and a three-binding DcbEventStream pattern by appending var markerVersions,
-  and a four-binding DcbReadOptions pattern by appending var versionsRequested and var afterVersions, in a switch
+  a four-binding DcbReadOptions pattern by appending var versionsRequested and var afterVersions, and a
+  three-binding Snapshot pattern by appending var markerVersions, in a switch
   case or an instanceof pattern alike. A pattern of any other arity is left alone. This is unconditional, since a
   record pattern's arity is a compiler-enforced fact rather than a judgement call. See
   doc/migration/upgrading-to-0.35.0.md.

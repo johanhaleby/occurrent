@@ -22,6 +22,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.reactor.ReactiveSnapshotStore;
+import org.occurrent.dsl.snapshot.internal.SnapshotMarkerVersionsFields;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
@@ -30,14 +31,16 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
- * A reactive {@link ReactiveSnapshotStore} backed by MongoDB, the reactive counterpart to
- * {@code SpringMongoSnapshotStore}. Each snapshot is one document in the store's collection, keyed by the snapshot key,
- * carrying the folded {@code state}, the {@code version} it was folded up to, and the {@code schemaVersion}. The state is
- * (de)serialized with the same {@code MongoConverter} the rest of the application uses, so a scalar (a number, string,
- * enum) and a POJO or record both round-trip.
+ * A reactive {@link ReactiveSnapshotStore} backed by MongoDB, the reactive counterpart to {@code
+ * SpringMongoSnapshotStore}. Each snapshot is one document in the store's collection, keyed by the snapshot key,
+ * carrying the folded {@code state}, the {@code version} it was folded up to, and the {@code schemaVersion}. A DCB
+ * snapshot stores its {@code markerVersions} instead of a {@code version}. The state is (de)serialized with the same
+ * {@code MongoConverter} the rest of the application uses, so a scalar (a number, string, enum) and a POJO or record
+ * both round-trip.
  *
  * @param <S> The snapshot state type.
  */
@@ -47,6 +50,7 @@ public final class ReactiveSpringMongoSnapshotStore<S extends @Nullable Object> 
     private static final Logger log = LoggerFactory.getLogger(ReactiveSpringMongoSnapshotStore.class);
 
     private static final String VERSION = "version";
+    private static final String MARKER_VERSIONS = "markerVersions";
     private static final String SCHEMA_VERSION = "schemaVersion";
     private static final String STATE = "state";
 
@@ -81,9 +85,13 @@ public final class ReactiveSpringMongoSnapshotStore<S extends @Nullable Object> 
      */
     private Mono<Snapshot<S>> decodeSnapshot(String key, Document document) {
         return Mono.fromSupplier(() -> {
-                    long version = document.getLong(VERSION);
                     int schemaVersion = document.getInteger(SCHEMA_VERSION);
                     S state = readState(mongoOperations.getConverter(), document.get(STATE));
+                    List<?> markerVersions = document.getList(MARKER_VERSIONS, Object.class);
+                    if (markerVersions != null) {
+                        return Snapshot.atMarkerVersions(state, SnapshotMarkerVersionsFields.fromFields(markerVersions), schemaVersion);
+                    }
+                    long version = document.getLong(VERSION);
                     return new Snapshot<>(state, version, schemaVersion);
                 })
                 .onErrorResume(e -> {
@@ -98,9 +106,13 @@ public final class ReactiveSpringMongoSnapshotStore<S extends @Nullable Object> 
     public Mono<Void> save(String key, Snapshot<S> snapshot) {
         Objects.requireNonNull(key, "key cannot be null");
         Objects.requireNonNull(snapshot, "snapshot cannot be null");
-        Document document = new Document("_id", key)
-                .append(VERSION, snapshot.version())
-                .append(SCHEMA_VERSION, snapshot.schemaVersion());
+        Document document = new Document("_id", key);
+        // A snapshot with marker versions is stored without a version, so a node that reads only the version treats
+        // it as unreadable and reads in full instead of folding onto it
+        snapshot.markerVersions().ifPresentOrElse(
+                markerVersions -> document.append(MARKER_VERSIONS, SnapshotMarkerVersionsFields.toFields(markerVersions).stream().map(Document::new).toList()),
+                () -> document.append(VERSION, snapshot.version()));
+        document.append(SCHEMA_VERSION, snapshot.schemaVersion());
         S state = snapshot.state();
         if (state != null) {
             document.append(STATE, mongoOperations.getConverter().convertToMongoType(state));
