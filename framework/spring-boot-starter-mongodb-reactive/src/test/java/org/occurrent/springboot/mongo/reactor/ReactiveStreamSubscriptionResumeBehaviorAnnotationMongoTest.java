@@ -114,7 +114,7 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
     @Test
     void now_with_same_as_start_at_starts_at_the_present_again_after_restart_and_misses_events_written_while_down() {
-        restart("reactive-resume-now-same", NowSameAsStartAt.class, FirstBootEnds.WHEN_THE_MARKER_IS_DELIVERED,
+        restart("reactive-resume-now-same", NowSameAsStartAt.class, FirstBootEnds.WHEN_THE_MARKER_IS_CHECKPOINTED,
                 List.of("live-1"),
                 List.of("live-2"));
     }
@@ -221,9 +221,11 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
         awaitDelivered(control, marker);
         awaitCheckpointed(context, "reactive-resume-bot-default", control, marker);
         CheckpointStorage storage = context.getBean(CheckpointStorage.class);
-        assertThat(storage.read(subscriptionId).blockOptional())
-                .describedAs("the checkpoint stored for %s, a start that is dynamic for the durable layer stores none", subscriptionId)
-                .isEmpty();
+        // A wrong write can land after the sibling's, so the absence has to hold for a while and not only at one read.
+        await().during(ofSeconds(1)).atMost(ofSeconds(5)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(storage.read(subscriptionId).blockOptional())
+                        .describedAs("the checkpoint stored for %s, a start that is dynamic for the durable layer stores none", subscriptionId)
+                        .isEmpty());
     }
 
     // Booted with SpringApplication.run rather than @SpringBootTest, so there is no @ServiceConnection and the url is
