@@ -160,10 +160,13 @@ MongoDB's documentation says only that a transaction at read concern local "migh
 opened. A probe on a single-node replica set at the D2 branch saw one snapshot across both collections. That's the
 assumption, and on a sharded cluster the store doesn't make it, so the query refuses there.
 
-The argument assumes two more things, and the sum check already assumes both. First, nothing replaces the document of
-an event a 0.35 node wrote, which ADR 148 also needs. Second, a marker version a token holds isn't rolled back and then
-given to another append under the same epoch. A plain read takes the token at the collection's default read concern,
-so a failover that rolls back an increment written at w:1 can break that.
+The argument assumes two more things. First, nothing replaces the document of an event a 0.35 node wrote, which ADR 148
+also needs. The sum check doesn't read events, so this is new for an ordinary conditional append, also with
+`resumeFromMarkerVersions(false)`. A 0.34 `updateEvent` during a rolling upgrade can remove an event's `mv`, and the
+query then passes a token that the sum check refused. Second, and the sum check assumes this too, a marker version a
+token holds isn't rolled back and then given to another append under the same epoch. A plain read takes the token at
+the collection's default read concern, so a failover that rolls back an increment written at w:1 can break that. So can
+a token read inside a transaction after that transaction's own append, when the transaction then rolls back.
 
 ### Pruning markers
 
@@ -171,6 +174,11 @@ ADR 21's pruning rule changes. A marker may be deleted only in a transaction tha
 or type. For a type, that covers every stripe of ADR 162. An append that increments the marker at the same time
 writes the same document, so one of the two transactions aborts. Deleting a marker while one of its events exists
 isn't supported. ADR 21 and the two store comments that call pruning during quiescence harmless change to this rule.
+
+Two conditions come with it. On a sharded cluster the transaction runs at read concern snapshot. At local or majority
+it can read an empty event shard, and then delete the marker on another shard at a later point in time, so an append
+that commits between the two conflicts with nothing. And no 0.34 node may append while markers are deleted. A 0.34 node
+recreates a marker with no epoch at the version it had, so a token that saw the old one can't tell them apart.
 
 With that rule, a marker the token didn't see and that is still missing at the check has no event committed after the
 read that still exists. Without it, an operator could delete the marker of an event that still exists, and a token
@@ -233,8 +241,10 @@ still be used.** No store can find the tokens a caller holds, so nobody can foll
 ## Consequences
 
 - On a replica set, a conditional append no longer fails with `DcbAppendConditionNotFulfilledException` because of an
-  append committed after the read that shares a tag with its criteria and matches none of them. That covers the three
-  cases in #1231. On anything else, such as a sharded cluster, only the second case is covered, by step 3.
+  append by a 0.35 node, committed after the read, that shares a tag with its criteria and matches none of them. That
+  covers the three cases in #1231. It can still fail without a match when the query's conditions above don't hold, for
+  example after a marker's epoch changed or a 0.34 node incremented a marker. On anything else, such as a sharded
+  cluster, only the second case is covered, by step 3.
 - When such an append runs at the same time as the conditional one, both still increment the shared tag marker, and
   MongoDB aborts one of them with a transient transaction error. When the store runs the transaction itself, it
   retries it without a new read or decision. Inside a transaction of yours, the error aborts your transaction, as it
@@ -244,9 +254,9 @@ still be used.** No store can find the tokens a caller holds, so nobody can foll
   is added.
 - A token read before a marker was deleted and recreated is refused, even when the versions add up to the same sum.
 - ADR 88's table changes. With the default settings, the MongoDB stores on a replica set no longer refuse for an
-  excluded type that shares a tag, and they still don't see a tag-scoped append after a `wholeStoreLock` read. Those
-  two answers were one fact in `DcbAppendConditionModel`, and they aren't any more, so the model gets a third value for
-  these stores. `TAG_MARKER` stays for a store that only compares markers, which `DcbAppendCondition` still allows.
+  event of an excluded type that a 0.35 node appended and that shares a tag, and they still don't see a tag-scoped
+  append after a `wholeStoreLock` read. Those two answers were one fact in `DcbAppendConditionModel`, and they aren't
+  any more, so the model gets a third value for these stores. `TAG_MARKER` stays for a store that only compares markers, which `DcbAppendCondition` still allows.
 - ADR 148 relies on nothing replacing the document of an event a 0.35 node wrote, such as a 0.34 `updateEvent`. The
   append check now relies on it too, and more is at stake. When such an event matches a condition and was committed
   after the read, the query doesn't find it, and an append that should fail passes. Replacing an event document isn't
@@ -257,5 +267,5 @@ still be used.** No store can find the tokens a caller holds, so nobody can foll
 - The token map holds one entry per marker key, so with ADR 162 an item without tags has one entry per stripe.
 - This decision changes no marker document, field or index, and neither the events' `mv` nor `version()`. A 0.34 node
   and a 0.35 node can append to the same store as far as this decision goes, and going back to 0.34 is safe for the
-  data. A 0.34 increment moves u, and then the check refuses as it does today. ADR 162 keeps that with its setting
-  off, and its setting may be turned on only once no 0.34 node runs.
+  data. A 0.34 increment moves u, and then the check refuses an item the markers don't rule out, as it does today. ADR
+  162 keeps that with its setting off, and its setting may be turned on only once no 0.34 node runs.
