@@ -732,13 +732,21 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     /**
      * Opens a change stream at {@code checkpoint} and closes it again. Emits {@code false} when MongoDB refuses to
-     * open it because the oplog no longer reaches back to {@code checkpoint}.
+     * open it because the oplog no longer reaches back to {@code checkpoint}. A transient failure, such as a lost
+     * connection, a timeout or a primary that stepped down, is asked again with the backoff that
+     * {@link ReactorMongoSubscriptionModelConfig#backoff(Duration, Duration)} sets, until MongoDB answers or the
+     * subscriber cancels. Every failed attempt is logged at warn level. Lost history is never asked again, and any other
+     * failure fails the {@code Mono} at once.
      */
     @Override
     public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
         requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
         return Mono.defer(() -> MongoCommons.changeStreamHistoryProbe(eventCollection, checkpoint)
+                // Only the command is asked again, so a checkpoint this model cannot read fails at once
                 .map(probe -> mongo.executeCommand(probe)
+                        .retryWhen(unboundedBackoff().filter(MongoCommons::isTransientFailure)
+                                .doBeforeRetry(retrySignal -> log.warn("Asking MongoDB whether collection {} can resume from checkpoint {} failed with {}: {}. Will ask again.",
+                                        eventCollection, checkpoint.asString(), retrySignal.failure().getClass().getName(), retrySignal.failure().getMessage(), retrySignal.failure())))
                         .flatMap(reply -> MongoCommons.killChangeStreamHistoryProbeCursor(eventCollection, reply)
                                 // The server closes an idle cursor on its own after a while
                                 .map(killCursors -> mongo.executeCommand(killCursors).onErrorResume(__ -> Mono.empty()).then())
