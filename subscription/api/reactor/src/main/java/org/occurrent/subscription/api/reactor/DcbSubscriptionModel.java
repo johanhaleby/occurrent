@@ -42,11 +42,13 @@ import java.util.function.Function;
  * named {@code subscribe} methods throw it.
  * <p>
  * A {@link DcbStartAt#dynamic(Function) dynamic} start is refused too when its function returns one of these before
- * the change stream of the subscription has been subscribed to. The model calls the function as the change stream
- * opens, so the {@code Flux}-returning methods fail their {@code Flux} with the exception. A named {@code subscribe}
- * returns normally and then stops the subscription with it, and {@link Subscription#waitUntilStarted()} fails with it,
- * except on the handle a {@code subscribe} returns while the model is stopped, which never completes. A start the
- * function returns when the change stream opens again after that, before the first event, is not refused.
+ * the change stream of the subscription has opened. The model calls the function as the change stream opens, so the
+ * {@code Flux}-returning methods fail their {@code Flux} with the exception. A named {@code subscribe} returns normally
+ * and then stops the subscription with it, and {@link Subscription#waitUntilStarted()} fails with it, except on the
+ * handle a {@code subscribe} returns while the model is stopped, which never completes. A handle that has already
+ * answered keeps its answer. It answers once the change stream is subscribed to, so a refusal on a retry after the
+ * server rejected the first answer stops the subscription and only logs. A start the function returns when the change
+ * stream opens again after that, before the first event, is not refused.
  * <p>
  * A checkpoint taken from an event that model delivered live works, and so do {@link DcbStartAt#now()} and
  * {@link DcbStartAt#subscriptionModelDefault()}. A checkpoint string the model does not recognise is not refused, and

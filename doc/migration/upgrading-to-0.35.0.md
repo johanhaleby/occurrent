@@ -928,7 +928,10 @@ in 0.34.0 and before. `DcbStartAt.dynamic(..)` returning `DcbStartAt.beginning()
 as well. They call the function only as the change stream opens, so `subscribe(..)` returns, and the subscription then
 stops with the `UnsupportedStartAtException` instead of delivering events. `waitUntilStarted(..)` throws it on the
 blocking models, which also log it at `ERROR`, and `waitUntilStarted()` fails with it on the reactor model, except on
-the handle `subscribe(..)` returns while the model is stopped, which never completes. See
+the handle `subscribe(..)` returns while the model is stopped, which never completes. A reactor handle that has already
+answered keeps its answer. It answers once the change stream is subscribed to, so a refusal on a retry after the server
+rejected the first answer stops the subscription and is only logged at `ERROR`. A pause and a resume straight after it
+answered can be refused too, since the cursor may not have opened, and the handle that resume returns fails with it. See
 [#1371](https://github.com/johanhaleby/occurrent/issues/1371).
 
 The function is checked until a change stream of the subscription has opened. On the blocking models that means a run
@@ -945,10 +948,14 @@ than that earlier answer. It can skip what the earlier answer would have deliver
 Code that subscribes a MongoDB subscription model directly at a checkpoint a catch-up stored, or delivered with a
 replayed event, in a `StartAt` that names it or from a dynamic start that returns it. A
 resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, isn't refused. The blocking models go on
-from the position the subscription has read to. When `subscribe(..)` was given a dynamic start and no change stream has
-opened yet, that position is still the dynamic start, so it's asked, and refused when it returns one. The reactor model opens at the moment of the resume, for such a
+from the position the subscription has read to. The reactor model opens at the moment of the resume, for such a
 checkpoint and for a dynamic position that returns one, as it did in 0.34.0, and can skip what was written while the
 subscription was paused.
+
+The function `subscribe(..)` was given is another matter. When no change stream has opened yet,
+`resumeSubscription(subscriptionId)` asks that function again and is refused when it returns one of these checkpoints.
+On the blocking models, `resumeSubscription(subscriptionId, startAt)` at such a checkpoint, or at a dynamic position
+that returns one, does the same, since that function is the position it goes on from.
 
 A blocking `DurableSubscriptionModel` hands the MongoDB model a dynamic start that returns the checkpoint in its
 `CheckpointStorage`. A subscription whose storage holds a catch-up's checkpoint now stops in the same

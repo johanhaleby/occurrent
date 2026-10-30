@@ -665,29 +665,39 @@ public class ReactorMongoSubscriptionModelTest {
             });
 
             // When it subscribes, so the retry asks the position again, and the answer is a catch-up's
-            subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.empty());
+            Subscription started = subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.empty());
             assertThat(askedAgain.await(10, SECONDS)).as("the position was asked again").isTrue();
 
             // Then no stream had opened at the first answer, so the second is refused and the run is gone
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                     assertThat(subscription.isRunning(subscriptionId)).as("running after the second answer").isFalse());
             assertThat(answers).hasValue(2);
+            // And the handle keeps the answer it gave when the first answer was subscribed to
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(5)).block()).isTrue();
         }
 
         @Test
-        void a_refusal_arriving_after_a_stream_opened_still_stops_the_subscription() {
+        void a_refusal_arriving_after_a_stream_opened_still_stops_the_subscription() throws Exception {
             // Given a dynamic position that answers a live checkpoint, then fails with the refusal of a catch-up's position, as the
             // check does, which stands in for a replaced run's late start landing between the check and the catch
             String subscriptionId = UUID.randomUUID().toString();
             Checkpoint live = liveStart();
             AtomicInteger answers = new AtomicInteger();
-            Subscription started = subscription.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
+            // And a listener the model asks only once the cursor has opened, and which delivers no event
+            CountDownLatch cursorOpened = new CountDownLatch(1);
+            subscription.addQuietPositionListener(id -> {
+                if (id.equals(subscriptionId)) {
+                    cursorOpened.countDown();
+                }
+                return Mono.empty();
+            });
+            subscription.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
                 if (answers.incrementAndGet() == 2) {
                     throw new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown as the check does");
                 }
                 return StartAt.checkpoint(live);
             }), cloudEvent -> Mono.empty());
-            assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            assertThat(cursorOpened.await(10, SECONDS)).as("the cursor opened").isTrue();
 
             // When it is paused and resumed, so the position is asked again
             subscription.pauseSubscription(subscriptionId);

@@ -1044,7 +1044,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         final AtomicReference<Present> presentAt;
         final @Nullable SubscriptionFilter filter;
         final AtomicReference<StartAt> currentStartAt;
-        // Whether any run of the subscription has subscribed to its change stream, which a refused position asks
+        // Whether any run of the subscription has opened its change stream, which a refused position asks. On the driver's
+        // cursor that's the cursor answering, on Spring's changeStream the subscribe
         final AtomicBoolean opened;
         final Function<CloudEvent, Mono<Void>> action;
         // The run that reads for the subscription while it's running. Read and written only while holding the model's monitor
