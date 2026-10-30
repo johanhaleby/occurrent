@@ -101,6 +101,9 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   `restart-on-change-stream-history-lost` no longer affects a subscription the starter runs through a catch-up
   subscription, which is every subscription by default. Compiles unchanged.
+- [A reactive `@StreamSubscription` follows `resumeBehavior`](#a-reactive-streamsubscription-follows-resumebehavior).
+  A restart no longer replays the history of a `BEGINNING_OF_TIME` subscription, and a `NOW` subscription no longer
+  misses the events written while the application was down. Compiles unchanged.
 
 ### Brokers
 
@@ -1094,6 +1097,38 @@ counts is the time since that position was written. On the reactor stack a subsc
 while it matches no events only while the MongoDB subscription model reads quiet positions. When it can't, it logs a
 warning saying that a subscription that matches no event keeps the position of the last event it handled. An unnamed
 reactor `Flux` saves no position, and its position moves only when it reads an event.
+
+## A reactive `@StreamSubscription` follows `resumeBehavior`
+
+The reactive Spring Boot starter ignored `resumeBehavior` on `@StreamSubscription`. A subscription with
+`startAt = BEGINNING_OF_TIME` started at position 0 on every restart, and one with `startAt = NOW` started at the
+present on every restart. The javadoc and the documentation say that, under the default `resumeBehavior`, a restart
+continues from the last event the subscription received. The reactive starter now does that, as the blocking starter
+already does for `BEGINNING_OF_TIME`.
+
+### Who is affected
+
+Every application on the reactive starter with a `@StreamSubscription` that sets `startAt` to `BEGINNING_OF_TIME` or
+`NOW` and does not set `resumeBehavior`. A `@StreamSubscription` that does not set `startAt` is not affected.
+
+### What changes
+
+- `BEGINNING_OF_TIME` with `DEFAULT` replays the history the first time. After a restart it continues from the
+  checkpoint it stored, so the handler no longer receives every event again.
+- `NOW` with `DEFAULT` starts at the present the first time. After a restart it continues from the checkpoint it
+  stored, so the handler receives the events written while the application was down. Before, it never received them.
+- `SAME_AS_START_AT` starts at `startAt` on every restart, as the documentation says. `BEGINNING_OF_TIME` with
+  `SAME_AS_START_AT` now stores no checkpoint, the way a reactive `@Subscription` already behaves.
+
+### What to do
+
+Nothing, if the subscription is meant to continue where it stopped.
+
+If the subscription feeds an in-memory read model that has to be rebuilt on every boot, set
+`resumeBehavior = SAME_AS_START_AT` on it. Without it the read model now starts empty and receives only the events
+since the last restart.
+
+A `NOW` subscription that has to skip the events written during downtime also needs `SAME_AS_START_AT`.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
