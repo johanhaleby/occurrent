@@ -332,7 +332,12 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
      * {@code doOnCancel} on the {@code Mono} an action returned or a handler on {@link Subscription#waitUntilStarted()}.
      * The cancel ends when the wrapped model throws, or when the {@code Mono} it returned completes or fails, and it ends
      * before a subscriber of the returned {@code Mono} is told that it completed. {@code ReactorMongoSubscriptionModel}
-     * ends it before this method returns. A cancel the wrapped model never ends keeps a subscribe of the id refused.
+     * ends it before this method returns, unless a subscribe of the id that goes straight to live is under way on another
+     * thread. This method then stops the action being called for further events and returns without waiting for that
+     * subscribe, and the cancel ends after the wrapped model's {@code subscribe(..)} has returned. So blocking on the returned {@code Mono} from a {@code StartAt.dynamic} function
+     * can wait for that subscribe. The cancel can run on the thread of that subscribe, so what follows the returned
+     * {@code Mono} can run there before that subscribe returns. A cancel the wrapped model never ends keeps a subscribe of
+     * the id refused.
      */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
