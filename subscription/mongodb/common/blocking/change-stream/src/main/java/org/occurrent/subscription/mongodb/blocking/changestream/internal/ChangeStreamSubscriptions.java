@@ -59,6 +59,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -268,7 +269,7 @@ public final class ChangeStreamSubscriptions {
         }
         // Follows every run of the subscription, so it answers true once start() or a resume opens the change stream of
         // one subscribed while the model was stopped, or paused before its change stream opened
-        return model.subscription(subscriptionId, internalSubscription.firstStartedLatch, internalSubscription.firstStartFailure::get);
+        return model.subscription(subscriptionId, internalSubscription.firstStart.latch, internalSubscription.firstStart::failure);
     }
 
     // A position of the subscription's own, so a resume given the very instance subscribe was given isn't taken for the
@@ -1130,6 +1131,27 @@ public final class ChangeStreamSubscriptions {
     // One run of a subscription, from a subscribe or a resume until a pause, a cancel or a shutdown closes it. A
     // restart after an error reuses the same run, and a resume starts a new one, so a closed run never opens a change
     // stream again.
+    // The answer of the handle subscribe returns. The first run to open or to fail for good decides it, in one step.
+    private static final class FirstStart {
+        final CountDownLatch latch = new CountDownLatch(1);
+        private final AtomicReference<@Nullable Optional<RuntimeException>> outcome = new AtomicReference<>();
+
+        void started() {
+            outcome.compareAndSet(null, Optional.empty());
+            latch.countDown();
+        }
+
+        void failed(RuntimeException failure) {
+            outcome.compareAndSet(null, Optional.of(failure));
+            latch.countDown();
+        }
+
+        @Nullable RuntimeException failure() {
+            Optional<RuntimeException> decided = outcome.get();
+            return decided == null ? null : decided.orElse(null);
+        }
+    }
+
     private static class InternalSubscription {
         private final Logger log;
         // Kept so a resume reuses the pipeline built when subscribing, rather than deriving the same one again from the
@@ -1138,10 +1160,8 @@ public final class ChangeStreamSubscriptions {
         final CountDownLatch startedLatch = new CountDownLatch(1);
         // Set before startedLatch is released, when this run failed for good instead of opening its change stream
         private volatile @Nullable RuntimeException startFailure;
-        // Shared by every run of the subscription, and released the first time one of them opens its change stream
-        final CountDownLatch firstStartedLatch;
-        // Shared like firstStartedLatch, and set before it is released when a run failed for good before any had opened
-        final AtomicReference<@Nullable RuntimeException> firstStartFailure;
+        // Shared by every run of the subscription
+        final FirstStart firstStart;
         private final CountDownLatch stoppedRestartingLatch = new CountDownLatch(1);
         final AtomicReference<StartAt> currentStartAt;
         // Shared by every run of the subscription
@@ -1161,17 +1181,16 @@ public final class ChangeStreamSubscriptions {
         private @Nullable Thread delivering;
 
         private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe) {
-            this(log, currentStartAt, action, pipeline, presentAtSubscribe, new CountDownLatch(1), new AtomicReference<>());
+            this(log, currentStartAt, action, pipeline, presentAtSubscribe, new FirstStart());
         }
 
-        private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, CountDownLatch firstStartedLatch, AtomicReference<@Nullable RuntimeException> firstStartFailure) {
+        private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, FirstStart firstStart) {
             this.log = log;
             this.pipeline = pipeline;
             this.currentStartAt = currentStartAt;
             this.presentAtSubscribe = presentAtSubscribe;
             this.action = action;
-            this.firstStartedLatch = firstStartedLatch;
-            this.firstStartFailure = firstStartFailure;
+            this.firstStart = firstStart;
         }
 
         // Under the same lock as movedUnlessReplacedTo, so an action of this run that returns after the pause waited
@@ -1184,7 +1203,7 @@ public final class ChangeStreamSubscriptions {
                     // In one step, since the operation time asked for at subscribe can be recorded meanwhile
                     currentStartAt.updateAndGet(reposition);
                 }
-                return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStartedLatch, firstStartFailure);
+                return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStart);
             } finally {
                 lock.unlock();
             }
@@ -1267,18 +1286,25 @@ public final class ChangeStreamSubscriptions {
 
         void started() {
             startedLatch.countDown();
-            firstStartedLatch.countDown();
+            firstStart.started();
         }
 
-        // A handle that has already answered it started keeps that answer
+        // Under the same lock as replacedBy, so a failure of a run a resume has replaced doesn't reach the handles the
+        // run after it answers for. A handle that has already answered it started keeps that answer.
         void failedToStart(RuntimeException failure) {
-            if (startedLatch.getCount() > 0) {
-                startFailure = failure;
+            lock.lock();
+            try {
+                if (replaced) {
+                    return;
+                }
+                if (startedLatch.getCount() > 0) {
+                    startFailure = failure;
+                }
+                startedLatch.countDown();
+                firstStart.failed(failure);
+            } finally {
+                lock.unlock();
             }
-            if (firstStartedLatch.getCount() > 0) {
-                firstStartFailure.set(failure);
-            }
-            started();
         }
 
         @Nullable RuntimeException startFailure() {

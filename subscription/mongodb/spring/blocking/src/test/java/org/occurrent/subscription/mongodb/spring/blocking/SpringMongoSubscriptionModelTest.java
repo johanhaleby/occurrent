@@ -1209,6 +1209,52 @@ public class SpringMongoSubscriptionModelTest {
             assertThat(second).extracting(CloudEvent::getId).doesNotContain(e1.eventId());
         }
 
+        @Test
+        void a_refusal_of_a_run_a_resume_has_replaced_does_not_reach_the_handle_of_the_subscribe() throws Exception {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            CountDownLatch resumedRunMayOpen = new CountDownLatch(1);
+            HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
+            ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
+            modelLogger.addAppender(holdsTheRefusal);
+            try {
+                Subscription first = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), state::add);
+                assertThat(holdsTheRefusal.held.await(10, SECONDS)).isTrue();
+
+                // When the run is paused and replaced by a resume while its refusal is held between the check and the failure
+                subscriptionModel.pauseSubscription(subscriptionId);
+                Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId, StartAt.dynamic(ctx -> {
+                    try {
+                        resumedRunMayOpen.await(20, SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return StartAt.now();
+                }));
+                holdsTheRefusal.release.countDown();
+
+                // Then the handle of the subscribe doesn't throw the refusal of the replaced run, and has not started yet
+                Throwable thrown = catchThrowable(() -> first.waitUntilStarted(Duration.ofMillis(500)));
+                assertThat(thrown).isNull();
+
+                // And the resumed run opens, answering for both handles, and delivers
+                resumedRunMayOpen.countDown();
+                assertThat(first.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+                assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+                NameDefined written = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+                mongoEventStore.write("1", 0, serialize(written));
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(state).extracting(CloudEvent::getId).contains(written.eventId()));
+                assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+            } finally {
+                holdsTheRefusal.release.countDown();
+                resumedRunMayOpen.countDown();
+                modelLogger.detachAppender(holdsTheRefusal);
+            }
+        }
+
         private void assertSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint, boolean paused) {
             // Given
             LocalDateTime now = LocalDateTime.now();
@@ -1716,6 +1762,29 @@ public class SpringMongoSubscriptionModelTest {
             }
         }
 
+    }
+
+    // Holds the thread that logs the first refusal of a start position until released
+    private static final class HoldsTheFirstRefusal extends UnsynchronizedAppenderBase<ILoggingEvent> {
+        private final AtomicBoolean first = new AtomicBoolean(true);
+        private final CountDownLatch held = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        private HoldsTheFirstRefusal() {
+            start();
+        }
+
+        @Override
+        protected void append(ILoggingEvent event) {
+            if (event.getLevel() == Level.ERROR && event.getFormattedMessage().startsWith("Cannot open the change stream of subscription") && first.compareAndSet(true, false)) {
+                held.countDown();
+                try {
+                    release.await(20, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
     }
 
     // Holds the thread that logs giving up first until released
