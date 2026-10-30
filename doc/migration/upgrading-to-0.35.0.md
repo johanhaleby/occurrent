@@ -56,6 +56,9 @@ other sections compile fine and behave differently, so read them first.
 
 ### Subscriptions and catch-up
 
+- [A read by position makes no promise about resuming](#a-read-by-position-makes-no-promise-about-resuming). A loop that
+  keeps a position and reads after it through `readInPositionOrder(..)` or `afterPosition(..)` still compiles, and can
+  skip an event.
 - [A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint).
   `RepositionableSubscriptions.findIn(durableModel)` finds the durable model, which stores the position before it
   resumes there. Compiles unchanged.
@@ -832,7 +835,7 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 ## A read by position makes no promise about resuming
 
 `readInPositionOrder(..)` on `PositionOrderedReader` and `DomainEventQueries` is a range query. It returns the events in
-the range that have committed when it runs. On MongoDB an append takes its position before its transaction commits, so
+the range it can see when it runs. On MongoDB an append takes its position before its transaction commits, so
 an event can reserve a position below the one you kept and commit after you read it, and a read after your position
 never returns it. See [#1297](https://github.com/johanhaleby/occurrent/issues/1297).
 

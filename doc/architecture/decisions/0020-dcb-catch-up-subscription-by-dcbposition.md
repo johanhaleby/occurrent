@@ -6,6 +6,11 @@ Date: 2026-06-21
 
 Accepted
 
+Amended by [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) and
+[ADR 155](0155-a-catch-up-reads-its-live-start-from-the-event-store-and-refuses-to-resume-where-it-could-skip-an-event.md).
+A `dcbposition` isn't a safe place to resume from on MongoDB, since an event can reserve a position below it and commit
+later. A snapshot resumes from marker versions and a catch-up from the checkpoint it stores.
+
 ## Context
 
 `CatchupSubscriptionModel` replays historic events before handing over to a live, position-aware subscription. Its replay reads stream events from `EventStoreQueries` ordered by `(time, streamversion)`, and the live subscription resumes by a database change-stream token. The catch-up phase is gated on a time-based subscription position (ADR 0014).

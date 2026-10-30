@@ -35,8 +35,10 @@ import static java.util.Objects.requireNonNull;
  *                             the matched {@code events}: the highest matched position can be lower than the head, and
  *                             when the query matches nothing there is no matched position at all, yet
  *                             {@code lastSequencePosition} still reports the store head. It is {@code 0} only when the
- *                             store holds no DCB events yet. It is a monotonic global cursor, but it isn't a safe place
- *                             to resume from on MongoDB, and it is NOT a safe optimistic-concurrency boundary on its
+ *                             store holds no DCB events yet. It isn't a safe place to resume from on MongoDB. To read on
+ *                             from a read, use {@link DcbReadOptions#withVersions()} and
+ *                             {@link DcbReadOptions#afterVersions(DcbMarkerVersions)}, or a catch-up subscription's
+ *                             checkpoint. It is NOT a safe optimistic-concurrency boundary on its
  *                             own: a store that assigns positions before the events commit can report a head that is
  *                             ahead of the data a reader can actually see. Use {@code consistencyToken} for optimistic
  *                             concurrency.

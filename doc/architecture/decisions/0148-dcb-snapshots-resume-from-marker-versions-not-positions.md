@@ -927,9 +927,8 @@ For 0.35, a bare position is documented as unsafe to resume from on MongoDB:
   `readInPositionOrder` with `PositionRange.afterPosition`. No TCK suite asks a reader that resumes from a position to
   get an append that committed late. `CatchupReadScopeLateCommitConformance` checks a catch-up's live start instead.
 - A catch-up that only replays and never goes live promises "everything committed before I started". Every event that
-  committed before the run started has a position at or below the head the run reads, and the replay reads it. A run
-  resumed after a crash reads a new head and replays after its stored position, which still covers everything committed
-  before the first start. What it doesn't promise is "everything up to position H", which would need a CT.
+  committed before the run started has a position at or below the head the run reads, and the replay reads it. What a
+  run resumed after a crash does depends on the checkpoint it stored, which is ADR 155's subject. What it doesn't promise is "everything up to position H", which would need a CT.
 - That promise holds only when the window reads run on a member that has every write the head read saw. Today the head
   (`PositionCatchupPipeline.java:84`) and the windows are both read at the default read concern, and on the primary that
   holds. Three cases void it, and the javadoc names them. Stream window reads routed to a secondary can miss an event
@@ -941,8 +940,9 @@ For 0.35, a bare position is documented as unsafe to resume from on MongoDB:
 
 A store-wide fix would give a bare position a safe meaning. It's not part of 0.35.
 [#1322](https://github.com/johanhaleby/occurrent/issues/1322), for 0.36.0, is an opt-in mode that reserves the position
-inside the append transaction, and [#1375](https://github.com/johanhaleby/occurrent/issues/1375) is a `currentPosition()`
-that stays below every append still in flight. Any such fix has to meet two constraints. It must not change the DCB path above. And if it reads windows at majority, it reads the head and the
+inside the append transaction, and it's the only recorded path. The default mode keeps the window, since
+[#1375](https://github.com/johanhaleby/occurrent/issues/1375), a `currentPosition()` that stays below every append still
+in flight, was closed as not planned. Any such fix has to meet two constraints. It must not change the DCB path above. And if it reads windows at majority, it reads the head and the
 live start (ADR 144) in the same causal session, with `afterClusterTime` at or above the head read.
 
 ## Consequences

@@ -34,7 +34,7 @@ import reactor.core.publisher.Mono;
  * without a position emits {@link UnsupportedOperationException} rather than an empty or incorrect result.
  * An {@code instanceof PositionOrderedReader} check alone does not tell you whether this instance writes a position.
  * <p>
- * A position read is a range query. It returns the events in the range that have committed when it runs, and it makes
+ * A position read is a range query. It returns the events in the range it can see when it runs, and it makes
  * no promise about resuming. A position isn't a safe place to resume from on MongoDB. An event can reserve a position
  * below the one you kept and commit after you read it, and a read after your position never returns it. To process
  * every event, resume a catch-up subscription from the checkpoint it stores.
