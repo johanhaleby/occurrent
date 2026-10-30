@@ -465,7 +465,8 @@ final class NamedCatchupSupport {
             if (!own(subscriptionId, delegate, record, null)) {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
-            subscribesUnderWay.put(subscriptionId, subscribing);
+            // Kept when code on this thread cancelled the id and subscribes it again, since the outer call is still running
+            subscribesUnderWay.putIfAbsent(subscriptionId, subscribing);
             return null;
         });
         // With the per-id lock released, since ReactorMongoSubscriptionModel can run the caller's dynamic start here
@@ -476,7 +477,6 @@ final class NamedCatchupSupport {
             owned.remove(subscriptionId, record);
             throw e;
         } finally {
-            // Replaced when code on this thread cancelled the id and subscribed it again
             subscribesUnderWay.remove(subscriptionId, subscribing);
             subscribing.returned().tryEmitEmpty();
         }

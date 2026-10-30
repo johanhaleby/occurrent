@@ -257,6 +257,45 @@ class ReactorCatchupSubscribeUnderWayTest {
     }
 
     @Test
+    void a_nested_subscribe_of_the_id_that_is_cancelled_again_keeps_other_threads_refused_until_the_outer_wrapped_subscribe_returns() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.registersBeforeTheStart = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        loadClassesOfASubscribeAndACancel(catchup);
+        wrapped.events.clear();
+        HeldStart held = new HeldStart();
+        AtomicReference<Throwable> nestedFailure = new AtomicReference<>();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, StartAt.dynamic(context -> {
+            if (context.hasSubscriptionModelType(ReactorStreamCatchupSubscriptionModel.class)) {
+                return null;
+            }
+            try {
+                catchup.cancelSubscription("x").subscribe();
+                catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty());
+                catchup.cancelSubscription("x").subscribe();
+            } catch (Throwable t) {
+                nestedFailure.set(t);
+            }
+            return held.startAt().get(context);
+        }), cloudEvent -> Mono.empty())).start();
+        held.awaitInside();
+
+        Throwable refusal = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()));
+        boolean heldWhileUnderWay = wrapped.isRunning("x") || wrapped.isPaused("x");
+        held.release();
+
+        await(subscribeOfX, "The subscribe of x did not return");
+        Throwable failureAfterTheReturn = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()));
+        assertThat(refusal).as("what the subscribe of x from another thread threw while the outer subscribe was under way").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(heldWhileUnderWay).as("whether the wrapped model held x while the outer subscribe was under way").isFalse();
+        assertThat(nestedFailure.get()).as("what the nested subscribe of x threw").isNull();
+        assertThat(failureAfterTheReturn).as("what the subscribe of x from another thread threw once the outer subscribe returned").isNull();
+        assertThat(wrapped.isRunning("x")).as("whether the wrapped model runs x").isTrue();
+        assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("subscribed:x", "cancelled:x", "subscribed:x", "cancelled:x", "subscribed:x");
+    }
+
+    @Test
     void a_subscribe_from_the_continuation_of_a_cancel_that_waited_for_the_wrapped_subscribe_goes_through() {
         WrappedModel wrapped = new WrappedModel();
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
