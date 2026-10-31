@@ -206,13 +206,14 @@ same hole, and the tear is a rarer path beside it. Fourth, the read returned the
 `skip` or a position bound may not return E, and in a probe a torn token from a read with `limit`, `skip` or
 `upToPosition` passed where the sum check refused it. With no tear the same read passes on the sum too, because the
 token doesn't depend on the window, as `DcbReadOptions` says. Fifth, no position reservation was lost. A store reserves
-an append's positions with an update of the counter that sets no write concern of its own. The native store runs the
-update outside any transaction, also when the append joins a caller's transaction. The Spring and reactor stores do when
-they run the transaction themselves. Outside a transaction it takes the write concern of the database the store uses,
-which falls back to the client's and then to the server's default, and a majority set on the transaction, a template or
-the event collection doesn't reach it. Below majority, for example at w:1, which is also the implicit default on a
-replica set of a primary, a secondary and an arbiter, a failover can lose that update while the append commits E above
-the counter. Every read stops at the counter, a read with `withVersions()` too, so a read can hold E's markers and miss
+an append's positions with an update of the counter. The native store runs the update outside any transaction, also when
+the append joins a caller's transaction. The Spring and reactor stores do when they run the transaction themselves.
+Outside a transaction the update waits for write concern majority. It takes the write concern of the database the store
+uses, which falls back to the client's, and sets `w` to majority on it, so a w:1 on either of those or as the server's
+default doesn't apply to this update, and a `wtimeout` on them does. A write concern set on a Spring template doesn't
+reach it, since the update goes to the collection. Below majority, a failover can lose that update while the append
+commits E above the counter. Every read stops at the counter, a read with `withVersions()` too, so a read can hold E's
+markers and miss
 E, and a read after that read's versions doesn't return E. A full read, and a read after versions saved before E, misses
 E until the counter reaches it. An append that reserves E's position and gets past its condition fails with
 `DuplicateCloudEventException`, whatever its boundary. A conditional append on the token that reserves another position
@@ -220,18 +221,28 @@ can pass. In a probe it passed when a reservation below E's was lost too, and on
 append took E's position first. With no tear the sum is equal, so the sum check passes the same append, unless a later
 event moved a marker of the criteria. The sum refuses then, and this check passes when that event doesn't match. On the
 Spring and reactor stores, the update in a caller's transaction joins it and commits with the event, so a failover can't
-lose it alone. A stepdown on both stores, with that transaction at majority and at w:1, kept E and the counter together,
+lose it alone. An operation inside a transaction can't set a write concern of its own, so this path stays as it was. A
+stepdown on both stores, with that transaction at majority and at w:1, kept E and the counter together,
 or lost both when a w:1 commit was rolled back. The exception is a store whose own transaction manager uses the same
 database factory as the caller's and whose transaction is set to `REQUIRES_NEW` or `NOT_SUPPORTED`. The update joins the
 caller's transaction and E commits apart from it, so in a probe on both stores a caller's rollback left E above the
 counter with no failover. An append in a caller's transaction that reserves E's position after another append lost its
 reservation rolls its own back with the duplicate, so in a probe that set the counter by hand such appends kept failing
-at E's position until an append in the store's own transaction moved the counter. The probes of the loss itself used a
-stepdown, and a raw `$inc` standing in for the reservation below E's. All three stores lost the update at w:1 on three
-members, and the native store did at w:2 on five members and on a primary, a secondary and an arbiter with no write
-concern set. The Spring store did on three data-bearing members with no write concern on the client and w:1 as the
-server's default. At w:majority, and on three data-bearing members with no write concern set and the server's implicit
-default, all three stores' reads held E. No probe ran through a mongos.
+at E's position until an append in the store's own transaction moved the counter. The probes of the loss itself ran
+before the update waited for majority, and used a stepdown, and a raw `$inc` standing in for the reservation below E's.
+All three stores lost the update at w:1 on three members, and the native store did at w:2 on five members and on a
+primary, a secondary and an arbiter with no write concern set. The Spring store did on three data-bearing members with
+no write concern on the client and w:1 as the server's default. At w:majority, and on three data-bearing members with no
+write concern set and the server's implicit default, all three stores' reads held E. A test on each store now steps the
+primary down with an append's update not yet replicated and a client at w:1, and a read finds E. That test fails without
+the wait. No failover probe ran through a mongos.
+
+On a replica set of a primary, a secondary and an arbiter with the secondary down, a majority can't acknowledge the
+update, where appends used to complete in 6 to 18 ms. In a probe on all three stores, an append with no timeout was
+still waiting after 25 seconds and completed when the secondary came back. `wtimeoutMS=2000` and `timeoutMS=2000` on the
+connection string failed it after 2 seconds, and `socketTimeoutMS=2000` after 4. On the Spring and reactor stores a
+write concern with a `wtimeout` on the database factory failed it after 2 seconds too, and one on a template didn't, for
+the reason above. An append that fails this way writes no event, and the positions it reserved can stay unused.
 
 ### Pruning markers
 
@@ -269,11 +280,15 @@ increments. During a rolling upgrade, a 0.34 append of a `TicketSold` tagged `co
 marker, so a 0.35 condition that reads only that marker lets a matching append through. The query above has no such
 gap, because a 0.34 append moves u.
 
-**Run the append transaction at read concern `snapshot`**, so the query is sound on a sharded cluster too. MongoDB
-keeps a `snapshot` read in step across shards. The store would have to override the read concern a user configured
-for their writes, and whether the Spring and reactor stores can set or read the read concern of the transaction their
-`TransactionTemplate` or `TransactionalOperator` runs hasn't been checked. A sharded deployment keeps refusing on a
-moved marker, and this stays open for when one asks.
+**Run the append transaction at read concern `snapshot`**, so the query reads one point in time across shards. MongoDB's
+documentation says that read concern gives its guarantee only when the transaction commits at write concern majority.
+The store would have to override the read concern a user configured for their writes. The native store could set it on
+its transaction options. The Spring and reactor stores couldn't set it through the `TransactionTemplate` or
+`TransactionalOperator` they're given, because those options live on the transaction manager, so a user would have to
+set it themselves. A snapshot alone also wouldn't make the query sound. A plain read's token can be torn across shards,
+and the query selects an item with tags on its first tag key only, so a first tag marker from after E can make it find
+nothing while E sits under another tag's marker. That part is reasoned and not probed. A sharded deployment keeps
+refusing on a moved marker, and this stays open for when one asks.
 
 **Read the token and the events in a snapshot transaction on a sharded cluster**, so that step 3 could stay there and a
 read could no longer miss an event its token holds. That would fix the second case of #1231 on a sharded cluster too and close the hole
@@ -324,6 +339,14 @@ still be used.** No store can find the tokens a caller holds, so nobody can foll
 - On a replica set, a conditional append runs one more indexed query in its transaction when its markers moved and
   don't rule out all of its items. An append whose markers didn't move does the same work as today. No append writes more documents than today, so no new write contention
   is added.
+- Outside a transaction, an append now waits for a majority on its counter update, overriding a w:1. In alternating
+  before and after runs of DCB appends on a local three-member set, the median p50 of a single writer at w:1 went from
+  4.0 to 3.8 ms on the native store, 3.7 to 3.7 ms on the Spring store and 4.1 to 5.2 ms on the reactor store. A client
+  with no write concern, which already waited for majority there, moved by up to 1.2 ms between the same runs. With 8
+  writers, throughput went from about 990 to 1030 appends a second on the native store, 1050 to 875 on the Spring store
+  and 990 to 670 on the reactor store, where the ranges of the four rounds on each side didn't overlap. All members ran
+  on one host, so these numbers show no network. Across a network each such append should wait about one more round trip
+  to a secondary, which wasn't measured. The stream write path wasn't measured either, and it shares the update.
 - A token that saw a marker that came back with another epoch or a lower version is refused, even when the versions add
   up to the same sum.
 - ADR 88's table changes. With the default settings, the MongoDB stores on a replica set no longer refuse for an

@@ -534,14 +534,13 @@ template bound to that session, commits once and closes the session. No versions
 commit succeeds. The reactor store collects the read and emits it only after the commit, and closes the session on
 completion, error and cancellation.
 
-The bound decides liveness only. Take a set with a primary, a secondary and an arbiter, with the secondary down. Appends
-still commit there, because the implicit default write concern on such a set is w:1. A commit at majority can't be
-acknowledged, and without a bound it waits for ever, so every snapshot command would block where today it completes. The
-review of this design checked that against the MongoDB
-[write concern](https://www.mongodb.com/docs/manual/reference/write-concern/) documentation. With the bound, the commit
-times out, the read after saved versions is refused, the decider reads in full on today's path and discards the base
-state, and the command completes without saving a snapshot. It takes up to the bound longer than it does today. Correctness doesn't depend on the bound,
-because a read whose commit failed returns no versions.
+The bound decides liveness only. Take a set with a primary, a secondary and an arbiter, with the secondary down. A
+commit at majority can't be acknowledged, and without a bound it waits for ever. The review of this design checked that
+against the MongoDB [write concern](https://www.mongodb.com/docs/manual/reference/write-concern/) documentation. With
+the bound, the commit times out, the read after saved versions is refused, and the decider reads in full on today's path
+and discards the base state. That takes up to the bound longer. A command that then appends waits on its position
+reservation, and only a timeout the user set ends that wait (ADR 149). Correctness doesn't depend on the bound, because a
+read whose commit failed returns no versions.
 
 Two claims in this section are unverified until a test with a `failCommand` fail point runs. One is that a read-only
 transaction's commit waits for majority at all. The other is that the bound stops that wait.
@@ -568,8 +567,7 @@ The consumers, on both stacks:
 - On every delivery the `@Snapshot` view reads `afterVersions` from its saved versions, applies what it read, and saves
   at the read's versions. A redelivered event is at or below the saved versions, so the read doesn't return it, and the
   view doesn't look at the delivered event's `mv`. When the read's snapshot doesn't have the delivered event yet, the
-  view saves below it and applies it on the next delivery for that boundary. That's a delay. A position reservation lost in a failover
-  can still lose an event, as "The decider confirms its append before it saves" says.
+  view saves below it and applies it on the next delivery for that boundary. That's a delay.
   `everyNEvents` counts events since the snapshot instead of positions.
 - A `@Snapshot` view over `MatchAll` logs a warning when it's registered and runs without a snapshot. I chose not to
   refuse it, because `@Snapshot` shipped in 0.34.0 and refusing it would stop an application that starts today. A
@@ -588,9 +586,11 @@ increments and the read-back of the versions then all happen in one transaction'
 saves is complete in every mode. The seventh review's first blocker came from building the watermark after commit, and
 this design never does that.
 
-A position reservation lost in a failover breaks completeness itself. ADR 149 has the case. An append commits E above a
-counter that lost its increment, a read stops at the counter, and the versions it reports already hold E's markers, so a
-snapshot saved at them skips E.
+A position reservation lost in a failover would break completeness itself, which is why the reservation waits for write
+concern majority outside a transaction (ADR 149). An append would commit E above a counter that lost its increment, a
+read would stop at the counter, and the versions it reports would already hold E's markers, so a snapshot saved at them
+would skip E. On the Spring and reactor stores, a caller's rollback can get there with no failover under the transaction
+settings ADR 149 names.
 
 Completeness isn't durability either. Versions from an append that rolls back after a failover are handed out again to other
 events, and a snapshot saved at them skips those events. The same happens without a failover when the caller owns the
@@ -795,8 +795,8 @@ versions only grow, and a prune changes the epoch. A majority-committed write is
   today (`MongoEventStore.java:369-372`, `SpringMongoEventStore.java:247-250`), it loses an event. The counter reads
   50. Append Y then commits a deposit at 51 with `tag:account:a1` at 8. The snapshot sees `a1` at 8 but the events are
       bounded at 50, so Y is cut off while the token covers it. The decider appends on token 8 without Y and saves at 9,
-      and Y is never selected again. Reading it inside the snapshot doesn't help when
-      the counter lost a reservation in a failover, which ADR 149 describes.
+      and Y is never selected again. Reading it inside the snapshot wouldn't help if the counter lost a reservation,
+      which ADR 149 describes.
 - **The token and the events in every other read** keep today's path, token first, both at the default read concern.
   This design doesn't change them. In the Spring stores the two may already come from different members, because the
   events read applies `queryOptions` (`SpringMongoEventStore.java:259`) and the token read doesn't (`:596`). The seventh
@@ -968,8 +968,7 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
   this ADR doesn't change it.
 - Inside a session or transaction the caller owns, a read reports no versions, so a decider or view there reads its
   boundary in full on every command or delivery.
-- The `@Snapshot` view can lag behind the event that triggered it until the next delivery for that boundary. A position
-  reservation lost in a failover can still make it lose the event.
+- The `@Snapshot` view can lag behind the event that triggered it until the next delivery for that boundary.
 - Store-wide positions stay as ADR 84 describes them. A catch-up that resumes from a bare position can still miss an
   event until the store-wide fix, and a 0.34 position-only checkpoint stays unrepairable.
 - Some things can't be settled until the code exists, and are checked when it's built:
@@ -981,6 +980,7 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
     its majority commit waits for that point to be majority-committed. Whether the commit of a read-only transaction
     waits for majority at all, and whether the bound stops that wait, is settled by a test with a `failCommand` fail
     point.
-- A failover can roll back a counter increment made below majority while the event's transaction survives, as ADR 149's
-  fifth assumption says. So a replay-only catch-up's head can sit below a committed event until the head is the highest
-  committed position instead of the counter, or the increment can't be lost.
+- On the Spring and reactor stores, a store's own transaction set to `REQUIRES_NEW` or `NOT_SUPPORTED` can leave a
+  committed event above the counter when a caller rolls back, as ADR 149's fifth assumption says. So a replay-only
+  catch-up's head can sit below a committed event until the head is the highest committed position instead of the
+  counter, or that path is closed.
