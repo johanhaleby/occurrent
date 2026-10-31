@@ -1495,10 +1495,10 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
     }
 
     /**
-     * Whether the declared append-condition model conflicts on an event that shares a tag with the criteria, whether it
-     * is of a type the criteria excludes or lacks another tag the criteria requires, although no event matching the
-     * criteria was committed. Written as a switch expression so adding a model breaks the build here rather than
-     * silently taking one of the existing branches.
+     * Whether the declared append-condition model can conflict on an event that shares a tag with the criteria, whether
+     * it is of a type the criteria excludes or lacks another tag the criteria requires, although no event matching the
+     * criteria was committed. Each test says whether such a model must refuse or may accept. Written as a switch
+     * expression so adding a model breaks the build here rather than silently taking one of the existing branches.
      */
     private boolean expectedToConflictOnANonMatchingEventSharingATag() {
         return switch (appendConditionModel()) {

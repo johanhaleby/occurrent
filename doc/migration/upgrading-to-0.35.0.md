@@ -561,11 +561,13 @@ What is new:
   read, with no limit, skip or position bound, and criteria other than `MatchAll`.
 - A conditional append with a consistency token reports the same in `DcbAppendResult.markerVersions()`.
 - `read(criteria, DcbReadOptions.afterVersions(saved))` returns every matching event appended after `saved`, including
-  one that committed late below a position an earlier read saw. When the store can't compare `saved` with its own
-  markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
-  full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
-  always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
-  which returns only what comes after them, with no exception.
+  one that committed late below a position an earlier read saw. It doesn't return an event an earlier read missed
+  although `saved` holds the event's markers, which [What else a token holds on
+  MongoDB](#what-else-a-token-holds-on-mongodb) describes. When the store can't compare `saved` with its own markers,
+  for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in full. Pass
+  versions only to a read on the same criteria as the read or append that reported them. A store doesn't always refuse
+  versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`, which returns
+  only what comes after them, with no exception.
 - `DcbAppendConfirmation.isConfirmed(result)` answers whether an append is committed at majority, read outside any
   transaction of yours. The MongoDB stores and `InMemoryEventStore` implement it.
 
@@ -713,14 +715,16 @@ sharded cluster, this doesn't apply, and any event that moves a marker of the cr
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
 A plain read through a mongos can do this when the markers and the events are on different shards. A read with
 `withVersions()` doesn't do this when its stream reports `markerVersions()`, because it read both in one snapshot
-transaction. On any deployment, with a client writing at w:1, a failover can do this to any read, one with
-`withVersions()` too. A store reserves an append's positions outside the transaction, so the failover can lose that
-reservation while the append commits, and a read stops at the last reserved position. A read after such a read's
-versions can then skip the event. Also on any deployment, a read whose events are behind its token can do this, for
-example when a read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A
-token also doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a
-matching event the read left out. 0.34.0 has this gap too, except that it refused the append when the read caught only
-some of the event's markers.
+transaction. A failover can do this to any read, one with `withVersions()` too, when the client writes at w:1 or sets no
+write concern on a replica set whose implicit default is w:1, such as a primary, a secondary and an arbiter. A store
+that runs the transaction itself reserves an append's positions outside it, so the failover can lose that reservation
+while the append commits above the last reserved position, and a read stops at that position. A read after such a read's
+versions doesn't return the event. A conditional append on such a read's token fails with `DuplicateCloudEventException`
+when it reserves the event's position, and can pass when a reservation below the event's was lost too. On any
+deployment, a read whose events are behind its token can do this, for example when a read preference or a read concern
+sends the events read to a lagging secondary or to an older snapshot. A token also doesn't depend on a read's limit,
+skip or position range, so after such a read a condition doesn't fail for a matching event the read left out. 0.34.0 has
+this gap too, except that it refused the append when the read caught only some of the event's markers.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
