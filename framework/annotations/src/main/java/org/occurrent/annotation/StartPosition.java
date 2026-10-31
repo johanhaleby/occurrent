@@ -30,7 +30,9 @@ public enum StartPosition {
      */
     BEGINNING,
     /**
-     * Start from "now", delivering only events written after the subscription, projection, or snapshot starts.
+     * Start from "now", delivering only events written after the subscription, projection, or snapshot starts for the
+     * first time. Under the default resume behavior a later run resumes from the position the subscription model
+     * stored, if it stores one, and with {@link ResumeBehavior#SAME_AS_START_AT} every run starts from "now".
      */
     NOW,
     /**

@@ -117,9 +117,11 @@ other sections compile fine and behave differently, so read them first.
   subscription, which is every subscription by default. Compiles unchanged.
 - [A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`](#a-restart-follows-resumebehavior-for-startat--beginning_of_time-and-startat--now).
   On the reactive stack a restart no longer replays the history of a `BEGINNING_OF_TIME` `@StreamSubscription`, and a
-  `NOW` one no longer misses the events written while the application was down. On the blocking stack `NOW` with
+  `NOW` subscription no longer misses the events written while the application was down. On the blocking stack `NOW` with
   `SAME_AS_START_AT` starts at the present on every restart and no longer competes with the other instances, so every
-  instance is delivered every event. Compiles unchanged.
+  instance is delivered every event. A reactive `NOW` subscription with the default `resumeBehavior` also reads the
+  position of the feed when it registers with no stored checkpoint, so when it waits for its start, which is the default
+  in `auto` subscription mode, the application does not start when the MongoDB server cannot answer. Compiles unchanged.
 
 ### Brokers
 
@@ -1270,11 +1272,13 @@ reactor `Flux` saves no position, and its position moves only when it reads an e
 
 ## A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`
 
-Two subscriptions did not start where `resumeBehavior` says on a restart. On the reactive Spring Boot starter, a
+Some subscriptions did not start where `resumeBehavior` says on a restart. On the reactive Spring Boot starter, a
 `@StreamSubscription` ignored `resumeBehavior`. With `startAt = BEGINNING_OF_TIME` it started at position 0 on every
-restart, and with `startAt = NOW` it started at the present on every restart. On the blocking starter, `startAt = NOW`
-with `resumeBehavior = SAME_AS_START_AT` continued from the checkpoint the subscription had stored, where the
-documentation says it starts at the present again. Both starters now do what the javadoc and the documentation say.
+restart, and with `startAt = NOW` it started at the present on every restart. A reactive `@Subscription`,
+`@DcbSubscription`, `@Projection` or `@Snapshot` with `startAt = NOW` did the same, while their replay starts already
+followed `resumeBehavior`. On the blocking starter, `startAt = NOW` with `resumeBehavior = SAME_AS_START_AT` continued
+from the checkpoint the subscription had stored, where the documentation says it starts at the present again. Both
+starters now do what the javadoc and the documentation say.
 
 ### Who is affected
 
@@ -1282,6 +1286,9 @@ documentation says it starts at the present again. Both starters now do what the
   `NOW`. That includes one that sets `resumeBehavior = DEFAULT` explicitly. A `@StreamSubscription` that does not set
   `startAt` is not affected, and neither is one that sets `resumeBehavior = SAME_AS_START_AT`, except that
   `BEGINNING_OF_TIME` no longer stores a checkpoint.
+- Every application on the reactive starter with a `@Subscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`
+  that sets `startAt = NOW`, including one that sets `resumeBehavior = DEFAULT` explicitly. One that does not set
+  `startAt`, or sets `resumeBehavior = SAME_AS_START_AT`, is not affected.
 - Every application on the blocking starter with `startAt = NOW` and `resumeBehavior = SAME_AS_START_AT` on a
   `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection`, `@Saga` or `@Snapshot`.
 
@@ -1305,6 +1312,18 @@ The checkpoint is the one the starter's durable subscription model stores. An ap
 with `DEFAULT` starts where its default start does, and whether `BEGINNING_OF_TIME` with `DEFAULT` continues or replays
 again depends on whether it stores a checkpoint.
 
+With the starter's durable model, `NOW` with `DEFAULT` also records where the feed is when a subscription with no stored
+checkpoint registers, the way any start from the model default does. The reactive MongoDB model reads it by asking the
+server, and only when no checkpoint is stored. A model that is stopped when the subscription registers, as with mode
+`manual`, asks every time and ignores the answer when a checkpoint is stored. A server that cannot be asked, or that
+replies without a clock, therefore makes the model refuse the registration only when no checkpoint is stored. Such
+a subscription waits for its start by default when `occurrent.subscription.mode` is `auto`, so the application does not
+start. With `startupMode = BACKGROUND`, with mode `manual`, or on a bean built after startup,
+the refusal does not hold up startup, and the subscription is not running.
+`occurrent.subscription.start-when-no-start-position-can-be-recorded=true` does not change this for the reactive MongoDB
+model, which fails when it cannot be asked and never answers nothing. The property is described in
+[section 7 of the 0.34.0 guide](upgrading-to-0.34.0.md#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
+
 A subscription that handled an event before the upgrade normally has a checkpoint stored already, because the old start
 stored one after each event too. The first restart after the upgrade continues from it, and `startAt` is not looked at
 again for that subscription id. So changing `startAt` on an existing id has no effect until the id is new or its
@@ -1327,6 +1346,9 @@ On the reactive starter, set `resumeBehavior = SAME_AS_START_AT` on a subscripti
 that has to be rebuilt on every boot. Without it the read model now starts empty and receives only the events after the
 last checkpoint. A `NOW` subscription that has to skip the events written during downtime also needs
 `SAME_AS_START_AT`.
+
+A reactive `NOW` subscription with the default `resumeBehavior` now needs the MongoDB server to answer when it
+registers with no stored checkpoint, and refuses the registration when it cannot be asked.
 
 On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription that relied on resuming from its
 checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events

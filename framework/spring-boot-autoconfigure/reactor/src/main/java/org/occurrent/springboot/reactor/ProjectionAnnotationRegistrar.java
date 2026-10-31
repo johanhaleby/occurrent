@@ -504,8 +504,9 @@ class ProjectionAnnotationRegistrar {
     // The three sound cases the recordAppliedAppends-never-resets warning may fire on for an event-store
     // (DCB/agnostic/stream) projection, per the epic's doctrine that a fact about a composition comes from the
     // owner that composed it, never from a probe or an annotation-only predicate:
-    //   1. An explicit NOW, StartAt.now() is a documented, composition-independent contract every Subscribable
-    //      must honor, true regardless of what the composition can do.
+    //   1. NOW with resumeBehavior SAME_AS_START_AT, which is StartAt.now() on every start, a documented,
+    //      composition-independent contract every Subscribable must honor, true regardless of what the composition
+    //      can do.
     //   2. The composition structurally has no catch-up layer at all (ADR 132 decision 9's third case), a known
     //      fact resolveCatchupModel's ComposedCatchupModel branch already verified, not an unobserved absence.
     //   3. DEFAULT, where the auto-configuration that composed this model registered, through ComposedCatchupModel,
@@ -513,17 +514,21 @@ class ProjectionAnnotationRegistrar {
     //      shipped Mongo composition (issue 865), never assumed for an application-supplied one, whose own DEFAULT
     //      semantics are its own to declare, and never assumed for a projection running on some other model the
     //      context also holds, which the holder was never told anything about (issue 996).
-    // DEFAULT on a composition with no registered fact stays silent. This registrar cannot verify it either way.
+    // NOW with the default resumeBehavior is the model default (the reactor StartPositionSupport.nowThenResume), so it is case 3
+    // and not case 1. A model default resumes from a stored checkpoint and, on an application-supplied model, may
+    // replay. DEFAULT on a composition with no registered fact stays silent. This registrar cannot verify it either way.
     private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable CatchupResolution recordingResolution,
                                          @Nullable SubscriptionModelCapability capability) {
-        if (annotation.startAt() == org.occurrent.annotation.StartPosition.NOW) {
+        org.occurrent.annotation.StartPosition startAt = annotation.startAt();
+        if (startAt == org.occurrent.annotation.StartPosition.NOW && annotation.resumeBehavior() == org.occurrent.annotation.ResumeBehavior.SAME_AS_START_AT) {
             return true;
         }
         boolean structurallyNeverReplays = recordingResolution != null && recordingResolution.structurallyNeverCatchesUp();
         if (structurallyNeverReplays) {
             return true;
         }
-        if (annotation.startAt() == org.occurrent.annotation.StartPosition.DEFAULT && annotation.startAtGlobalPosition() < 0) {
+        boolean startsAtTheModelDefault = startAt == org.occurrent.annotation.StartPosition.DEFAULT || startAt == org.occurrent.annotation.StartPosition.NOW;
+        if (startsAtTheModelDefault && annotation.startAtGlobalPosition() < 0) {
             // startAtGlobalPosition >= 0 overrides DEFAULT and replays from that position regardless
             // (generateAgnosticStartAt/generateDcbStartAt check it first), so it must be excluded here too, or a
             // projection that genuinely replays from an explicit position would get the never-replays warning.
