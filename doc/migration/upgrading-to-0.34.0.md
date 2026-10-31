@@ -738,8 +738,9 @@ The blocking `ManualStartSubscriptionModel` and the reactor `ReactorDurableSubsc
 `null` position source this way since 0.33.0. This change gives `DurableSubscriptionModel` the same answer. The
 property reaches the reactive starter too, where
 `ReactorDurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true)` now lets
-`ReactorDurableSubscriptionModel` start such a registration as well, so a reactive application on a shared Atlas
-cluster gets the same no-code-change path out of the refusal it has had since 0.33.0.
+`ReactorDurableSubscriptionModel` start such a registration as well. The reactive MongoDB subscription model reads
+the position it records with the `hello` command, which does not depend on `hostInfo`, and fails when the server
+cannot be asked, so the property does not change what that model does.
 
 
 ## 8. A saga instance that keeps failing can be quarantined, and four saga types change with it
