@@ -654,8 +654,9 @@ stacks, so it isn't affected on a store that returns the criteria it was given.
   read of `all()` with `afterVersions`. So when `all()` becomes a tag, use the three-argument constructor on that read,
   drop the versions from that append's result, and throw on that read yourself. In `append`, rewrite the criteria the
   same way, and give the inner store a condition with
-  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`. On MongoDB the added tag then counts in the check like
-  any other tag, so appending any event with that tag can make the check refuse, whether or not the event matches.
+  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`. On a sharded cluster the added tag then
+  counts in the check like any other tag, so appending any event with that tag makes the check refuse, whether or not
+  the event matches.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
   condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
   deprecation warning, and `wholeStoreLock(token)` and `new DcbAppendCondition(criteria, Optional.of(token))` compile
@@ -712,8 +713,10 @@ sharded cluster, this doesn't apply, and any event that moves a marker of the cr
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it,
 and 0.34.0 has the same gap. A plain read through a mongos can do that when the markers and the events are on different
 shards. A read with `withVersions()` doesn't do that when its stream reports `markerVersions()`, because it read both in
-one snapshot transaction. On any deployment, so can a read whose events are behind its token, for example when a read
-preference or a read concern sends the events read to a lagging secondary or to an older snapshot.
+one snapshot transaction. On any deployment, a read whose events are behind its token can do it too, for example when a
+read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A token also
+doesn't depend on a read's limit, skip or upper position, so after such a read a condition doesn't fail for a matching
+event the read left out.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
@@ -765,6 +768,9 @@ describes it.
 - **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
   succeed, so a store that still reads the type marker for an item with tags fails the case.
+- **Code that switches over the TCK's `DcbAppendConditionModel`.** The enum gains `MARKERS_THEN_EVENTS`, which the
+  fixtures of the MongoDB stores declare, so a `switch` that lists every case and has no `default` stops compiling until
+  it handles the new one. A fixture that returns `EXACT_CRITERIA` or `TAG_MARKER` still compiles.
 - **Code that saved a token value.** For an item with both types and tags, a 0.34.0 token value is a sum over its tag
   and type markers, and 0.35.0 no longer counts the type markers of that item. An old value can then let an append through
   that should have been refused. Read again instead, as
