@@ -57,11 +57,10 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -156,35 +155,35 @@ class ReactorMongoEventStoreDcbReadInTransactionTest {
     // Counts the commands on the event store's collections that started while another of them was still running. The
     // reads run one at a time, so an overlap can only come from within one read.
     private static final class OverlappingCommands implements CommandListener {
-        private final Map<Integer, Boolean> running = new ConcurrentHashMap<>();
-        private final AtomicInteger overlapping = new AtomicInteger();
+        private final Set<Integer> running = new HashSet<>();
+        private int overlapping;
 
-        void reset() {
-            overlapping.set(0);
+        synchronized void reset() {
+            overlapping = 0;
         }
 
-        int count() {
-            return overlapping.get();
+        synchronized int count() {
+            return overlapping;
         }
 
         @Override
-        public void commandStarted(CommandStartedEvent event) {
+        public synchronized void commandStarted(CommandStartedEvent event) {
             BsonValue target = event.getCommand().get(event.getCommandName());
             if (target != null && target.isString() && target.asString().getValue().startsWith("events")) {
                 if (!running.isEmpty()) {
-                    overlapping.incrementAndGet();
+                    overlapping++;
                 }
-                running.put(event.getRequestId(), true);
+                running.add(event.getRequestId());
             }
         }
 
         @Override
-        public void commandSucceeded(CommandSucceededEvent event) {
+        public synchronized void commandSucceeded(CommandSucceededEvent event) {
             running.remove(event.getRequestId());
         }
 
         @Override
-        public void commandFailed(CommandFailedEvent event) {
+        public synchronized void commandFailed(CommandFailedEvent event) {
             running.remove(event.getRequestId());
         }
     }
