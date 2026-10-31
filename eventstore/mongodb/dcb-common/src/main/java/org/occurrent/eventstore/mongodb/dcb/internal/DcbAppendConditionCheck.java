@@ -92,7 +92,8 @@ public final class DcbAppendConditionCheck {
      * @param token        the token of the condition
      * @param criteria     the criteria of the condition
      * @param current      the marker observation of every marker key of {@code criteria}
-     * @param queryAllowed whether the store may query the events, see {@link #queryAllowed(Function)}
+     * @param queryAllowed whether the store runs on a replica set and so may query the events. When it doesn't, any marker
+     *                     that moved refuses, see {@link #queryAllowed(Function)}
      * @throws IllegalArgumentException if the token doesn't hold exactly the marker keys of {@code criteria}, which means
      *                                  this store's read didn't create it
      */
@@ -114,7 +115,7 @@ public final class DcbAppendConditionCheck {
         if (!moved) {
             return new Pass();
         }
-        if (criteria instanceof DcbCriteria.MatchAll) {
+        if (!queryAllowed || criteria instanceof DcbCriteria.MatchAll) {
             return new Refuse();
         }
         List<ItemQuery> items = new ArrayList<>();
@@ -131,17 +132,14 @@ public final class DcbAppendConditionCheck {
             List<String> selectionKeys = item.tags().isEmpty() ? movedKeys : DcbMarkerVersionsSupport.selectionKeys(item);
             items.add(new ItemQuery(item, selectionKeys.stream().map(key -> new KeySelection(key, read.get(key).version())).toList()));
         }
-        if (items.isEmpty()) {
-            return new Pass();
-        }
-        return queryAllowed ? new QueryEvents(items) : new Refuse();
+        return items.isEmpty() ? new Pass() : new QueryEvents(items);
     }
 
     /**
-     * Whether a transaction reads the markers and the events from one snapshot on this deployment, so the store may query
-     * the events (ADR 149). It's true for a replica set, and false for a mongos, a load balancer in front of one and
-     * anything else that doesn't answer like a replica set. Every failure except a server that doesn't know {@code hello}
-     * propagates.
+     * Whether a read and a transaction take the markers and the events from one snapshot on this deployment, so the store
+     * may rule an item out by its markers and query the events (ADR 149). It's true for a replica set, and false for a
+     * mongos, a load balancer in front of one and anything else that doesn't answer like a replica set. Every failure
+     * except a server that doesn't know {@code hello} propagates.
      *
      * @param runCommand runs a command against the store's database
      */
@@ -150,7 +148,8 @@ public final class DcbAppendConditionCheck {
         return answer.get("setName") != null && !"isdbgrid".equals(answer.get("msg"));
     }
 
-    // MongoDB 4.2.0 to 4.2.9 don't know hello. The Spring templates wrap the driver's exception, so the causes are walked.
+    // An old server, such as MongoDB 4.2.8, doesn't know hello. The Spring templates wrap the driver's exception, so the
+    // causes are walked.
     private static Document helloOrIsMaster(Function<Document, Document> runCommand) {
         try {
             return runCommand.apply(new Document("hello", 1));

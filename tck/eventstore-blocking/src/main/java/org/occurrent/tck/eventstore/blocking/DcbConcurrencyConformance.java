@@ -361,9 +361,8 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             });
 
             assertThat(failuresOf(outcomes.subList(1, outcomes.size())))
-                    .as("Iteration %d: an append with no condition has nothing to fail on, and it races only two other "
-                            + "writers on a fresh tag, so a store that retries its own collisions can't run out of "
-                            + "attempts. Failing it is the store giving up on its own collision", iteration)
+                    .as("Iteration %d: an append with no condition has nothing to fail on, so failing it is the store giving "
+                            + "up on its own collision", iteration)
                     .isEmpty();
             started++;
             Outcome<String> conditional = outcomes.get(0);

@@ -57,10 +57,12 @@ class DcbAppendConditionCheckTest {
     private static final String E2 = "epoch-2";
     private static final String KEY_A = "tag:a:1";
     private static final String KEY_B = "tag:b:1";
+    private static final String KEY_Z = "tag:z:1";
     private static final String KEY_X = "type:X";
     private static final String KEY_Y = "type:Y";
     private static final DcbCriterion TAGS_A = DcbCriteria.tags(Tag.of("a", "1"));
     private static final DcbCriterion TAGS_A_AND_B = DcbCriteria.tags(Tag.of("a", "1"), Tag.of("b", "1"));
+    private static final DcbCriterion TAGS_A_AND_Z = DcbCriteria.tags(Tag.of("a", "1"), Tag.of("z", "1"));
     private static final DcbCriterion TAGS_B = DcbCriteria.tags(Tag.of("b", "1"));
     private static final DcbCriterion TYPE_X = DcbCriteria.type("X");
     private static final DcbCriterion TYPES_X_AND_Y = DcbCriteria.types("X", "Y");
@@ -254,12 +256,33 @@ class DcbAppendConditionCheckTest {
     }
 
     @Test
-    void passes_a_condition_the_markers_settle_whether_or_not_the_store_may_query_the_events() {
+    void passes_when_no_marker_moved_whether_or_not_the_store_may_query_the_events() {
         Map<String, MarkerObservation> read = read(KEY_A, observation(E1, 1), KEY_B, observation(E2, 4));
-        Map<String, MarkerObservation> now = read(KEY_A, observation(E1, 2), KEY_B, observation(E2, 4));
 
-        assertThat(check(TAGS_A_AND_B, read, now, false)).as("an unmoved tag marker rules the item out, and nothing needs the events").isEqualTo(new Pass());
-        assertThat(check(TAGS_A_AND_B, read, now, true)).isEqualTo(new Pass());
+        assertThat(check(TAGS_A_AND_B, read, read, false)).as("nothing moved, so nothing needs the events").isEqualTo(new Pass());
+        assertThat(check(TAGS_A_AND_B, read, read, true)).isEqualTo(new Pass());
+    }
+
+    @Test
+    void refuses_an_item_with_an_unmoved_tag_marker_when_the_store_may_not_query_the_events_and_passes_it_when_it_may() {
+        Map<String, MarkerObservation> read = read(KEY_A, observation(E1, 4), KEY_Z, observation(E2, 1));
+        Map<String, MarkerObservation> now = read(KEY_A, observation(E1, 4), KEY_Z, observation(E2, 2));
+
+        assertThat(check(TAGS_A_AND_Z, read, now, false))
+                .as("A read that can tear holds tag a from after a matching event and tag z from before it, so an unmoved marker of a doesn't rule the event out")
+                .isEqualTo(new Refuse());
+        assertThat(check(TAGS_A_AND_Z, read, now, true))
+                .as("Where the read can't tear, the unmoved marker of a rules the item out")
+                .isEqualTo(new Pass());
+    }
+
+    @Test
+    void refuses_what_step_one_refuses_whether_or_not_the_store_may_query_the_events() {
+        Map<String, MarkerObservation> read = read(KEY_A, observation(E1, 2));
+
+        assertThat(check(TAGS_A, read, read(KEY_A, observation(E2, 2)), false)).as("the epoch changed").isEqualTo(new Refuse());
+        assertThat(check(TAGS_A, read, read(KEY_A, MarkerObservation.absent()), false)).as("the marker is missing").isEqualTo(new Refuse());
+        assertThat(check(TAGS_A, read, read(KEY_A, observation(E1, 1)), false)).as("the version is lower").isEqualTo(new Refuse());
     }
 
     @Test
