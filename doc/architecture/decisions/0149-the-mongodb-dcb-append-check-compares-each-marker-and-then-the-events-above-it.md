@@ -8,7 +8,8 @@ Accepted. Decides [#1231](https://github.com/johanhaleby/occurrent/issues/1231) 
 [#1300](https://github.com/johanhaleby/occurrent/issues/1300). Amends
 [ADR 21](0021-dcb-write-path-query-scoped-concurrency.md) on how the append check compares a token and on pruning
 markers, [ADR 88](0088-what-a-dcb-append-condition-guarantees.md) on what the MongoDB stores answer for an excluded
-type, and [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md) on what the token holds.
+type, [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md) on what the token holds, and
+[ADR 31](0031-capture-dcb-consistency-token-in-a-single-read.md) on what one read of the markers gives.
 Builds on the marker versions of [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md).
 
 The second part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), splitting each type marker into
@@ -119,6 +120,16 @@ On a replica set, the store runs the query only when both of these hold, and ref
 - The marker's u is the token's u. When u moved, a writer that writes no `mv` incremented the marker since the read,
   and its event can't be found by `mv`.
 
+The query doesn't depend on `resumeFromMarkerVersions` (ADR 148). That setting is for deployments that can't run the
+read-only transaction a snapshot read needs, and the check runs inside the append's own transaction. Every append
+writes `mv`, `s` and the epoch whatever the setting says.
+
+A key the token didn't see gets version 0 and the marker's current epoch. The marker didn't exist at the read, so
+that epoch was created after it, and every `mv` element with that epoch is newer than the read.
+
+`DcbCriteria.all()` has no selection key, so a `wholeStoreLock` condition keeps steps 1 and 2 and refuses whenever
+the `all` marker moved.
+
 ### On a sharded cluster the check refuses when a marker moved
 
 Two things stop working through a mongos. A transaction at read concern local or majority opens a snapshot on each shard
@@ -130,7 +141,9 @@ that token, because the marker from after E didn't move, and the sum check would
 didn't reproduce it in 1600 iterations.
 
 So on anything but a replica set, steps 1 and 2 still apply, and any marker that moved refuses the append. That refuses
-everything the sum check refused, and it means a sharded deployment keeps 0.34's refusals.
+everything the sum check refused. It doesn't refuse everything 0.34 refused, because a token no longer holds the type
+markers of an item with tags (ADR 147). An event of type T with another tag moved a marker of a 0.34 read of
+`type(T).tags(a)`, and it moves no marker of this one.
 
 The store asks the server once, when the store is created, with a `hello` command. A server too old to know `hello`,
 such as MongoDB 4.2.8, answers with error code 59, and the store then uses `isMaster`. All three stores apply the same
@@ -142,17 +155,11 @@ through.
 
 This doesn't make a plain read through a mongos safe. With the markers on one shard and the events on another, a token
 can hold E's markers while the read misses E, and then no marker moves and the append passes. The sum check has the same
-hole, so it isn't new. A read with `withVersions()` runs in a snapshot transaction, and in the same probe it blocked
-during the window and the append was refused.
-The query doesn't depend on `resumeFromMarkerVersions` (ADR 148). That setting is for deployments that can't run the
-read-only transaction a snapshot read needs, and the check runs inside the append's own transaction. Every append
-writes `mv`, `s` and the epoch whatever the setting says.
-
-A key the token didn't see gets version 0 and the marker's current epoch. The marker didn't exist at the read, so
-that epoch was created after it, and every `mv` element with that epoch is newer than the read.
-
-`DcbCriteria.all()` has no selection key, so a `wholeStoreLock` condition keeps steps 1 and 2 and refuses whenever
-the `all` marker moved.
+hole, so it isn't new. A read with `withVersions()` whose stream reports versions ran in a snapshot transaction, and in the
+same probe it blocked during the window and the append was refused. A stream that reports none came from a plain read
+and has the hole. In that probe, holding E's commit for 9 seconds made the read give up on its snapshot after 5 seconds,
+report no versions and let the append pass. The store also reads plainly with `resumeFromMarkerVersions` off, for
+`DcbCriteria.all()` and inside a session of the caller's (ADR 148).
 
 ### Why a matching event can't get through
 
@@ -176,13 +183,23 @@ MongoDB's documentation says only that a transaction at read concern local "migh
 opened. A probe on a single-node replica set at the D2 branch saw one snapshot across both collections. That's the
 assumption, and on a sharded cluster the store doesn't make it.
 
-The argument assumes two more things. First, nothing replaces the document of an event a 0.35 node wrote, which ADR 148
+The markers of a plain read aren't one snapshot on a replica set either, since a find can yield between documents. A
+probe that forced a yield got a token with one marker from before E and one from after it. The read takes the position
+and the events after the token and from the same primary, so it holds E, and the caller decides with E in hand. That,
+and not a snapshot, is what makes step 3 sound for such a token.
+
+The argument assumes three more things. First, nothing replaces the document of an event a 0.35 node wrote, which ADR 148
 also needs. The sum check doesn't read events, so this is new for an ordinary conditional append, also with
 `resumeFromMarkerVersions(false)`. A 0.34 `updateEvent` during a rolling upgrade can remove an event's `mv`, and the
 query then passes a token that the sum check refused. Second, and the sum check assumes this too, a marker version a
 token holds isn't rolled back and then given to another append under the same epoch. A plain read takes the token at
 the collection's default read concern, so a failover that rolls back an increment written at w:1 can break that. So can
-a token read inside a transaction after that transaction's own append, when the transaction then rolls back.
+a token read inside a transaction after that transaction's own append, when the transaction then rolls back. Third, a
+read takes its events from the member its markers came from, or from one ahead of it. The Spring and reactor stores apply
+`queryOptions` to the events read and not to the marker read, so `withReadPreference(secondary())` breaks this. In a probe
+on the Spring store, a torn marker read on the primary and a secondary that hadn't applied E passed a token the sum check
+refused. A secondary that lags with no tear leaves the sum equal, so the sum check has that hole, and this is a rarer
+path beside it.
 
 ### Pruning markers
 
@@ -222,11 +239,11 @@ gap, because a 0.34 append moves u.
 **Run the append transaction at read concern `snapshot`**, so the query is sound on a sharded cluster too. MongoDB
 keeps a `snapshot` read in step across shards. The store would have to override the read concern a user configured
 for their writes, and whether the Spring and reactor stores can set or read the read concern of the transaction their
-`TransactionTemplate` or `TransactionalOperator` runs hasn't been checked. A sharded deployment keeps 0.34's
-refusals, which is no worse than today, and this stays open for when one asks.
+`TransactionTemplate` or `TransactionalOperator` runs hasn't been checked. A sharded deployment keeps refusing on a
+moved marker, and this stays open for when one asks.
 
 **Read the token in a snapshot transaction on a sharded cluster**, so that step 3 could stay there and a read could no
-longer miss an event its token holds. That would keep the second case of #1231 on a sharded cluster and close the hole
+longer miss an event its token holds. That would fix the second case of #1231 on a sharded cluster too and close the hole
 the sum check also has. It costs a transaction on every read and a branch in each store's read path, and it can't be
 tested on the single-shard cluster the test suite starts. It stays open with the option above.
 
@@ -271,8 +288,8 @@ still be used.** No store can find the tokens a caller holds, so nobody can foll
   MongoDB aborts one of them with a transient transaction error. When the store runs the transaction itself, it
   retries it without a new read or decision. Inside a transaction of yours, the error aborts your transaction, as it
   does today. Removing that conflict as well would need markers finer than a tag, which ADR 21 rules out.
-- A conditional append whose markers moved runs one more indexed query in its transaction. An append whose markers
-  didn't move does the same work as today. No append writes more documents than today, so no new write contention
+- On a replica set, a conditional append runs one more indexed query in its transaction when its markers moved and
+  don't rule out all of its items. An append whose markers didn't move does the same work as today. No append writes more documents than today, so no new write contention
   is added.
 - A token read before a marker was deleted and recreated is refused, even when the versions add up to the same sum.
 - ADR 88's table changes. With the default settings, the MongoDB stores on a replica set no longer refuse for an
