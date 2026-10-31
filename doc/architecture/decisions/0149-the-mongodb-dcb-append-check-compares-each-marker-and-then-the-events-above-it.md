@@ -175,7 +175,8 @@ Take a matching event E committed after the read loaded the markers, which it do
   it. The check may still refuse, for example through step 1 after the marker was pruned. Refusing for an event that
   no longer exists is allowed and isn't required.
 
-E's position never enters the argument, so it holds while positions are reserved outside the transaction.
+E's position never enters the argument, so it holds while positions are reserved outside the transaction, a lost reservation
+included. The fifth assumption below covers an E the token already holds.
 
 The first two cases need the transaction to read the markers and the events from one snapshot. On a replica set,
 MongoDB's documentation says only that a transaction at read concern local "might observe" a snapshot taken when it
@@ -188,22 +189,41 @@ where the sum check refused it. That's sound when the read's events hold E, beca
 hand. A read of the whole boundary from the primary at read concern local holds E, because it takes the position and the
 events after the token. The assumptions below say when a read doesn't.
 
-The argument assumes four more things. First, nothing replaces the document of an event a 0.35 node wrote, which ADR 148
-also needs. The sum check doesn't read events, so this is new for an ordinary conditional append, also with
+The argument also assumes the following. First, nothing replaces the document of an event a 0.35 node wrote, which ADR
+148 also needs. The sum check doesn't read events, so this is new for an ordinary conditional append, also with
 `resumeFromMarkerVersions(false)`. A 0.34 `updateEvent` during a rolling upgrade can remove an event's `mv`, and the
-query then passes a token that the sum check refused. Second, and the sum check assumes this too, a marker version a
-token holds isn't rolled back and then given to another append under the same epoch. A plain read takes the token at
-the collection's default read concern, so a failover that rolls back an increment written at w:1 can break that. So can
-a token read inside a transaction after that transaction's own append, when the transaction then rolls back. Third, a
-read's events aren't behind its markers, by member or by read concern. The Spring and reactor stores apply `queryOptions`
-to the events read and not to the marker read, so `withReadPreference(secondary())` breaks this, and so does read concern
-majority with the secondaries stalled. A native store built on a collection with its own read preference does the same,
-and it reads a token outside a caller's session and the events inside it. In a probe on the Spring store, a torn marker
-read on the primary and a secondary that hadn't applied E passed a token the sum check refused. With no tear these reads
-keep the sum equal, so the sum check has the same hole, and the tear is a rarer path beside it. Fourth, the read returned the whole
-boundary. A read with `limit`, `skip` or `upToPosition` may not return E, and in a probe a torn token from such a read
-passed where the sum check refused it. With no tear the same read passes on the sum too, because the token doesn't depend
-on the window, as `DcbReadOptions` says.
+query then passes a token that the sum check refused. Second, a marker version a token holds isn't rolled back and then
+given to another append under the same epoch. With no tear the sum check has the same hole, and a torn token can pass
+here where the sum refused it. A plain read takes the token at the collection's default read concern, so a failover that
+rolls back an increment written at w:1 can break that. So can a token read inside a transaction after that transaction's
+own append, when the transaction then rolls back. Third, a read's events aren't behind its markers, by member or by read
+concern. The Spring and reactor stores apply `queryOptions` to the events read and not to the marker read, so
+`withReadPreference(secondary())` breaks this, and so does read concern majority with the secondaries stalled. A native
+store built on a collection with its own read preference does the same, and it reads a token outside a caller's session
+and the events inside it. In a probe on the Spring store, a torn marker read on the primary and a secondary that hadn't
+applied E passed a token the sum check refused. With no tear these reads keep the sum equal, so the sum check has the
+same hole, and the tear is a rarer path beside it. Fourth, the read returned the whole boundary. A read with `limit`,
+`skip` or a position bound may not return E, and in a probe a torn token from a read with `limit`, `skip` or
+`upToPosition` passed where the sum check refused it. With no tear the same read passes on the sum too, because the
+token doesn't depend on the window, as `DcbReadOptions` says. Fifth, no position reservation was lost. A store reserves
+an append's positions with an update of the counter that sets no write concern of its own, so it takes the one on the
+client or database it was given, and a majority set on a transaction or a template doesn't reach it. The native store
+runs the update outside any transaction, also when the append joins a caller's transaction. The Spring and reactor
+stores do when they run the transaction themselves. Below majority, for example at w:1, which is also the implicit
+default on a replica set of a primary, a secondary and an arbiter, a failover can lose that update while the append
+commits E above the counter. Every read stops at the counter, a read with `withVersions()` too, so a read can hold E's
+markers and miss E, and a read after that read's versions doesn't return E. A full read, and a read after versions saved
+before E, misses E until the counter reaches it. An append that reserves E's position and gets past its condition fails
+with `DuplicateCloudEventException`, whatever its boundary. A conditional append on the token that reserves another
+position can pass. In a probe it passed when a reservation below E's was lost too, and on the native store when an
+unrelated append took E's position first. With no tear the sum is equal, so the sum check passes the same append, unless
+a later event moved a marker of the criteria. The sum refuses then, and this check passes when that event doesn't match.
+On the Spring and reactor stores, an append in a caller's transaction rolls its reservation back with the duplicate, so
+in a probe that set the counter by hand such appends kept failing at E's position until an append in the store's own
+transaction moved the counter. The other probes forced the loss with a stepdown, and with a raw `$inc` standing in for
+the reservation below E's. All three stores lost the update at w:1 on three members, and the native store did at w:2 on
+five members and on a primary, a secondary and an arbiter with no write concern set. At w:majority, and on three
+data-bearing members with no write concern set, all three stores' reads held E. No probe ran through a mongos.
 
 ### Pruning markers
 
@@ -219,10 +239,11 @@ recreates a marker with no epoch, starting again at version 1. A token that saw 
 the two apart once the new one is at the token's version.
 
 With that rule, a marker the token didn't see and that is still missing at the check has no event committed after the
-read that still exists. Without it, an operator could delete the marker of an event that still exists, and a token
-taken before that event's append would pass. So #1300 is closed for every marker the token saw, and for a marker the
-token didn't see it's closed as long as the rule is followed. The sum check passes that case too, so nothing gets
-worse. Occurrent doesn't prune markers itself and doesn't ship a tool that does.
+read that still exists. Without it, an operator could delete the marker of an event that still exists, and a token taken
+before that event's append would pass. So #1300 is closed for every marker the token saw, and for a marker the token
+didn't see it's closed as long as the rule is followed. With one tag the sum check passes that case too. With several
+tags the sum check can refuse it, when another marker of the criteria moved, and this check can pass it. Occurrent
+doesn't prune markers itself and doesn't ship a tool that does.
 
 ## Alternatives considered
 
@@ -295,7 +316,8 @@ still be used.** No store can find the tokens a caller holds, so nobody can foll
 - On a replica set, a conditional append runs one more indexed query in its transaction when its markers moved and
   don't rule out all of its items. An append whose markers didn't move does the same work as today. No append writes more documents than today, so no new write contention
   is added.
-- A token read before a marker was deleted and recreated is refused, even when the versions add up to the same sum.
+- A token that saw a marker that came back with another epoch or a lower version is refused, even when the versions add
+  up to the same sum.
 - ADR 88's table changes. With the default settings, the MongoDB stores on a replica set no longer refuse for an
   event of an excluded type that a 0.35 node appended and that shares a tag, and they still don't see a tag-scoped
   append after a `wholeStoreLock` read. Those two answers were one fact in `DcbAppendConditionModel`, and they aren't

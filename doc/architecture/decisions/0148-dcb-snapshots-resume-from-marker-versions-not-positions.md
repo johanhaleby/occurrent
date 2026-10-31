@@ -472,8 +472,8 @@ The read path:
 1. A read reports versions only when it asks for them, with `DcbReadOptions.withVersions()`.
    `DcbReadOptions.afterVersions(DcbMarkerVersions)` sits next to `afterPosition` and implies `withVersions()`.
    Combining `afterVersions` with `afterPosition` is refused. Only the snapshot deciders and the `@Snapshot` view ask,
-   and they ask on every read, including a cold start with no snapshot and the full read after `DcbSnapshotInvalid`, so
-   every read they make gives them versions to save.
+   and they ask on every read, including a cold start with no snapshot and the full read after `DcbSnapshotInvalid`, and
+   save versions when the read reports them.
 2. Every read that doesn't ask keeps today's path exactly. It reads the token first, then the events, both at the
    store's default read concern, joining a caller's transaction when there is one. That includes every plain
    `read(criteria)` a command or a query does, the DCB catch-up's head and window reads
@@ -569,7 +569,8 @@ The consumers, on both stacks:
 - On every delivery the `@Snapshot` view reads `afterVersions` from its saved versions, applies what it read, and saves
   at the read's versions. A redelivered event is at or below the saved versions, so the read doesn't return it, and the
   view doesn't look at the delivered event's `mv`. When the read's snapshot doesn't have the delivered event yet, the
-  view saves below it and applies it on the next delivery for that boundary. That's a delay, never a loss.
+  view saves below it and applies it on the next delivery for that boundary. That's a delay. A position reservation lost in a failover
+  can still lose an event, as "The decider confirms its append before it saves" says.
   `everyNEvents` counts events since the snapshot instead of positions.
 - A `@Snapshot` view over `MatchAll` logs a warning when it's registered and runs without a snapshot. I chose not to
   refuse it, because `@Snapshot` shipped in 0.34.0 and refusing it would stop an application that starts today. A
@@ -588,7 +589,11 @@ increments and the read-back of the versions then all happen in one transaction'
 saves is complete in every mode. The seventh review's first blocker came from building the watermark after commit, and
 this design never does that.
 
-Completeness isn't durability. Versions from an append that rolls back after a failover are handed out again to other
+A position reservation lost in a failover breaks completeness itself. ADR 149 has the case. An append commits E above a
+counter that lost its increment, a read stops at the counter, and the versions it reports already hold E's markers, so a
+snapshot saved at them skips E.
+
+Completeness isn't durability either. Versions from an append that rolls back after a failover are handed out again to other
 events, and a snapshot saved at them skips those events. The same happens without a failover when the caller owns the
 transaction. `NativeMongoTransactionExecutor` joins a transaction already open on the thread
 (`NativeMongoTransactionExecutor.java:78-82`), and Spring's `@Transactional` does the same, so `execute` can return
@@ -742,6 +747,8 @@ isn't met.
 
 ### Why a late append can't be missed
 
+This argument assumes no position reservation was lost. ADR 149's fifth assumption has what happens when one is.
+
 Two properties make this work.
 
 **Per key, marker versions follow commit order.** The transaction that sets marker k to version j+1 took its snapshot
@@ -789,7 +796,8 @@ versions only grow, and a prune changes the epoch. A majority-committed write is
   today (`MongoEventStore.java:369-372`, `SpringMongoEventStore.java:247-250`), it loses an event. The counter reads
   50. Append Y then commits a deposit at 51 with `tag:account:a1` at 8. The snapshot sees `a1` at 8 but the events are
       bounded at 50, so Y is cut off while the token covers it. The decider appends on token 8 without Y and saves at 9,
-      and Y is never selected again.
+      and Y is never selected again. Reading it inside the snapshot doesn't help when
+      the counter lost a reservation in a failover, which ADR 149 describes.
 - **The token and the events in every other read** keep today's path, token first, both at the default read concern.
   This design doesn't change them. In the Spring stores the two may already come from different members, because the
   events read applies `queryOptions` (`SpringMongoEventStore.java:259`) and the token read doesn't (`:596`). The seventh
@@ -961,8 +969,8 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
   this ADR doesn't change it.
 - Inside a session or transaction the caller owns, a read reports no versions, so a decider or view there reads its
   boundary in full on every command or delivery.
-- The `@Snapshot` view can lag behind the event that triggered it until the next delivery for that boundary. It never
-  loses the event.
+- The `@Snapshot` view can lag behind the event that triggered it until the next delivery for that boundary. A position
+  reservation lost in a failover can still make it lose the event.
 - Store-wide positions stay as ADR 84 describes them. A catch-up that resumes from a bare position can still miss an
   event until the store-wide fix, and a 0.34 position-only checkpoint stays unrepairable.
 - Some things can't be settled until the code exists, and are checked when it's built:
@@ -974,6 +982,6 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
     its majority commit waits for that point to be majority-committed. Whether the commit of a read-only transaction
     waits for majority at all, and whether the bound stops that wait, is settled by a test with a `failCommand` fail
     point.
-- Whether a failover can roll back a counter increment made at w:1 while the event's transaction survives is unchecked.
-  If it can, a replay-only catch-up's head can sit below a committed event, and the head has to be the highest committed
-  position instead of the counter.
+- A failover can roll back a counter increment made below majority while the event's transaction survives, as ADR 149's
+  fifth assumption says. So a replay-only catch-up's head can sit below a committed event until the head is the highest
+  committed position instead of the counter, or the increment can't be lost.
