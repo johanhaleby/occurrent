@@ -40,13 +40,13 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * A plain read through a mongos can miss a matching event while its token already holds that event's markers, when the
  * markers and the events are on different shards, and the append then doesn't fail. A read with {@link
- * DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} doesn't do that. The same
- * happens on any deployment when a read preference or a read concern puts a read's events behind its token, and with a
- * token read inside a transaction after that transaction's own append, once the transaction has rolled back (see {@link
- * DcbEventStream#consistencyToken()}). With a client writing at w:1, a failover can do the same to any read, one with
- * {@link DcbReadOptions#withVersions()} too, since a MongoDB store reserves positions outside the transaction and a
- * read stops at the last reserved position. A token also doesn't depend on a read's limit, skip or position range, so
- * after such a read the append doesn't fail for a matching event the read left out.
+ * DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} doesn't do that. The
+ * append can also pass on any deployment when a read preference or a read concern puts a read's events behind its
+ * token, and with a token read inside a transaction after that transaction's own append, once the transaction has
+ * rolled back (see {@link DcbEventStream#consistencyToken()}). After a failover that lost a position reservation, which
+ * a MongoDB store makes outside the transaction it runs itself and which w:1 allows, any read can miss the event, one
+ * with {@link DcbReadOptions#withVersions()} too, and the append can pass. A token also doesn't depend on a read's
+ * limit, skip or position range, so after such a read the append doesn't fail for a matching event the read left out.
  * <p>
  * A store can answer from the events as they are when the append runs. A matching event committed after the read that
  * was deleted by then, or changed so that it no longer matches, may not make the append fail. The in-memory store
