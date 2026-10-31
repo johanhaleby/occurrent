@@ -43,7 +43,9 @@ import static java.util.Objects.requireNonNull;
  * {@link DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} doesn't do that. The
  * same happens on any deployment when a read preference or a read concern puts a read's events behind its token, and with
  * a token read inside a transaction after that transaction's own append, once the transaction has rolled back (see
- * {@link DcbEventStream#consistencyToken()}). A token also doesn't depend on a read's limit, skip or upper position, so
+ * {@link DcbEventStream#consistencyToken()}). With a client writing at w:1, a failover can do the same to any read, one
+ * with {@link DcbReadOptions#withVersions()} too, since a MongoDB store reserves positions outside the transaction and a
+ * read stops at the last reserved position. A token also doesn't depend on a read's limit, skip or upper position, so
  * after such a read the append doesn't fail for a matching event the read left out.
  * <p>
  * A store can answer from the events as they are when the append runs. A matching event committed after the read that
