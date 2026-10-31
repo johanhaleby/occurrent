@@ -206,24 +206,27 @@ same hole, and the tear is a rarer path beside it. Fourth, the read returned the
 `skip` or a position bound may not return E, and in a probe a torn token from a read with `limit`, `skip` or
 `upToPosition` passed where the sum check refused it. With no tear the same read passes on the sum too, because the
 token doesn't depend on the window, as `DcbReadOptions` says. Fifth, no position reservation was lost. A store reserves
-an append's positions with an update of the counter that sets no write concern of its own, so it takes the one on the
-client or database it was given, and a majority set on a transaction or a template doesn't reach it. The native store
-runs the update outside any transaction, also when the append joins a caller's transaction. The Spring and reactor
-stores do when they run the transaction themselves. Below majority, for example at w:1, which is also the implicit
-default on a replica set of a primary, a secondary and an arbiter, a failover can lose that update while the append
-commits E above the counter. Every read stops at the counter, a read with `withVersions()` too, so a read can hold E's
-markers and miss E, and a read after that read's versions doesn't return E. A full read, and a read after versions saved
-before E, misses E until the counter reaches it. An append that reserves E's position and gets past its condition fails
-with `DuplicateCloudEventException`, whatever its boundary. A conditional append on the token that reserves another
-position can pass. In a probe it passed when a reservation below E's was lost too, and on the native store when an
-unrelated append took E's position first. With no tear the sum is equal, so the sum check passes the same append, unless
-a later event moved a marker of the criteria. The sum refuses then, and this check passes when that event doesn't match.
-On the Spring and reactor stores, an append in a caller's transaction rolls its reservation back with the duplicate, so
-in a probe that set the counter by hand such appends kept failing at E's position until an append in the store's own
-transaction moved the counter. The other probes forced the loss with a stepdown, and with a raw `$inc` standing in for
-the reservation below E's. All three stores lost the update at w:1 on three members, and the native store did at w:2 on
-five members and on a primary, a secondary and an arbiter with no write concern set. At w:majority, and on three
-data-bearing members with no write concern set, all three stores' reads held E. No probe ran through a mongos.
+an append's positions with an update of the counter that sets no write concern of its own. The native store runs the
+update outside any transaction, also when the append joins a caller's transaction. The Spring and reactor stores do when
+they run the transaction themselves. There it takes the write concern of the database the store uses, which is the
+client's unless the database sets its own, and a majority set on the transaction, a template or the event collection
+doesn't reach it. Below majority, for example at w:1, which is also the implicit default on a replica set of a primary,
+a secondary and an arbiter, a failover can lose that update while the append commits E above the counter. Every read
+stops at the counter, a read with `withVersions()` too, so a read can hold E's markers and miss E, and a read after that
+read's versions doesn't return E. A full read, and a read after versions saved before E, misses E until the counter
+reaches it. An append that reserves E's position and gets past its condition fails with `DuplicateCloudEventException`,
+whatever its boundary. A conditional append on the token that reserves another position can pass. In a probe it passed
+when a reservation below E's was lost too, and on the native store when an unrelated append took E's position first.
+With no tear the sum is equal, so the sum check passes the same append, unless a later event moved a marker of the
+criteria. The sum refuses then, and this check passes when that event doesn't match. On the Spring and reactor stores,
+the update in a caller's transaction commits with the event, so a failover can't lose it alone. In a probe on the Spring
+store with a client at w:1 and the transaction at majority, every read after the failover held E. Such an append rolls
+its reservation back with a duplicate, so in a probe that set the counter by hand such appends kept failing at E's
+position until an append in the store's own transaction moved the counter. The other probes forced the loss with a
+stepdown, and with a raw `$inc` standing in for the reservation below E's. All three stores lost the update at w:1 on
+three members, and the native store did at w:2 on five members and on a primary, a secondary and an arbiter with no
+write concern set. At w:majority, and on three data-bearing members with no write concern set, all three stores' reads
+held E. No probe ran through a mongos.
 
 ### Pruning markers
 
