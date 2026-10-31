@@ -115,6 +115,7 @@ public final class DcbAppendConditionCheck {
         if (!moved) {
             return new Pass();
         }
+        // Through a mongos the token isn't one snapshot, so an unmoved marker rules nothing out (ADR 0149)
         if (!queryAllowed || criteria instanceof DcbCriteria.MatchAll) {
             return new Refuse();
         }
