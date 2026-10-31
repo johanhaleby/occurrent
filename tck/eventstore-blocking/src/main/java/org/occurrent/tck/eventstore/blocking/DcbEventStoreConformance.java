@@ -1184,7 +1184,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             List<CloudEvent> events = List.of(taggedEvent(type, course, student));
             DcbAppendCondition condition = failIfEventsMatch(token);
-            if (expectedToConflictOnAnExcludedTypeSharingATag()) {
+            if (expectedToConflictOnANonMatchingEventSharingATag()) {
                 assertThatThrownBy(() -> dcbEventStore().append(events, condition))
                         .as("Under the tag-marker model the marker of the course tag moved, and it knows nothing about "
                                 + "the student tag, so the event with the other student conflicts")
@@ -1259,7 +1259,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             List<CloudEvent> events = List.of(taggedEvent(otherType, "alternatives-accepted:unrelated"));
             DcbAppendCondition condition = failIfEventsMatch(token);
-            if (expectedToConflictOnAnExcludedTypeSharingATag()) {
+            if (expectedToConflictOnANonMatchingEventSharingATag()) {
                 assertThatThrownBy(() -> dcbEventStore().append(events, condition))
                         .as("Under the tag-marker model the marker of tag a moved, and it knows nothing about types or "
                                 + "tag b, so the event of the other type conflicts")
@@ -1345,7 +1345,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             List<CloudEvent> events = List.of(taggedEvent(CHANGED, NAME_1));
             DcbAppendCondition condition = failIfEventsMatch(token);
-            if (expectedToConflictOnAnExcludedTypeSharingATag()) {
+            if (expectedToConflictOnANonMatchingEventSharingATag()) {
                 assertThatThrownBy(() -> dcbEventStore().append(events, condition))
                         .as("Under the tag-marker model the boundary's marker was bumped by the excluded event, so "
                                 + "the condition conflicts. A false conflict, and a sound one: it never misses a "
@@ -1372,7 +1372,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             List<CloudEvent> events = List.of(taggedEvent(type, concert));
             DcbAppendCondition condition = failIfEventsMatch(token);
-            if (expectedToConflictOnAnExcludedTypeSharingATag()) {
+            if (expectedToConflictOnANonMatchingEventSharingATag()) {
                 assertThatThrownBy(() -> dcbEventStore().append(events, condition))
                         .as("Under the tag-marker model the marker of the concert tag moved, and it knows nothing about "
                                 + "types, so the event of the other type conflicts")
@@ -1467,10 +1467,9 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
     /**
      * Whether the declared append-condition model conflicts on an event that shares a tag with the criteria, whether it
      * is of a type the criteria excludes or lacks another tag the criteria requires, although no event matching the
-     * criteria was committed. Written as a switch expression so
-     * adding a model breaks the build here rather than silently taking one of the existing branches.
+     * criteria was committed. Written as a switch expression so adding a model breaks the build here rather than silently taking one of the existing branches.
      */
-    private boolean expectedToConflictOnAnExcludedTypeSharingATag() {
+    private boolean expectedToConflictOnANonMatchingEventSharingATag() {
         return switch (appendConditionModel()) {
             case EXACT_CRITERIA, MARKERS_THEN_EVENTS -> false;
             case TAG_MARKER -> true;

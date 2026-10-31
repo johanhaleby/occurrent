@@ -88,8 +88,8 @@ public enum DcbAppendConditionModel {
      * The two consequences the suite asserts, which are the exact inverse of {@link #EXACT_CRITERIA}:
      * <ul>
      *     <li>An event whose type the criteria excludes, or that lacks another tag the criteria requires,
-     *     <strong>does</strong> conflict when it carries a tag the criteria requires, because the marker the token was derived from is keyed on the tag and knows nothing about
-     *     types. It is a false conflict, and it self-heals, because the application service re-reads the
+     *     <strong>does</strong> conflict when it carries a tag the criteria requires, because the marker the token was
+     *     derived from is keyed on the tag and knows nothing about types or other tags. It is a false conflict, and it self-heals, because the application service re-reads the
      *     still-excluded boundary and retries.</li>
      *     <li>{@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} does <strong>not</strong> detect a
      *     tag-scoped append committed after the read, because a whole-store lock is keyed on a marker that only
