@@ -16,6 +16,7 @@
 
 package org.occurrent.eventstore.mongodb.dcb.internal;
 
+import com.mongodb.WriteConcern;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
@@ -69,6 +70,16 @@ public final class DcbMarkerModel {
     private static final String CHECKPOINT_COLLECTION_SUFFIX = "_dcb_checkpoints";
 
     private DcbMarkerModel() {
+    }
+
+    /**
+     * The write concern of a position reservation that runs outside a transaction, whatever the store is configured
+     * with, because a failover that lost the reservation would leave the append's event above the counter, where no
+     * read finds it (ADR 149). A timeout set on the given write concern still applies. MongoDB ignores it inside a
+     * transaction, where the update commits with the transaction.
+     */
+    public static WriteConcern reservationWriteConcern(WriteConcern writeConcern) {
+        return writeConcern.withW("majority");
     }
 
     public static String positionCollectionName(String eventStoreCollectionName) {
