@@ -716,9 +716,10 @@ Through a mongos, a plain read can do this when the markers and the events are o
 `withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction. A
 failover can do this to any read, one with `withVersions()` too, when an append reserves its positions below majority.
 An append reserves them in an update outside the transaction, except on the Spring and reactor stores in a transaction
-of yours, where the update commits with the event. Outside a transaction the update takes the write concern of the
-database the store uses, which is the client's unless the database sets its own, so a majority set on the transaction or
-a template doesn't count, and w:1 is the implicit default on a replica set of a primary, a secondary and an arbiter. The
+of yours, where the update joins it and commits with the event, unless you set the store's own transaction to a
+propagation such as `REQUIRES_NEW`. Outside a transaction the update takes the write concern of the database the store
+uses, which falls back to the client's and then to the server's default, so a majority set on the transaction or a
+template doesn't count, and w:1 is the implicit default on a replica set of a primary, a secondary and an arbiter. The
 failover can lose that reservation while the append commits above the last reserved position. A read stops at that
 position until the counter reaches the event, a full read and a read after versions too, and once a read's versions hold
 the event's markers, a read after them doesn't return it. An append that reserves the event's position can fail with

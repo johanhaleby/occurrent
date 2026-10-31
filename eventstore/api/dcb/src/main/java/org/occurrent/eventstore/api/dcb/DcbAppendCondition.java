@@ -44,10 +44,11 @@ import static java.util.Objects.requireNonNull;
  * The append can also pass on any deployment when a read preference or a read concern puts a read's events behind its
  * token, and with a token read inside a transaction after that transaction's own append, once the transaction has
  * rolled back (see {@link DcbEventStream#consistencyToken()}). A MongoDB store can reserve an append's positions below
- * majority even when the transaction commits at majority. A failover can then lose the reservation, and any read can
- * miss an event its token holds, one with {@link DcbReadOptions#withVersions()} too, and the append can pass. A token
- * also doesn't depend on a read's limit, skip or position range, so after such a read the append doesn't fail for a
- * matching event the read left out.
+ * majority even when the transaction commits at majority, because the reservation usually runs outside the
+ * transaction. A failover can then lose the reservation, and any read can miss an event its token holds, one with
+ * {@link DcbReadOptions#withVersions()} too, and the append can pass. The 0.35.0 upgrade guide says which write
+ * concern applies. A token also doesn't depend on a read's limit, skip or position range, so after such a read the
+ * append doesn't fail for a matching event the read left out.
  * <p>
  * A store can answer from the events as they are when the append runs. A matching event committed after the read that
  * was deleted by then, or changed so that it no longer matches, may not make the append fail. The in-memory store

@@ -918,8 +918,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     /**
      * Reserves a contiguous block of {@code eventCount} DCB positions by incrementing one global counter document. Every
      * DCB append passes through this single document, so it is a serialization point and an inherent throughput ceiling
-     * for the store as a whole under very high append rates. It is kept outside the append transaction (ADR 0021) so it
-     * does not turn into transaction conflicts, but the global monotonic sequence cannot be sharded away.
+     * for the store as a whole under very high append rates. When this store owns the append transaction it is kept
+     * outside that transaction (ADR 0021) so it does not turn into transaction conflicts, but the global monotonic
+     * sequence cannot be sharded away.
      */
     private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
