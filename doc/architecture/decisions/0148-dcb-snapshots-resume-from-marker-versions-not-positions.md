@@ -646,13 +646,26 @@ is the order the service has without synchronous subscriptions, and these are th
 needs no marker versions.
 
 A transaction the caller owns stays the limitation described below, because the read still joins it and reports no
-versions. With an executor on `PROPAGATION_REQUIRES_NEW` under such a transaction, the service reads in the caller's
-transaction and the executor appends in its own. A second command on the same boundary in the caller's transaction then
-doesn't see the first one's event, its condition fails on every attempt, and it ends with
-`DcbAppendConditionNotFulfilledException`. I ran this once on real MongoDB on both stacks. Before this order the blocking
-service stored both events, and the reactive service failed with `NoSuchTransaction`. `PROPAGATION_REQUIRED` stored both
-events on both stacks, before and after. I accept this regression on the blocking stack, since reading in the executor's
-transaction would bring back the skipped saves. No test in this repository runs this, since nothing should come to depend on it.
+versions. With an executor that suspends or replaces this transaction over a Spring MongoDB store, for example on
+`PROPAGATION_REQUIRES_NEW` or `PROPAGATION_NOT_SUPPORTED`, the service reads in the caller's transaction and the
+executor appends outside it. A second command on the same boundary in the caller's transaction then doesn't see the
+first one's event, and a first command doesn't see a commit another writer makes to that boundary after the caller's
+snapshot. If such a command appends, its condition can fail on every attempt, and it then ends with
+`DcbAppendConditionNotFulfilledException`. I ran both on real MongoDB over `DcbCriteria.tags` with no prune, and on both
+stacks it did whenever the first command had stored or the other writer had committed. Before this order a second
+command on a blocking service stored its event on both propagations, and one on a reactive service did unless it hit the
+failure below, so this is a regression for this setup. I didn't run the other writer before this order. Reading in the
+executor when `isTransactional()` already answers `true` outside it would avoid the regression, at the cost of a second
+order of read and transaction, and a refused read there mustn't mark a transaction the caller owns rollback-only. I
+didn't build that. On `PROPAGATION_REQUIRED` a second command stored its event before and after this order.
+
+A command on a reactive service under a caller's transaction can also fail with `TransientClientSessionException`, on
+these three propagations and before and after this order. On `PROPAGATION_REQUIRED` before this order, a first command
+failed that way in 2 of 20 runs in one set and 15 of 30 in another. `Mono.zip` in `ReactorMongoEventStore` is the cause.
+It can send two commands as the transaction's first operation. With a sequential read in its place no command failed
+that way in 90 runs before this order and 90 after it, and on the two suspending propagations a second command stored
+its event in 60 of 60 runs before it and in none of 60 after it. I didn't change that read here. I didn't add a test for
+a second command under a suspending executor, since nothing should come to depend on it.
 
 ### The decider confirms its append before it saves
 

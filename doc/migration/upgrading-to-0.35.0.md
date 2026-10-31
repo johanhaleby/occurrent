@@ -806,11 +806,15 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   domain function. A handler can run again on such a retry, as it could before. When the condition then fails, the
   service's retry strategy by default reads and decides again. By default the service allows 5 attempts and the Spring executors
   about 15, so a command on a contended boundary can fail sooner, with the same budget a service without synchronous
-  subscriptions has. With an executor on `PROPAGATION_REQUIRES_NEW` under a transaction of yours, the service reads in your
-  transaction and the executor appends in its own, so a second command on the same boundary in your transaction doesn't
-  see the first one's event. Its condition fails on every attempt, and it ends with
-  `DcbAppendConditionNotFulfilledException`. A blocking service used to read in the executor's new transaction, where
-  this worked. `PROPAGATION_REQUIRED` isn't affected.
+  subscriptions has. With an executor that suspends or replaces a transaction of yours over a Spring MongoDB store, such
+  as `PROPAGATION_REQUIRES_NEW` or `PROPAGATION_NOT_SUPPORTED`, the service reads in your transaction and the executor
+  appends outside it. A second command on the same boundary in your transaction then doesn't see the first one's event,
+  and a first command doesn't see a commit another writer makes to that boundary after your transaction's snapshot. If
+  such a command appends, its condition can fail on every attempt, and it then ends with
+  `DcbAppendConditionNotFulfilledException`. In my runs over `DcbCriteria.tags` with no prune it did whenever the first
+  command had stored or the other writer had committed. In my runs a second command used to store its event here, unless
+  it failed as the next sentence says. On a reactive service under a transaction of yours a command can also fail with
+  `TransientClientSessionException`, before and after this change and on `PROPAGATION_REQUIRED` too.
 
 ### Stored snapshots
 
