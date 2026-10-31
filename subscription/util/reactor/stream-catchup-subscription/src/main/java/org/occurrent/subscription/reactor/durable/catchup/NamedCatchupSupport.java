@@ -580,7 +580,8 @@ final class NamedCatchupSupport {
 
     // Resumes the subscription the wrapped model holds paused at liveStartAt. A start(true) of the wrapped model, or of
     // the catch-up model, can resume it at the lost live start until the resume here returns, and it is paused again
-    // each time. Throws when the resume is refused while the wrapped model doesn't run the subscription.
+    // each time. Throws when the resume is refused while the wrapped model doesn't run the subscription, and when the pause
+    // finds the id gone.
     private Subscription resumeAt(String subscriptionId, SubscriptionModel delegate, StartAt liveStartAt) {
         SubscriptionAlreadyRunningException resumedMeanwhile = null;
         while (true) {

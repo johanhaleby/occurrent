@@ -1013,7 +1013,7 @@ public class ReactorMongoSubscriptionModelTest {
                 return super.isRunning(subscriptionId);
             }
 
-            // Disarms first, so the wait below does not enter the hook again
+            // Disarms first, so the hook fires once and the isRunning and isPaused calls that follow skip it
             private void endTheRunIfArmedAt(Hook hook, String subscriptionId) {
                 if (armedAt.compareAndSet(hook, null)) {
                     mayAnswer.countDown();

@@ -1735,20 +1735,27 @@ public class NativeMongoSubscriptionModelTest {
             });
             // And the run is held as it has opened its change stream, before it reports that it started
             HoldsTheRunWhenItOpened holdsTheFirstRun = new HoldsTheRunWhenItOpened(Thread.currentThread());
+            AtomicReference<CountDownLatch> startedLatchOfTheFirstRun = new AtomicReference<>();
+            ExecutorService waiterExecutor = Executors.newSingleThreadExecutor();
             try {
                 assertThat(positionAsked.await(10, SECONDS)).isTrue();
                 replaceLockOfTheRunOf(subscriptionModel, subscriptionId, holdsTheFirstRun);
+                // Kept before the pause, since the resume makes a latch of its own
+                replaceLatchOfTheRunOf(subscriptionModel, subscriptionId, "startedLatch", own -> {
+                    startedLatchOfTheFirstRun.set(own);
+                    return own;
+                });
 
                 // And a waiter on the first handle that looks at the model when the handle lets it go
                 record WhatTheWaiterSaw(Throwable thrown, boolean running, Throwable subscribedAgain) {
                 }
                 CompletableFuture<WhatTheWaiterSaw> waiter = CompletableFuture.supplyAsync(() -> {
-                    Throwable thrown = catchThrowable(() -> first.waitUntilStarted(Duration.ofSeconds(10)));
+                    Throwable thrown = catchThrowable(() -> first.waitUntilStarted(Duration.ofSeconds(60)));
                     boolean running = subscriptionModel.isRunning(subscriptionId);
                     Throwable subscribedAgain = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
                     }));
                     return new WhatTheWaiterSaw(thrown, running, subscribedAgain);
-                });
+                }, waiterExecutor);
 
                 // When the subscription is paused and resumed after the first run opened, and the run of the resume is refused
                 // while the id is still taken
@@ -1760,6 +1767,7 @@ public class NativeMongoSubscriptionModelTest {
 
                 // And the first run then reports that it started
                 holdsTheFirstRun.release.countDown();
+                assertThat(startedLatchOfTheFirstRun.get().await(10, SECONDS)).as("the first run reported that it started").isTrue();
 
                 // Then a waiter that is let go while the id is taken is let go within a second, so it is only given that long
                 catchThrowable(() -> waiter.get(1, SECONDS));
@@ -1774,6 +1782,7 @@ public class NativeMongoSubscriptionModelTest {
                 positionMayAnswer.countDown();
                 holdsTheFirstRun.release.countDown();
                 refusedRunsRemoval.release.countDown();
+                waiterExecutor.shutdownNow();
             }
         }
 

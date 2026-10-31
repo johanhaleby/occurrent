@@ -140,7 +140,8 @@ public final class ChangeStreamSubscriptions {
         /**
          * Returns the handle the model gives its caller for a subscription whose change stream has opened once
          * {@code started} is released. {@code startFailure} answers what the start failed with, when it failed for good
-         * rather than opened, once {@code started} is released.
+         * rather than opened. It holds the failure before {@code started} is released, so a timed wait that runs out can
+         * read it too.
          */
         Subscription subscription(String subscriptionId, CountDownLatch started, Supplier<@Nullable RuntimeException> startFailure);
 
@@ -1151,7 +1152,8 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
-    // The answer of the handle subscribe returns. The first run to open or to fail for good decides it, in one step.
+    // The answer of the handle subscribe returns. The first run to report it opened or to record a failure decides it,
+    // in one step.
     private static final class FirstStart {
         final CountDownLatch latch = new CountDownLatch(1);
         private final AtomicReference<@Nullable Optional<RuntimeException>> outcome = new AtomicReference<>();
@@ -1323,7 +1325,8 @@ public final class ChangeStreamSubscriptions {
             firstStart.recordFailure(failure);
         }
 
-        // Does nothing for a run a pause or a resume took first, which recorded nothing
+        // Does nothing for a run that recorded no failure, because it had started or something else took it out of the map
+        // first
         void releaseWaitersOfAFailedStart() {
             if (startFailure != null) {
                 startedLatch.countDown();
