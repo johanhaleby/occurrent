@@ -787,7 +787,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
      * Reserves a contiguous block of {@code eventCount} global positions by incrementing one counter document, shared
      * by the DCB and stream write paths so both draw from one sequence. Every positioned append passes through this
      * document, so it serializes writes and caps append throughput under very high load. It is kept outside the append
-     * transaction so it does not cause transaction conflicts.
+     * transaction so it does not cause transaction conflicts, and so it waits for {@link DcbMarkerModel#reservationWriteConcern majority}.
      */
     private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
@@ -797,7 +797,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 .maxAttempts(5)
                 .retryIf(MongoEventStore::isDuplicateKeyError)
                 .execute(() -> {
-                    Document updated = dcbPositionCollection.findOneAndUpdate(
+                    Document updated = dcbPositionCollection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(dcbPositionCollection.getWriteConcern())).findOneAndUpdate(
                             eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
                             Updates.inc(DcbMarkerModel.COUNTER_POSITION, (long) eventCount),
                             new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));

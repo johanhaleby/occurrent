@@ -25,9 +25,12 @@ import com.mongodb.client.ClientSession;
 import com.mongodb.MongoException;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.Projections;
+import com.mongodb.client.model.ReturnDocument;
+import com.mongodb.client.model.Updates;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.v1.CloudEventV1;
 import org.bson.BsonTimestamp;
@@ -76,7 +79,6 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.BulkOperations;
-import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -919,8 +921,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * Reserves a contiguous block of {@code eventCount} DCB positions by incrementing one global counter document. Every
      * DCB append passes through this single document, so it is a serialization point and an inherent throughput ceiling
      * for the store as a whole under very high append rates. When this store owns the append transaction it is kept
-     * outside that transaction (ADR 0021) so it does not turn into transaction conflicts, but the global monotonic
-     * sequence cannot be sharded away.
+     * outside that transaction (ADR 0021) so it does not turn into transaction conflicts, and so it waits for
+     * {@link DcbMarkerModel#reservationWriteConcern majority}, but the global monotonic sequence cannot be sharded away.
      */
     private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
@@ -929,10 +931,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // transaction aborts it and no further attempt could commit.
         return retryOnlyWhenThisStoreOwnsTheTransaction(COLD_START_COUNTER_RETRY,
                 () -> {
-                    Query query = new Query(where(ID).is(DcbMarkerModel.POSITION_DOCUMENT_ID));
-                    Update update = new Update().inc(DcbMarkerModel.COUNTER_POSITION, eventCount);
-                    FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
-                    Document updated = mongoTemplate.findAndModify(query, update, options, Document.class, dcbPositionCollectionName);
+                    // MongoTemplate.findAndModify takes no write concern, so this goes to the collection
+                    Document updated = mongoTemplate.execute(dcbPositionCollectionName, collection -> collection
+                            .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern()))
+                            .findOneAndUpdate(
+                                    Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
+                                    Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
+                                    new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER)));
                     long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DcbMarkerModel.COUNTER_POSITION)).longValue();
                     return lastPosition - eventCount + 1;
                 });

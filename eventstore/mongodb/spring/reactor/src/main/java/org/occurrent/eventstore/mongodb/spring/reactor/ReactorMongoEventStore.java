@@ -25,9 +25,12 @@ import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.Projections;
+import com.mongodb.client.model.ReturnDocument;
+import com.mongodb.client.model.Updates;
 import com.mongodb.reactivestreams.client.ClientSession;
 import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
@@ -79,7 +82,6 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.ReactiveMongoDatabaseUtils;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.BulkOperations;
-import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveBulkOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -659,10 +661,15 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<Long> reservePositions(int eventCount) {
-        Query query = new Query(where(ID).is(DcbMarkerModel.POSITION_DOCUMENT_ID));
-        Update update = new Update().inc(DcbMarkerModel.COUNTER_POSITION, eventCount);
-        FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
-        return mongoTemplate.findAndModify(query, update, options, Document.class, dcbPositionCollectionName)
+        // Waits for majority when it runs outside a transaction, see DcbMarkerModel.reservationWriteConcern.
+        // ReactiveMongoTemplate.findAndModify takes no write concern, so this goes to the collection.
+        return mongoTemplate.execute(dcbPositionCollectionName, collection -> collection
+                        .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern()))
+                        .findOneAndUpdate(
+                                Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
+                                Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
+                                new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER)))
+                .next()
                 .map(updated -> ((Number) updated.get(DcbMarkerModel.COUNTER_POSITION)).longValue() - eventCount + 1)
                 // Cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert it
                 // and all but one get a duplicate key. On retry the document exists and the upsert becomes an update.
