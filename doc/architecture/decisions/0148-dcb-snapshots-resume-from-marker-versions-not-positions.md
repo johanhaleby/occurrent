@@ -350,11 +350,11 @@ after E, so it doesn't deliver E either. The checkpoint moves past 50, and E is 
 
 The three major findings were about caller transactions and a write path. Inside a caller's transaction the two rules
 can't both hold for a DCB read. If the events are read in the store's own majority session, the re-read
-`GenericDcbApplicationService` does of its own uncommitted block (`GenericDcbApplicationService.java:173-174`) comes
+`GenericDcbApplicationService` does of its own uncommitted block comes
 back empty and the synchronous handlers get nothing. If the events are read in the caller's transaction and CT in the
 store's session, CT can cover events the read didn't return. So the only consistent answer is no CT inside a caller's
-transaction. With synchronous subscriptions, `GenericDcbApplicationService` always runs in the executor's transaction
-(`:137`, `:172`), so the snapshot decider would never save a snapshot in that configuration. And `PositionBackfill` was
+transaction. With synchronous subscriptions, `GenericDcbApplicationService` then read and decided in the executor's transaction,
+so the snapshot decider would never have saved a snapshot in that configuration. And `PositionBackfill` was
 still not covered.
 
 Two of the blockers are a kind no earlier review had named, which makes six kinds:
@@ -480,7 +480,7 @@ The read path:
    store's default read concern, joining a caller's transaction when there is one. That includes every plain
    `read(criteria)` a command or a query does, the DCB catch-up's head and window reads
    (`DcbCatchupSubscriptionModel.java:185`, `:190`, `ReactorDcbCatchupSubscriptionModel.java:324`, `:332`) and the
-   re-read `GenericDcbApplicationService` does of its own block (`GenericDcbApplicationService.java:173-174`). So this
+   re-read `GenericDcbApplicationService` does of its own block. So this
    design changes neither the catch-up's read concern nor what a synchronous handler sees, and the seventh review's
    third blocker and its caller-transaction findings can't be reached through it.
 3. A read that asks for versions takes the marker documents, the consistency token, the position counter and the events
@@ -611,13 +611,67 @@ into the snapshot, where a full read of the boundary doesn't see it. A fold that
 need, from the late event until the next save. Both Spring Mongo snapshot stores treat a DCB document without the field
 as unreadable, which also means a full read.
 
+### The read and the decision run before the executor's transaction
+
+`GenericDcbApplicationService` opens the transaction executor only when it has synchronous subscriptions to dispatch to.
+It used to run the read, the decision, the append, the re-read of the written block and the dispatch all in that
+transaction. The store can't tell that transaction from one the caller owns, so the read reported no versions, the
+service dropped the append's versions, and a decider on such a service saved no snapshot. A 0.34 decider in that setup
+did save snapshots, at positions, so the fix for #1230 would have made every command on it read its whole boundary.
+
+The service now reads and decides first, and only the append, the re-read and the dispatch run in the transaction. That
+is the order the service has without synchronous subscriptions, and these are the consequences:
+
+- The append's condition holds the token of the read, so a transaction around the read adds nothing to the check. A
+  failed condition goes to the service's retry strategy, which by default reads and decides again.
+- The executor's own conflict retry from [ADR 74](0074-retry-only-where-the-transaction-is-owned.md) re-runs the
+  append, the re-read and the dispatch, with that same token, and not the read or the decision. A handler can run again
+  on such a retry, as it could before. When the condition then fails, the service's retry strategy by default reads and decides
+  again. Otherwise the append goes through on the decision it
+  already made.
+  The condition doesn't catch every append that happened since the read, for example after a prune
+  ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)) or on `DcbCriteria.all()`, where the append can go
+  through on a decision that didn't see a matching event. A conflict that only the condition can see spends an attempt
+  of the service's retry strategy instead of one of the executor's. By default the service allows 5
+  attempts and the Spring executors about 15, so a command on a contended boundary can fail sooner, with the same budget
+  a service without synchronous subscriptions has.
+- The domain function no longer runs in the executor's transaction, and a decision with no new events no longer opens
+  one. An exception from the domain function doesn't pass through the executor either, so in a transaction the caller
+  owns it no longer marks that transaction rollback-only. A caller that catches it and continues now commits.
+- A refused read never passes through the executor, so it can't mark a transaction the caller owns rollback-only.
+- This changes one sentence of ADR 74's context, the one saying the service runs the whole read-decide-append through a
+  `TransactionExecutor`. ADR 74's decision still holds.
+
+`GenericApplicationService`, the stream service, still reads and decides in the transaction, since a stream snapshot
+needs no marker versions.
+
+A transaction the caller owns stays the limitation described below, because the read still joins it and reports no
+versions. With an executor that suspends or replaces this transaction over a Spring MongoDB store, for example on
+`PROPAGATION_REQUIRES_NEW` or `PROPAGATION_NOT_SUPPORTED`, the service reads in the caller's transaction and the
+executor appends outside it. A second command on the same boundary in the caller's transaction then doesn't see the
+first one's event, and a first command doesn't see a commit another writer makes to that boundary after the caller's
+snapshot. If such a command appends, its condition can fail on every attempt, and it then ends with
+`DcbAppendConditionNotFulfilledException`. I ran both on real MongoDB over `DcbCriteria.tags` with no prune, and on both
+stacks it did whenever the first command had stored or the other writer had committed. Before this order a second
+command on a blocking service stored its event on both propagations, and one on a reactive service did unless it hit the
+failure below, so this is a regression for this setup. I didn't run the other writer before this order. Reading in the
+executor when `isTransactional()` already answers `true` outside it would avoid the regression, at the cost of a second
+order of read and transaction, and a refused read there mustn't mark a transaction the caller owns rollback-only. I
+didn't build that. On `PROPAGATION_REQUIRED` a second command stored its event before and after this order.
+
+A command on a reactive service under a caller's transaction can also fail with `TransientClientSessionException`, on
+these three propagations and before and after this order. On `PROPAGATION_REQUIRED` before this order, a first command
+failed that way in 2 of 20 runs in one set and 15 of 30 in another. `Mono.zip` in `ReactorMongoEventStore` is the cause.
+It can send two commands as the transaction's first operation. With a sequential read in its place no command failed
+that way in 90 runs before this order and 90 after it, and on the two suspending propagations a second command stored
+its event in 60 of 60 runs before it and in none of 60 after it. I didn't change that read here. I didn't add a test for
+a second command under a suspending executor, since nothing should come to depend on it.
+
 ### The decider confirms its append before it saves
 
-The snapshot decider saves after `applicationService.execute` returns. Without synchronous subscriptions the store reads the events and their versions in a transaction of its
-own, so the state the decider saves is complete. With synchronous subscriptions, `execute` runs the read, the decision
-and the append in the executor's transaction. The store
-can't tell that transaction from one the caller owns, so the read reports no versions and the decider saves no snapshot
-in that configuration. The seventh review's first blocker came from building the watermark after commit, and this
+The snapshot decider saves after `applicationService.execute` returns. The store reads the events and their versions in a transaction of its
+own, so the state the decider saves is complete. That holds with synchronous subscriptions too, as the previous section
+explains. The seventh review's first blocker came from building the watermark after commit, and this
 design never does that.
 
 Completeness isn't durability. Versions from an append that rolls back after a failover are handed out again to other
@@ -971,11 +1025,12 @@ the store unchanged.
   same consequence. Full reads, subscriptions and catch-ups select by tags, type and position, never by `mv`, so they
   still return the event. The migration guide states the precondition and explains the detection and the setting, and
   the changelog names the setting and its default.
-- The first command on a boundary that existed before the upgrade reads in full and saves nothing, because its markers
-  have no epoch yet. Its append gives them one, and the next command can save.
-- A decider on an application service with synchronous subscriptions never saves a snapshot, since the service runs
-  every execute in its transaction executor's transaction and the store reports no versions inside a transaction. A
-  0.34 decider in that configuration did save snapshots, at positions.
+- The first command on a boundary reads in full and saves nothing, whether the boundary is new or existed before the
+  upgrade, because its markers don't exist yet or have no epoch yet. Its append gives them one, and the next command
+  can save.
+- On a DCB application service with synchronous subscriptions the domain function no longer runs in the executor's
+  transaction. The executor's conflict retry re-runs the append, the re-read and the dispatch, with the token of the
+  read the decision was made on, and not the read or the domain function.
 - A decider inside a transaction the caller owns never saves a snapshot. Saving after that transaction commits isn't in
   0.35.0, and this is a known limitation, tracked in #1307. The warning lists a transaction the caller owns as one of
   the causes.

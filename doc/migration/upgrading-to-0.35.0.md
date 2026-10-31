@@ -139,7 +139,8 @@ other sections compile fine and behave differently, so read them first.
 
 - [DCB snapshots resume from marker versions](#dcb-snapshots-resume-from-marker-versions). The DCB deciders and
   a `@Snapshot` DCB view save at marker versions, and ignore a snapshot 0.34.0 saved at a position. `Snapshot` gains two
-  components. **Breaks the build** if you use a record pattern over `Snapshot`.
+  components. **Breaks the build** if you use a record pattern over `Snapshot`. A DCB application service with
+  synchronous subscriptions no longer runs your domain function in its transaction executor's transaction.
 - [The reactive `executeAndReturnState` emits a non-null state](#the-reactive-executeandreturnstate-emits-a-non-null-state).
   The emitted state is declared non-null. Breaks the build only for a Kotlin `Mono<State?>` written by hand.
 
@@ -794,10 +795,26 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   resumes after the saved versions and doesn't read the older events the wider criteria now matches, and nothing reports
   it. A widening that changes the marker keys is refused, and the decider reads the whole boundary.
 - Inside a transaction of yours a read reports no versions, so a decider that runs in one reads the whole
-  boundary and saves no snapshot.
-- The same holds on an application service with synchronous subscriptions, since it runs every execute in its
-  transaction executor's transaction. A 0.34 decider in that setup saved snapshots, and a 0.35 one reads the whole
-  boundary on every command.
+  boundary and saves no snapshot. This is a known limitation, tracked in
+  [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
+- A DCB application service with synchronous subscriptions now reads and decides before it enters its transaction
+  executor's transaction, so a decider on it saves snapshots. Only the append, the re-read of the written block and the
+  dispatch run in that transaction. Your domain function no longer runs in it, so when the executor opens the
+  transaction, a write your domain function makes is no longer part of it. An exception from it no longer marks a
+  transaction you own rollback-only, so if you catch it and continue, that transaction commits. The executor's conflict
+  retry re-runs the append, the re-read and the dispatch, with the token of the read the decision was made on, and not the read or your
+  domain function. A handler can run again on such a retry, as it could before. When the condition then fails, the
+  service's retry strategy by default reads and decides again. By default the service allows 5 attempts and the Spring executors
+  about 15, so a command on a contended boundary can fail sooner, with the same budget a service without synchronous
+  subscriptions has. With an executor that suspends or replaces a transaction of yours over a Spring MongoDB store, such
+  as `PROPAGATION_REQUIRES_NEW` or `PROPAGATION_NOT_SUPPORTED`, the service reads in your transaction and the executor
+  appends outside it. A second command on the same boundary in your transaction then doesn't see the first one's event,
+  and a first command doesn't see a commit another writer makes to that boundary after your transaction's snapshot. If
+  such a command appends, its condition can fail on every attempt, and it then ends with
+  `DcbAppendConditionNotFulfilledException`. In my runs over `DcbCriteria.tags` with no prune it did whenever the first
+  command had stored or the other writer had committed. In my runs a second command used to store its event here, unless
+  it failed as the next sentence says. On a reactive service under a transaction of yours a command can also fail with
+  `TransientClientSessionException`, before and after this change and on `PROPAGATION_REQUIRED` too.
 
 ### Stored snapshots
 
