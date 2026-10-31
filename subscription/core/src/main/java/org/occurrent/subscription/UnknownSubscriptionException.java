@@ -18,7 +18,7 @@ package org.occurrent.subscription;
 
 /**
  * This subscription model has no subscription with that id, so pausing or resuming it was refused. The id was never
- * subscribed here, or it was cancelled, or a failure ended its run for good, or it belongs to a different model
+ * subscribed here, or it was cancelled, or a failure made the model drop it, or it belongs to a different model
  * instance.
  * <p>
  * This is the refusal that says the id does not exist, as opposed to {@link SubscriptionNotRunningException} and

@@ -1740,7 +1740,7 @@ public class NativeMongoSubscriptionModelTest {
             try {
                 assertThat(positionAsked.await(10, SECONDS)).isTrue();
                 replaceLockOfTheRunOf(subscriptionModel, subscriptionId, holdsTheFirstRun);
-                // Kept before the pause, since the resume makes a latch of its own
+                // Kept before the pause, which takes this run out of the map, and the resume makes a latch of its own
                 replaceLatchOfTheRunOf(subscriptionModel, subscriptionId, "startedLatch", own -> {
                     startedLatchOfTheFirstRun.set(own);
                     return own;
