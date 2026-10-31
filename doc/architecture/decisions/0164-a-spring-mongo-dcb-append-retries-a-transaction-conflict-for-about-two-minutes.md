@@ -72,7 +72,7 @@ Moving the stores to `ClientSession.withTransaction` was considered and rejected
   call inside a retry of 15 attempts, so the native store can wait longer overall. A caller with a shorter deadline of
   its own sees that deadline first.
 - A duplicate key or a validation failure inside the transaction now runs the unit of work once and reaches the caller,
-  as against the 214 runs in 120 seconds that a duplicate key got in a measurement of the old predicate under the new budget on MongoDB 8.0. 0.34.0 itself made 15 attempts.
+  as against the 214 runs in 120 seconds that a duplicate key got in a measurement of the old predicate under the new budget on MongoDB 8.0. 0.34.0 itself ran it 15 times on the blocking executor and 16 on the reactive one.
   One case that was retried before is not any more. It is a duplicate from a write made outside the transaction, for
   example through a template that does not join it. MongoDB labels no such error, so a unit of work that checks, loses
   a race to a rival and then gets the duplicate used to succeed on its second run, and now fails with the duplicate. A
@@ -80,7 +80,7 @@ Moving the stores to `ClientSession.withTransaction` was considered and rejected
 - A commit that fails with `UnknownTransactionCommitResult` is never retried, also when the same error has the
   `TransientTransactionError` label. The old predicate did not retry it either, since a commit failure surfaces as a
   `TransactionSystemException` with a `MongoException` cause, which it did not match. The same reason means a commit
-  that fails with only the transient label, which the old predicate did not retry, is retried now.
+  that fails with only the transient label, which the old predicate did not retry, is retried now. That includes a unit of work that catches a duplicate key from a write inside the transaction and returns normally. The server has aborted the transaction, the commit fails with the transient label and the callback runs again on each attempt for the whole budget, where 0.34.0 failed once. The executor cannot tell that commit from a conflict, so the caller has to let such a duplicate propagate.
 - The budget of 240 attempts and 120 seconds was chosen when a retry could be spent on an error no retry could cure. Now
   that only a conflict uses it, I measured how much a conflict needs, on a single-node MongoDB 8.0 with a
   `TransientTransactionError` predicate. 64 threads appending 10 times each to one marker needed at most 21 attempts, and 256

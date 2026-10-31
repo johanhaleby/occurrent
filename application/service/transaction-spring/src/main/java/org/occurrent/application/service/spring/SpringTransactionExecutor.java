@@ -186,22 +186,22 @@ public class SpringTransactionExecutor implements TransactionExecutor {
     private static final class MongoErrorLabels {
         /**
          * What the error labels in the cause chain say, or {@code null} when they say nothing. The unknown commit result
-         * label is checked first on each exception, as the driver's {@code withTransaction} does, so a commit that may
-         * have gone through is not retried even when the same error also has the transient label.
+         * label anywhere in the chain wins over the transient label, so a commit that may have gone through is not
+         * retried. The driver's {@code withTransaction} also looks at the unknown commit result label first, but it
+         * retries the commit and not the callback, and the executor can only run the callback again.
          */
         static Boolean verdict(Throwable throwable) {
             Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+            boolean transientLabel = false;
             for (Throwable cause = throwable; cause != null && seen.add(cause); cause = cause.getCause()) {
                 if (cause instanceof MongoException mongoException) {
                     if (mongoException.hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)) {
                         return false;
                     }
-                    if (mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
-                        return true;
-                    }
+                    transientLabel |= mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
                 }
             }
-            return null;
+            return transientLabel ? Boolean.TRUE : null;
         }
     }
 

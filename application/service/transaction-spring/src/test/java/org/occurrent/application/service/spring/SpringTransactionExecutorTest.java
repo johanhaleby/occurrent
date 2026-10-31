@@ -205,7 +205,22 @@ class SpringTransactionExecutorTest {
     }
 
     @Test
-    void the_default_executor_runs_the_action_again_when_the_label_is_more_than_sixty_four_causes_down() {
+    void the_default_executor_runs_the_action_once_when_a_cause_has_the_unknown_commit_label_below_one_with_the_transient_label() {
+        MongoException outer = new MongoException("outer", labelled(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL));
+        outer.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+        runsOnceAndFailsWith(new DataIntegrityViolationException("commit", outer));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_the_cause_chain_is_a_cycle_without_a_label() {
+        RuntimeException first = new RuntimeException("first");
+        RuntimeException second = new RuntimeException("second", first);
+        first.initCause(second);
+        runsOnceAndFailsWith(first);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_when_the_label_is_a_hundred_causes_down() {
         // Given
         SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
         AtomicInteger attempts = new AtomicInteger();

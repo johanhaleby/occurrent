@@ -756,7 +756,7 @@ describes it.
 The default `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry a transaction they opened when it
 loses a conflict. In 0.34.0 that meant any `DataIntegrityViolationException`, because Spring translates MongoDB's write
 conflict to it. That also matched a duplicate key and a validation failure, which no new transaction can get past, so
-the unit of work ran 15 times before the error reached the caller. The 0.35.0 budget is 240 attempts, so the same
+the unit of work ran 15 times on the blocking executor and 16 on the reactive one before the error reached the caller. The 0.35.0 budget is 240 attempts, so the same
 predicate would have run it for two minutes.
 
 0.35.0 retries a `TransientDataAccessException`, or any exception with the `TransientTransactionError` label anywhere
@@ -781,13 +781,16 @@ after the first run.
 The second did not retry in 0.34.0 and does now. A commit that fails with the `TransientTransactionError` label reaches
 the executor as a `TransactionSystemException` with a `MongoException` cause, which 0.34.0 did not match. The executor
 now runs the unit of work again, which is safe when the transaction was rolled back, as that label says it was.
+The case to watch is a unit of work that catches a duplicate key from a write inside the transaction and returns normally.
+MongoDB has aborted the transaction by then, so the commit fails with the label and the executor runs the unit of work
+again on each attempt, up to 240 of them, where 0.34.0 failed once.
 
 An executor you build with a retry of your own uses that retry as given, as before. So does one built on a template or
 operator that opens no transaction.
 
 ### What to do
 
-Handle the duplicate in the unit of work, or make the write through a template that joins the transaction, so that a
+Handle the duplicate in the unit of work only when its write is outside the transaction, and let a duplicate from a write inside the transaction reach the caller instead of catching it. Or make the write through a template that joins the transaction, so that a
 rival's insert surfaces as a labelled conflict and is retried.
 
 ## A catch-up needs the event store itself
