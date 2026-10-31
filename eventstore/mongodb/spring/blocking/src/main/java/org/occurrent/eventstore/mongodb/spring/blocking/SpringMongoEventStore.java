@@ -891,8 +891,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return DcbMarkerVersionsDocuments.consistencyToken(criteria, queryMarkers(criteria, template));
     }
 
-    // Read the query's markers in one query so their versions come from a single consistent snapshot. Reading them one by
-    // one could tear across a concurrent append and capture a token that masks a real conflict (ADR 0031).
+    // Read the query's markers in one query so that on a replica set their versions come from a single consistent
+    // snapshot. Reading them one by one could tear across a concurrent append and capture a token that masks a real
+    // conflict (ADR 0031). Through a mongos a query over several shards can still tear (ADR 0149).
     private Map<String, Document> queryMarkers(DcbCriteria criteria, MongoTemplate template) {
         Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
         if (markerKeys.isEmpty()) {

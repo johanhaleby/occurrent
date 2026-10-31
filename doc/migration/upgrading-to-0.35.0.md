@@ -710,7 +710,7 @@ read concern snapshot. Earlier versions said pruning during quiescence was harml
 held across the prune.
 
 A `DcbEventStore` of your own needs no change, and `DcbConsistencyToken.of(criteria, version)` keeps working for it.
-A MongoDB store throws `IllegalArgumentException` for a token built that way, unless its criteria has no marker keys.
+A MongoDB store throws `IllegalArgumentException` for a token built that way.
 
 ## Criteria with tags conflict on their tags
 
