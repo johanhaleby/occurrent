@@ -191,6 +191,38 @@ class SpringTransactionExecutorTest {
         runsOnceAndFailsWith(labelled(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL));
     }
 
+    @Test
+    void the_default_executor_runs_the_action_once_when_a_commit_error_has_both_the_transient_and_the_unknown_commit_label() {
+        // The driver's withTransaction looks at the unknown commit label first, and so does the executor.
+        MongoException both = labelled(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+        both.addLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL);
+        runsOnceAndFailsWith(new DataIntegrityViolationException("commit", both));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_a_transient_data_access_exception_wraps_an_unknown_commit_result() {
+        runsOnceAndFailsWith(new TransientDataAccessResourceException("commit", labelled(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_when_the_label_is_more_than_sixty_four_causes_down() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw deeplyNested(labelled(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL));
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(4);
+    }
+
     // The callback fails the test if it runs a second time, so a retry that should not happen fails on this
     // assertion straight away instead of running the default two minute budget out.
     private static void runsOnceAndFailsWith(RuntimeException failure) {
@@ -204,6 +236,14 @@ class SpringTransactionExecutorTest {
             throw failure;
         })).isSameAs(failure);
         assertThat(attempts).hasValue(1);
+    }
+
+    private static RuntimeException deeplyNested(Throwable root) {
+        Throwable cause = root;
+        for (int depth = 0; depth < 100; depth++) {
+            cause = new RuntimeException("wrapper " + depth, cause);
+        }
+        return (RuntimeException) cause;
     }
 
     private static MongoException labelled(String label) {

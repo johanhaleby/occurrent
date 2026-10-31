@@ -31,7 +31,10 @@ import reactor.util.retry.RetryBackoffSpec;
 
 import java.time.Duration;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -181,23 +184,33 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
     }
 
     private static boolean isTransientConflict(Throwable throwable) {
-        return throwable instanceof TransientDataAccessException || (MONGO_DRIVER_PRESENT && MongoTransientTransactionError.isCarriedBy(throwable));
+        Boolean byLabel = MONGO_DRIVER_PRESENT ? MongoErrorLabels.verdict(throwable) : null;
+        return byLabel != null ? byLabel : throwable instanceof TransientDataAccessException;
     }
 
     /**
      * Kept in a class of its own so that {@link SpringReactiveTransactionExecutor} loads when the driver is absent.
      * This class is not touched then.
      */
-    private static final class MongoTransientTransactionError {
-        static boolean isCarriedBy(Throwable throwable) {
-            // Bounded walk so a cyclic cause chain cannot spin forever.
-            Throwable cause = throwable;
-            for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
-                if (cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
-                    return true;
+    private static final class MongoErrorLabels {
+        /**
+         * What the error labels in the cause chain say, or {@code null} when they say nothing. The unknown commit result
+         * label is checked first on each exception, as the driver's {@code withTransaction} does, so a commit that may
+         * have gone through is not retried even when the same error also has the transient label.
+         */
+        static Boolean verdict(Throwable throwable) {
+            Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+            for (Throwable cause = throwable; cause != null && seen.add(cause); cause = cause.getCause()) {
+                if (cause instanceof MongoException mongoException) {
+                    if (mongoException.hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)) {
+                        return false;
+                    }
+                    if (mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
+                        return true;
+                    }
                 }
             }
-            return false;
+            return null;
         }
     }
 
