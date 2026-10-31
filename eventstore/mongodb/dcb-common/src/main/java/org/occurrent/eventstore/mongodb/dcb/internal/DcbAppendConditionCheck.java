@@ -89,12 +89,11 @@ public final class DcbAppendConditionCheck {
     /**
      * Compares {@code current}, the markers read inside the append's transaction, with what {@code token} saw.
      *
-     * @param token        the token of the condition
-     * @param criteria     the criteria of the condition
-     * @param current      the marker observation of every marker key of {@code criteria}
+     * @param token            the token of the condition
+     * @param criteria         the criteria of the condition
+     * @param current          the marker observation of every marker key of {@code criteria}
      * @param runsOnReplicaSet whether the store may rule an item out by its markers and query the events, see
      *                         {@link #runsOnReplicaSet(Function)}
-     *                     that moved refuses, see {@link #runsOnReplicaSet(Function)}
      * @throws IllegalArgumentException if the token doesn't hold exactly the marker keys of {@code criteria}, which means
      *                                  this store's read didn't create it
      */
@@ -138,10 +137,11 @@ public final class DcbAppendConditionCheck {
     }
 
     /**
-     * Whether this deployment is a replica set, the one case where the store may rule an item out by its markers and query
-     * the events (ADR 149). A read there takes its events after its markers from the same member, and a transaction reads
-     * both from one member. It's false for a mongos, a load balancer in front of one and anything else that doesn't answer
-     * like a replica set. Every failure except a server that doesn't know {@code hello} propagates.
+     * Whether this deployment is a replica set, the one case where the store may rule an item out by its markers and
+     * query the events (ADR 149). A read there takes its events after its markers from the same member, unless its
+     * query options send the events read to a secondary, and a transaction reads both from one member. It's false for a
+     * mongos, a load balancer in front of one and anything else that doesn't answer like a replica set. Every failure
+     * except a server that doesn't know {@code hello} propagates.
      *
      * @param runCommand runs a command against the store's database
      */
