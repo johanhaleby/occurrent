@@ -198,8 +198,8 @@ public final class DcbMarkerVersionsDocuments {
     }
 
     /**
-     * The keys of the index a read after marker versions selects events by, one {@code mv} element with a key, an
-     * epoch and a version above the saved one.
+     * The keys of the index that a read after marker versions and the check of a conditional append select events by,
+     * one {@code mv} element with a key, an epoch and a version above a given one.
      */
     public static Document markerVersionsIndex() {
         return new Document(EVENT_MARKER_VERSIONS + "." + EVENT_MARKER_VERSIONS_KEY, 1)

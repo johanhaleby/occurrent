@@ -1132,7 +1132,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     // skewed dataset (a plausible popular-tag boundary) showed a winning SORT stage over the dcbTags
                     // index without this compound index.
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true)))
-                    // A read after marker versions selects events by one mv element per criteria item (ADR 148).
+                    // A read after marker versions selects events by one mv element per criteria item (ADR 148), and so does the check of a conditional append (ADR 149).
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, DcbMarkerVersionsDocuments.markerVersionsIndex(), new IndexOptions().sparse(true)))
                     .then();
         }

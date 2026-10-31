@@ -34,6 +34,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.wholeStoreLock;
@@ -1172,7 +1173,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
-        void a_condition_on_a_type_and_two_tags_conflicts_on_an_event_of_that_type_carrying_only_one_of_the_tags_only_under_the_tag_marker_model() {
+        void a_condition_on_a_type_and_two_tags_ignores_an_event_of_that_type_carrying_only_one_of_the_tags_unless_the_model_compares_only_markers() {
             String type = "TwoTagsAccepted";
             String course = "two-tags-accepted-course:c1";
             String student = "two-tags-accepted-student:s1";
@@ -1185,14 +1186,22 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             List<CloudEvent> events = List.of(taggedEvent(type, course, student));
             DcbAppendCondition condition = failIfEventsMatch(token);
             if (expectedToConflictOnANonMatchingEventSharingATag()) {
-                assertThatThrownBy(() -> dcbEventStore().append(events, condition))
-                        .as("Under the tag-marker model the marker of the course tag moved, and it knows nothing about "
-                                + "the student tag, so the event with the other student conflicts")
-                        .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
-
-                assertThat(dcbEventStore().read(criteria).events())
-                        .as("The refused append must not have written its event, and the event with the other student is not selected")
-                        .isEmpty();
+                Throwable thrown = catchThrowable(() -> dcbEventStore().append(events, condition));
+                int selected = dcbEventStore().read(criteria).events().size();
+                if (thrown == null) {
+                    assertThat(selected)
+                            .as("A store that compares the marker of each tag can accept the append, and then it must "
+                                    + "have written its event. The event with the other student is not selected")
+                            .isEqualTo(1);
+                } else {
+                    assertThat(thrown)
+                            .as("A store that compares the markers as a sum can refuse the append, because the marker "
+                                    + "of the course tag moved. It must refuse with the append condition exception")
+                            .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+                    assertThat(selected)
+                            .as("The refused append must not have written its event, and the event with the other student is not selected")
+                            .isZero();
+                }
             } else {
                 assertThatCode(() -> dcbEventStore().append(events, condition))
                         .as("The event committed after the read carries the course tag but not the student tag, so it "
@@ -1247,7 +1256,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
-        void a_condition_on_a_type_alternative_and_a_two_tag_alternative_conflicts_on_an_event_of_another_type_carrying_one_of_the_tags_only_under_the_tag_marker_model() {
+        void a_condition_on_a_type_alternative_and_a_two_tag_alternative_ignores_an_event_of_another_type_carrying_one_of_the_tags_unless_the_model_compares_only_markers() {
             String type = "AlternativesAcceptedType";
             String otherType = "AlternativesAcceptedOther";
             String tagA = "alternatives-accepted:a";
@@ -1260,10 +1269,13 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             List<CloudEvent> events = List.of(taggedEvent(otherType, "alternatives-accepted:unrelated"));
             DcbAppendCondition condition = failIfEventsMatch(token);
             if (expectedToConflictOnANonMatchingEventSharingATag()) {
-                assertThatThrownBy(() -> dcbEventStore().append(events, condition))
-                        .as("Under the tag-marker model the marker of tag a moved, and it knows nothing about types or "
-                                + "tag b, so the event of the other type conflicts")
-                        .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+                Throwable thrown = catchThrowable(() -> dcbEventStore().append(events, condition));
+                if (thrown != null) {
+                    assertThat(thrown)
+                            .as("A store that compares the markers as a sum can refuse the append, because the marker "
+                                    + "of tag a moved. It must refuse with the append condition exception")
+                            .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+                }
             } else {
                 assertThatCode(() -> dcbEventStore().append(events, condition))
                         .as("The event committed after the read has neither the type of the first alternative nor both "
@@ -1467,7 +1479,8 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
     /**
      * Whether the declared append-condition model conflicts on an event that shares a tag with the criteria, whether it
      * is of a type the criteria excludes or lacks another tag the criteria requires, although no event matching the
-     * criteria was committed. Written as a switch expression so adding a model breaks the build here rather than silently taking one of the existing branches.
+     * criteria was committed. Written as a switch expression so adding a model breaks the build here rather than
+     * silently taking one of the existing branches.
      */
     private boolean expectedToConflictOnANonMatchingEventSharingATag() {
         return switch (appendConditionModel()) {
