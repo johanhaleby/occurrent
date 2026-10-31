@@ -12,7 +12,7 @@ has tags is no longer a reason for the check to refuse, as in memory.
 
 Amended by [ADR 149](0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md). On a replica set the MongoDB stores no longer refuse an append for an event a 0.35 node appended that shares a tag
 with the criteria and doesn't match them, so the answer for an excluded type is the same as in memory there. On a
-sharded cluster the store still refuses for an event with every tag of a criteria item.
+sharded cluster the store still refuses when a marker of the criteria moved.
 
 ## Context
 
