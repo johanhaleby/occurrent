@@ -188,7 +188,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             if (sideEffect == null) {
                 return Mono.just(result.appendResult());
             }
-            return sideEffect.apply(result.newDomainEvents()).thenReturn(result.appendResult());
+            return Mono.defer(() -> sideEffect.apply(result.newDomainEvents()))
+                    // A side-effect can let through a refusal another service marked, which says nothing about this append
+                    .onErrorMap(DcbSnapshotInvalidException.class, DcbSnapshotInvalidException::afterAppend)
+                    .thenReturn(result.appendResult());
         });
     }
 

@@ -29,6 +29,7 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
+import org.occurrent.application.service.blocking.dcb.DcbExecuteOptions;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
@@ -65,6 +66,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -387,6 +389,49 @@ class SnapshotDcbDeciderApplicationServiceTest {
         callOtherService.set(true);
 
         Throwable thrown = catchThrowable(() -> dispatchingService.execute(new Change("B"), account));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(DcbSnapshotInvalidException.class),
+                () -> assertThat(thrown).as("the refusal is no longer marked as thrown before the append").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertThat(refused.isBeforeAppend()).isFalse()),
+                () -> assertThat(decideCount.get()).as("times the command was decided").isEqualTo(1),
+                // The seed, A and the one B that committed before the other service's refusal
+                () -> assertThat(eventStore.read(criteria()).events()).as("events in the boundary").hasSize(3),
+                // The refusal escapes before the snapshot is saved, so the one from A is left in place
+                () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("A")
+        );
+    }
+
+    @Test
+    void a_refusal_marked_by_another_service_in_a_side_effect_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
+        // The side-effect calls a second service whose read is refused, so the refusal it lets through is marked beforeAppend
+        ControlledStore refusingStore = new ControlledStore(eventStore);
+        refusingStore.refuseEveryRead = true;
+        var otherService = new GenericDcbApplicationService<>(refusingStore, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetryStrategy());
+        AtomicBoolean callOtherService = new AtomicBoolean();
+        // The decider sets no side-effect, so a decorator adds one before it delegates
+        DcbApplicationService<DomainEvent> addingSideEffect = new DcbApplicationService<>() {
+            @Override
+            public Optional<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<DomainEvent> options, Function<List<DomainEvent>, List<DomainEvent>> functionThatCallsDomainModel) {
+                DcbExecuteOptions<DomainEvent> withSideEffect = callOtherService.get()
+                        ? options.sideEffect(events -> otherService.execute(criteria(), written -> List.of()))
+                        : options;
+                return applicationService.execute(criteria, withSideEffect, functionThatCallsDomainModel);
+            }
+
+            @Override
+            public boolean isAppendConfirmed(DcbAppendResult appendResult) {
+                return applicationService.isAppendConfirmed(appendResult);
+            }
+        };
+        var decoratedService = new SnapshotDcbDeciderApplicationService<>(addingSideEffect);
+        AtomicInteger decideCount = new AtomicInteger();
+        var account = SnapshotDcbDecider.from(DcbDecider.from(decideCounting(countingDecider(evolveCount, time), decideCount), command -> criteria(), event -> Set.of(tag())), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+        decoratedService.execute(new Define("A"), account);
+        decideCount.set(0);
+        callOtherService.set(true);
+
+        Throwable thrown = catchThrowable(() -> decoratedService.execute(new Change("B"), account));
 
         assertAll(
                 () -> assertThat(thrown).isInstanceOf(DcbSnapshotInvalidException.class),

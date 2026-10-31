@@ -198,7 +198,12 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // Invoke the side-effect once, after a successful append, with the newly written events. It is not invoked
         // on the no-new-events path, and it is outside the retry so it does not run per attempt.
         if (sideEffect != null && result.v1.isPresent()) {
-            sideEffect.accept(result.v2);
+            try {
+                sideEffect.accept(result.v2);
+            } catch (DcbSnapshotInvalidException refused) {
+                // A side-effect can let through a refusal another service marked, which says nothing about this append
+                throw refused.afterAppend();
+            }
         }
         return result.v1;
     }
