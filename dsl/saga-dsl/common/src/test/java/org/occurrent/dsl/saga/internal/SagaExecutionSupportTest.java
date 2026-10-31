@@ -662,6 +662,13 @@ class SagaExecutionSupportTest {
                     TYPE_B, new TypeMark(20, List.of(), 16)), pending)));
         }
 
+        /** As {@link #markedWithPending(Map)}, with the instant each pending version first failed. */
+        private SagaEnvelope<OrderState> markedWithPending(Map<String, List<Long>> pending, Map<Long, Instant> pendingSince) {
+            return envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(10, Map.of(
+                    TYPE_A, new TypeMark(30, List.of(27L, 28L), 26),
+                    TYPE_B, new TypeMark(20, List.of(), 16)), pending, List.of(), pendingSince)));
+        }
+
         private List<Long> pendingOf(SagaEnvelope<OrderState> envelope, String stream, String type) {
             StreamMarks marks = envelope.streamMarks().get(stream);
             return marks == null ? List.of() : marks.pending().getOrDefault(type, List.of());
@@ -1015,8 +1022,9 @@ class SagaExecutionSupportTest {
 
             @Test
             void a_stream_first_seen_by_this_delivery_has_no_floor_so_a_lower_version_of_another_type_is_new_afterwards() {
-                // Given
-                SagaEnvelope<OrderState> afterFirst = apply(null, new EventMeta(STREAM, 10L, null, TYPE_A)).envelope();
+                // Given the instance started on another stream, so stream s1 gets its marks from this delivery
+                SagaEnvelope<OrderState> started = apply(null, new EventMeta("s0", 1L, null, TYPE_A)).envelope();
+                SagaEnvelope<OrderState> afterFirst = apply(started, new EventMeta(STREAM, 10L, null, TYPE_A)).envelope();
 
                 // When
                 Delivery delivery = SagaExecutionSupport.classify(afterFirst, meta(TYPE_B, 3), WINDOW);
@@ -1356,7 +1364,7 @@ class SagaExecutionSupportTest {
             }
 
             @Test
-            void the_input_the_record_named_is_behind_the_window_again_once_it_has_been_applied() {
+            void the_input_the_record_named_is_skipped_as_a_redelivery_once_it_has_been_applied() {
                 // Given
                 SagaEnvelope<OrderState> afterApplied = applyOrderPlaced(failingOn(STREAM + "@5", NOW), meta(TYPE_A, 5)).envelope();
 
@@ -1365,7 +1373,7 @@ class SagaExecutionSupportTest {
 
                 // Then
                 assertAll(
-                        () -> assertThat(SagaExecutionSupport.classify(afterApplied, meta(TYPE_A, 5), WINDOW)).isEqualTo(Delivery.BEHIND_WINDOW),
+                        () -> assertThat(SagaExecutionSupport.classify(afterApplied, meta(TYPE_A, 5), WINDOW)).isEqualTo(Delivery.REDELIVERY),
                         () -> assertThat(redelivery.processed()).isFalse(),
                         () -> assertThat(redelivery.commands()).isEmpty()
                 );
@@ -1506,7 +1514,7 @@ class SagaExecutionSupportTest {
                 // Then
                 assertAll(
                         () -> assertThat(record).isNotNull(),
-                        () -> assertThat(record.envelope().streamMarks()).isEqualTo(markedWithPending(Map.of(TYPE_A, List.of(31L))).streamMarks()),
+                        () -> assertThat(record.envelope().streamMarks()).isEqualTo(markedWithPending(Map.of(TYPE_A, List.of(31L)), Map.of(31L, NOW)).streamMarks()),
                         () -> assertThat(record.envelope().streamWatermarks()).isEqualTo(marked().streamWatermarks()),
                         () -> assertThat(record.envelope().failure().input()).isEqualTo("s1@31")
                 );
@@ -1521,7 +1529,7 @@ class SagaExecutionSupportTest {
                 assertAll(
                         () -> assertThat(record).isNotNull(),
                         () -> assertThat(record.envelope().failure().input()).isEqualTo("s1@29"),
-                        () -> assertThat(record.envelope().streamMarks()).isEqualTo(markedWithPending(Map.of(TYPE_A, List.of(29L))).streamMarks())
+                        () -> assertThat(record.envelope().streamMarks()).isEqualTo(markedWithPending(Map.of(TYPE_A, List.of(29L)), Map.of(29L, NOW)).streamMarks())
                 );
             }
 
@@ -1571,7 +1579,7 @@ class SagaExecutionSupportTest {
 
             @Test
             void quarantining_only_adds_the_version_as_pending_to_the_marks() {
-                // Given an instance that has been failing for longer than the budget
+                // Given an input that has been failing for as long as the budget
                 SagaEnvelope<OrderState> failingSince = failing(marked(), meta(TYPE_A, 31)).envelope();
 
                 // When
@@ -1581,7 +1589,7 @@ class SagaExecutionSupportTest {
                 // Then
                 assertAll(
                         () -> assertThat(record.quarantined()).isTrue(),
-                        () -> assertThat(record.envelope().streamMarks()).isEqualTo(markedWithPending(Map.of(TYPE_A, List.of(31L))).streamMarks()),
+                        () -> assertThat(record.envelope().streamMarks()).isEqualTo(markedWithPending(Map.of(TYPE_A, List.of(31L)), Map.of(31L, NOW)).streamMarks()),
                         () -> assertThat(record.envelope().streamWatermarks()).isEqualTo(marked().streamWatermarks())
                 );
             }
@@ -1593,7 +1601,7 @@ class SagaExecutionSupportTest {
 
                 // Then
                 assertThat(record.envelope().streamMarks()).isEqualTo(
-                        Map.of(STREAM, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(TYPE_A, List.of(1L)))));
+                        Map.of(STREAM, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(TYPE_A, List.of(1L)), List.of(), Map.of(1L, NOW))));
             }
         }
 
@@ -1626,42 +1634,106 @@ class SagaExecutionSupportTest {
                         Map.of(TYPE_A, new TypeMark(30, List.of(), 20)), Map.of(TYPE_A, List.of(5L, 6L, 7L, 8L, 9L, 10L)))));
             }
 
-            @Test
-            void only_the_largest_pending_versions_that_fit_the_window_are_kept() {
-                // Given
-                SagaEnvelope<OrderState> current = withSixPendingVersionsOfTypeA();
+            private List<String> warnings() {
+                return appender.list.stream()
+                        .filter(event -> event.getLevel() == Level.WARN)
+                        .map(ILoggingEvent::getFormattedMessage)
+                        .toList();
+            }
 
-                // When
-                FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, 31),
-                        new IllegalStateException("boom"), NOW, Duration.ofMinutes(5), NARROW_WINDOW);
-
-                // Then
-                assertThat(record).isNotNull();
-                assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(10L, 31L);
+            private FailureRecord<OrderState> failingAt(SagaEnvelope<OrderState> current, long version, int window) {
+                return SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, version),
+                        new IllegalStateException("boom"), NOW, Duration.ofMinutes(5), window);
             }
 
             @Test
-            void each_version_that_is_no_longer_remembered_is_logged_as_an_error_once() {
+            void every_pending_version_is_kept_however_many_the_window_allows() {
                 // Given
                 SagaEnvelope<OrderState> current = withSixPendingVersionsOfTypeA();
 
                 // When
-                SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, 31),
-                        new IllegalStateException("boom"), NOW, Duration.ofMinutes(5), NARROW_WINDOW);
+                FailureRecord<OrderState> record = failingAt(current, 31, NARROW_WINDOW);
 
                 // Then
-                List<String> errors = appender.list.stream()
-                        .filter(event -> event.getLevel() == Level.ERROR)
-                        .map(ILoggingEvent::getFormattedMessage)
-                        .toList();
-                assertAll(
-                        () -> assertThat(errors).hasSize(5),
-                        () -> assertThat(errors).anyMatch(message -> message.contains("version 5 is no longer remembered")),
-                        () -> assertThat(errors).anyMatch(message -> message.contains("version 6 is no longer remembered")),
-                        () -> assertThat(errors).anyMatch(message -> message.contains("version 7 is no longer remembered")),
-                        () -> assertThat(errors).anyMatch(message -> message.contains("version 8 is no longer remembered")),
-                        () -> assertThat(errors).anyMatch(message -> message.contains("version 9 is no longer remembered"))
-                );
+                assertThat(record).isNotNull();
+                assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(5L, 6L, 7L, 8L, 9L, 10L, 31L);
+            }
+
+            @Test
+            void no_error_is_logged_for_a_version_kept_past_the_window() {
+                // Given
+                SagaEnvelope<OrderState> current = withSixPendingVersionsOfTypeA();
+
+                // When
+                failingAt(current, 31, NARROW_WINDOW);
+
+                // Then
+                assertThat(appender.list).noneMatch(event -> event.getLevel() == Level.ERROR);
+            }
+
+            @Test
+            void a_warning_naming_the_stream_the_type_and_the_window_is_logged_when_the_pending_versions_of_a_type_grow_past_the_window() {
+                // Given a window of 2 and 2 versions of type A pending already
+                SagaEnvelope<OrderState> current = failingAt(failingAt(null, 31, NARROW_WINDOW).envelope(), 32, NARROW_WINDOW).envelope();
+
+                // When
+                failingAt(current, 33, NARROW_WINDOW);
+
+                // Then
+                assertThat(warnings()).singleElement().satisfies(message -> assertAll(
+                        () -> assertThat(message).contains("Stream s1"),
+                        () -> assertThat(message).contains("'" + TYPE_A + "'"),
+                        () -> assertThat(message).contains("more than 2")
+                ));
+            }
+
+            @Test
+            void no_warning_is_logged_while_the_pending_versions_of_a_type_fit_the_window() {
+                // Given a window of 2 and 1 version of type A pending already
+                SagaEnvelope<OrderState> current = failingAt(null, 31, NARROW_WINDOW).envelope();
+
+                // When
+                failingAt(current, 32, NARROW_WINDOW);
+
+                // Then
+                assertThat(warnings()).isEmpty();
+            }
+
+            @Test
+            void the_warning_is_not_logged_again_for_the_next_version_that_fails() {
+                // Given a window of 2 and 3 versions of type A pending, which logged the warning
+                SagaEnvelope<OrderState> crossed = failingAt(failingAt(failingAt(null, 31, NARROW_WINDOW).envelope(), 32, NARROW_WINDOW).envelope(), 33, NARROW_WINDOW).envelope();
+
+                // When
+                failingAt(crossed, 34, NARROW_WINDOW);
+
+                // Then
+                assertThat(warnings()).hasSize(1);
+            }
+
+            @Test
+            void the_warning_is_not_logged_again_when_a_version_that_is_pending_already_fails_again() {
+                // Given a window of 2 and 4 versions of type A pending, the last of them failing now, which logged the warning once
+                SagaEnvelope<OrderState> crossed = failingAt(failingAt(failingAt(failingAt(null, 31, NARROW_WINDOW).envelope(), 32, NARROW_WINDOW).envelope(),
+                        33, NARROW_WINDOW).envelope(), 34, NARROW_WINDOW).envelope();
+
+                // When
+                failingAt(crossed, 33, NARROW_WINDOW);
+
+                // Then
+                assertThat(warnings()).hasSize(1);
+            }
+
+            @Test
+            void the_warning_is_not_logged_for_an_instance_that_was_past_the_window_before() {
+                // Given 6 versions pending and a window of 2, which is the state after the window was lowered
+                SagaEnvelope<OrderState> current = withSixPendingVersionsOfTypeA();
+
+                // When
+                failingAt(current, 31, NARROW_WINDOW);
+
+                // Then
+                assertThat(warnings()).isEmpty();
             }
         }
 
@@ -1930,7 +2002,9 @@ class SagaExecutionSupportTest {
                 StreamMarks after = outcome.envelope().streamMarks().get(STREAM);
                 assertAll(
                         () -> assertThat(after.floor()).isEqualTo(10L),
-                        () -> assertThat(after.byType()).isEqualTo(marked().streamMarks().get(STREAM).byType()),
+                        () -> assertThat(after.byType()).isEqualTo(Map.of(
+                                TYPE_A, new TypeMark(30, List.of(12L, 27L, 28L), 26),
+                                TYPE_B, marked().streamMarks().get(STREAM).byType().get(TYPE_B))),
                         () -> assertThat(outcome.envelope().streamWatermarks()).isEqualTo(Map.of(STREAM, 30L))
                 );
             }
@@ -1947,9 +2021,43 @@ class SagaExecutionSupportTest {
 
                 // Then
                 assertAll(
-                        () -> assertThat(SagaExecutionSupport.classify(first.envelope(), meta(TYPE_A, 12), WINDOW)).isEqualTo(Delivery.BEHIND_WINDOW),
+                        () -> assertThat(SagaExecutionSupport.classify(first.envelope(), meta(TYPE_A, 12), WINDOW)).isEqualTo(Delivery.REDELIVERY),
                         () -> assertThat(second.processed()).isFalse(),
                         () -> assertThat(second.commands()).isEmpty()
+                );
+            }
+
+            @Test
+            void the_applied_pending_version_is_forgotten_again_by_the_next_applying_save_of_its_type() {
+                // Given
+                Outcome<OrderState, OrderCommand> first = apply(markedWithPending(Map.of(TYPE_A, List.of(12L))), meta(TYPE_A, 12));
+                assertThat(first.processed()).isTrue();
+
+                // When
+                Outcome<OrderState, OrderCommand> next = apply(first.envelope(), meta(TYPE_A, 31));
+
+                // Then
+                assertAll(
+                        () -> assertThat(next.processed()).isTrue(),
+                        () -> assertThat(next.envelope().streamMarks().get(STREAM).byType().get(TYPE_A).applied()).as("the versions applied below the mark").containsExactly(28L, 30L),
+                        () -> assertThat(SagaExecutionSupport.classify(next.envelope(), meta(TYPE_A, 12), WINDOW)).isEqualTo(Delivery.BEHIND_WINDOW)
+                );
+            }
+
+            @Test
+            void the_applied_pending_version_stays_through_the_next_applying_save_of_another_type() {
+                // Given
+                Outcome<OrderState, OrderCommand> first = apply(markedWithPending(Map.of(TYPE_A, List.of(12L))), meta(TYPE_A, 12));
+                assertThat(first.processed()).isTrue();
+
+                // When
+                Outcome<OrderState, OrderCommand> next = apply(first.envelope(), meta(TYPE_B, 21));
+
+                // Then
+                assertAll(
+                        () -> assertThat(next.processed()).isTrue(),
+                        () -> assertThat(next.envelope().streamMarks().get(STREAM).byType().get(TYPE_A).applied()).as("the versions applied below the mark").containsExactly(12L, 27L, 28L),
+                        () -> assertThat(SagaExecutionSupport.classify(next.envelope(), meta(TYPE_A, 12), WINDOW)).isEqualTo(Delivery.REDELIVERY)
                 );
             }
 
@@ -2013,7 +2121,7 @@ class SagaExecutionSupportTest {
                         () -> assertThat(record.expectedVersion()).isEqualTo(7L),
                         () -> assertThat(record.envelope()).isEqualTo(new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 8, timers,
                                 Map.of(STREAM, 30L), null, NOW, later, null, null, true, otherFailure,
-                                Map.of(STREAM, new StreamMarks(10, byType, Map.of(TYPE_A, List.of(29L), TYPE_B, List.of(11L))))))
+                                Map.of(STREAM, new StreamMarks(10, byType, Map.of(TYPE_A, List.of(29L), TYPE_B, List.of(11L)), List.of(), Map.of(29L, later)))))
                 );
             }
 
@@ -2084,7 +2192,7 @@ class SagaExecutionSupportTest {
             }
 
             @Test
-            void the_smallest_pending_version_is_dropped_when_there_would_be_more_than_the_window() {
+            void every_pending_version_stays_pending_when_there_are_more_than_the_window() {
                 // Given a window of 3, a mark at 30 with nothing applied below it, and 28 and 29 being new
                 SagaEnvelope<OrderState> current = envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0,
                         Map.of(TYPE_A, new TypeMark(30, List.of(), 20)), Map.of(TYPE_A, List.of(5L, 6L, 28L)))));
@@ -2094,7 +2202,7 @@ class SagaExecutionSupportTest {
 
                 // Then
                 assertThat(record).isNotNull();
-                assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(6L, 28L, 29L);
+                assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(5L, 6L, 28L, 29L);
             }
 
             @Test
@@ -2112,7 +2220,7 @@ class SagaExecutionSupportTest {
             }
 
             @Test
-            void the_cap_is_per_type_so_a_full_list_of_another_type_is_left_alone() {
+            void a_list_that_grows_past_the_window_leaves_the_list_of_another_type_alone() {
                 // Given
                 SagaEnvelope<OrderState> current = envelope(Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0,
                         Map.of(TYPE_A, new TypeMark(30, List.of(), 20), TYPE_B, new TypeMark(20, List.of(), 10)),
@@ -2124,7 +2232,7 @@ class SagaExecutionSupportTest {
                 // Then
                 assertThat(record).isNotNull();
                 assertAll(
-                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(6L, 7L, 29L),
+                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(5L, 6L, 7L, 29L),
                         () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_B)).containsExactly(1L, 2L, 3L)
                 );
             }
@@ -2155,7 +2263,7 @@ class SagaExecutionSupportTest {
                         () -> assertThat(record.expectedVersion()).isZero(),
                         () -> assertThat(record.envelope()).isEqualTo(new SagaEnvelope<>("o1", orderFulfillment().initialState(), SagaStatus.ACTIVE, 1,
                                 List.of(), Map.of(), null, later, later, null, null, false, null,
-                                Map.of(STREAM, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(TYPE_A, List.of(1L))))))
+                                Map.of(STREAM, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(TYPE_A, List.of(1L)), List.of(), Map.of(1L, later)))))
                 );
             }
 
@@ -2322,9 +2430,9 @@ class SagaExecutionSupportTest {
             }
 
             @Test
-            void a_different_input_that_fails_later_adds_its_version_and_keeps_the_one_pending_from_before() {
-                // Given the instance is failing on version 31 and holds it as pending
-                SagaEnvelope<OrderState> current = failingOn(STREAM + "@31", markedWithPending(Map.of(TYPE_A, List.of(31L))));
+            void a_different_input_that_fails_later_records_its_own_first_instant_and_keeps_the_version_pending_from_before() {
+                // Given the instance is failing on version 31 since NOW and holds it as pending
+                SagaEnvelope<OrderState> current = failingOn(STREAM + "@31", markedWithPending(Map.of(TYPE_A, List.of(31L)), Map.of(31L, NOW)));
 
                 // When
                 FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 29), NOW.plusSeconds(1));
@@ -2333,8 +2441,9 @@ class SagaExecutionSupportTest {
                 assertThat(record).isNotNull();
                 assertAll(
                         () -> assertThat(record.envelope().failure().input()).isEqualTo("s1@29"),
-                        () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW),
-                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(29L, 31L)
+                        () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW.plusSeconds(1)),
+                        () -> assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(29L, 31L),
+                        () -> assertThat(record.envelope().streamMarks().get(STREAM).pendingSince()).isEqualTo(Map.of(31L, NOW, 29L, NOW.plusSeconds(1)))
                 );
             }
 
@@ -2378,7 +2487,7 @@ class SagaExecutionSupportTest {
                 // Then
                 assertThat(record).isNotNull();
                 assertThat(record.envelope().streamMarks()).isEqualTo(
-                        Map.of(STREAM, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(TYPE_A, List.of(1L)))));
+                        Map.of(STREAM, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(TYPE_A, List.of(1L)), List.of(), Map.of(1L, NOW))));
             }
         }
 
@@ -2794,7 +2903,7 @@ class SagaExecutionSupportTest {
             }
 
             @Test
-            void the_smallest_kept_version_is_dropped_and_logged_with_the_stream_when_more_than_the_window_would_be_kept() {
+            void every_kept_version_stays_and_no_error_is_logged_when_more_than_the_window_would_be_kept() {
                 // Given
                 SagaEnvelope<OrderState> current = failingOn(STREAM + "@5", NOW, Map.of(STREAM, 30L), Map.of(STREAM, new StreamMarks(0,
                         Map.of(TYPE_A, new TypeMark(30, List.of(), 20)), Map.of(), List.of(3L, 4L))));
@@ -2805,9 +2914,8 @@ class SagaExecutionSupportTest {
                 // Then
                 assertThat(record).isNotNull();
                 assertAll(
-                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).containsExactly(4L, 5L),
-                        () -> assertThat(errors()).hasSize(1),
-                        () -> assertThat(errors()).allMatch(message -> message.contains("Stream s1") && message.contains("version 3 is no longer remembered"))
+                        () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).containsExactly(3L, 4L, 5L),
+                        () -> assertThat(errors()).isEmpty()
                 );
             }
 
@@ -2830,8 +2938,8 @@ class SagaExecutionSupportTest {
 
             @Test
             void the_replacement_that_quarantines_the_instance_keeps_the_version_as_well() {
-                // Given the instance has been failing on s1@5 for as long as the budget
-                SagaEnvelope<OrderState> current = storedBeforePending(false);
+                // Given the instance has been failing on s1@5 since NOW, and version 31 is pending since NOW
+                SagaEnvelope<OrderState> current = SagaExecutionSupport.pendingRecord(orderFulfillment(), "o1", storedBeforePending(false), meta(TYPE_A, 31), NOW, WINDOW).envelope();
 
                 // When
                 FailureRecord<OrderState> record = failing(current, meta(TYPE_A, 31), NOW.plus(budget), WINDOW);
@@ -2877,6 +2985,201 @@ class SagaExecutionSupportTest {
                         () -> assertThat(legacyFailedOf(record.envelope(), STREAM)).containsExactly(3L, 4L),
                         () -> assertThat(errors()).isEmpty()
                 );
+            }
+        }
+
+        @Nested
+        @DisplayName("when each input runs its own quarantine budget")
+        class WhenEachInputRunsItsOwnQuarantineBudget {
+
+            private final Duration budget = Duration.ofMinutes(5);
+            private final Throwable failure = new IllegalStateException("boom");
+
+            private Instant after(long minutes) {
+                return NOW.plus(Duration.ofMinutes(minutes));
+            }
+
+            private FailureRecord<OrderState> failing(SagaEnvelope<OrderState> current, long version, Instant now) {
+                return failing(current, version, now, WINDOW);
+            }
+
+            private FailureRecord<OrderState> failing(SagaEnvelope<OrderState> current, long version, Instant now, int window) {
+                FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", current, meta(TYPE_A, version), failure, now, budget, window);
+                assertThat(record).as("a record for version %s", version).isNotNull();
+                return record;
+            }
+
+            /** The input succeeds, which clears the failure record when it names that input. */
+            private SagaEnvelope<OrderState> succeeding(SagaEnvelope<OrderState> current, long version, int window) {
+                Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(orderFulfillment(), "o1", current,
+                        SagaInput.event(new OrderPlaced("o1", 100)), meta(TYPE_A, version), NOW, window);
+                assertThat(outcome.processed()).as("version %s is processed", version).isTrue();
+                return outcome.envelope();
+            }
+
+            private SagaEnvelope<OrderState> succeeding(SagaEnvelope<OrderState> current, long version) {
+                return succeeding(current, version, WINDOW);
+            }
+
+            @Test
+            void an_input_that_fails_for_the_first_time_is_not_quarantined_however_long_another_input_has_been_parked() {
+                // Given version 7 failed at the start, so it has been pending for longer than the budget
+                SagaEnvelope<OrderState> parked = failing(null, 7, after(0)).envelope();
+
+                // When
+                FailureRecord<OrderState> record = failing(parked, 8, after(6));
+
+                // Then
+                assertAll(
+                        () -> assertThat(record.quarantined()).isFalse(),
+                        () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.ACTIVE),
+                        () -> assertThat(record.envelope().failure().input()).isEqualTo("s1@8"),
+                        () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(after(6))
+                );
+            }
+
+            @Test
+            void a_pending_input_that_is_replayed_after_the_budget_has_passed_is_quarantined_on_its_first_failure_of_the_replay() {
+                // Given the instance started at version 1, version 7 failed and was parked, version 8 failed and then succeeded, which cleared the record
+                SagaEnvelope<OrderState> started = succeeding(null, 1);
+                SagaEnvelope<OrderState> parked = failing(started, 7, after(0)).envelope();
+                SagaEnvelope<OrderState> failedOn8 = failing(parked, 8, after(1)).envelope();
+                SagaEnvelope<OrderState> cleared = succeeding(failedOn8, 8);
+                assertThat(cleared.failure()).as("the record is cleared").isNull();
+
+                // When
+                FailureRecord<OrderState> record = failing(cleared, 7, after(5));
+
+                // Then
+                assertAll(
+                        () -> assertThat(record.quarantined()).isTrue(),
+                        () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.QUARANTINED),
+                        () -> assertThat(record.envelope().failure().input()).isEqualTo("s1@7"),
+                        () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(after(0))
+                );
+            }
+
+            @Test
+            void a_pending_input_that_is_replayed_before_the_budget_has_passed_is_not_quarantined() {
+                // Given
+                SagaEnvelope<OrderState> started = succeeding(null, 1);
+                SagaEnvelope<OrderState> parked = failing(started, 7, after(0)).envelope();
+                SagaEnvelope<OrderState> cleared = succeeding(failing(parked, 8, after(1)).envelope(), 8);
+
+                // When
+                FailureRecord<OrderState> record = failing(cleared, 7, after(5).minusSeconds(1));
+
+                // Then
+                assertAll(
+                        () -> assertThat(record.quarantined()).isFalse(),
+                        () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(after(0))
+                );
+            }
+
+            /** An instance stored before pending existed. It is failing on s1@5 since NOW with nothing pending and a watermark of 4. */
+            private SagaEnvelope<OrderState> storedBeforePending() {
+                SagaFailure record = new SagaFailure(STREAM + "@5", null, NOW, IllegalStateException.class.getName(), "boom");
+                return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM, 4L), null,
+                        NOW, NOW, null, null, true, record, Map.of());
+            }
+
+            @Test
+            void an_input_whose_failure_record_was_replaced_by_another_input_keeps_its_own_instant_when_it_fails_again() {
+                // Given s1@5 has failed since NOW, then s1@31 failed and replaced its record, and s1@31 then succeeded
+                SagaEnvelope<OrderState> replaced = failing(storedBeforePending(), 31, after(1)).envelope();
+                SagaEnvelope<OrderState> cleared = succeeding(replaced, 31);
+                assertThat(cleared.failure()).as("the record is cleared").isNull();
+
+                // When
+                FailureRecord<OrderState> record = failing(cleared, 5, after(5));
+
+                // Then
+                assertAll(
+                        () -> assertThat(record.quarantined()).isTrue(),
+                        () -> assertThat(record.envelope().failure().input()).isEqualTo("s1@5"),
+                        () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW)
+                );
+            }
+
+            @Test
+            void an_input_whose_failure_record_was_replaced_by_another_input_is_not_quarantined_by_the_replacing_input() {
+                // Given s1@5 has failed since NOW and s1@31 fails for the first time after the budget has passed
+                SagaEnvelope<OrderState> current = storedBeforePending();
+
+                // When
+                FailureRecord<OrderState> record = failing(current, 31, after(6));
+
+                // Then
+                assertAll(
+                        () -> assertThat(record.quarantined()).isFalse(),
+                        () -> assertThat(record.envelope().failure().input()).isEqualTo("s1@31"),
+                        () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(after(6))
+                );
+            }
+
+            @Test
+            void a_version_that_fails_again_keeps_the_instant_it_first_failed() {
+                // Given versions 7 and 8 failed in turn
+                SagaEnvelope<OrderState> failedOn8 = failing(failing(null, 7, after(0)).envelope(), 8, after(1)).envelope();
+
+                // When
+                FailureRecord<OrderState> record = failing(failedOn8, 7, after(2));
+
+                // Then
+                assertThat(record.envelope().streamMarks().get(STREAM).pendingSince()).isEqualTo(Map.of(7L, after(0), 8L, after(1)));
+            }
+
+            @Test
+            void applying_a_pending_version_removes_its_instant_and_keeps_the_others() {
+                // Given versions 7 and 8 failed in turn
+                SagaEnvelope<OrderState> failedOn8 = failing(failing(null, 7, after(0)).envelope(), 8, after(1)).envelope();
+
+                // When
+                SagaEnvelope<OrderState> applied = succeeding(failedOn8, 7);
+
+                // Then
+                assertThat(applied.streamMarks().get(STREAM).pendingSince()).isEqualTo(Map.of(8L, after(1)));
+            }
+
+            @Test
+            void both_versions_that_failed_are_pending_at_a_window_of_one() {
+                // Given a window of 1
+                SagaEnvelope<OrderState> failedOn7 = failing(null, 7, after(0), 1).envelope();
+
+                // When
+                FailureRecord<OrderState> record = failing(failedOn7, 8, after(1), 1);
+
+                // Then
+                assertThat(pendingOf(record.envelope(), STREAM, TYPE_A)).containsExactly(7L, 8L);
+            }
+
+            @Test
+            void a_replay_of_the_first_failed_version_is_applied_after_the_instance_moved_far_past_it_at_a_window_of_one() {
+                // Given a window of 1, the instance started at version 1, versions 7 and 8 failed, and the instance then applied version 20
+                SagaEnvelope<OrderState> started = succeeding(null, 1, 1);
+                SagaEnvelope<OrderState> failedOn8 = failing(failing(started, 7, after(0), 1).envelope(), 8, after(1), 1).envelope();
+                SagaEnvelope<OrderState> ahead = succeeding(failedOn8, 20, 1);
+
+                // When
+                Delivery delivery = SagaExecutionSupport.classify(ahead, meta(TYPE_A, 7), 1);
+
+                // Then
+                assertThat(delivery).isEqualTo(Delivery.NEW);
+            }
+
+            @Test
+            void the_replay_of_the_first_failed_version_at_a_window_of_one_is_processed() {
+                // Given
+                SagaEnvelope<OrderState> started = succeeding(null, 1, 1);
+                SagaEnvelope<OrderState> failedOn8 = failing(failing(started, 7, after(0), 1).envelope(), 8, after(1), 1).envelope();
+                SagaEnvelope<OrderState> ahead = succeeding(failedOn8, 20, 1);
+
+                // When
+                Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(orderFulfillment(), "o1", ahead,
+                        SagaInput.event(new OrderPlaced("o1", 100)), meta(TYPE_A, 7), NOW, 1);
+
+                // Then
+                assertThat(outcome.processed()).isTrue();
             }
         }
     }

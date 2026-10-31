@@ -27,13 +27,15 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * An in-memory {@link SagaStateStore} backed by a {@link ConcurrentHashMap}, for tests and single-node use. The
- * compare-and-set save is atomic per instance via {@link ConcurrentMap#compute}.
+ * compare-and-set save is atomic per instance via {@link ConcurrentMap#compute}, and so are the marks
+ * {@link SagaHeldEvents} writes on an envelope. Held events live in a second map, keyed by instance and then by key.
  *
  * @param <S> the user state type
  */
-public final class InMemorySagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S> {
+public final class InMemorySagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S>, SagaHeldEvents<S> {
 
     private final ConcurrentMap<String, SagaEnvelope<S>> store = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ConcurrentMap<String, HeldEvent>> heldEvents = new ConcurrentHashMap<>();
 
     @Override
     public Optional<SagaEnvelope<S>> find(String sagaId) {
@@ -104,6 +106,66 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     @Override
     public void delete(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
+        // Held events first, so a delete that stops half way never keeps held events for an instance it removed.
+        heldEvents.remove(sagaId);
         store.remove(sagaId);
+    }
+
+    @Override
+    public boolean hold(String sagaId, HeldEvent event) {
+        requireNonNull(sagaId, "sagaId cannot be null");
+        requireNonNull(event, "event cannot be null");
+        // Every change to an instance's held events goes through compute on the outer map, so a release that removes the
+        // emptied inner map cannot swallow a hold landing in it at the same moment.
+        boolean[] inserted = {false};
+        heldEvents.compute(sagaId, (id, held) -> {
+            ConcurrentMap<String, HeldEvent> events = held == null ? new ConcurrentHashMap<>() : held;
+            inserted[0] = events.putIfAbsent(event.key(), event) == null;
+            return events;
+        });
+        return inserted[0];
+    }
+
+    @Override
+    public void failing(String sagaId, String key, Instant at) {
+        requireNonNull(sagaId, "sagaId cannot be null");
+        requireNonNull(key, "key cannot be null");
+        requireNonNull(at, "at cannot be null");
+        heldEvents.computeIfPresent(sagaId, (id, held) -> {
+            held.computeIfPresent(key, (k, event) -> {
+                HeldEventRef ref = event.ref();
+                return ref.failingSince() != null ? event : new HeldEvent(event.sagaId(), new HeldEventRef(ref.key(), ref.streamId(), ref.version(), ref.position(),
+                        ref.type(), ref.heldAt(), ref.startEvent(), at), event.cloudEvent());
+            });
+            return held;
+        });
+    }
+
+    @Override
+    public List<HeldEventRef> heldIndex(String sagaId) {
+        requireNonNull(sagaId, "sagaId cannot be null");
+        ConcurrentMap<String, HeldEvent> held = heldEvents.get(sagaId);
+        return held == null ? List.of() : held.values().stream().map(HeldEvent::ref).toList();
+    }
+
+    @Override
+    public List<HeldEvent> held(String sagaId, Collection<String> keys) {
+        requireNonNull(sagaId, "sagaId cannot be null");
+        requireNonNull(keys, "keys cannot be null");
+        ConcurrentMap<String, HeldEvent> held = heldEvents.get(sagaId);
+        if (held == null) {
+            return List.of();
+        }
+        return keys.stream().map(held::get).filter(Objects::nonNull).toList();
+    }
+
+    @Override
+    public void release(String sagaId, String key) {
+        requireNonNull(sagaId, "sagaId cannot be null");
+        requireNonNull(key, "key cannot be null");
+        heldEvents.computeIfPresent(sagaId, (id, held) -> {
+            held.remove(key);
+            return held.isEmpty() ? null : held;
+        });
     }
 }

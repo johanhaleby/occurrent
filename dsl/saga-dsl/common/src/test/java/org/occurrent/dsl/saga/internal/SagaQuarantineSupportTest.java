@@ -100,6 +100,13 @@ class SagaQuarantineSupportTest {
                 Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(pendingVersion)))));
     }
 
+    /** As {@link #withFailureAndPending}, with the instant the pending version first failed, as an instance written by this version has it. */
+    private static SagaEnvelope<OrderState> withFailureAndPendingSince(SagaStatus status, SagaFailure failure, long pendingVersion, Instant pendingSince) {
+        return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), status, 4, List.of(new TimerEntry(TIMER, NOW.toEpochMilli())),
+                Map.of("o1", 6L), 6L, NOW.minusSeconds(60), NOW, null, null, true, failure,
+                Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(pendingVersion)), List.of(), Map.of(pendingVersion, pendingSince))));
+    }
+
     private static SagaFailure failedOn(long position, Instant firstFailedAt) {
         return new SagaFailure("o1@" + position, position, firstFailedAt, IllegalStateException.class.getName(), "boom");
     }
@@ -248,7 +255,7 @@ class SagaQuarantineSupportTest {
         }
 
         @Test
-        void a_different_input_failing_names_itself_and_keeps_the_instant_the_instance_started_failing() {
+        void a_different_input_failing_names_itself_and_starts_its_own_clock_while_the_replaced_input_keeps_its_instant() {
             SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(2))));
 
             FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
@@ -257,13 +264,30 @@ class SagaQuarantineSupportTest {
             assertAll(
                     () -> assertThat(record.quarantined()).isFalse(),
                     () -> assertThat(record.envelope().failure().position()).isEqualTo(8),
-                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(2)))
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW),
+                    () -> assertThat(record.envelope().streamMarks().get("o1").pendingSince())
+                            .isEqualTo(Map.of(7L, NOW.minus(Duration.ofMinutes(2)), 8L, NOW))
             );
         }
 
         @Test
-        void a_different_input_failing_once_the_budget_has_run_out_quarantines_the_instance_on_itself() {
+        void a_different_input_failing_for_the_first_time_is_not_quarantined_by_a_budget_another_input_used_up() {
             SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(6))));
+
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", failing, at(8), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertAll(
+                    () -> assertThat(record.quarantined()).isFalse(),
+                    () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(record.envelope().failure().input()).isEqualTo("o1@8"),
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW)
+            );
+        }
+
+        @Test
+        void a_different_input_failing_once_its_own_budget_has_run_out_quarantines_the_instance_on_itself() {
+            SagaEnvelope<OrderState> failing = withFailureAndPendingSince(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(2))), 8, NOW.minus(Duration.ofMinutes(6)));
 
             FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
                     saga(), "o1", failing, at(8), new IllegalStateException("boom"), NOW, BUDGET);
@@ -284,12 +308,13 @@ class SagaQuarantineSupportTest {
             Instant startedFailing = NOW;
             SagaEnvelope<OrderState> instance = active(3, Map.of("o1", 6L), 6L);
             List<Long> alternating = List.of(7L, 8L, 7L, 8L);
+            List<Long> minutes = List.of(0L, 1L, 4L, 6L);
             FailureRecord<OrderState> quarantining = null;
 
-            // Two minutes between deliveries, so the fourth is six minutes past the first and the five minute budget has
-            // run out by then.
+            // Version 8 first failed one minute in, so its fifth minute is the sixth of the run, and version 7 is back
+            // before its own fifth minute has passed.
             for (int delivery = 0; delivery < alternating.size() && quarantining == null; delivery++) {
-                Instant now = startedFailing.plus(Duration.ofMinutes(2L * delivery));
+                Instant now = startedFailing.plus(Duration.ofMinutes(minutes.get(delivery)));
                 FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(saga(), "o1", instance,
                         at(alternating.get(delivery)), new IllegalStateException("boom"), now, BUDGET);
                 if (record == null) {
@@ -306,7 +331,7 @@ class SagaQuarantineSupportTest {
                     () -> assertThat(record).isNotNull(),
                     () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.QUARANTINED),
                     () -> assertThat(record.envelope().failure().input()).isEqualTo("o1@8"),
-                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(startedFailing)
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(startedFailing.plus(Duration.ofMinutes(1)))
             );
         }
 
@@ -472,7 +497,8 @@ class SagaQuarantineSupportTest {
 
             assertAll(
                     () -> assertThat(record).isNotNull(),
-                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(2)))
+                    () -> assertThat(record.envelope().streamMarks().get("position:orders").pendingSince())
+                            .isEqualTo(Map.of(3L, NOW.minus(Duration.ofMinutes(2)), 4L, NOW))
             );
         }
     }

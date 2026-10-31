@@ -22,6 +22,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.SagaHeldEvents;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaFilters;
@@ -30,13 +31,17 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -74,6 +79,18 @@ import static java.util.Objects.requireNonNull;
  * {@link SagaSubscription#close()} so another instance takes over within roughly one lease period. Without a strategy
  * the poller runs on every instance (still correct through compare-and-set, just not coordinated).
  *
+ * <h2>Events that arrive before their instance starts</h2>
+ * A subscription can deliver a non-start event before the event that starts its instance, for example a broker
+ * consumer with several messages in flight, or a catch-up handing over to its live feed. The saga then holds the event
+ * in the state store and applies it once the instance starts. On a subscription model that declares through
+ * {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()} that it delivers every subscription in commit
+ * order, only an event that came before its start in that order arrives before the start, and such an event is skipped
+ * as in 0.34.0. A model that does not declare it
+ * needs a store that implements
+ * {@link SagaHeldEvents}, which {@code SagaStateStore.inMemory()} and {@code SpringMongoSagaStateStore} both do, and
+ * {@code run} refuses any other store with an {@link IllegalStateException}. An event whose start never arrives stays
+ * held until it is removed.
+ *
  * <h2>Failure handling differs between the two input paths</h2>
  * A failed input is handled differently on the event path and the timer path, and the difference matters when a
  * reaction or a dispatch throws.
@@ -101,8 +118,8 @@ import static java.util.Objects.requireNonNull;
  *       thread, and any other delivery running then would have met the same thing.
  *       <p>
  *       An event the saga correlated is charged to that instance, and a quarantine records whichever event the
- *       instance is failing on then. The budget is the instance's rather than one event's, so an instance where two
- *       events both fail keeps the instant it started failing and the record names whichever event it stopped on.
+ *       instance is failing on then. Each failing event keeps its own clock, so an instance where two events fail in
+ *       turn measures each from its own first failure, and the record names whichever event it stopped on.
  *       The quarantined instance stops there, and 0.34.0 has no operation that brings it back, so {@code SagaStateStore.delete(sagaId)} is how you abandon it.
  *       <p>
  *       An event the saga could <em>not</em> correlate, because the converter or the id extractor threw, is never let
@@ -253,7 +270,10 @@ public final class SagaRunner<E, C> {
         requireNonNull(timersEnabled, "timersEnabled cannot be null");
 
         SagaRunnerConfig effectiveConfig = quarantineOnlyIfTheEventCanBeAskedForAgain(subscriptionId, config);
-        SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig, retentionCheckFor(subscriptionId, effectiveConfig));
+        boolean holds = holdsEarlyEvents(subscriptionId);
+        refuseAStoreThatCannotHold(subscriptionId, holds, stateStore);
+        SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig,
+                retentionCheckFor(subscriptionId, effectiveConfig), Instant::now, holds);
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
         Consumer<CloudEvent> action = execution::onCloudEvent;
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
@@ -336,6 +356,44 @@ public final class SagaRunner<E, C> {
             return config.disableQuarantine();
         }
         return config;
+    }
+
+    // Whether this saga's feed can deliver an event before its instance's start, in which case the saga holds early
+    // events and keeps a failed one it cannot list. Read once from the model-wide answer, which is true only when the
+    // model delivers every subscription in commit order at every moment. The only place that asks, so nothing
+    // downstream asks the subscription model. A model that does not declare commit order holds, wrapped or not
+    private boolean holdsEarlyEvents(String subscriptionId) {
+        Optional<CommitOrderedSubscriptions> ordered = CommitOrderedSubscriptions.findIn(subscriptionModel);
+        if (ordered.isEmpty()) {
+            warnIfAWrapperHidesCommitOrder(subscriptionId);
+        }
+        return ordered.map(o -> !o.deliversEveryEventInCommitOrder()).orElse(true);
+    }
+
+    // A wrapper is not unwrapped for commit order, so a declaration below it goes unused, which costs held copies of
+    // early events rather than losing anything. A model below that answers false declares nothing to hide.
+    private void warnIfAWrapperHidesCommitOrder(String subscriptionId) {
+        SubscriptionModelCapability model = subscriptionModel;
+        while (model instanceof SubscriptionModelWrapper wrapper) {
+            model = wrapper.getWrappedSubscriptionModel();
+            if (model instanceof CommitOrderedSubscriptions ordered && ordered.deliversEveryEventInCommitOrder()) {
+                log.warn("Saga subscription '{}' runs on {}, which does not declare commit order, although the model it wraps, {}, does. A wrapper can break commit order, so a declaration below it is not used, and the saga holds every event that arrives before its instance's start instead of skipping it. A wrapper that keeps commit order declares it by implementing {}.",
+                        subscriptionId, subscriptionModel.getClass().getName(), model.getClass().getName(), CommitOrderedSubscriptions.class.getName());
+                return;
+            }
+        }
+    }
+
+    // A feed that can deliver an event before its instance's start needs somewhere to keep the event until the start
+    // arrives, and skipping it instead loses its reaction.
+    private void refuseAStoreThatCannotHold(String subscriptionId, boolean holds, SagaStateStore<?> stateStore) {
+        if (holds && !(stateStore instanceof SagaHeldEvents<?>)) {
+            throw new IllegalStateException("Saga subscription '" + subscriptionId + "' runs on " + subscriptionModel.getClass().getName()
+                                            + ", which can deliver an event before the event that starts its instance, and the state store "
+                                            + stateStore.getClass().getName() + " has nowhere to hold such an event until the start arrives. "
+                                            + "Use a state store that implements " + SagaHeldEvents.class.getName()
+                                            + ", as SagaStateStore.inMemory() and SpringMongoSagaStateStore do, or run the saga on a subscription model that delivers in commit order.");
+        }
     }
 
     /**

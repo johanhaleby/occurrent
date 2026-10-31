@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.saga;
 
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -23,6 +25,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -332,5 +335,53 @@ class InMemorySagaStateStoreTest {
 
             assertThat(store.find("unknown")).isEmpty();
         }
+
+        @Test
+        void removes_the_events_held_for_the_instance_and_leaves_the_events_held_for_another_instance() {
+            // Given
+            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            store.hold("s1", heldEvent("s1", "s1-stream@2"));
+            store.hold("s1", heldEvent("s1", "s1-stream@3"));
+            store.hold("s2", heldEvent("s2", "s2-stream@2"));
+
+            // When
+            store.delete("s1");
+
+            // Then
+            assertAll(
+                    () -> assertThat(store.heldIndex("s1")).isEmpty(),
+                    () -> assertThat(store.held("s1", List.of("s1-stream@2", "s1-stream@3"))).isEmpty(),
+                    () -> assertThat(store.heldIndex("s2")).extracting(HeldEventRef::key).containsExactly("s2-stream@2"));
+        }
+
+        @Test
+        void removes_the_events_held_for_an_instance_that_has_not_started_and_has_no_envelope() {
+            // Given
+            store.hold("s1", heldEvent("s1", "s1-stream@2"));
+
+            // When
+            store.delete("s1");
+
+            // Then
+            assertThat(store.heldIndex("s1")).isEmpty();
+        }
+
+        @Test
+        void lets_an_event_be_held_for_the_id_again_afterwards() {
+            // Given
+            store.hold("s1", heldEvent("s1", "s1-stream@2"));
+            store.delete("s1");
+
+            // When
+            boolean held = store.hold("s1", heldEvent("s1", "s1-stream@2"));
+
+            // Then
+            assertThat(held).isTrue();
+        }
+    }
+
+    private static HeldEvent heldEvent(String sagaId, String key) {
+        CloudEvent cloudEvent = CloudEventBuilder.v1().withId(key).withSource(URI.create("urn:test")).withType("test.event").build();
+        return new HeldEvent(sagaId, new HeldEventRef(key, null, null, null, "test.event", NOW, false, null), cloudEvent);
     }
 }

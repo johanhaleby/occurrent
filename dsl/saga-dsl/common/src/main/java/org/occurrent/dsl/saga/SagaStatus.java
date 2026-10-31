@@ -35,7 +35,7 @@ public enum SagaStatus {
 
     /**
      * The instance is suspended on an input it could not handle. It skips every event addressed to it and fires no
-     * timers.
+     * timers. Events held for it, because they arrived before its start or failed while it ran, stay held.
      * <p>
      * What a failing event holds up while the runner rethrows its failure is not the runner's to decide. That goes for
      * an instance that is failing and not quarantined, and for an event the saga could not route to any instance. Whatever
@@ -54,8 +54,10 @@ public enum SagaStatus {
      * from then on, and either source stops for good on a record the model refuses.
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
-     * which input the instance stopped on, when it started failing, and what the saga threw.
-     * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it.
+     * which input the instance stopped on, when that input first failed, and what the saga threw.
+     * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it. On a
+     * subscription that holds an event arriving before its start, a later event of a deleted instance is held rather
+     * than skipped, so keep the instance as {@link #COMPLETED} instead when more of its events may still arrive.
      * <p>
      * Note that {@code findByStatus(ACTIVE, ...)} does not return a quarantined instance. Enumerate this status too when
      * you are looking for instances that have stopped moving.

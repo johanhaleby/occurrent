@@ -23,6 +23,7 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -45,6 +46,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -816,8 +818,8 @@ class SagaRunnerTest {
         }
 
         // Wraps an in-memory store and counts the due-timer queries, the DB load this feature is meant to remove.
-        private final class CountingStateStore implements SagaStateStore<OrderState> {
-            private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
+        private final class CountingStateStore implements SagaStateStore<OrderState>, SagaHeldEvents<OrderState> {
+            private final InMemorySagaStateStore<OrderState> delegate = new InMemorySagaStateStore<>();
             private final AtomicInteger dueTimerQueries = new AtomicInteger();
 
             @Override
@@ -840,6 +842,31 @@ class SagaRunnerTest {
             @Override
             public void delete(@NonNull String sagaId) {
                 delegate.delete(sagaId);
+            }
+
+            @Override
+            public boolean hold(String sagaId, HeldEvent event) {
+                return delegate.hold(sagaId, event);
+            }
+
+            @Override
+            public void failing(String sagaId, String key, Instant at) {
+                delegate.failing(sagaId, key, at);
+            }
+
+            @Override
+            public List<HeldEventRef> heldIndex(String sagaId) {
+                return delegate.heldIndex(sagaId);
+            }
+
+            @Override
+            public List<HeldEvent> held(String sagaId, Collection<String> keys) {
+                return delegate.held(sagaId, keys);
+            }
+
+            @Override
+            public void release(String sagaId, String key) {
+                delegate.release(sagaId, key);
             }
         }
 

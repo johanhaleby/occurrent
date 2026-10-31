@@ -53,6 +53,7 @@ import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -74,6 +75,8 @@ class SagaPendingStreamVersionTest {
     private static final String ITEM_ADDED_TYPE = ItemAdded.class.getName();
     private static final SagaRunnerConfig WINDOW_OF_2 = SagaRunnerConfig.defaults().withReorderWindow(2);
     private static final SagaRunnerConfig WINDOW_OF_2_WITH_QUARANTINE = WINDOW_OF_2.withQuarantineAfter(BUDGET);
+    private static final SagaRunnerConfig WINDOW_OF_1 = SagaRunnerConfig.defaults().withReorderWindow(1);
+    private static final SagaRunnerConfig WINDOW_OF_1_WITH_QUARANTINE = WINDOW_OF_1.withQuarantineAfter(BUDGET);
 
     sealed interface BasketEvent permits BasketOpened, ItemAdded {
         String eventId();
@@ -214,6 +217,11 @@ class SagaPendingStreamVersionTest {
 
     private List<String> warnings() {
         return appender.list.stream().filter(e -> e.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    /** The warning about pending versions growing past the window, which is the only one the executor and its support class log about the window. */
+    private List<String> reorderWindowWarnings() {
+        return warnings().stream().filter(message -> message.contains("failed versions of type")).toList();
     }
 
     private static BasketOpened opened() {
@@ -381,23 +389,81 @@ class SagaPendingStreamVersionTest {
         }
 
         @Test
-        void the_versions_beyond_the_window_that_failed_are_dropped_oldest_first_and_an_error_names_the_stream() {
+        void the_versions_beyond_the_window_that_failed_all_stay_pending_and_no_error_is_logged() {
             // Given
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = execution(WINDOW_OF_2);
             deliver(execution, openedAt(1));
             failingItems.addAll(Set.of("two", "three", "four"));
             deliverFailing(execution, itemAddedAt(2, "two"));
             deliverFailing(execution, itemAddedAt(3, "three"));
-            List<String> errorsWithinTheWindow = errors();
 
             // When
             deliverFailing(execution, itemAddedAt(4, "four"));
 
             // Then
             assertAll(
-                    () -> assertThat(errorsWithinTheWindow).isEmpty(),
-                    () -> assertThat(pending()).containsExactly(3L, 4L),
-                    () -> assertThat(errors()).anyMatch(message -> message.contains(STREAM))
+                    () -> assertThat(pending()).containsExactly(2L, 3L, 4L),
+                    () -> assertThat(errors()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_warning_naming_the_stream_is_logged_once_the_failed_versions_of_a_type_grow_past_the_window() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = execution(WINDOW_OF_2);
+            deliver(execution, openedAt(1));
+            failingItems.addAll(Set.of("two", "three", "four"));
+            deliverFailing(execution, itemAddedAt(2, "two"));
+            deliverFailing(execution, itemAddedAt(3, "three"));
+            List<String> warningsWithinTheWindow = reorderWindowWarnings();
+
+            // When
+            deliverFailing(execution, itemAddedAt(4, "four"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(warningsWithinTheWindow).isEmpty(),
+                    () -> assertThat(reorderWindowWarnings()).singleElement().satisfies(message -> assertThat(message).contains(STREAM))
+            );
+        }
+
+        @Test
+        void the_warning_is_not_logged_again_for_the_next_failed_version() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = execution(WINDOW_OF_2);
+            deliver(execution, openedAt(1));
+            failingItems.addAll(Set.of("two", "three", "four", "five"));
+            deliverFailing(execution, itemAddedAt(2, "two"));
+            deliverFailing(execution, itemAddedAt(3, "three"));
+            deliverFailing(execution, itemAddedAt(4, "four"));
+
+            // When
+            deliverFailing(execution, itemAddedAt(5, "five"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(pending()).containsExactly(2L, 3L, 4L, 5L),
+                    () -> assertThat(reorderWindowWarnings()).hasSize(1)
+            );
+        }
+
+        @Test
+        void both_inputs_that_failed_are_applied_when_they_are_redelivered_after_the_mark_moved_past_a_window_of_one() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionsTwoAndThreeFailedInTurnAndFourToNineApplied(WINDOW_OF_1);
+            List<Long> pendingBefore = pending();
+
+            // When
+            deliver(execution, itemAddedAt(2, "two"));
+            deliver(execution, itemAddedAt(3, "three"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(pendingBefore).containsExactly(2L, 3L),
+                    () -> assertThat(issued).containsOnlyOnce(reserve("two")),
+                    () -> assertThat(issued).containsOnlyOnce(reserve("three")),
+                    () -> assertThat(stored().state()).isEqualTo(new Basket(8)),
+                    () -> assertThat(pending()).isEmpty()
             );
         }
     }
@@ -492,6 +558,120 @@ class SagaPendingStreamVersionTest {
                     () -> assertThat(stored().state()).isEqualTo(new Basket(3)),
                     () -> assertThat(pending()).containsExactly(3L),
                     () -> assertThat(warnings()).noneMatch(message -> message.contains("skipped version 2 of stream"))
+            );
+        }
+    }
+
+    @Nested
+    @DisplayName("when quarantine is on and the budget runs per input")
+    class WhenQuarantineIsOnAndTheBudgetRunsPerInput {
+
+        private Instant minute(long minutes) {
+            return NOW.plus(Duration.ofMinutes(minutes));
+        }
+
+        @Test
+        void both_inputs_that_failed_are_applied_when_they_are_redelivered_after_the_mark_moved_past_a_window_of_one() {
+            // Given
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = afterVersionsTwoAndThreeFailedInTurnAndFourToNineApplied(WINDOW_OF_1_WITH_QUARANTINE);
+            List<Long> pendingBefore = pending();
+
+            // When
+            deliver(execution, itemAddedAt(2, "two"));
+            deliver(execution, itemAddedAt(3, "three"));
+
+            // Then
+            assertAll(
+                    () -> assertThat(pendingBefore).containsExactly(2L, 3L),
+                    () -> assertThat(issued).containsOnlyOnce(reserve("two")),
+                    () -> assertThat(issued).containsOnlyOnce(reserve("three")),
+                    () -> assertThat(stored().state()).isEqualTo(new Basket(8)),
+                    () -> assertThat(stored().failure()).isNull(),
+                    () -> assertThat(pending()).isEmpty()
+            );
+        }
+
+        @Test
+        void two_inputs_that_fail_in_turn_are_quarantined_once_one_of_them_has_failed_for_the_budget() {
+            // Given versions 2 and 3 fail in turn as 2, 3, 2, which is five minutes past the first failure of 3 only once 3 fails again
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = execution(WINDOW_OF_2_WITH_QUARANTINE);
+            deliver(execution, openedAt(1));
+            failingItems.addAll(Set.of("two", "three"));
+            now.set(minute(0));
+            deliverFailing(execution, itemAddedAt(2, "two"));
+            now.set(minute(1));
+            deliverFailing(execution, itemAddedAt(3, "three"));
+            now.set(minute(4));
+            deliverFailing(execution, itemAddedAt(2, "two"));
+            SagaStatus statusBeforeTheLastFailure = stored().status();
+            now.set(minute(6));
+
+            // When
+            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(itemAddedAt(3, "three")));
+
+            // Then
+            SagaEnvelope<Basket> after = stored();
+            assertAll(
+                    () -> assertThat(statusBeforeTheLastFailure).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(after.status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(after.failure().input()).isEqualTo(STREAM + "@3"),
+                    () -> assertThat(after.failure().firstFailedAt()).isEqualTo(minute(1))
+            );
+        }
+
+        @Test
+        void an_input_that_fails_for_the_first_time_is_not_quarantined_however_long_another_input_has_been_parked() {
+            // Given version 2 failed at the start and has been pending for longer than the budget
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = execution(WINDOW_OF_2_WITH_QUARANTINE);
+            deliver(execution, openedAt(1));
+            failingItems.addAll(Set.of("two", "three"));
+            now.set(minute(0));
+            deliverFailing(execution, itemAddedAt(2, "two"));
+            now.set(minute(6));
+
+            // When
+            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(itemAddedAt(3, "three")));
+
+            // Then
+            SagaEnvelope<Basket> after = stored();
+            assertAll(
+                    () -> assertThat(thrown).isSameAs(handlerFailure),
+                    () -> assertThat(after.status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(after.failure().input()).isEqualTo(STREAM + "@3"),
+                    () -> assertThat(after.failure().firstFailedAt()).isEqualTo(minute(6)),
+                    () -> assertThat(pending()).containsExactly(2L, 3L)
+            );
+        }
+
+        @Test
+        void a_parked_input_that_is_replayed_after_the_budget_has_passed_is_quarantined_on_its_first_failure_of_the_replay() {
+            // Given version 2 failed at the start, version 3 failed and then succeeded, which cleared the failure record
+            SagaExecution<BasketEvent, Basket, BasketCommand> execution = execution(WINDOW_OF_2_WITH_QUARANTINE);
+            deliver(execution, openedAt(1));
+            failingItems.addAll(Set.of("two", "three"));
+            now.set(minute(0));
+            deliverFailing(execution, itemAddedAt(2, "two"));
+            now.set(minute(1));
+            deliverFailing(execution, itemAddedAt(3, "three"));
+            failingItems.remove("three");
+            now.set(minute(2));
+            deliver(execution, itemAddedAt(3, "three"));
+            SagaEnvelope<Basket> parked = stored();
+            now.set(minute(5));
+
+            // When
+            Throwable thrown = catchThrowable(() -> execution.onCloudEvent(itemAddedAt(2, "two")));
+
+            // Then
+            SagaEnvelope<Basket> after = stored();
+            assertAll(
+                    () -> assertThat(parked.failure()).isNull(),
+                    () -> assertThat(parked.status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(after.status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(after.failure().input()).isEqualTo(STREAM + "@2"),
+                    () -> assertThat(after.failure().firstFailedAt()).isEqualTo(minute(0))
             );
         }
     }

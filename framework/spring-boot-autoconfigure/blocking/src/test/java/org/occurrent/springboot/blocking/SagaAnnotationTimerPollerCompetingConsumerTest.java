@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Saga;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
+import org.occurrent.dsl.saga.SagaHeldEvents;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
@@ -42,6 +43,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 /**
  * {@link SagaAnnotationRegistrar#resolveSagaCompetingConsumerStrategy()} gates the saga timer poller on a
@@ -133,7 +135,7 @@ class SagaAnnotationTimerPollerCompetingConsumerTest {
         @SuppressWarnings("unchecked")
         @Bean
         SagaStateStore<TestState> sagaStateStore() {
-            return mock(SagaStateStore.class);
+            return mock(SagaStateStore.class, withSettings().extraInterfaces(SagaHeldEvents.class));
         }
 
         @Bean

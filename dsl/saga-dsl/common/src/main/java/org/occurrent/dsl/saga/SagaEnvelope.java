@@ -65,6 +65,9 @@ import static java.util.Objects.requireNonNull;
  *                          of the same type, which a feed that reorders can deliver, be told from a redelivery. Empty
  *                          for an instance stored before 0.35.0, which reads as every type of a stream being applied up to
  *                          that stream's watermark
+ * @param startMark         the lowest start event the instance has applied on the stream it started on, or {@code null}
+ *                          for one stored before 0.35.0. An event of that stream below it that is not a start event waits
+ *                          held, because a start event below it may still arrive, and applying one moves this down to it
  * @param <S>               the user state type
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
@@ -80,7 +83,8 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        @Nullable String currentStep,
                                                        boolean started,
                                                        @Nullable SagaFailure failure,
-                                                       Map<String, StreamMarks> streamMarks) implements SagaInstance {
+                                                       Map<String, StreamMarks> streamMarks,
+                                                       @Nullable StartMark startMark) implements SagaInstance {
 
     public SagaEnvelope {
         requireNonNull(sagaId, "sagaId cannot be null");
@@ -94,6 +98,17 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
             // state to derive from, which is exactly the projected-read case a store needs it for.
             currentStep = state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
         }
+    }
+
+    /**
+     * An envelope with no start mark, which is every instance stored before 0.35.0.
+     */
+    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
+                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
+                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep,
+                        boolean started, @Nullable SagaFailure failure, Map<String, StreamMarks> streamMarks) {
+        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
+                completedAt, currentStep, started, failure, streamMarks, null);
     }
 
     /**
@@ -132,22 +147,32 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      * @param byType the versions applied per cloud event type
      * @param pending the versions per cloud event type that were handed to the executor and failed, ascending, so still
      *                outstanding. A version in here is applied when it arrives again however far behind the highest
-     *                one applied it is, because it is known not to have been applied. Applying it removes it. At
-     *                most the reorder window many are kept per type
+     *                one applied it is, because it is known not to have been applied. Applying it removes it, and
+     *                nothing else does
      * @param legacyFailed the versions of the stream whose failure was recorded before the executor listed failed versions
      *                as pending, ascending, so the event type is not known. A stream version names exactly one event, so
      *                the version is enough to recognise it. It is treated like a pending version and removed when the
      *                version is applied. It is filled only when such a failure record is replaced by another input's, so
-     *                it holds at most the one record an instance carried over from before, and at most the reorder window
-     *                many are kept
+     *                it holds at most the one record an instance carried over from before
+     * @param pendingSince when each version in {@code pending} first failed, by version. The quarantine budget of an input
+     *                runs from here, so a failure of one input never moves the clock of another. A pending version
+     *                missing from it falls back to the failure record's {@code firstFailedAt} when the record names it,
+     *                and otherwise to the moment it fails again
      */
-    public record StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending, List<Long> legacyFailed) {
+    public record StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending, List<Long> legacyFailed,
+                              Map<Long, Instant> pendingSince) {
         public StreamMarks {
             legacyFailed = List.copyOf(legacyFailed);
             byType = Map.copyOf(byType);
             Map<String, List<Long>> copied = new HashMap<>();
             pending.forEach((type, versions) -> copied.put(type, List.copyOf(versions)));
             pending = Map.copyOf(copied);
+            pendingSince = Map.copyOf(pendingSince);
+        }
+
+        /** Marks that know no instant for their pending versions. */
+        public StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending, List<Long> legacyFailed) {
+            this(floor, byType, pending, legacyFailed, Map.of());
         }
 
         /** Marks with no failure recorded before pending existed. */
@@ -174,6 +199,18 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     public record TypeMark(long mark, List<Long> applied, long horizon) {
         public TypeMark {
             applied = List.copyOf(applied);
+        }
+    }
+
+    /**
+     * The event that started an instance.
+     *
+     * @param streamId the stream the start was written to
+     * @param version  the start's stream version
+     */
+    public record StartMark(String streamId, long version) {
+        public StartMark {
+            requireNonNull(streamId, "streamId cannot be null");
         }
     }
 

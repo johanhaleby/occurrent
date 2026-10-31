@@ -41,11 +41,18 @@ import static java.util.Objects.requireNonNull;
  * <h2>Semantics an executor must honour</h2>
  * <ul>
  *   <li>An event with a {@code null} {@link #sagaId(Object)} belongs to no instance and is skipped.</li>
- *   <li>A correlated event whose type is not in {@link #startEventTypes()} and for which no instance exists is skipped.</li>
+ *   <li>A correlated event whose type is not in {@link #startEventTypes()} and whose instance has not started is held
+ *       and applied once the instance starts. On a subscription that delivers in commit order only an event that came
+ *       before the start in that order arrives before it, so it is skipped instead.</li>
+ *   <li>An event on the stream that started the instance, below the start's version, that is not a
+ *       {@linkplain #startEventTypes() start event}, runs no reaction when it arrives. On a subscription that can reorder
+ *       it is held and applied when a start event below it applies, and completing the instance removes it otherwise. On
+ *       a subscription that delivers in commit order it is skipped.</li>
  *   <li>For each input the executor computes {@code s' = evolve(state, input)}, then {@code react(s', input)}: react sees
  *       the state <em>after</em> the fold. Replay only ever folds {@link #evolve}, so it produces no effects.</li>
  *   <li>{@link #onStart(Object, Object)} runs exactly once, when a start event creates the instance, after the first
- *       {@code evolve} and before that event's {@code react}, and the effects are concatenated in that order.</li>
+ *       {@code evolve} and before that event's {@code react}, and the effects are concatenated in that order. Events
+ *       held because they arrived before the start are applied after that, each as an input of its own.</li>
  *   <li>{@link #isTerminal(Object)} is absorbing: a terminal instance ignores further inputs, and the executor cancels
  *       all of the instance's outstanding timers when a state first becomes terminal.</li>
  *   <li>Timeouts never start an instance and are ignored by a terminal instance.</li>

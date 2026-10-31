@@ -27,12 +27,16 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
 import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport.FailureRecord;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -41,6 +45,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -832,6 +837,186 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
             // Then
             assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(LEGACY_FAILED_MARKS);
+        }
+    }
+
+    @Nested
+    @DisplayName("when an instance with pending versions that first failed at different instants is saved")
+    class WhenAnInstanceWithPendingVersionsThatFirstFailedAtDifferentInstantsIsSaved {
+
+        private static final Instant OLDER = Instant.parse("2026-01-01T00:00:10Z");
+        private static final Instant NEWER = Instant.parse("2026-01-01T00:05:00Z");
+        private static final String KEY_OF_FOUR = STREAM_ID + "@4";
+        private static final String KEY_OF_SIX = STREAM_ID + "@6";
+        private final Map<Long, Instant> clocks = Map.of(4L, OLDER, 6L, NEWER);
+        private final Map<String, StreamMarks> marks = Map.of(
+                STREAM_ID, new StreamMarks(3, Map.of(
+                        PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L), 8)),
+                        Map.of(PLACED_TYPE, List.of(4L, 6L)), List.of(), clocks));
+
+        private SagaEnvelope<String> instanceFailingOn(String input, Instant firstFailedAt) {
+            return new SagaEnvelope<>(SAGA_ID, "awaiting-payment", SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM_ID, 12L), null,
+                    NOW, NOW, null, null, true, failure(input, firstFailedAt), marks);
+        }
+
+        private SagaFailure failure(String input, Instant firstFailedAt) {
+            return new SagaFailure(input, null, firstFailedAt, IllegalStateException.class.getName(), "boom");
+        }
+
+        private SagaEnvelope<String> writeOver(SagaEnvelope<String> read, SagaFailure failure) {
+            return new SagaEnvelope<>(SAGA_ID, read.state(), read.status(), read.version() + 1, read.timers(), read.streamWatermarks(), null,
+                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), failure, read.streamMarks());
+        }
+
+        private Map<Long, Instant> clocksOf(SagaEnvelope<String> envelope) {
+            return envelope.streamMarks().get(STREAM_ID).pendingSince();
+        }
+
+        @Test
+        void find_reads_back_the_instant_each_version_first_failed() {
+            // Given
+            save(instanceWith(marks, 1), 0);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertAll(
+                    () -> assertThat(clocksOf(read)).isEqualTo(clocks),
+                    () -> assertThat(read.streamMarks()).isEqualTo(marks)
+            );
+        }
+
+        @Test
+        void findWithoutState_reads_back_the_instant_each_version_first_failed() {
+            // Given
+            save(instanceWith(marks, 1), 0);
+
+            // When
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // Then
+            assertThat(clocksOf(read)).isEqualTo(clocks);
+        }
+
+        @Test
+        void a_write_without_the_state_that_carries_the_marks_over_keeps_the_instants() {
+            // Given
+            save(instanceWith(marks, 1), 0);
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // When
+            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, writeOver(read, failure(KEY_OF_FOUR, OLDER)), read.version());
+
+            // Then
+            assertAll(
+                    () -> assertThat(written).isTrue(),
+                    () -> assertThat(clocksOf(stateStore.find(SAGA_ID).orElseThrow())).isEqualTo(clocks)
+            );
+        }
+
+        @Test
+        void a_write_without_the_state_that_replaces_the_failure_record_keeps_the_instant_of_the_input_it_no_longer_names() {
+            // Given
+            save(instanceFailingOn(KEY_OF_FOUR, OLDER), 0);
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // When
+            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, writeOver(read, failure(KEY_OF_SIX, NEWER)), read.version());
+
+            // Then
+            SagaEnvelope<String> after = stateStore.find(SAGA_ID).orElseThrow();
+            assertAll(
+                    () -> assertThat(written).isTrue(),
+                    () -> assertThat(requireNonNull(after.failure()).input()).isEqualTo(KEY_OF_SIX),
+                    () -> assertThat(clocksOf(after)).isEqualTo(clocks)
+            );
+        }
+
+        @Test
+        void a_write_without_the_state_that_clears_the_failure_record_keeps_the_instants() {
+            // Given
+            save(instanceFailingOn(KEY_OF_FOUR, OLDER), 0);
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // When
+            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, writeOver(read, null), read.version());
+
+            // Then
+            SagaEnvelope<String> after = stateStore.find(SAGA_ID).orElseThrow();
+            assertAll(
+                    () -> assertThat(written).isTrue(),
+                    () -> assertThat(after.failure()).isNull(),
+                    () -> assertThat(clocksOf(after)).isEqualTo(clocks)
+            );
+        }
+    }
+
+    @Nested
+    @DisplayName("when a stored stream entry has no pending since field")
+    class WhenAStoredStreamEntryHasNoPendingSinceField {
+
+        private static final Instant FIRST_FAILED_AT = Instant.parse("2026-01-01T00:00:10Z");
+        private static final String KEY_OF_FOUR = STREAM_ID + "@4";
+
+        // A stream entry and a failure record as 0.35.0 wrote them before the instant of a pending version was kept.
+        private Document documentWithAPendingVersionAndAFailureRecordButNoInstants() {
+            Document type = new Document("type", PLACED_TYPE).append("mark", 12L).append("applied", List.of(9L, 10L, 11L)).append("horizon", 8L);
+            Document pending = new Document("type", PLACED_TYPE).append("versions", List.of(4L));
+            Document stream = new Document("streamId", STREAM_ID).append("floor", 3L).append("types", List.of(type)).append("pending", List.of(pending));
+            return documentWrittenBy0_34().append("streamMarks", List.of(stream))
+                    .append("failureInput", KEY_OF_FOUR)
+                    .append("failureFirstFailedAt", FIRST_FAILED_AT.toEpochMilli())
+                    .append("failureType", IllegalStateException.class.getName());
+        }
+
+        @Test
+        void find_reads_it_with_no_instants() {
+            // Given
+            mongoOperations.insert(documentWithAPendingVersionAndAFailureRecordButNoInstants(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertThat(read.streamMarks().get(STREAM_ID).pendingSince()).isEmpty();
+        }
+
+        @Test
+        void findWithoutState_reads_it_with_no_instants() {
+            // Given
+            mongoOperations.insert(documentWithAPendingVersionAndAFailureRecordButNoInstants(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // Then
+            assertThat(read.streamMarks().get(STREAM_ID).pendingSince()).isEmpty();
+        }
+
+        @Test
+        void the_budget_of_the_input_the_failure_record_names_runs_from_the_first_failure_of_the_record() {
+            // Given
+            mongoOperations.insert(documentWithAPendingVersionAndAFailureRecordButNoInstants(), COLLECTION);
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            Saga<String, String, String> saga = Saga.<String, String, String>builder("initial")
+                    .correlateAll(event -> event)
+                    .startsOn(String.class)
+                    .evolve(String.class, (state, event) -> state)
+                    .react(String.class, (state, event) -> List.of())
+                    .build();
+            Instant now = FIRST_FAILED_AT.plus(Duration.ofMinutes(10));
+
+            // When
+            FailureRecord<String> record = SagaExecutionSupport.onFailure(saga, SAGA_ID, read, new EventMeta(STREAM_ID, 4L, null, PLACED_TYPE),
+                    new IllegalStateException("boom"), now, Duration.ofMinutes(5), 2);
+
+            // Then
+            assertAll(
+                    () -> assertThat(requireNonNull(record).envelope().failure().firstFailedAt()).isEqualTo(FIRST_FAILED_AT),
+                    () -> assertThat(record.quarantined()).isTrue(),
+                    () -> assertThat(record.envelope().streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(4L, FIRST_FAILED_AT))
+            );
         }
     }
 }
