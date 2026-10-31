@@ -18,8 +18,8 @@ Extends [ADR 84](0084-what-a-position-guarantees.md) with what a position can't 
 The MongoDB stores reserve a block of positions before the append transaction starts. The reservation is one
 `findOneAndUpdate` with `$inc` on a counter document, outside the transaction (`MongoEventStore.java:471` reserves,
 `:485-487` starts the transaction, and `SpringMongoEventStore.java:426` and `ReactorMongoEventStore.java:359` do the
-same). The block is reused when the transaction is retried. So an append can own a position for a long time before its
-events are visible, and an append that reserved later can commit first.
+same when they run the transaction themselves). The block is reused when the transaction is retried. So an append can
+own a position for a long time before its events are visible, and an append that reserved later can commit first.
 
 [ADR 84](0084-what-a-position-guarantees.md) states this as the contract:
 
