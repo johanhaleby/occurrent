@@ -29,6 +29,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Projection;
+import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.view.ViewStateRepository;
@@ -333,17 +334,17 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void startAt_now_still_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
-        // Unlike DEFAULT, an explicit NOW resolves to StartAt.now(), a documented, composition-independent contract
-        // (subscribe at this moment, no replay) every Subscribable must honor regardless of whether it also exposes
-        // ReplayAwareSubscriptions, so that fact holds and is worth its own warning alongside resolveEventStorePhase's
-        // "cannot tell" one, not instead of it.
+    void startAt_now_with_same_as_start_at_still_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
+        // Unlike DEFAULT, an explicit NOW with resumeBehavior = SAME_AS_START_AT resolves to StartAt.now(), a
+        // documented, composition-independent contract (subscribe at this moment, no replay, no stored checkpoint)
+        // every Subscribable must honor regardless of whether it also exposes ReplayAwareSubscriptions, so that fact
+        // holds and is worth its own warning alongside resolveEventStorePhase's "cannot tell" one, not instead of it.
         Subscribable model = unobservableModel();
 
         new ApplicationContextRunner()
                 .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
                 .withUserConfiguration(TestConfiguration.class)
-                .withBean("startAtNowProjection", StartAtNowProjection.class, StartAtNowProjection::new)
+                .withBean("startAtNowSameAsStartAtProjection", StartAtNowSameAsStartAtProjection.class, StartAtNowSameAsStartAtProjection::new)
                 .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
                 .withBean("subscribable", Subscribable.class, () -> model)
                 .run(context -> {
@@ -352,6 +353,56 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                     assertThat(warnings()).anySatisfy(event -> assertThat(event.getFormattedMessage()).contains("does not expose"));
                     assertThat(warnings()).anySatisfy(event -> assertThat(event.getFormattedMessage())
                             .contains("its resolved start position or composition never replays"));
+                });
+    }
+
+    @Test
+    void startAt_now_with_the_default_resume_behavior_does_not_claim_it_never_replays_when_the_composition_cannot_say_whether_its_default_would() {
+        // Given NOW with the default resumeBehavior resolves to StartAt.subscriptionModelDefault(), not StartAt.now(),
+        // so it resumes from a stored checkpoint, and on a composition this registrar cannot read (no
+        // ReplayAwareSubscriptions, no ComposedCatchupModel holder) nobody has said that default is live-only.
+        Subscribable model = unobservableModel();
+
+        // When the context starts
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("startAtNowDefaultResumeProjection", StartAtNowDefaultResumeProjection.class, StartAtNowDefaultResumeProjection::new)
+                .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
+                .withBean("subscribable", Subscribable.class, () -> model)
+                .run(context -> {
+                    // Then no warning claims it never replays, and only the "cannot tell" one fires
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).noneSatisfy(event -> assertThat(event.getFormattedMessage())
+                            .contains("its resolved start position or composition never replays"));
+                    assertThat(warnings()).hasSize(1);
+                    assertThat(warnings().get(0).getFormattedMessage()).contains("does not expose");
+                });
+    }
+
+    @Test
+    void startAt_now_with_the_default_resume_behavior_warns_on_the_shipped_composition_because_its_owner_vouched_the_default_is_live_only() {
+        // Given the same owner-registered fact as the first test in this class, NOW with the default resumeBehavior is
+        // the model default, which the starter's composition declared bypasses catch-up and so never replays.
+        Subscribable model = shippedCompositionSubscribable();
+        ComposedCatchupModel composedCatchupModel = shippedCompositionHolderFor(model);
+
+        // When the context starts
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("startAtNowDefaultResumeProjection", StartAtNowDefaultResumeProjection.class, StartAtNowDefaultResumeProjection::new)
+                .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
+                .withBean("subscribable", Subscribable.class, () -> model)
+                .withBean(ComposedCatchupModel.class, () -> composedCatchupModel)
+                .run(context -> {
+                    // Then the never-replays warning names the projection
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).hasSize(1);
+                    assertThat(warnings().get(0).getFormattedMessage())
+                            .contains(PROJECTION_ID)
+                            .contains("recordAppliedAppends = true")
+                            .contains("never replays");
                 });
     }
 
@@ -399,6 +450,26 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     // What OccurrentReactiveMongoAutoConfiguration does for the composition it built, suppliedBy for the identity and
     // defaultBypassesCatchup() as the separate owner-supplied fact the warning is keyed on.
     private static ComposedCatchupModel starterHolderFor(FluxSubscriptionModel model) {
+        ComposedCatchupModel holder = new ComposedCatchupModel();
+        holder.suppliedBy((ReplayAwareSubscriptions) model, model);
+        holder.defaultBypassesCatchup();
+        return holder;
+    }
+
+    // The Subscribable the shipped composition presents: it exposes ReplayAwareSubscriptions and reports no catch-up
+    // in flight. Pair it with shippedCompositionHolderFor for the owner-supplied fact.
+    private static Subscribable shippedCompositionSubscribable() {
+        Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
+        doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
+        when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
+        Subscription subscription = mock(Subscription.class);
+        when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
+        when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(subscription);
+        return model;
+    }
+
+    private static ComposedCatchupModel shippedCompositionHolderFor(Subscribable model) {
         ComposedCatchupModel holder = new ComposedCatchupModel();
         holder.suppliedBy((ReplayAwareSubscriptions) model, model);
         holder.defaultBypassesCatchup();
@@ -510,7 +581,19 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         }
     }
 
-    static class StartAtNowProjection {
+    static class StartAtNowSameAsStartAtProjection {
+        @Projection(id = PROJECTION_ID, recordAppliedAppends = true, startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    // resumeBehavior is left at its default on purpose. NOW then maps to the model default, which resumes from a
+    // stored checkpoint, so it is not the live-only StartAt.now() that SAME_AS_START_AT gives.
+    static class StartAtNowDefaultResumeProjection {
         @Projection(id = PROJECTION_ID, recordAppliedAppends = true, startAt = StartPosition.NOW)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
