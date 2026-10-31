@@ -336,8 +336,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 });
     }
 
-    // Markers, counter and events come from one point in time, so a read after the reported versions misses none of the
-    // boundary's events, unless a failover lost a position reservation (ADR 149). This runs in a read-only snapshot
+    // Markers, counter and events come from one point in time, so an event that commits after it is above the reported
+    // versions. ADR 148 and ADR 149 say what a read after them can still miss. This runs in a read-only snapshot
     // transaction on a session of the store's own, never through the configured TransactionalOperator, and commits it
     // once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a reactive transaction
     // it reports no versions, since the transaction's own increments may still abort and a later append would reuse

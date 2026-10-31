@@ -431,8 +431,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return new DcbEventStream(events, highWatermark, readToken);
     }
 
-    // Markers, counter and events come from one point in time, so a read after the reported versions misses none of the
-    // boundary's events, unless a failover lost a position reservation (ADR 149). This runs in a read-only snapshot
+    // Markers, counter and events come from one point in time, so an event that commits after it is above the reported
+    // versions. ADR 148 and ADR 149 say what a read after them can still miss. This runs in a read-only snapshot
     // transaction of the store's own, never with the transaction options configured for writes, and commits it once by
     // hand. The majority commit makes sure the snapshot was majority-committed. Inside a caller's session it reports no
     // versions, since the session's own increments may still abort and a later append would reuse them. A failure
@@ -766,8 +766,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     // The optimistic-concurrency token for a query: what the read saw of each of its conflict markers. Because versions
-    // bump inside the append transaction, not when positions are reserved, this token reflects only committed appends
-    // and is immune to the read-watermark overshoot a position-based check suffers (ADR 0021).
+    // bump inside the append transaction, not when positions are reserved, this token is immune to the read-watermark
+    // overshoot a position-based check suffers (ADR 0021). Outside a caller's transaction it reflects only committed
+    // appends.
     private DcbConsistencyToken consistencyToken(@Nullable ClientSession clientSession, DcbCriteria criteria) {
         return DcbMarkerVersionsDocuments.consistencyToken(criteria, queryMarkers(clientSession, criteria));
     }

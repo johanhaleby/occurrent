@@ -30,6 +30,7 @@ import org.occurrent.eventstore.api.dcb.*;
 
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -1268,24 +1269,33 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             List<CloudEvent> events = List.of(taggedEvent(otherType, "alternatives-accepted:unrelated"));
             DcbAppendCondition condition = failIfEventsMatch(token);
+            AtomicReference<DcbAppendResult> result = new AtomicReference<>();
             if (expectedToConflictOnANonMatchingEventSharingATag()) {
-                Throwable thrown = catchThrowable(() -> dcbEventStore().append(events, condition));
-                if (thrown != null) {
+                Throwable thrown = catchThrowable(() -> result.set(dcbEventStore().append(events, condition)));
+                if (thrown == null) {
+                    assertThat(result.get().eventCount())
+                            .as("A store that compares the marker of each tag can accept the append, and then it must "
+                                    + "have written its event")
+                            .isEqualTo(1);
+                } else {
                     assertThat(thrown)
                             .as("A store that compares the markers as a sum can refuse the append, because the marker "
                                     + "of tag a moved. It must refuse with the append condition exception")
                             .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
                 }
             } else {
-                assertThatCode(() -> dcbEventStore().append(events, condition))
+                assertThatCode(() -> result.set(dcbEventStore().append(events, condition)))
                         .as("The event committed after the read has neither the type of the first alternative nor both "
                                 + "tags of the second, so it matches neither. A store that cannot tell this from a match "
                                 + "of the type alternative, or of the tag alternative, would refuse")
                         .doesNotThrowAnyException();
+                assertThat(result.get().eventCount())
+                        .as("The accepted append must have written its event")
+                        .isEqualTo(1);
             }
 
             assertThat(dcbEventStore().read(criteria).events())
-                    .as("No event of the type or with both tags exists, so the append wrote none either way")
+                    .as("The event of the append matches neither alternative, so the criteria selects none either way")
                     .isEmpty();
         }
 
@@ -1390,11 +1400,15 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
                                 + "types, so the event of the other type conflicts")
                         .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
             } else {
-                assertThatCode(() -> dcbEventStore().append(events, condition))
+                AtomicReference<DcbAppendResult> result = new AtomicReference<>();
+                assertThatCode(() -> result.set(dcbEventStore().append(events, condition)))
                         .as("The event committed after the read has the tag of the criteria but not its type, so it "
                                 + "doesn't match. Only a store that tells a matching event from one that shares a tag "
                                 + "accepts this append")
                         .doesNotThrowAnyException();
+                assertThat(result.get().eventCount())
+                        .as("The accepted append must have written its event")
+                        .isEqualTo(1);
             }
         }
 
@@ -1443,11 +1457,15 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             dcbEventStore().append(List.of(taggedEvent(typeZ, "two-types-accepted:a")));
 
-            assertThatCode(() -> dcbEventStore().append(
-                    List.of(taggedEvent(typeX, "two-types-accepted:b")), failIfEventsMatch(token)))
+            AtomicReference<DcbAppendResult> result = new AtomicReference<>();
+            assertThatCode(() -> result.set(dcbEventStore().append(
+                    List.of(taggedEvent(typeX, "two-types-accepted:b")), failIfEventsMatch(token))))
                     .as("The event committed after the read is of neither type, so it doesn't match. The control of "
                             + "the conflict case: a store that refuses every append after any event would reject this one")
                     .doesNotThrowAnyException();
+            assertThat(result.get().eventCount())
+                    .as("The accepted append must have written its event")
+                    .isEqualTo(1);
         }
 
         @Test
