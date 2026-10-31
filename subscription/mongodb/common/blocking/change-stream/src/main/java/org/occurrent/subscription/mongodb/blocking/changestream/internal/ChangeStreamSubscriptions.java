@@ -481,7 +481,8 @@ public final class ChangeStreamSubscriptions {
                 // Whoever takes the run out of the map first decides. A pause or a cancel that got there first owns what
                 // happens next, and a resume asks the start again. Recorded inside the map's atomic update, so whoever reads
                 // the run as gone finds the failure, and without the model's monitor, since whoever holds it may be waiting
-                // for this handle. Waiters are released after the update, so the id is free before they throw
+                // for this handle. Waiters are released after the update, so the id is free before a released waiter
+                // throws. A timed wait that runs out during the update can read the failure before that.
                 runningSubscriptions.computeIfPresent(subscriptionId, (__, current) -> {
                     if (current != internalSubscription) {
                         return current;
@@ -1155,9 +1156,11 @@ public final class ChangeStreamSubscriptions {
         final CountDownLatch latch = new CountDownLatch(1);
         private final AtomicReference<@Nullable Optional<RuntimeException>> outcome = new AtomicReference<>();
 
+        // A run that recorded a failure releases the waiters itself, once the id is free
         void started() {
-            outcome.compareAndSet(null, Optional.empty());
-            latch.countDown();
+            if (outcome.compareAndSet(null, Optional.empty())) {
+                latch.countDown();
+            }
         }
 
         void recordFailure(RuntimeException failure) {

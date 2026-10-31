@@ -84,6 +84,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -95,6 +96,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
@@ -1713,6 +1716,68 @@ public class NativeMongoSubscriptionModelTest {
         }
 
         @Test
+        void the_handle_of_a_subscribe_is_not_released_by_a_run_a_resume_replaced_until_the_refusal_has_freed_the_id() throws Exception {
+            // Given a run whose position answers the present first, and a global checkpoint after
+            String subscriptionId = UUID.randomUUID().toString();
+            AtomicInteger answers = new AtomicInteger();
+            CountDownLatch positionAsked = new CountDownLatch(1);
+            CountDownLatch positionMayAnswer = new CountDownLatch(1);
+            HoldsTheRemovalOfARefusedRun refusedRunsRemoval = new HoldsTheRemovalOfARefusedRun();
+            replaceRunningSubscriptionsOf(subscriptionModel, refusedRunsRemoval);
+            Subscription first = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
+                if (answers.incrementAndGet() == 1) {
+                    positionAsked.countDown();
+                    awaitUpToTenSeconds(positionMayAnswer);
+                    return StartAt.now();
+                }
+                return StartAt.checkpoint(GlobalCheckpoint.of(0));
+            }), __ -> {
+            });
+            // And the run is held as it has opened its change stream, before it reports that it started
+            HoldsTheRunWhenItOpened holdsTheFirstRun = new HoldsTheRunWhenItOpened(Thread.currentThread());
+            try {
+                assertThat(positionAsked.await(10, SECONDS)).isTrue();
+                replaceLockOfTheRunOf(subscriptionModel, subscriptionId, holdsTheFirstRun);
+
+                // And a waiter on the first handle that looks at the model when the handle lets it go
+                record WhatTheWaiterSaw(Throwable thrown, boolean running, Throwable subscribedAgain) {
+                }
+                CompletableFuture<WhatTheWaiterSaw> waiter = CompletableFuture.supplyAsync(() -> {
+                    Throwable thrown = catchThrowable(() -> first.waitUntilStarted(Duration.ofSeconds(10)));
+                    boolean running = subscriptionModel.isRunning(subscriptionId);
+                    Throwable subscribedAgain = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+                    }));
+                    return new WhatTheWaiterSaw(thrown, running, subscribedAgain);
+                });
+
+                // When the subscription is paused and resumed after the first run opened, and the run of the resume is refused
+                // while the id is still taken
+                positionMayAnswer.countDown();
+                assertThat(holdsTheFirstRun.held.await(10, SECONDS)).as("the first run opened its change stream").isTrue();
+                subscriptionModel.pauseSubscription(subscriptionId);
+                subscriptionModel.resumeSubscription(subscriptionId);
+                assertThat(refusedRunsRemoval.held.await(10, SECONDS)).as("the refused run was recorded and held").isTrue();
+
+                // And the first run then reports that it started
+                holdsTheFirstRun.release.countDown();
+
+                // Then a waiter that is let go while the id is taken is let go within a second, so it is only given that long
+                catchThrowable(() -> waiter.get(1, SECONDS));
+                refusedRunsRemoval.release.countDown();
+
+                // And once it is let go it throws the refusal with the id free, so it can be subscribed to again
+                WhatTheWaiterSaw saw = waiter.get(10, SECONDS);
+                assertThat(saw.thrown()).isExactlyInstanceOf(UnsupportedStartAtException.class);
+                assertThat(saw.running()).as("running when the waiter was let go").isFalse();
+                assertThat(saw.subscribedAgain()).as("thrown by subscribing again when the waiter was let go").isNull();
+            } finally {
+                positionMayAnswer.countDown();
+                holdsTheFirstRun.release.countDown();
+                refusedRunsRemoval.release.countDown();
+            }
+        }
+
+        @Test
         void a_resume_that_answered_it_started_ends_the_check_before_its_handle_is_released() throws Exception {
             // Given a paused subscription whose position answers a live checkpoint first and a global checkpoint after
             String subscriptionId = UUID.randomUUID().toString();
@@ -2018,6 +2083,42 @@ public class NativeMongoSubscriptionModelTest {
             }
         }
 
+        // The map of the running subscriptions can't be reached from a public method, so it is replaced through the private fields
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        private static void replaceRunningSubscriptionsOf(NativeMongoSubscriptionModel model, ConcurrentHashMap replacement) {
+            try {
+                Field subscriptionsField = NativeMongoSubscriptionModel.class.getDeclaredField("subscriptions");
+                subscriptionsField.setAccessible(true);
+                Object subscriptions = subscriptionsField.get(model);
+                Field runningField = subscriptions.getClass().getDeclaredField("runningSubscriptions");
+                runningField.setAccessible(true);
+                replacement.putAll((Map) runningField.get(subscriptions));
+                runningField.set(subscriptions, replacement);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        // The lock of a run is replaced together with the condition it hands out, through the private fields
+        private static void replaceLockOfTheRunOf(NativeMongoSubscriptionModel model, String subscriptionId, ReentrantLock replacement) {
+            try {
+                Field subscriptionsField = NativeMongoSubscriptionModel.class.getDeclaredField("subscriptions");
+                subscriptionsField.setAccessible(true);
+                Object subscriptions = subscriptionsField.get(model);
+                Field runningField = subscriptions.getClass().getDeclaredField("runningSubscriptions");
+                runningField.setAccessible(true);
+                Object run = ((Map<?, ?>) runningField.get(subscriptions)).get(subscriptionId);
+                Field lockField = run.getClass().getDeclaredField("lock");
+                lockField.setAccessible(true);
+                lockField.set(run, replacement);
+                Field stoppedDeliveringField = run.getClass().getDeclaredField("stoppedDelivering");
+                stoppedDeliveringField.setAccessible(true);
+                stoppedDeliveringField.set(run, replacement.newCondition());
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
         private Checkpoint liveStart() {
             return requireNonNull(subscriptionModel.globalCheckpoint());
         }
@@ -2131,6 +2232,48 @@ public class NativeMongoSubscriptionModelTest {
         @Override
         public long getCount() {
             return own.getCount();
+        }
+    }
+
+    // Replaces the lock of a run. The first thread other than the test's that lets go of it is held, which is the run
+    // returning from having opened its change stream, before it reports that it started
+    private static final class HoldsTheRunWhenItOpened extends ReentrantLock {
+        final CountDownLatch held = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        private final Thread testThread;
+        private final AtomicBoolean first = new AtomicBoolean(true);
+
+        private HoldsTheRunWhenItOpened(Thread testThread) {
+            this.testThread = testThread;
+        }
+
+        @Override
+        public void unlock() {
+            super.unlock();
+            if (Thread.currentThread() != testThread && first.getAndSet(false)) {
+                held.countDown();
+                awaitUpToTenSeconds(release);
+            }
+        }
+    }
+
+    // Replaces the map of the running subscriptions. The thread that removes the run of a refused subscription is held
+    // inside the update, once the failure is recorded and before the run is gone from the map
+    private static final class HoldsTheRemovalOfARefusedRun extends ConcurrentHashMap<String, Object> {
+        final CountDownLatch held = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        private final AtomicBoolean first = new AtomicBoolean(true);
+
+        @Override
+        public Object computeIfPresent(String key, BiFunction<? super String, ? super Object, ?> remappingFunction) {
+            return super.computeIfPresent(key, (id, current) -> {
+                Object remapped = remappingFunction.apply(id, current);
+                if (remapped == null && first.getAndSet(false)) {
+                    held.countDown();
+                    awaitUpToTenSeconds(release);
+                }
+                return remapped;
+            });
         }
     }
 
