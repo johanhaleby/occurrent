@@ -1172,7 +1172,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
-        void a_condition_on_a_type_and_two_tags_ignores_an_event_of_that_type_carrying_only_one_of_the_tags_committed_after_the_read() {
+        void a_condition_on_a_type_and_two_tags_conflicts_on_an_event_of_that_type_carrying_only_one_of_the_tags_only_under_the_tag_marker_model() {
             String type = "TwoTagsAccepted";
             String course = "two-tags-accepted-course:c1";
             String student = "two-tags-accepted-student:s1";
@@ -1182,16 +1182,28 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             dcbEventStore().append(List.of(taggedEvent(type, course, otherStudent)));
 
-            assertThatCode(() -> dcbEventStore().append(
-                    List.of(taggedEvent(type, course, student)), failIfEventsMatch(token)))
-                    .as("The event committed after the read carries the course tag but not the student tag, so it "
-                            + "does not match a criterion that needs both. Sharing one of two tags with the criteria "
-                            + "is not sharing the boundary")
-                    .doesNotThrowAnyException();
+            List<CloudEvent> events = List.of(taggedEvent(type, course, student));
+            DcbAppendCondition condition = failIfEventsMatch(token);
+            if (expectedToConflictOnAnExcludedTypeSharingATag()) {
+                assertThatThrownBy(() -> dcbEventStore().append(events, condition))
+                        .as("Under the tag-marker model the marker of the course tag moved, and it knows nothing about "
+                                + "the student tag, so the event with the other student conflicts")
+                        .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
 
-            assertThat(dcbEventStore().read(criteria).events().size())
-                    .as("The accepted append must have written its event, and the event with the other student is not selected")
-                    .isEqualTo(1);
+                assertThat(dcbEventStore().read(criteria).events())
+                        .as("The refused append must not have written its event, and the event with the other student is not selected")
+                        .isEmpty();
+            } else {
+                assertThatCode(() -> dcbEventStore().append(events, condition))
+                        .as("The event committed after the read carries the course tag but not the student tag, so it "
+                                + "does not match a criterion that needs both. Sharing one of two tags with the criteria "
+                                + "is not sharing the boundary")
+                        .doesNotThrowAnyException();
+
+                assertThat(dcbEventStore().read(criteria).events().size())
+                        .as("The accepted append must have written its event, and the event with the other student is not selected")
+                        .isEqualTo(1);
+            }
         }
 
         @Test
@@ -1235,7 +1247,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
-        void a_condition_on_a_type_alternative_and_a_two_tag_alternative_ignores_an_event_of_another_type_carrying_one_of_the_tags() {
+        void a_condition_on_a_type_alternative_and_a_two_tag_alternative_conflicts_on_an_event_of_another_type_carrying_one_of_the_tags_only_under_the_tag_marker_model() {
             String type = "AlternativesAcceptedType";
             String otherType = "AlternativesAcceptedOther";
             String tagA = "alternatives-accepted:a";
@@ -1245,15 +1257,23 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             dcbEventStore().append(List.of(taggedEvent(otherType, tagA)));
 
-            assertThatCode(() -> dcbEventStore().append(
-                    List.of(taggedEvent(otherType, "alternatives-accepted:unrelated")), failIfEventsMatch(token)))
-                    .as("The event committed after the read has neither the type of the first alternative nor both "
-                            + "tags of the second, so it matches neither. A store that cannot tell this from a match "
-                            + "of the type alternative, or of the tag alternative, would refuse")
-                    .doesNotThrowAnyException();
+            List<CloudEvent> events = List.of(taggedEvent(otherType, "alternatives-accepted:unrelated"));
+            DcbAppendCondition condition = failIfEventsMatch(token);
+            if (expectedToConflictOnAnExcludedTypeSharingATag()) {
+                assertThatThrownBy(() -> dcbEventStore().append(events, condition))
+                        .as("Under the tag-marker model the marker of tag a moved, and it knows nothing about types or "
+                                + "tag b, so the event of the other type conflicts")
+                        .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+            } else {
+                assertThatCode(() -> dcbEventStore().append(events, condition))
+                        .as("The event committed after the read has neither the type of the first alternative nor both "
+                                + "tags of the second, so it matches neither. A store that cannot tell this from a match "
+                                + "of the type alternative, or of the tag alternative, would refuse")
+                        .doesNotThrowAnyException();
+            }
 
             assertThat(dcbEventStore().read(criteria).events())
-                    .as("No event of the type or with both tags exists, so the accepted append wrote none either")
+                    .as("No event of the type or with both tags exists, so the append wrote none either way")
                     .isEmpty();
         }
 
@@ -1445,8 +1465,9 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
     }
 
     /**
-     * Whether the declared append-condition model conflicts on an event of a type the criteria excludes when it shares a
-     * tag with the criteria, although no event matching the criteria was committed. Written as a switch expression so
+     * Whether the declared append-condition model conflicts on an event that shares a tag with the criteria, whether it
+     * is of a type the criteria excludes or lacks another tag the criteria requires, although no event matching the
+     * criteria was committed. Written as a switch expression so
      * adding a model breaks the build here rather than silently taking one of the existing branches.
      */
     private boolean expectedToConflictOnAnExcludedTypeSharingATag() {
