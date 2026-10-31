@@ -61,9 +61,9 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
  * race means, so a store failing anything below has a defect rather than a missing declaration. What the models
  * disagree about, whether a boundary conflicts that arguably should not have, only ever produces extra losers, and
  * every assertion here that could be weakened by an extra loser instead demands a winner. The one exception is
- * {@code a_conditional_append_is_not_refused_by_appends_of_another_type_that_share_its_tag_and_race_it}, which asks
- * the declared {@link EventStoreFixture#appendConditionModel()} whether an extra loser is allowed and holds a model that
- * allows none to it.
+ * {@code a_conditional_append_is_not_refused_by_appends_of_another_type_that_share_its_tag_and_race_it_unless_the_model_compares_only_markers},
+ * which asks the declared {@link EventStoreFixture#appendConditionModel()} whether an extra loser is allowed and holds
+ * a model that allows none to it.
  * <p>
  * These scenarios put every append into one storage stream on a store that derives placement from tags, so two
  * concurrent appends collide on the next stream version as well as on the DCB condition. That collision is the
@@ -334,7 +334,7 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
 
     @Test
     @Timeout(120)
-    void a_conditional_append_is_not_refused_by_appends_of_another_type_that_share_its_tag_and_race_it() {
+    void a_conditional_append_is_not_refused_by_appends_of_another_type_that_share_its_tag_and_race_it_unless_the_model_compares_only_markers() {
         int iterations = 50;
         List<Throwable> refusals = new ArrayList<>();
 

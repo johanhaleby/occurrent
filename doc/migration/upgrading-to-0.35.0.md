@@ -711,16 +711,16 @@ on a busy tag. A condition can still fail with no matching event, for example af
 sharded cluster, this doesn't apply, and any event that moves a marker of the criteria still fails it.
 
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
-0.34.0 has this gap too, except that it refused the append when the read caught only some of the event's markers. A
-plain read through a mongos can do that when the markers and the events are on different shards. A read with
-`withVersions()` doesn't do that when its stream reports `markerVersions()`, because it read both in one snapshot
-transaction. On any deployment, with a client writing at w:1, a failover can do it to any read, one with
+A plain read through a mongos can do this when the markers and the events are on different shards. A read with
+`withVersions()` doesn't do this when its stream reports `markerVersions()`, because it read both in one snapshot
+transaction. On any deployment, with a client writing at w:1, a failover can do this to any read, one with
 `withVersions()` too. A store reserves an append's positions outside the transaction, so the failover can lose that
 reservation while the append commits, and a read stops at the last reserved position. A read after such a read's
-versions can then skip the event. Also on any deployment, a read whose events are behind its token can do it too, for
+versions can then skip the event. Also on any deployment, a read whose events are behind its token can do this, for
 example when a read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A
-token also doesn't depend on a read's limit, skip or upper position, so after such a read a condition doesn't fail for a
-matching event the read left out.
+token also doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a
+matching event the read left out. 0.34.0 has this gap too, except that it refused the append when the read caught only
+some of the event's markers.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
@@ -749,7 +749,9 @@ describes it.
 
 - A conditional append on criteria with tags is still refused when an event that matches them committed after the
   read. On a replica set the check reads the events as they are when the append runs, so an event deleted by then, or
-  changed so that it no longer matches, may not fail it.
+  changed so that it no longer matches, may not fail it. A read can also miss such an event and let the append through,
+  as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says.
+
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
 - This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the
