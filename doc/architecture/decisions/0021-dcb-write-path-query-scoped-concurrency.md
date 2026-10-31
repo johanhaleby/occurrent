@@ -8,6 +8,10 @@ Accepted. Amended by [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-no
 recreated with a new epoch, so pruning also invalidates every DCB snapshot on that boundary. The read refuses such a
 snapshot, and it's rebuilt from a full read on its next use.
 
+Amended by [ADR 149](0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md) on pruning and on how the check compares a token. A token now holds what the read saw of each
+marker, so the check compares each marker, not a sum. The operator guidance under Consequences no longer holds. A
+marker may be deleted only in a transaction that also finds no event with its tag or type.
+
 Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md). For a criteria item with at least one tag, the query reads and increments only its `tag:`
 markers and no longer its `type:` markers, so sharing a type with such an item is no longer a reason for the check to
 refuse. What an append increments for its own events is unchanged, so two
