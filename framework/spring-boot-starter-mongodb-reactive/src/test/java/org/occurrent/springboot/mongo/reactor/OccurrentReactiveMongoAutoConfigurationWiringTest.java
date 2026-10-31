@@ -37,6 +37,7 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
+import org.occurrent.eventstore.mongodb.spring.reactor.CommitRetryingReactiveMongoTransactionManager;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
@@ -54,6 +55,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.data.mongodb.ReactiveMongoDatabaseFactory;
+import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
@@ -357,6 +359,28 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
             assertThat(context).doesNotHaveBean(Subscribable.class);
             assertThat(context).doesNotHaveBean(ReactorDurableSubscriptionModel.class);
         });
+    }
+
+    @Test
+    void the_transaction_manager_the_starter_creates_sends_a_commit_again_when_its_result_is_unknown() {
+        contextRunner().run(context ->
+                assertThat(context.getBean(ReactiveMongoTransactionManager.class)).isInstanceOf(CommitRetryingReactiveMongoTransactionManager.class));
+    }
+
+    @Test
+    void the_transaction_manager_method_keeps_the_return_type_it_shipped_with() throws NoSuchMethodException {
+        // Compiled callers bind to the method descriptor and subclasses override it, so narrowing the return type to the
+        // retrying manager would break both. The bean the method returns is still the retrying one.
+        assertThat(OccurrentReactiveMongoAutoConfiguration.class.getMethod("reactiveMongoTransactionManager", ReactiveMongoDatabaseFactory.class).getReturnType())
+                .isEqualTo(ReactiveMongoTransactionManager.class);
+    }
+
+    @Test
+    void a_transaction_manager_defined_by_the_application_replaces_the_one_the_starter_creates() {
+        ReactiveMongoTransactionManager own = new ReactiveMongoTransactionManager(databaseFactory);
+
+        contextRunner().withBean(ReactiveMongoTransactionManager.class, () -> own).run(context ->
+                assertThat(context.getBean(ReactiveMongoTransactionManager.class)).isSameAs(own));
     }
 
     @Test

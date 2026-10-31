@@ -80,6 +80,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -164,6 +165,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.dcbPositionCollectionName = DcbMarkerModel.positionCollectionName(eventStoreCollectionName);
         this.dcbCheckpointCollectionName = DcbMarkerModel.checkpointCollectionName(eventStoreCollectionName);
         this.transactionTemplate = config.transactionTemplate;
+        PlatformTransactionManager transactionManager = transactionTemplate.getTransactionManager();
+        if (!(transactionManager instanceof CommitRetryingMongoTransactionManager)) {
+            log.warn("The transaction manager of this SpringMongoEventStore is a {}, which does not send a commit again when MongoDB cannot say whether it succeeded. " +
+                            "An append that may have been saved is then reported as a failure, and retrying it can write its events twice. " +
+                            "Use a {} instead.", transactionManager == null ? null : transactionManager.getClass().getName(), CommitRetryingMongoTransactionManager.class.getSimpleName());
+        }
         this.timeRepresentation = config.timeRepresentation;
         this.queryOptions = config.queryOptions;
         this.readOptions = config.readOptions;

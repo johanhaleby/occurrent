@@ -46,6 +46,7 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.eventstore.mongodb.spring.blocking.CommitRetryingMongoTransactionManager;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
@@ -143,7 +144,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnMissingBean(MongoTransactionManager.class)
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public MongoTransactionManager mongoTransactionManager(MongoDatabaseFactory dbFactory) {
-        return new MongoTransactionManager(dbFactory, TransactionOptions.builder().readConcern(ReadConcern.MAJORITY).writeConcern(WriteConcern.MAJORITY).build());
+        return new CommitRetryingMongoTransactionManager(dbFactory, TransactionOptions.builder().readConcern(ReadConcern.MAJORITY).writeConcern(WriteConcern.MAJORITY).build());
     }
 
     @Bean

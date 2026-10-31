@@ -18,6 +18,7 @@ package org.occurrent.example.eventstore.mongodb.spring.transactional;
 
 import jakarta.annotation.PostConstruct;
 import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.mongodb.spring.blocking.CommitRetryingMongoTransactionManager;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -43,7 +44,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplication {
 
     @Bean
     public MongoTransactionManager transactionManager(MongoDatabaseFactory dbFactory) {
-        return new MongoTransactionManager(dbFactory);
+        return new CommitRetryingMongoTransactionManager(dbFactory);
     }
 
     @Bean
