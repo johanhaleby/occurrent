@@ -798,23 +798,20 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   boundary and saves no snapshot. This is a known limitation, tracked in
   [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
 - A DCB application service with synchronous subscriptions now reads and decides before it enters its transaction
-  executor's transaction, so a decider on it saves snapshots. Only the append, the re-read of the written block and the
-  dispatch run in that transaction. Your domain function no longer runs in it, so when the executor opens the
-  transaction, a write your domain function makes is no longer part of it. An exception from it no longer marks a
-  transaction you own rollback-only, so if you catch it and continue, that transaction commits. The executor's conflict
-  retry re-runs the append, the re-read and the dispatch, with the token of the read the decision was made on, and not the read or your
-  domain function. A handler can run again on such a retry, as it could before. When the condition then fails, the
-  service's retry strategy by default reads and decides again. By default the service allows 5 attempts and the Spring executors
-  about 15, so a command on a contended boundary can fail sooner, with the same budget a service without synchronous
-  subscriptions has. With an executor that suspends or replaces a transaction of yours over a Spring MongoDB store, such
-  as `PROPAGATION_REQUIRES_NEW` or `PROPAGATION_NOT_SUPPORTED`, the service reads in your transaction and the executor
-  appends outside it. A second command on the same boundary in your transaction then doesn't see the first one's event,
-  and a first command doesn't see a commit another writer makes to that boundary after your transaction's snapshot. If
-  such a command appends, its condition can fail on every attempt, and it then ends with
-  `DcbAppendConditionNotFulfilledException`. In my runs over `DcbCriteria.tags` with no prune it did whenever the first
-  command had stored or the other writer had committed. In my runs a second command used to store its event here, unless
-  it failed as the next sentence says. On a reactive service under a transaction of yours a command can also fail with
-  `TransientClientSessionException`, before and after this change and on `PROPAGATION_REQUIRED` too.
+  executor's transaction when no transaction of yours is open, so a decider on it saves snapshots. Only the append, the
+  re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
+  write your domain function makes is no longer part of it. The executor's conflict retry re-runs the append, the re-read
+  and the dispatch, with the token of the read the decision was made on, and not the read or your domain function. A
+  handler can run again on such a retry, as it could before. When the condition then fails, the service's retry strategy
+  by default reads and decides again. By default the service allows 5 attempts and the Spring executors about 15, so a
+  command on a contended boundary can fail sooner, with the same budget a service without synchronous subscriptions has.
+- The executor's conflict retry no longer covers that read. A transient failure of the read, such as a
+  `QueryTimeoutException`, fails the command unless your retry strategy retries it. If you relied on that retry, add it to what you
+  pass to `retryStrategy` on the blocking builder or `retry` on the reactive builder.
+- In a transaction you own, the service still reads and decides in the executor, so what such a command sees doesn't
+  change, also on `PROPAGATION_REQUIRES_NEW` and `PROPAGATION_NOT_SUPPORTED`. On a blocking service an exception from
+  your domain function no longer marks that transaction rollback-only, so if you catch it and continue, that transaction
+  commits.
 
 ### Stored snapshots
 

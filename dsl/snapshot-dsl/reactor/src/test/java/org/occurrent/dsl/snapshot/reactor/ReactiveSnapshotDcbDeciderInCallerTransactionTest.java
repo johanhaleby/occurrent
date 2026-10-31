@@ -30,8 +30,12 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.application.service.reactor.ReactiveTransactionExecutor;
 import org.occurrent.application.service.reactor.dcb.GenericDcbApplicationService;
 import org.occurrent.application.service.spring.reactor.SpringReactiveTransactionExecutor;
 import org.occurrent.domain.DomainEvent;
@@ -42,6 +46,7 @@ import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
+import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
@@ -57,7 +62,9 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.reactive.TransactionalOperator;
+import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -71,6 +78,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -103,7 +113,9 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
     private CloudEventConverter<DomainEvent> converter;
     private ReactorMongoEventStore eventStore;
     private ReactiveSnapshotStore<List<String>> snapshots;
+    private SynchronousSubscriptionModel subscriptions;
     private List<CloudEvent> seenBySubscription;
+    private GenericDcbApplicationService<DomainEvent> applicationService;
     private ReactiveSnapshotDcbDeciderApplicationService<DomainEvent> service;
     private ReactiveSnapshotDcbDecider<Add, List<String>, DomainEvent> decider;
 
@@ -122,18 +134,15 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
                 .build();
         eventStore = new ReactorMongoEventStore(new ReactiveMongoTemplate(databaseFactory), config);
         converter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
-        SynchronousSubscriptionModel subscriptions = new SynchronousSubscriptionModel();
+        subscriptions = new SynchronousSubscriptionModel();
         seenBySubscription = new CopyOnWriteArrayList<>();
         subscriptions.subscribe("names", event -> {
             seenBySubscription.add(event);
             return Mono.empty();
         });
         snapshots = ReactiveSnapshotStore.inMemory();
-        service = new ReactiveSnapshotDcbDeciderApplicationService<>(GenericDcbApplicationService.builder(eventStore, converter)
-                .tagGenerator((DomainEvent event) -> Set.of(tag()))
-                .synchronousSubscriptions(subscriptions)
-                .transactionExecutor(new SpringReactiveTransactionExecutor(transactionManager))
-                .build());
+        applicationService = applicationServiceWith(new SpringReactiveTransactionExecutor(transactionManager));
+        service = new ReactiveSnapshotDcbDeciderApplicationService<>(applicationService);
         decider = ReactiveSnapshotDcbDecider.from(DcbDecider.from(names(), command -> criteria(), event -> Set.of(tag())), snapshots, SnapshotOptions.of(1, SnapshotPolicy.always()));
     }
 
@@ -206,6 +215,106 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
         );
     }
 
+    @ParameterizedTest(name = "propagation behavior {0}")
+    @ValueSource(ints = {TransactionDefinition.PROPAGATION_REQUIRED, TransactionDefinition.PROPAGATION_REQUIRES_NEW, TransactionDefinition.PROPAGATION_NOT_SUPPORTED})
+    void a_second_command_in_the_callers_transaction_sees_the_first_ones_event_whatever_the_executor_does_with_that_transaction(int propagationBehavior) {
+        GenericDcbApplicationService<DomainEvent> service = applicationServiceOnPropagation(propagationBehavior);
+        List<Integer> eventsSeen = new CopyOnWriteArrayList<>();
+
+        TransactionalOperator.create(transactionManager).execute(status ->
+                service.execute(criteria(), appendingAndRecordingWhatItSees("first", eventsSeen))
+                        .then(service.execute(criteria(), appendingAndRecordingWhatItSees("second", eventsSeen)))
+        ).collectList().block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(eventsSeen).as("events each decision saw").containsExactly(0, 1),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored after the commit").hasSize(2)
+        );
+    }
+
+    @ParameterizedTest(name = "propagation behavior {0}")
+    @ValueSource(ints = {TransactionDefinition.PROPAGATION_REQUIRES_NEW, TransactionDefinition.PROPAGATION_NOT_SUPPORTED})
+    void a_command_in_the_callers_transaction_sees_what_another_writer_committed_when_the_executor_leaves_that_transaction(int propagationBehavior) {
+        GenericDcbApplicationService<DomainEvent> service = applicationServiceOnPropagation(propagationBehavior);
+        List<Integer> eventsSeen = new CopyOnWriteArrayList<>();
+
+        // A read of something else starts the caller's snapshot, and the other writer commits after it. A future drops the
+        // subscriber's context, so its append isn't part of the caller's transaction.
+        TransactionalOperator.create(transactionManager).execute(status ->
+                eventStore.read(DcbCriteria.tags(Tag.of("name", "unrelated")))
+                        .then(Mono.fromFuture(() -> appendingSeed().toFuture()))
+                        .then(service.execute(criteria(), appendingAndRecordingWhatItSees("mine", eventsSeen)))
+        ).collectList().block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(eventsSeen).as("events the decision saw").containsExactly(1),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored after the commit").hasSize(2)
+        );
+    }
+
+    @ParameterizedTest(name = "propagation behavior {0}")
+    @ValueSource(ints = {TransactionDefinition.PROPAGATION_REQUIRES_NEW, TransactionDefinition.PROPAGATION_NOT_SUPPORTED})
+    void a_snapshot_deciders_second_command_folds_the_first_ones_event_when_the_executor_leaves_the_callers_transaction(int propagationBehavior) {
+        ReactiveSnapshotDcbDeciderApplicationService<DomainEvent> service = new ReactiveSnapshotDcbDeciderApplicationService<>(applicationServiceOnPropagation(propagationBehavior));
+
+        List<String> state = TransactionalOperator.create(transactionManager).execute(status ->
+                service.execute(new Add("first"), decider).then(service.executeAndReturnState(new Add("second"), decider))
+        ).single().block(TIMEOUT);
+
+        assertThat(state).as("the state after the second command").containsExactly("first", "second");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("failuresFromTheDomainFunction")
+    void the_callers_transaction_commits_when_it_handles_a_failure_from_the_domain_function(Throwable failure) {
+        AtomicReference<Throwable> handled = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> TransactionalOperator.create(transactionManager).execute(status ->
+                applicationService.execute(criteria(), events -> rethrow(failure))
+                        .onErrorResume(error -> {
+                            handled.set(error);
+                            return Mono.empty();
+                        })
+                        .then(appendingSeed())
+        ).collectList().block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(handled.get()).as("what the caller handled").isSameAs(failure),
+                () -> assertThat(thrown).as("what the caller's commit threw").isNull(),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored after the commit").hasSize(1)
+        );
+    }
+
+    private static Stream<Throwable> failuresFromTheDomainFunction() {
+        return Stream.of(new IllegalStateException("from the domain function"), new AssertionError("from the domain function"));
+    }
+
+    private static List<DomainEvent> rethrow(Throwable failure) {
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw (RuntimeException) failure;
+    }
+
+    private Function<List<DomainEvent>, List<DomainEvent>> appendingAndRecordingWhatItSees(String name, List<Integer> eventsSeen) {
+        return events -> {
+            eventsSeen.add(events.size());
+            return List.of(nameWasChanged(name));
+        };
+    }
+
+    private GenericDcbApplicationService<DomainEvent> applicationServiceOnPropagation(int propagationBehavior) {
+        return applicationServiceWith(new SpringReactiveTransactionExecutor(TransactionalOperator.create(transactionManager, new DefaultTransactionDefinition(propagationBehavior))));
+    }
+
+    private GenericDcbApplicationService<DomainEvent> applicationServiceWith(ReactiveTransactionExecutor transactionExecutor) {
+        return GenericDcbApplicationService.builder(eventStore, converter)
+                .tagGenerator((DomainEvent event) -> Set.of(tag()))
+                .synchronousSubscriptions(subscriptions)
+                .transactionExecutor(transactionExecutor)
+                .build();
+    }
+
     /**
      * The snapshot holds a state the store doesn't, so a read that resumed from it would show up in the state.
      */
@@ -216,7 +325,11 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
     }
 
     private long appendSeed() {
-        return eventStore.append(new ArrayList<>(converter.toCloudEvents(List.of(nameWasChanged("seed"))).stream().map(ce -> DcbCloudEvents.withTags(ce, List.of(tag()))).toList())).block(TIMEOUT).lastSequencePosition();
+        return appendingSeed().block(TIMEOUT).lastSequencePosition();
+    }
+
+    private Mono<DcbAppendResult> appendingSeed() {
+        return eventStore.append(new ArrayList<>(converter.toCloudEvents(List.of(nameWasChanged("seed"))).stream().map(ce -> DcbCloudEvents.withTags(ce, List.of(tag()))).toList()));
     }
 
     private static NameWasChanged nameWasChanged(String name) {

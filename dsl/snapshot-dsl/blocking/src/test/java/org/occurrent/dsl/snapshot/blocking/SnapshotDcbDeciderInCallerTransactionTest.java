@@ -30,8 +30,12 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
 import org.occurrent.application.service.spring.SpringTransactionExecutor;
 import org.occurrent.domain.DomainEvent;
@@ -57,6 +61,8 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -68,8 +74,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -101,7 +110,9 @@ class SnapshotDcbDeciderInCallerTransactionTest {
     private CloudEventConverter<DomainEvent> converter;
     private SpringMongoEventStore eventStore;
     private SnapshotStore<List<String>> snapshots;
+    private SynchronousSubscriptionModel subscriptions;
     private List<CloudEvent> seenBySubscription;
+    private GenericDcbApplicationService<DomainEvent> applicationService;
     private SnapshotDcbDeciderApplicationService<DomainEvent> service;
     private SnapshotDcbDecider<Add, List<String>, DomainEvent> decider;
 
@@ -119,15 +130,12 @@ class SnapshotDcbDeciderInCallerTransactionTest {
                 .build();
         eventStore = new SpringMongoEventStore(new MongoTemplate(databaseFactory), config);
         converter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
-        SynchronousSubscriptionModel subscriptions = new SynchronousSubscriptionModel();
+        subscriptions = new SynchronousSubscriptionModel();
         seenBySubscription = new CopyOnWriteArrayList<>();
         subscriptions.subscribe("names", seenBySubscription::add);
         snapshots = SnapshotStore.inMemory();
-        service = new SnapshotDcbDeciderApplicationService<>(GenericDcbApplicationService.builder(eventStore, converter)
-                .tagGenerator((DomainEvent event) -> Set.of(tag()))
-                .synchronousSubscriptions(subscriptions)
-                .transactionExecutor(new SpringTransactionExecutor(transactionManager))
-                .build());
+        applicationService = applicationServiceWith(new SpringTransactionExecutor(transactionManager));
+        service = new SnapshotDcbDeciderApplicationService<>(applicationService);
         decider = SnapshotDcbDecider.from(DcbDecider.from(names(), command -> criteria(), event -> Set.of(tag())), snapshots, SnapshotOptions.of(1, SnapshotPolicy.always()));
     }
 
@@ -197,6 +205,103 @@ class SnapshotDcbDeciderInCallerTransactionTest {
                 () -> assertThat(seenBySubscription).as("events the subscription saw").hasSize(1),
                 () -> assertThat(snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria()))).as("the snapshot saved").isEmpty()
         );
+    }
+
+    @ParameterizedTest(name = "propagation behavior {0}")
+    @ValueSource(ints = {TransactionDefinition.PROPAGATION_REQUIRED, TransactionDefinition.PROPAGATION_REQUIRES_NEW, TransactionDefinition.PROPAGATION_NOT_SUPPORTED})
+    void a_second_command_in_the_callers_transaction_sees_the_first_ones_event_whatever_the_executor_does_with_that_transaction(int propagationBehavior) {
+        GenericDcbApplicationService<DomainEvent> service = applicationServiceOnPropagation(propagationBehavior);
+        List<Integer> eventsSeen = new CopyOnWriteArrayList<>();
+
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            service.execute(criteria(), appendingAndRecordingWhatItSees("first", eventsSeen));
+            service.execute(criteria(), appendingAndRecordingWhatItSees("second", eventsSeen));
+        });
+
+        assertAll(
+                () -> assertThat(eventsSeen).as("events each decision saw").containsExactly(0, 1),
+                () -> assertThat(eventStore.read(criteria()).events()).as("events stored after the commit").hasSize(2)
+        );
+    }
+
+    @ParameterizedTest(name = "propagation behavior {0}")
+    @ValueSource(ints = {TransactionDefinition.PROPAGATION_REQUIRES_NEW, TransactionDefinition.PROPAGATION_NOT_SUPPORTED})
+    void a_command_in_the_callers_transaction_sees_what_another_writer_committed_when_the_executor_leaves_that_transaction(int propagationBehavior) {
+        GenericDcbApplicationService<DomainEvent> service = applicationServiceOnPropagation(propagationBehavior);
+        List<Integer> eventsSeen = new CopyOnWriteArrayList<>();
+
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            // A read of something else starts the caller's snapshot, and the other writer commits after it
+            eventStore.read(DcbCriteria.tags(Tag.of("name", "unrelated")));
+            CompletableFuture.runAsync(this::appendSeed).join();
+            service.execute(criteria(), appendingAndRecordingWhatItSees("mine", eventsSeen));
+        });
+
+        assertAll(
+                () -> assertThat(eventsSeen).as("events the decision saw").containsExactly(1),
+                () -> assertThat(eventStore.read(criteria()).events()).as("events stored after the commit").hasSize(2)
+        );
+    }
+
+    @ParameterizedTest(name = "propagation behavior {0}")
+    @ValueSource(ints = {TransactionDefinition.PROPAGATION_REQUIRES_NEW, TransactionDefinition.PROPAGATION_NOT_SUPPORTED})
+    void a_snapshot_deciders_second_command_folds_the_first_ones_event_when_the_executor_leaves_the_callers_transaction(int propagationBehavior) {
+        SnapshotDcbDeciderApplicationService<DomainEvent> service = new SnapshotDcbDeciderApplicationService<>(applicationServiceOnPropagation(propagationBehavior));
+        AtomicReference<List<String>> state = new AtomicReference<>();
+
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            service.execute(new Add("first"), decider);
+            state.set(service.executeAndReturnState(new Add("second"), decider));
+        });
+
+        assertThat(state.get()).as("the state after the second command").containsExactly("first", "second");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("failuresFromTheDomainFunction")
+    void the_callers_transaction_commits_when_it_catches_a_failure_from_the_domain_function(Throwable failure) {
+        AtomicReference<Throwable> caught = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            caught.set(catchThrowable(() -> applicationService.execute(criteria(), events -> rethrow(failure))));
+            appendSeed();
+        }));
+
+        assertAll(
+                () -> assertThat(caught.get()).as("what the caller caught").isSameAs(failure),
+                () -> assertThat(thrown).as("what the caller's commit threw").isNull(),
+                () -> assertThat(eventStore.read(criteria()).events()).as("events stored after the commit").hasSize(1)
+        );
+    }
+
+    private static Stream<Throwable> failuresFromTheDomainFunction() {
+        return Stream.of(new IllegalStateException("from the domain function"), new AssertionError("from the domain function"));
+    }
+
+    private static List<DomainEvent> rethrow(Throwable failure) {
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw (RuntimeException) failure;
+    }
+
+    private Function<List<DomainEvent>, List<DomainEvent>> appendingAndRecordingWhatItSees(String name, List<Integer> eventsSeen) {
+        return events -> {
+            eventsSeen.add(events.size());
+            return List.of(nameWasChanged(name));
+        };
+    }
+
+    private GenericDcbApplicationService<DomainEvent> applicationServiceOnPropagation(int propagationBehavior) {
+        return applicationServiceWith(new SpringTransactionExecutor(new TransactionTemplate(transactionManager, new DefaultTransactionDefinition(propagationBehavior))));
+    }
+
+    private GenericDcbApplicationService<DomainEvent> applicationServiceWith(TransactionExecutor transactionExecutor) {
+        return GenericDcbApplicationService.builder(eventStore, converter)
+                .tagGenerator((DomainEvent event) -> Set.of(tag()))
+                .synchronousSubscriptions(subscriptions)
+                .transactionExecutor(transactionExecutor)
+                .build();
     }
 
     /**

@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -142,9 +143,11 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         record Tuple<T1, T2>(T1 v1, T2 v2) {}
         // @formatter:on
 
-        Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
-            // The read and the decision run outside the transaction, since a store reports no marker versions inside one.
-            // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
+        // @formatter:off
+        record Decision<T>(DcbEventStream eventStream, List<T> newDomainEvents, List<CloudEvent> dcbEvents) {}
+        // @formatter:on
+
+        Supplier<Optional<Decision<E>>> readAndDecide = () -> {
             final DcbEventStream eventStream;
             try {
                 eventStream = readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions);
@@ -155,31 +158,62 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
             List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
             if (newDomainEvents == null || newDomainEvents.isEmpty()) {
-                return new Tuple<>(Optional.empty(), List.of());
+                return Optional.empty();
             }
 
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-            List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
-            DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(eventStream.consistencyToken());
-            Supplier<DcbAppendResult> appendAndDispatch = () -> {
-                DcbAppendResult appendResult = eventStore.append(dcbEvents, appendCondition);
+            return Optional.of(new Decision<>(eventStream, newDomainEvents, addTags(options.tagGenerator(), newDomainEvents, cloudEvents)));
+        };
+        Function<Decision<E>, Tuple<Optional<DcbAppendResult>, List<E>>> appendAndDispatch = decision -> {
+            DcbAppendResult appendResult = eventStore.append(decision.dcbEvents(), DcbAppendCondition.failIfEventsMatch(decision.eventStream().consistencyToken()));
 
-                if (dispatchSynchronously) {
-                    // A successful append is assigned a contiguous global-position block, so re-read exactly that block
-                    // to get the events enriched with their positions, then dispatch on this thread, inside the transaction.
-                    List<CloudEvent> writtenEnriched = eventStore.read(DcbCriteria.all(),
-                            DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
-                    synchronousEventDispatcher.dispatch(writtenEnriched, transactionExecutor.isTransactional());
+            if (dispatchSynchronously) {
+                // A successful append is assigned a contiguous global-position block, so re-read exactly that block
+                // to get the events enriched with their positions, then dispatch on this thread, inside the transaction.
+                List<CloudEvent> writtenEnriched = eventStore.read(DcbCriteria.all(),
+                        DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
+                synchronousEventDispatcher.dispatch(writtenEnriched, transactionExecutor.isTransactional());
+            }
+
+            return new Tuple<>(Optional.of(withCheckedVersions(appendResult, versionsRequested, decision.eventStream())), decision.newDomainEvents());
+        };
+
+        Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
+            if (dispatchSynchronously && transactionExecutor.isTransactional()) {
+                // The executor can leave the transaction that's open here for the append, so a read here could miss what the
+                // append's condition sees and fail on every attempt. The read and the decision go in the executor too, and
+                // that costs nothing, since a store already reports no marker versions in the open transaction.
+                // Their failure goes around the executor, so it can't mark that transaction rollback-only.
+                AtomicReference<@Nullable Throwable> failedBeforeAppend = new AtomicReference<>();
+                Tuple<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransaction(() -> {
+                    final Optional<Decision<E>> decision;
+                    try {
+                        decision = readAndDecide.get();
+                    } catch (RuntimeException | Error failure) {
+                        failedBeforeAppend.set(failure);
+                        return new Tuple<>(Optional.empty(), List.of());
+                    }
+                    return decision.map(appendAndDispatch).orElseGet(() -> new Tuple<>(Optional.empty(), List.of()));
+                });
+                Throwable failure = failedBeforeAppend.get();
+                if (failure instanceof Error error) {
+                    throw error;
+                } else if (failure != null) {
+                    throw (RuntimeException) failure;
                 }
-
-                return appendResult;
-            };
+                return attempt;
+            }
+            // The read and the decision run outside the transaction, since a store reports no marker versions inside one.
+            // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
+            Optional<Decision<E>> decision = readAndDecide.get();
+            if (decision.isEmpty()) {
+                return new Tuple<>(Optional.empty(), List.of());
+            }
             // Only open the transaction executor when synchronous dispatch must commit atomically with the append.
             // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
             // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
             // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0074.
-            DcbAppendResult appendResult = dispatchSynchronously ? transactionExecutor.inTransaction(appendAndDispatch) : appendAndDispatch.get();
-            return new Tuple<>(Optional.of(withCheckedVersions(appendResult, versionsRequested, eventStream)), newDomainEvents);
+            return dispatchSynchronously ? transactionExecutor.inTransaction(() -> appendAndDispatch.apply(decision.get())) : appendAndDispatch.apply(decision.get());
         });
 
         // Invoke the side-effect once, after a successful append, with the newly written events. It is not invoked

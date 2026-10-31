@@ -635,37 +635,50 @@ is the order the service has without synchronous subscriptions, and these are th
   of the service's retry strategy instead of one of the executor's. By default the service allows 5
   attempts and the Spring executors about 15, so a command on a contended boundary can fail sooner, with the same budget
   a service without synchronous subscriptions has.
-- The domain function no longer runs in the executor's transaction, and a decision with no new events no longer opens
-  one. An exception from the domain function doesn't pass through the executor either, so in a transaction the caller
-  owns it no longer marks that transaction rollback-only. A caller that catches it and continues now commits.
-- A refused read never passes through the executor, so it can't mark a transaction the caller owns rollback-only.
+- With no transaction open before the executor, the domain function no longer runs in the executor's transaction, and a
+  decision with no new events no longer opens one.
+- The executor's conflict retry no longer covers the read, so a transient failure of the read now fails the command
+  unless the service's retry strategy retries it, as on a service without synchronous subscriptions. I ran one
+  `QueryTimeoutException` from the first read on both stacks. Before this order the command stored its event, and after
+  it the command failed with that exception. I kept this, since the service's retry strategy is where a caller already
+  decides what to retry.
 - This changes one sentence of ADR 74's context, the one saying the service runs the whole read-decide-append through a
   `TransactionExecutor`. ADR 74's decision still holds.
 
 `GenericApplicationService`, the stream service, still reads and decides in the transaction, since a stream snapshot
 needs no marker versions.
 
-A transaction the caller owns stays the limitation described below, because the read still joins it and reports no
-versions. With an executor that suspends or replaces this transaction over a Spring MongoDB store, for example on
-`PROPAGATION_REQUIRES_NEW` or `PROPAGATION_NOT_SUPPORTED`, the service reads in the caller's transaction and the
-executor appends outside it. A second command on the same boundary in the caller's transaction then doesn't see the
-first one's event, and a first command doesn't see a commit another writer makes to that boundary after the caller's
-snapshot. If such a command appends, its condition can fail on every attempt, and it then ends with
-`DcbAppendConditionNotFulfilledException`. I ran both on real MongoDB over `DcbCriteria.tags` with no prune, and on both
-stacks it did whenever the first command had stored or the other writer had committed. Before this order a second
-command on a blocking service stored its event on both propagations, and one on a reactive service did unless it hit the
-failure below, so this is a regression for this setup. I didn't run the other writer before this order. Reading in the
-executor when `isTransactional()` already answers `true` outside it would avoid the regression, at the cost of a second
-order of read and transaction, and a refused read there mustn't mark a transaction the caller owns rollback-only. I
-didn't build that. On `PROPAGATION_REQUIRED` a second command stored its event before and after this order.
+A transaction the caller owns stays the limitation described below, because a read in it reports no versions. So when
+`isTransactional()` already answers `true` before the service enters the executor, the read and the decision run in the
+executor too, as they did before this order. That costs no versions, since the store reports none in the open
+transaction anyway. On `PROPAGATION_REQUIRED` the executor joins that transaction, so nothing changes. On
+`PROPAGATION_REQUIRES_NEW` or `PROPAGATION_NOT_SUPPORTED` it suspends the transaction for all of the work, so the read
+sees what the append's condition checks. The domain function then runs in a transaction the executor opened, if it
+opened one, and a decision with no new events enters the executor.
 
-A command on a reactive service under a caller's transaction can also fail with `TransientClientSessionException`, on
-these three propagations and before and after this order. On `PROPAGATION_REQUIRED` before this order, a first command
-failed that way in 2 of 20 runs in one set and 15 of 30 in another. `Mono.zip` in `ReactorMongoEventStore` is the cause.
-It can send two commands as the transaction's first operation. With a sequential read in its place no command failed
-that way in 90 runs before this order and 90 after it, and on the two suspending propagations a second command stored
-its event in 60 of 60 runs before it and in none of 60 after it. I didn't change that read here. I didn't add a test for
-a second command under a suspending executor, since nothing should come to depend on it.
+I first read in the caller's transaction in this case too, and the executor appended outside it. A second command on
+the same boundary then didn't see the first one's event, and a first command didn't see a commit another writer made to
+that boundary after the caller's snapshot. If such a command appended, its condition could fail on every attempt, and it
+then ended with `DcbAppendConditionNotFulfilledException`. I ran that on real MongoDB over `DcbCriteria.tags` with no
+prune, on both stacks, and it did whenever the first command had stored or the other writer had committed.
+
+On the blocking service a failure of the read or the decision goes around the executor, so it can't mark a transaction
+the caller owns rollback-only, and a caller that catches it and continues commits. The service holds it inside the
+executor's action, returns normally, and throws it after the executor has returned, an `Error` as well. Without that
+hold the caller's commit threw `UnexpectedRollbackException`. The reactive service lets the failure through the
+executor. `GenericReactiveTransaction.isRollbackOnly()` in spring-tx 7.0.9 reads only its own flag, so a participant
+can't stop the caller's commit, and with and without a hold the caller's transaction committed on a Spring MongoDB store.
+I ran no other reactive executor.
+
+The answer of `isTransactional()` decides all of this. I ran an executor that answers `true` with no transaction open,
+against what the interface asks for, on both stacks over a Spring MongoDB store. When it opens a transaction, the read
+runs in that transaction and the decider saves no snapshot. When it opens none, the decider saves one. In both the
+command stored its event, the handler ran once, and an `AssertionError` from the domain function reached the caller.
+
+The reactive service needs the store to read one command at a time in such a transaction. `Mono.zip` in
+`ReactorMongoEventStore` could send two commands as the transaction's first operation, and a command then failed with
+`TransientClientSessionException`, in 15 of 30 runs of a first command on `PROPAGATION_REQUIRED`. The store now sends them
+one after the other when transaction synchronization is active.
 
 ### The decider confirms its append before it saves
 
