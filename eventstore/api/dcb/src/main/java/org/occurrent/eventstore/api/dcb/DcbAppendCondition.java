@@ -41,7 +41,9 @@ import static java.util.Objects.requireNonNull;
  * A plain read through a mongos can miss a matching event while its token already holds that event's markers, when the
  * markers and the events are on different shards, and the append then doesn't fail. A read with
  * {@link DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} doesn't do that. The
- * same happens when the Spring or reactor store's {@code queryOptions} send the events read to a lagging secondary.
+ * same happens when the Spring or reactor store's {@code queryOptions} send the events read to a lagging secondary, and
+ * with a token read inside a transaction after that transaction's own append, once the transaction has rolled back (see
+ * {@link DcbEventStream#consistencyToken()}).
  * <p>
  * A store can answer from the events as they are when the append runs. A matching event committed after the read that
  * was deleted by then, or changed so that it no longer matches, may not make the append fail. The in-memory store
@@ -87,7 +89,8 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
      * returned {@code consistencyToken}. The condition's criteria are the ones the token was read with, so pass the
      * token from {@link DcbEventStream#consistencyToken()} unchanged. For a token read with {@link DcbCriteria#all()},
      * this is the same condition as {@link #wholeStoreLock(DcbConsistencyToken)}, so on the MongoDB stores a tag-scoped
-     * or type-scoped append committed after the read doesn't make it fail.
+     * or type-scoped append committed after the read doesn't make it fail. The class documentation says when else a
+     * store's answer differs from this.
      */
     public static DcbAppendCondition failIfEventsMatch(DcbConsistencyToken consistencyToken) {
         requireNonNull(consistencyToken, "Consistency token cannot be null");
@@ -97,7 +100,8 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
     /**
      * Creates a condition that fails if an event matching {@code criteria} was committed after the read that returned
      * {@code consistencyToken}. With {@link DcbCriteria#all()} it has the limit that
-     * {@link #wholeStoreLock(DcbConsistencyToken)} describes.
+     * {@link #wholeStoreLock(DcbConsistencyToken)} describes. The class documentation says when else a store's answer
+     * differs from this.
      *
      * @throws IllegalArgumentException if {@code criteria} isn't the same as the criteria the token was read with
      * @deprecated Use {@link #failIfEventsMatch(DcbConsistencyToken)}, which takes the criteria from the token. This
