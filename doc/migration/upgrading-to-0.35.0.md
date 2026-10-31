@@ -714,20 +714,21 @@ sharded cluster, this doesn't apply, and any event that moves a marker of the cr
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
 Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
 `withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction. A
-failover can do this to any read, one with `withVersions()` too, when appends write below majority, for example at w:1,
-or with no write concern set on a replica set whose implicit default is w:1, such as a primary, a secondary and an
-arbiter. The native store reserves an append's positions outside the transaction, and the Spring and reactor stores do
-when they run the transaction themselves, so the failover can lose that reservation while the append commits above the
-last reserved position, and a read stops at that position. A read after versions misses the event the same way, and once
-a read's versions hold the event's markers, a read after them doesn't return it. A full read returns it once the last
-reserved position has passed it. The append that reserves the event's position fails with
-`DuplicateCloudEventException`, whatever its boundary, and a conditional append on such a read's token that reserves
-another position can pass. On any deployment, a read whose events are behind its token can do this, for example when a
-read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A token also
-doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a matching
-event the read left out. 0.34.0 has the gap this paragraph describes too, except that it refused the append when the
-read caught only some of the event's markers, or when a later event moved a marker of the criteria, even one that didn't
-match.
+failover can do this to any read, one with `withVersions()` too, unless the client or database the store uses writes at
+majority. A majority set on a transaction or a template doesn't count, and w:1 is the implicit default on a replica set
+of a primary, a secondary and an arbiter. An append reserves its positions in an update outside the transaction, except
+on the Spring and reactor stores in a transaction of yours, so the failover can lose that reservation while the append
+commits above the last reserved position. A read stops at that position until the counter reaches the event, a full read
+and a read after versions too, and once a read's versions hold the event's markers, a read after them doesn't return it.
+An append that reserves the event's position can fail with `DuplicateCloudEventException`, and a conditional append on
+such a read's token can pass. [ADR
+149](../architecture/decisions/0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md)
+has the cases under its fifth assumption. On any deployment, a read whose events are behind its token can do this, for
+example when a read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A
+token also doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a
+matching event the read left out. 0.34.0 has the gap this paragraph describes too, except that it refused the append
+when the read caught only some of the event's markers, or when a later event moved a marker of the criteria, even one
+that didn't match.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
