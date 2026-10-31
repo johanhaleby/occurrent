@@ -16,20 +16,25 @@
 
 package org.occurrent.application.service.spring.reactor;
 
+import com.mongodb.MongoException;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.service.reactor.ReactiveTransactionExecutor;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.ReactiveTransactionManager;
 import org.springframework.transaction.reactive.TransactionContextManager;
 import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
+import org.springframework.util.ClassUtils;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
+import reactor.util.retry.RetryBackoffSpec;
 
 import java.time.Duration;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -59,16 +64,38 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * global position counter, but only when this executor opened the transaction. The event store joins this
      * transaction rather than opening its own, so it cannot retry a conflict itself: an aborted transaction can only
      * be started again by whoever owns it. Attempt count and backoff match the event store's own transient-conflict
-     * retry, which this stands in for, and the blocking {@code SpringTransactionExecutor}, so retry behaviour is
-     * identical across the two stacks (ADR 0053). See ADR 0074.
+     * retry, which this stands in for. The waiting matches the blocking {@code SpringTransactionExecutor} (ADR 0053),
+     * about two minutes, and the count is higher to make up for it: 320 retries, 321 attempts in all, since Reactor's
+     * jitter makes the average wait at the 500 ms cap 375 ms. An executor that uses this
+     * default also schedules no retry once 120 seconds have passed since the subscription started, so attempts that are slow themselves,
+     * for example while MongoDB has no primary, don't stretch the budget to hours. A retry passed to a constructor is
+     * used as given, this default included. See ADR 0074.
+     * <p>
+     * A conflict is a {@link TransientDataAccessException}, or any exception with the {@code TransientTransactionError}
+     * label that MongoDB puts on an error a fresh transaction can get past, found anywhere in its cause chain. That
+     * label is what the driver's own {@code withTransaction} retries on. The label is needed because Spring translates
+     * the most common conflict, a WriteConflict, to {@link org.springframework.dao.DataIntegrityViolationException},
+     * which is not transient. Retrying that type would retry a genuine duplicate key or validation error for two
+     * minutes, running the unit of work again each time along with any side effect it has outside the transaction.
+     * Without the MongoDB driver on the classpath only the transient type applies.
+     * <p>
+     * Three things are not retried. A commit that fails with {@code UnknownTransactionCommitResult} may have gone
+     * through, so running the unit of work again could apply it twice. A duplicate key or validation error is a
+     * result, not a conflict. A duplicate from a write made outside any transaction has no label either, which
+     * 0.34.0 did retry.
      */
-    private static final Retry DEFAULT_CONFLICT_RETRY = Retry.backoff(15, Duration.ofMillis(10))
+    private static final RetryBackoffSpec DEFAULT_CONFLICT_RETRY = Retry.backoff(320, Duration.ofMillis(10))
             .maxBackoff(Duration.ofMillis(500))
-            .filter(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException)
+            .filter(SpringReactiveTransactionExecutor::isTransientConflict)
             .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+
+    private static final boolean MONGO_DRIVER_PRESENT = ClassUtils.isPresent("com.mongodb.MongoException", SpringReactiveTransactionExecutor.class.getClassLoader());
+
+    private static final Duration DEFAULT_CONFLICT_DEADLINE = Duration.ofSeconds(120);
 
     private final TransactionalOperator transactionalOperator;
     private final Retry conflictRetry;
+    private final boolean stopAfterDefaultDeadline;
 
     /**
      * Create an executor that runs work inside reactive transactions managed by the supplied
@@ -88,7 +115,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * @param transactionalOperator The transactional operator to run work through.
      */
     public SpringReactiveTransactionExecutor(TransactionalOperator transactionalOperator) {
-        this(transactionalOperator, DEFAULT_CONFLICT_RETRY);
+        this(transactionalOperator, DEFAULT_CONFLICT_RETRY, true);
     }
 
     /**
@@ -115,13 +142,20 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * @param conflictRetry         The retry spec to apply when this executor opens the transaction.
      */
     public SpringReactiveTransactionExecutor(TransactionalOperator transactionalOperator, Retry conflictRetry) {
+        this(transactionalOperator, conflictRetry, false);
+    }
+
+    private SpringReactiveTransactionExecutor(TransactionalOperator transactionalOperator, Retry conflictRetry, boolean stopAfterDefaultDeadline) {
+        this.stopAfterDefaultDeadline = stopAfterDefaultDeadline;
         this.transactionalOperator = Objects.requireNonNull(transactionalOperator, "transactionalOperator cannot be null");
         this.conflictRetry = Objects.requireNonNull(conflictRetry, "conflictRetry cannot be null");
     }
 
     /**
-     * The conflict-retry spec applied when this executor opens the transaction: 15 attempts with exponential backoff
-     * from 10ms to 500ms, matching the blocking executor and the event store's own transient-conflict retry.
+     * The conflict-retry spec applied when this executor opens the transaction: 320 retries with exponential backoff
+     * from 10ms to 500ms, about two minutes of waiting, matching the blocking executor and the event store's own
+     * transient-conflict retry. It counts retries only. An executor built without a retry of its own adds a
+     * 120 second deadline per subscription on top, which this spec does not include when you pass it to a constructor.
      *
      * @return The default retry spec.
      */
@@ -146,7 +180,43 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                         // A conflict aborts the whole transaction, which only its owner can start again, so run the
                         // action once and let the error reach that owner. See ADR 0074.
                         ? transaction
-                        : transaction.retryWhen(conflictRetry));
+                        : Mono.defer(() -> transaction.retryWhen(stopAfterDefaultDeadline ? withinDeadline() : conflictRetry)));
+    }
+
+    private static boolean isTransientConflict(Throwable throwable) {
+        Boolean byLabel = MONGO_DRIVER_PRESENT ? MongoErrorLabels.verdict(throwable) : null;
+        return byLabel != null ? byLabel : throwable instanceof TransientDataAccessException;
+    }
+
+    /**
+     * Kept in a class of its own so that {@link SpringReactiveTransactionExecutor} loads when the driver is absent.
+     * This class is not touched then.
+     */
+    private static final class MongoErrorLabels {
+        /**
+         * What the error labels in the cause chain say, or {@code null} when they say nothing. The unknown commit result
+         * label anywhere in the chain wins over the transient label, so a commit that may have gone through is not
+         * retried. The driver's {@code withTransaction} also looks at the unknown commit result label first, but it
+         * retries the commit and not the callback, and the executor can only run the callback again.
+         */
+        static Boolean verdict(Throwable throwable) {
+            Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+            boolean transientLabel = false;
+            for (Throwable cause = throwable; cause != null && seen.add(cause); cause = cause.getCause()) {
+                if (cause instanceof MongoException mongoException) {
+                    if (mongoException.hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)) {
+                        return false;
+                    }
+                    transientLabel |= mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+                }
+            }
+            return transientLabel ? Boolean.TRUE : null;
+        }
+    }
+
+    private static Retry withinDeadline() {
+        long deadlineNanos = System.nanoTime() + DEFAULT_CONFLICT_DEADLINE.toNanos();
+        return DEFAULT_CONFLICT_RETRY.modifyErrorFilter(isRetryable -> throwable -> isRetryable.test(throwable) && System.nanoTime() - deadlineNanos < 0);
     }
 
     /**

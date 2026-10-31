@@ -13,6 +13,8 @@ markers and no longer its `type:` markers, so sharing a type with such an item i
 refuse. What an append increments for its own events is unchanged, so two
 appends of one type that run at the same time still write the same `type:` marker.
 
+Amended by [ADR 164](0164-a-spring-mongo-dcb-append-retries-a-transaction-conflict-for-about-two-minutes.md). "Contention surfaces as a retry, not a spurious command failure" holds while an append loses fewer than 240 attempts in a row on the blocking store, or 321 on the reactive one, within about two minutes of waiting. An append that loses every attempt fails with the last error.
+
 ## Context
 
 `SpringMongoEventStore.appendDcb` appends DCB events under an optional `DcbAppendCondition`, which is the DCB optimistic-concurrency check: fail the append if any event matching the condition's `DcbQuery` exists after the position the command read. The current implementation has three concurrency problems.
