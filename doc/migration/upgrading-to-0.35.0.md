@@ -560,14 +560,13 @@ What is new:
   each marker of the criteria, read at the same point in time as the events. It reports them only for a full forward
   read, with no limit, skip or position bound, and criteria other than `MatchAll`.
 - A conditional append with a consistency token reports the same in `DcbAppendResult.markerVersions()`.
-- `read(criteria, DcbReadOptions.afterVersions(saved))` returns every matching event appended after `saved`, including
-  one that committed late below a position an earlier read saw. It doesn't return an event an earlier read missed
-  although `saved` holds the event's markers, which [What else a token holds on
-  MongoDB](#what-else-a-token-holds-on-mongodb) describes. When the store can't compare `saved` with its own markers,
-  for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in full. Pass
-  versions only to a read on the same criteria as the read or append that reported them. A store doesn't always refuse
-  versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`, which returns
-  only what comes after them, with no exception.
+- `read(criteria, DcbReadOptions.afterVersions(saved))` returns the matching events appended after `saved`, including
+  one that committed late below a position an earlier read saw. A failover can make it miss an event, as [What else a
+  token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. When the store can't compare `saved` with its own
+  markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
+  full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
+  always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
+  which returns only what comes after them, with no exception.
 - `DcbAppendConfirmation.isConfirmed(result)` answers whether an append is committed at majority, read outside any
   transaction of yours. The MongoDB stores and `InMemoryEventStore` implement it.
 
@@ -713,18 +712,21 @@ on a busy tag. A condition can still fail with no matching event, for example af
 sharded cluster, this doesn't apply, and any event that moves a marker of the criteria still fails it.
 
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
-A plain read through a mongos can do this when the markers and the events are on different shards. A read with
-`withVersions()` doesn't do this when its stream reports `markerVersions()`, because it read both in one snapshot
-transaction. A failover can do this to any read, one with `withVersions()` too, when the client writes at w:1 or sets no
-write concern on a replica set whose implicit default is w:1, such as a primary, a secondary and an arbiter. A store
-that runs the transaction itself reserves an append's positions outside it, so the failover can lose that reservation
-while the append commits above the last reserved position, and a read stops at that position. A read after such a read's
-versions doesn't return the event. A conditional append on such a read's token fails with `DuplicateCloudEventException`
-when it reserves the event's position, and can pass when a reservation below the event's was lost too. On any
-deployment, a read whose events are behind its token can do this, for example when a read preference or a read concern
-sends the events read to a lagging secondary or to an older snapshot. A token also doesn't depend on a read's limit,
-skip or position range, so after such a read a condition doesn't fail for a matching event the read left out. 0.34.0 has
-this gap too, except that it refused the append when the read caught only some of the event's markers.
+Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
+`withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction. A
+failover can do this to any read, one with `withVersions()` too, when appends write below majority, for example at w:1,
+or with no write concern set on a replica set whose implicit default is w:1, such as a primary, a secondary and an
+arbiter. The native store reserves an append's positions outside the transaction, and the Spring and reactor stores do
+when they run the transaction themselves, so the failover can lose that reservation while the append commits above the
+last reserved position, and a read stops at that position. A read after versions misses the event the same way, and once
+a read's versions hold the event's markers, a read after them doesn't return it. A full read returns it once the last
+reserved position has passed it. The append that reserves the event's position fails with
+`DuplicateCloudEventException`, whatever its boundary, and a conditional append on such a read's token that reserves
+another position can pass. On any deployment, a read whose events are behind its token can do this, for example when a
+read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A token also
+doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a matching
+event the read left out. 0.34.0 has the gap this paragraph describes too, except that it refused the append when the
+read caught only some of the event's markers.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
@@ -755,7 +757,6 @@ describes it.
   read. On a replica set the check reads the events as they are when the append runs, so an event deleted by then, or
   changed so that it no longer matches, may not fail it. A read can also miss such an event and let the append through,
   as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says.
-
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
 - This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the

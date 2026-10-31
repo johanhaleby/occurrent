@@ -766,9 +766,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     // The optimistic-concurrency token for a query: what the read saw of each of its conflict markers. Because versions
-    // bump inside the append transaction, not when positions are reserved, this token is immune to the read-watermark
-    // overshoot a position-based check suffers (ADR 0021). Outside a caller's transaction it reflects only committed
-    // appends.
+    // bump inside the append transaction, not when positions are reserved, this token reflects only committed appends
+    // and is immune to the read-watermark overshoot a position-based check suffers (ADR 0021).
     private DcbConsistencyToken consistencyToken(@Nullable ClientSession clientSession, DcbCriteria criteria) {
         return DcbMarkerVersionsDocuments.consistencyToken(criteria, queryMarkers(clientSession, criteria));
     }
