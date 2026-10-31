@@ -30,11 +30,30 @@ import static java.util.Objects.requireNonNull;
  * event was committed after the read that returned the token (see {@link DcbEventStream#consistencyToken()}). On the
  * MongoDB stores, a tag-scoped or type-scoped append committed after a read with {@link DcbCriteria#all()} doesn't make
  * it fail (see {@link #wholeStoreLock(DcbConsistencyToken)}). A store may also make it fail when no matching event was
- * committed. The MongoDB stores can do that, for example when an event committed after the read shares a tag with
- * {@code criteria} but doesn't match it, or when another conditional append on the same criteria committed after the
- * read, whatever events it appended. The MongoDB stores rely on a marker document being deleted only in a transaction
- * that also finds no event with its tag or type, at read concern snapshot on a sharded cluster, and not while a 0.34 node
- * can still append, since 0.34 recreates a deleted marker with no epoch and restarts its version at 1.
+ * committed. The MongoDB stores can do that on a replica set, for example when a marker document was deleted after the
+ * read or a 0.34 node appended after it. On anything else, such as a sharded cluster, they do that whenever a marker of
+ * {@code criteria} moved after the read, for example for an event that shares a tag with {@code criteria} but doesn't
+ * match it, or for another conditional append on the same criteria, whatever events it appended. The MongoDB stores
+ * rely on a marker document being deleted only in a transaction that also finds no event with its tag or type, at read
+ * concern snapshot on a sharded cluster, and not while a 0.34 node can still append, since 0.34 recreates a deleted
+ * marker with no epoch and restarts its version at 1.
+ * <p>
+ * A plain read through a mongos can miss a matching event while its token already holds that event's markers, when the
+ * markers and the events are on different shards, and the append then doesn't fail. A read through a mongos with
+ * {@link DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} doesn't do that.
+ * The append can also pass on any deployment when a read preference or a read concern puts a read's events behind its
+ * token, and with a token read inside a transaction after that transaction's own append, once the transaction has
+ * rolled back (see {@link DcbEventStream#consistencyToken()}). On the Spring and reactor MongoDB stores, an append whose
+ * own transaction is set to {@code REQUIRES_NEW} or {@code NOT_SUPPORTED} on the database factory of a transaction
+ * already open can leave its event above the reserved positions when that open transaction rolls back. Any read can
+ * then miss an event its token holds, one with {@link DcbReadOptions#withVersions()} too, and the append can pass. The <a
+ * href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">0.35.0 upgrade
+ * guide</a> has the details. A token also doesn't depend on a read's limit, skip or position range,
+ * so after such a read the append doesn't fail for a matching event the read left out.
+ * <p>
+ * A store can answer from the events as they are when the append runs. A matching event committed after the read that
+ * was deleted by then, or changed so that it no longer matches, may not make the append fail. The in-memory store
+ * answers that way, and so do the MongoDB stores on a replica set when the markers don't refuse first.
  * <p>
  * A token belongs to the criteria it was read with, so the constructor throws {@link IllegalArgumentException} when the
  * token's criteria aren't the same as {@code criteria}. Every factory goes through the constructor, so this happens
@@ -76,7 +95,8 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
      * returned {@code consistencyToken}. The condition's criteria are the ones the token was read with, so pass the
      * token from {@link DcbEventStream#consistencyToken()} unchanged. For a token read with {@link DcbCriteria#all()},
      * this is the same condition as {@link #wholeStoreLock(DcbConsistencyToken)}, so on the MongoDB stores a tag-scoped
-     * or type-scoped append committed after the read doesn't make it fail.
+     * or type-scoped append committed after the read doesn't make it fail. The class documentation says when else a
+     * store's answer differs from this.
      */
     public static DcbAppendCondition failIfEventsMatch(DcbConsistencyToken consistencyToken) {
         requireNonNull(consistencyToken, "Consistency token cannot be null");
@@ -86,7 +106,8 @@ public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyTo
     /**
      * Creates a condition that fails if an event matching {@code criteria} was committed after the read that returned
      * {@code consistencyToken}. With {@link DcbCriteria#all()} it has the limit that
-     * {@link #wholeStoreLock(DcbConsistencyToken)} describes.
+     * {@link #wholeStoreLock(DcbConsistencyToken)} describes. The class documentation says when else a store's answer
+     * differs from this.
      *
      * @throws IllegalArgumentException if {@code criteria} isn't the same as the criteria the token was read with
      * @deprecated Use {@link #failIfEventsMatch(DcbConsistencyToken)}, which takes the criteria from the token. This

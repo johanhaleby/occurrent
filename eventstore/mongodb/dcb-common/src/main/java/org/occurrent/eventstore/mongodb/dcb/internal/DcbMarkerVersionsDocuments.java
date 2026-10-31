@@ -198,13 +198,23 @@ public final class DcbMarkerVersionsDocuments {
     }
 
     /**
-     * The keys of the index a read after marker versions selects events by, one {@code mv} element with a key, an
-     * epoch and a version above the saved one.
+     * The keys of the index that a read after marker versions and the check of a conditional append select events by,
+     * one {@code mv} element with a key, an epoch and a version above a given one.
      */
     public static Document markerVersionsIndex() {
         return new Document(EVENT_MARKER_VERSIONS + "." + EVENT_MARKER_VERSIONS_KEY, 1)
                 .append(EVENT_MARKER_VERSIONS + "." + EVENT_MARKER_VERSIONS_EPOCH, 1)
                 .append(EVENT_MARKER_VERSIONS + "." + EVENT_MARKER_VERSIONS_VERSION, 1);
+    }
+
+    /**
+     * The elements of {@code mv} that select the events the check has to look for. Call it only for an item the check
+     * returned, so every selection key has a marker with an epoch in {@code markersByKey}.
+     */
+    public static List<Selection> selections(DcbAppendConditionCheck.ItemQuery item, Map<String, Document> markersByKey) {
+        return item.selections().stream()
+                .map(selection -> new Selection(selection.key(), Objects.requireNonNull(markersByKey.get(selection.key()), () -> "No marker for " + selection.key()).get(CHECKPOINT_EPOCH), selection.version()))
+                .toList();
     }
 
     /**
@@ -219,7 +229,15 @@ public final class DcbMarkerVersionsDocuments {
      * Call it only after {@link DcbMarkerVersionsSupport#requireResumable} accepted {@code saved}.
      */
     public static Bson afterVersionsFilter(DcbCriterion item, Map<String, Document> markersByKey, DcbMarkerVersions saved) {
-        List<Bson> elements = selections(item, markersByKey, saved).stream()
+        return selectionFilter(selections(item, markersByKey, saved));
+    }
+
+    /**
+     * The filter on an event with an element of {@code mv} that one of {@code selections} selects. {@code $elemMatch}
+     * keeps the key, the epoch and the version on one element.
+     */
+    public static Bson selectionFilter(List<Selection> selections) {
+        List<Bson> elements = selections.stream()
                 .map(selection -> Filters.elemMatch(EVENT_MARKER_VERSIONS, Filters.and(
                         Filters.eq(EVENT_MARKER_VERSIONS_KEY, selection.key()),
                         Filters.eq(EVENT_MARKER_VERSIONS_EPOCH, selection.epoch()),

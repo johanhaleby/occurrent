@@ -34,6 +34,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.wholeStoreLock;
@@ -44,10 +45,11 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.*;
  * The Dynamic Consistency Boundary contract covers which events a criteria selects, what the read options do to the
  * selection, and when an append condition conflicts.
  * <p>
- * Occurrent's stores answer a token-qualified append condition in two genuinely different ways, so the fixture
+ * Occurrent's stores answer a token-qualified append condition in genuinely different ways, so the fixture
  * declares which through {@link EventStoreFixture#appendConditionModel()} and this suite asserts the outcome that
- * model owes. Both branches run in this repository, so neither is a claim nobody checks. See
- * {@link DcbAppendConditionModel} for why one declaration settles two questions.
+ * model owes. The in-memory store runs the {@code EXACT_CRITERIA} branches and the MongoDB stores run the
+ * {@code MARKERS_THEN_EVENTS} ones. No store in this repository declares {@code TAG_MARKER}, so its branches are
+ * written but not run. See {@link DcbAppendConditionModel} for the two questions a declaration answers.
  * <p>
  * What this suite deliberately does <strong>not</strong> assert, each for a reason the contract states:
  * <ul>
@@ -746,13 +748,16 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         void a_condition_with_no_token_succeeds_when_nothing_matches() {
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_2)));
 
+            CloudEvent appended = taggedEvent(CHANGED, NAME_1);
+
             DcbAppendResult result = dcbEventStore().append(
-                    List.of(taggedEvent(CHANGED, NAME_1)),
+                    List.of(appended),
                     failIfEventsMatch(DcbCriteria.tags(tag(NAME_1))));
 
             assertThat(result.eventCount())
                     .as("A guard on an empty boundary must not be tripped by an event in a different boundary")
                     .isEqualTo(1);
+            assertWritten(appended);
         }
 
         @Test
@@ -773,13 +778,15 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             DcbCriteria criteria = DcbCriteria.tags(tag(NAME_1));
             DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
 
-            DcbAppendResult result = dcbEventStore().append(
-                    List.of(taggedEvent(CHANGED, NAME_1)), failIfEventsMatch(token));
+            CloudEvent appended = taggedEvent(CHANGED, NAME_1);
+
+            DcbAppendResult result = dcbEventStore().append(List.of(appended), failIfEventsMatch(token));
 
             assertThat(result.eventCount())
                     .as("A token narrows the condition to what was committed after the read, so the event the read "
                             + "itself saw must not reject the append")
                     .isEqualTo(1);
+            assertWritten(appended);
         }
 
         @Test
@@ -802,13 +809,15 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_2)));
 
-            DcbAppendResult result = dcbEventStore().append(
-                    List.of(taggedEvent(CHANGED, NAME_1)), failIfEventsMatch(token));
+            CloudEvent appended = taggedEvent(CHANGED, NAME_1);
+
+            DcbAppendResult result = dcbEventStore().append(List.of(appended), failIfEventsMatch(token));
 
             assertThat(result.eventCount())
                     .as("A consistency boundary is scoped by its criteria, so a concurrent append to an unrelated "
                             + "boundary must not reject this one. This is the whole point of DCB over a stream lock")
                     .isEqualTo(1);
+            assertWritten(appended);
         }
 
         @Test
@@ -969,13 +978,15 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
             DcbConsistencyToken token = dcbEventStore().read(DcbCriteria.tags(tag(NAME_1))).consistencyToken();
 
-            DcbAppendResult result = dcbEventStore().append(
-                    List.of(taggedEvent(CHANGED, NAME_1)), failIfEventsMatch(token));
+            CloudEvent appended = taggedEvent(CHANGED, NAME_1);
+
+            DcbAppendResult result = dcbEventStore().append(List.of(appended), failIfEventsMatch(token));
 
             assertThat(result.eventCount())
                     .as("The one-argument form uses the criteria the token was read with, so the control for the "
                             + "refusals above must be accepted when nothing matching was committed after the read")
                     .isEqualTo(1);
+            assertWritten(appended);
         }
 
         @Test
@@ -1171,7 +1182,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
-        void a_condition_on_a_type_and_two_tags_ignores_an_event_of_that_type_carrying_only_one_of_the_tags_committed_after_the_read() {
+        void a_condition_on_a_type_and_two_tags_ignores_an_event_of_that_type_carrying_only_one_of_the_tags_unless_the_model_compares_only_markers() {
             String type = "TwoTagsAccepted";
             String course = "two-tags-accepted-course:c1";
             String student = "two-tags-accepted-student:s1";
@@ -1181,16 +1192,36 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             dcbEventStore().append(List.of(taggedEvent(type, course, otherStudent)));
 
-            assertThatCode(() -> dcbEventStore().append(
-                    List.of(taggedEvent(type, course, student)), failIfEventsMatch(token)))
-                    .as("The event committed after the read carries the course tag but not the student tag, so it "
-                            + "does not match a criterion that needs both. Sharing one of two tags with the criteria "
-                            + "is not sharing the boundary")
-                    .doesNotThrowAnyException();
+            List<CloudEvent> events = List.of(taggedEvent(type, course, student));
+            DcbAppendCondition condition = failIfEventsMatch(token);
+            if (expectedToConflictOnANonMatchingEventSharingATag()) {
+                Throwable thrown = catchThrowable(() -> dcbEventStore().append(events, condition));
+                int selected = dcbEventStore().read(criteria).events().size();
+                if (thrown == null) {
+                    assertThat(selected)
+                            .as("A store that compares the marker of each tag can accept the append, and then it must "
+                                    + "have written its event. The event with the other student is not selected")
+                            .isEqualTo(1);
+                } else {
+                    assertThat(thrown)
+                            .as("A store that compares the markers as a sum can refuse the append, because the marker "
+                                    + "of the course tag moved. It must refuse with the append condition exception")
+                            .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+                    assertThat(selected)
+                            .as("The refused append must not have written its event, and the event with the other student is not selected")
+                            .isZero();
+                }
+            } else {
+                assertThatCode(() -> dcbEventStore().append(events, condition))
+                        .as("The event committed after the read carries the course tag but not the student tag, so it "
+                                + "does not match a criterion that needs both. Sharing one of two tags with the criteria "
+                                + "is not sharing the boundary")
+                        .doesNotThrowAnyException();
 
-            assertThat(dcbEventStore().read(criteria).events().size())
-                    .as("The accepted append must have written its event, and the event with the other student is not selected")
-                    .isEqualTo(1);
+                assertThat(dcbEventStore().read(criteria).events().size())
+                        .as("The accepted append must have written its event, and the event with the other student is not selected")
+                        .isEqualTo(1);
+            }
         }
 
         @Test
@@ -1234,7 +1265,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
-        void a_condition_on_a_type_alternative_and_a_two_tag_alternative_ignores_an_event_of_another_type_carrying_one_of_the_tags() {
+        void a_condition_on_a_type_alternative_and_a_two_tag_alternative_ignores_an_event_of_another_type_carrying_one_of_the_tags_unless_the_model_compares_only_markers() {
             String type = "AlternativesAcceptedType";
             String otherType = "AlternativesAcceptedOther";
             String tagA = "alternatives-accepted:a";
@@ -1244,15 +1275,31 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             dcbEventStore().append(List.of(taggedEvent(otherType, tagA)));
 
-            assertThatCode(() -> dcbEventStore().append(
-                    List.of(taggedEvent(otherType, "alternatives-accepted:unrelated")), failIfEventsMatch(token)))
-                    .as("The event committed after the read has neither the type of the first alternative nor both "
-                            + "tags of the second, so it matches neither. A store that cannot tell this from a match "
-                            + "of the type alternative, or of the tag alternative, would refuse")
-                    .doesNotThrowAnyException();
+            CloudEvent appended = taggedEvent(otherType, "alternatives-accepted:unrelated");
+            List<CloudEvent> events = List.of(appended);
+            DcbAppendCondition condition = failIfEventsMatch(token);
+            if (expectedToConflictOnANonMatchingEventSharingATag()) {
+                Throwable thrown = catchThrowable(() -> dcbEventStore().append(events, condition));
+                if (thrown == null) {
+                    assertWritten(appended);
+                } else {
+                    assertThat(thrown)
+                            .as("A store that compares the markers as a sum can refuse the append, because the marker "
+                                    + "of tag a moved. It must refuse with the append condition exception")
+                            .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+                    assertNotWritten(appended);
+                }
+            } else {
+                assertThatCode(() -> dcbEventStore().append(events, condition))
+                        .as("The event committed after the read has neither the type of the first alternative nor both "
+                                + "tags of the second, so it matches neither. A store that cannot tell this from a match "
+                                + "of the type alternative, or of the tag alternative, would refuse")
+                        .doesNotThrowAnyException();
+                assertWritten(appended);
+            }
 
             assertThat(dcbEventStore().read(criteria).events())
-                    .as("No event of the type or with both tags exists, so the accepted append wrote none either")
+                    .as("The event of the append matches neither alternative, so the criteria selects none either way")
                     .isEmpty();
         }
 
@@ -1288,11 +1335,14 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
         @Test
         void a_whole_store_lock_with_no_token_succeeds_only_while_the_store_holds_no_dcb_event() {
-            DcbAppendResult result = dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)), wholeStoreLock());
+            CloudEvent bootstrap = taggedEvent(DEFINED, NAME_1);
+
+            DcbAppendResult result = dcbEventStore().append(List.of(bootstrap), wholeStoreLock());
             assertThat(result.eventCount())
                     .as("A whole-store lock is correct for a bootstrap append, so it must let the first append "
                             + "through")
                     .isEqualTo(1);
+            assertWritten(bootstrap);
 
             assertThatThrownBy(() -> dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_2)), wholeStoreLock()))
                     .as("Once any DCB event exists, an untokenized whole-store lock must reject the append whatever "
@@ -1303,7 +1353,9 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         @Test
         void a_whole_store_lock_conflicts_on_a_later_whole_store_append() {
             DcbConsistencyToken token = dcbEventStore().read(DcbCriteria.all()).consistencyToken();
-            dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)), wholeStoreLock(token));
+            CloudEvent first = taggedEvent(DEFINED, NAME_1);
+            dcbEventStore().append(List.of(first), wholeStoreLock(token));
+            assertWritten(first);
 
             assertThatThrownBy(() -> dcbEventStore().append(
                     List.of(taggedEvent(CHANGED, NAME_2)), wholeStoreLock(token)))
@@ -1322,21 +1374,105 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             // ReadingByCriteria), but it carries the positive tag the boundary is keyed on.
             dcbEventStore().append(List.of(taggedEvent(SNAPSHOT, NAME_1)));
 
-            List<CloudEvent> events = List.of(taggedEvent(CHANGED, NAME_1));
+            CloudEvent appended = taggedEvent(CHANGED, NAME_1);
+            List<CloudEvent> events = List.of(appended);
             DcbAppendCondition condition = failIfEventsMatch(token);
-            if (expectedToConflictOnAnExcludedTypeSharingATag()) {
+            if (expectedToConflictOnANonMatchingEventSharingATag()) {
                 assertThatThrownBy(() -> dcbEventStore().append(events, condition))
                         .as("Under the tag-marker model the boundary's marker was bumped by the excluded event, so "
                                 + "the condition conflicts. A false conflict, and a sound one: it never misses a "
                                 + "real conflict, and the application service re-reads the still-excluded boundary "
                                 + "and retries")
                         .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+                assertNotWritten(appended);
             } else {
                 assertThat(dcbEventStore().append(events, condition).eventCount())
-                        .as("Under the exact-criteria model the exclusion is applied to the event itself, so an "
-                                + "excluded event is not a conflict however it is tagged")
+                        .as("Under the exact-criteria and the markers-then-events models the exclusion is applied to "
+                                + "the event itself, so an excluded event is not a conflict however it is tagged")
                         .isEqualTo(1);
+                assertWritten(appended);
             }
+        }
+
+        @Test
+        void an_event_of_another_type_sharing_the_tag_of_a_type_and_tag_condition_conflicts_only_under_the_tag_marker_model() {
+            String type = "TicketSoldShared";
+            String otherType = "ConcertRenamedShared";
+            String concert = "shared-tag-concert:k1";
+            DcbCriteria criteria = DcbCriteria.type(type).tags(tag(concert));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(otherType, concert)));
+
+            CloudEvent appended = taggedEvent(type, concert);
+            List<CloudEvent> events = List.of(appended);
+            DcbAppendCondition condition = failIfEventsMatch(token);
+            if (expectedToConflictOnANonMatchingEventSharingATag()) {
+                assertThatThrownBy(() -> dcbEventStore().append(events, condition))
+                        .as("Under the tag-marker model the marker of the concert tag moved, and it knows nothing about "
+                                + "types, so the event of the other type conflicts")
+                        .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+            } else {
+                assertThatCode(() -> dcbEventStore().append(events, condition))
+                        .as("The event committed after the read has the tag of the criteria but not its type, so it "
+                                + "doesn't match. Only a store that tells a matching event from one that shares a tag "
+                                + "accepts this append")
+                        .doesNotThrowAnyException();
+                assertWritten(appended);
+            }
+        }
+
+        @Test
+        void a_condition_on_a_type_and_a_tag_conflicts_on_an_event_of_that_type_with_the_tag_committed_after_the_read_although_another_type_with_the_tag_came_first() {
+            String type = "TicketSoldControl";
+            String otherType = "ConcertRenamedControl";
+            String concert = "shared-tag-control-concert:k1";
+            DcbCriteria criteria = DcbCriteria.type(type).tags(tag(concert));
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(otherType, concert)));
+            dcbEventStore().append(List.of(taggedEvent(type, concert)));
+
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(type, concert)), failIfEventsMatch(token)))
+                    .as("The control of the case above: the marker of the tag moved for two appends, and one of them "
+                            + "is an event of the criteria's type with its tag. A store that lets an append through "
+                            + "because the tag was shared with a non-matching event would accept this one too")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
+        void a_condition_on_two_types_conflicts_on_an_event_of_the_second_type_committed_after_the_read() {
+            String typeX = "TwoTypesConflictX";
+            String typeY = "TwoTypesConflictY";
+            DcbCriteria criteria = DcbCriteria.types(typeX, typeY);
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(typeY, "two-types-conflict:a")));
+
+            assertThatThrownBy(() -> dcbEventStore().append(
+                    List.of(taggedEvent(typeX, "two-types-conflict:b")), failIfEventsMatch(token)))
+                    .as("An event of the second type matches the criteria, and the marker of the first type didn't "
+                            + "move. A store that looks at the first type alone would accept this append")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
+        void a_condition_on_two_types_ignores_an_event_of_a_third_type_committed_after_the_read() {
+            String typeX = "TwoTypesAcceptedX";
+            String typeY = "TwoTypesAcceptedY";
+            String typeZ = "TwoTypesAcceptedZ";
+            DcbCriteria criteria = DcbCriteria.types(typeX, typeY);
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+
+            dcbEventStore().append(List.of(taggedEvent(typeZ, "two-types-accepted:a")));
+
+            CloudEvent appended = taggedEvent(typeX, "two-types-accepted:b");
+            assertThatCode(() -> dcbEventStore().append(List.of(appended), failIfEventsMatch(token)))
+                    .as("The event committed after the read is of neither type, so it doesn't match. The control of "
+                            + "the conflict case: a store that refuses every append after any event would reject this one")
+                    .doesNotThrowAnyException();
+            assertWritten(appended);
         }
 
         @Test
@@ -1346,15 +1482,18 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             // A tag-scoped append commits after the whole-store read.
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
 
-            List<CloudEvent> events = List.of(taggedEvent(CHANGED, NAME_2));
+            CloudEvent appended = taggedEvent(CHANGED, NAME_2);
+            List<CloudEvent> events = List.of(appended);
             DcbAppendCondition condition = wholeStoreLock(token);
-            if (expectedToConflictOnAnExcludedTypeSharingATag()) {
+            if (expectedToMissATagScopedAppendUnderAWholeStoreLock()) {
                 assertThat(dcbEventStore().append(events, condition).eventCount())
-                        .as("Under the tag-marker model a whole-store lock is keyed on a marker only another "
-                                + "whole-store append touches, so it does not see a tag-scoped append. This is the "
+                        .as("Under the tag-marker and the markers-then-events models a whole-store lock is keyed on a "
+                                + "marker only another whole-store append touches, so it does not see a tag-scoped "
+                                + "append. This is the "
                                 + "limitation wholeStoreLock() documents, and the reason it is correct only for a "
                                 + "single writer or a bootstrap append that races only with other bootstrap appends")
                         .isEqualTo(1);
+                assertWritten(appended);
             } else {
                 assertThatThrownBy(() -> dcbEventStore().append(events, condition))
                         .as("Under the exact-criteria model MatchAll matches the tag-scoped event like any other, "
@@ -1365,15 +1504,44 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
     }
 
     /**
-     * Whether the declared append-condition model over-approximates on an excluded type, and by the same coarseness
-     * under-approximates on a whole-store lock. Written as a switch expression so adding a third model breaks the
-     * build here rather than silently taking one of the existing branches.
+     * Whether the declared append-condition model can conflict on an event that shares a tag with the criteria, whether
+     * it is of a type the criteria excludes or lacks another tag the criteria requires, although no event matching the
+     * criteria was committed. Each test says whether such a model must refuse or may accept. Written as a switch
+     * expression so adding a model breaks the build here rather than silently taking one of the existing branches.
      */
-    private boolean expectedToConflictOnAnExcludedTypeSharingATag() {
+    private boolean expectedToConflictOnANonMatchingEventSharingATag() {
         return switch (appendConditionModel()) {
-            case EXACT_CRITERIA -> false;
+            case EXACT_CRITERIA, MARKERS_THEN_EVENTS -> false;
             case TAG_MARKER -> true;
         };
+    }
+
+    /**
+     * Whether the declared append-condition model lets a whole-store lock pass after a tag-scoped append committed
+     * since its read. A separate question from the one above, since a model can answer exactly on one and coarsely on
+     * the other.
+     */
+    private boolean expectedToMissATagScopedAppendUnderAWholeStoreLock() {
+        return switch (appendConditionModel()) {
+            case EXACT_CRITERIA -> false;
+            case MARKERS_THEN_EVENTS, TAG_MARKER -> true;
+        };
+    }
+
+    private void assertWritten(CloudEvent event) {
+        assertThat(idsOfType(event))
+                .as("The accepted append must have written its event, read back by its own type")
+                .contains(event.getId());
+    }
+
+    private void assertNotWritten(CloudEvent event) {
+        assertThat(idsOfType(event))
+                .as("The refused append must not have written its event, read back by its own type")
+                .doesNotContain(event.getId());
+    }
+
+    private List<String> idsOfType(CloudEvent event) {
+        return dcbEventStore().read(DcbCriteria.type(event.getType())).events().stream().map(CloudEvent::getId).toList();
     }
 
     private static List<Long> positionsOf(List<CloudEvent> events) {
