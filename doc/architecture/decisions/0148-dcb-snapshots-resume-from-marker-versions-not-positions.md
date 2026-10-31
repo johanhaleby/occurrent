@@ -940,9 +940,9 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
 ## Consequences
 
 A boundary reports versions only when each tag of an item with tags, and each type of an item without tags, has a
-marker. A decider on it reads in full and saves nothing on that command, and when it appends, that append creates the
-missing markers, so its next command can save. A view never appends, so it reads in full until other appends have
-created them. 0.34 saved at a position there, so this is a cost I accept for not saving at a position. A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot, and one 0.34 saved stays in
+marker. A decider on it reads in full, an attempt whose read reported no versions saves nothing, and its append creates the missing
+markers and gives the others an epoch, so its next command can save. A view never appends, so it reads in full until
+other appends have done that for every marker. 0.34 saved at a position there, so this is a cost I accept for not saving at a position. A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot, and one 0.34 saved stays in
 the store unchanged.
 
 - #1230 is fixed for the snapshot deciders and the `@Snapshot` view on every store in this repository, without a new

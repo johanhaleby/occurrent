@@ -778,9 +778,9 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - When the store reported no versions, or didn't confirm the append, the snapshot isn't saved. The first skip for each
   reason logs a warning, and later ones log at debug.
 - A boundary reports no versions until each tag of an item with tags, and each type of an item without tags, has a
-  marker. A decider reads the whole boundary and saves nothing on that command, and when it appends, that append creates
-  the missing markers, so its next command can save. A `@Snapshot` view never appends, so it reads the whole boundary
-  until other appends have created them. 0.34.0 saved at a position there.
+  marker. A decider reads the whole boundary, an attempt whose read reported no versions saves nothing, and its append creates the missing markers
+  and gives the others an epoch, so its next command can save. A `@Snapshot` view never appends, so it reads the whole
+  boundary until other appends have done that for every marker. 0.34.0 saved at a position there.
 - A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot and logs a warning at start, since a read of every event
   has no marker versions. A snapshot 0.34.0 saved for it stays in the store and stops changing, so delete it or give the
   view a boundary. `dcbSnapshotView { }` in Kotlin uses `DcbCriteria.all()` unless you set tags or criteria. A decider over
@@ -804,8 +804,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` array, a
   `highestFoldedPosition` field and no `version` field. A stream snapshot is stored as before.
 - A DCB snapshot that 0.34.0 saved at a position is never used. After the upgrade an execute or delivery reads the whole
-  boundary until one can save over it, so nothing needs migrating. On a boundary whose markers 0.34.0 wrote, the first
-  append gives them an epoch, and a later command saves.
+  boundary until one can save over it, so nothing needs migrating. On a boundary whose markers 0.34.0 wrote, a decider's
+  append gives them an epoch, and its next command can save.
 - A 0.34.0 node that reads a snapshot 0.35.0 saved, during a rolling upgrade or after a rollback, finds no `version`. It
   reads the whole boundary and saves a snapshot at a position, which 0.35.0 then doesn't use.
 - A snapshot store of your own has to persist `Snapshot.markerVersions()` and `Snapshot.highestFoldedPosition()`. If it
