@@ -29,13 +29,19 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.DcbExecuteOptions;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.application.service.dcb.TagGenerator;
+import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.nativedriver.ClientSessionHolder;
@@ -57,11 +63,13 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -219,6 +227,230 @@ class NativeMongoTransactionExecutorTest {
         assertThat(sideEffectCollection.countDocuments(new Document("name", "dcb-rollback"))).isZero();
     }
 
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_rolls_back_the_stream_write_and_the_command_runs_again_when_the_executor_owns_the_transaction() {
+        String streamId = UUID.randomUUID().toString();
+        WriteConditionNotFulfilledException conflict = new WriteConditionNotFulfilledException(streamId, 1, WriteCondition.anyStreamVersion());
+        SynchronousSubscriptionModel subscriptions = new SynchronousSubscriptionModel();
+        subscriptions.subscribe("side-effect", null, StartAt.now(), recordSideEffectUsingAmbientSessionAndFailOnce(conflict));
+        ApplicationService<NameDefined> applicationService = GenericApplicationService.<NameDefined>builder(eventStore, converter)
+                .transactionExecutor(transactionExecutor)
+                .synchronousSubscriptions(subscriptions)
+                .build();
+        AtomicInteger decisions = new AtomicInteger();
+
+        applicationService.execute(streamId, __ -> {
+            decisions.incrementAndGet();
+            return List.of(new NameDefined(UUID.randomUUID().toString(), "owned-stream"));
+        });
+
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(2);
+        assertThat(sideEffectCollection.countDocuments(new Document("name", "owned-stream"))).as("[side effects]").isEqualTo(1);
+        assertThat(eventStore.read(streamId).eventList()).as("[events in the stream]").hasSize(1);
+    }
+
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_rolls_back_the_dcb_append_and_the_command_runs_again_when_the_executor_owns_the_transaction() {
+        Tag tag = Tag.parse("name:owned-dcb");
+        DcbCriteria criteria = DcbCriteria.tags(tag);
+        DcbAppendConditionNotFulfilledException conflict = new DcbAppendConditionNotFulfilledException(DcbAppendCondition.failIfEventsMatch(criteria), 1);
+        SynchronousSubscriptionModel subscriptions = new SynchronousSubscriptionModel();
+        subscriptions.subscribe("side-effect", null, StartAt.now(), recordSideEffectUsingAmbientSessionAndFailOnce(conflict));
+        DcbApplicationService<NameDefined> applicationService = dcbApplicationService(subscriptions);
+        AtomicInteger decisions = new AtomicInteger();
+
+        applicationService.execute(criteria, DcbExecuteOptions.empty(), __ -> {
+            decisions.incrementAndGet();
+            return List.of(new NameDefined(UUID.randomUUID().toString(), "owned-dcb"));
+        });
+
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(2);
+        assertThat(sideEffectCollection.countDocuments(new Document("name", "owned-dcb"))).as("[side effects]").isEqualTo(1);
+        assertThat(eventStore.read(DcbCriteria.tags(Tag.parse("name:owned-dcb"))).events()).as("[events in the boundary]").hasSize(1);
+    }
+
+    // ------------------------------------------------------------------------------------------------------------
+    // A failure after the write, where this executor only joins the transaction
+    // ------------------------------------------------------------------------------------------------------------
+
+    @Test
+    void isTransactional_is_false_outside_inTransaction_and_true_inside_it() {
+        boolean before = transactionExecutor.isTransactional();
+        boolean inside = transactionExecutor.inTransaction(transactionExecutor::isTransactional);
+        boolean after = transactionExecutor.isTransactional();
+
+        assertThat(before).as("[before inTransaction]").isFalse();
+        assertThat(inside).as("[inside inTransaction]").isTrue();
+        assertThat(after).as("[after inTransaction]").isFalse();
+    }
+
+    @Test
+    void isTransactional_is_false_for_a_session_bound_to_the_thread_with_no_transaction_started() {
+        boolean answer;
+        try (ClientSession session = mongoClient.startSession()) {
+            ClientSessionHolder.set(session);
+            try {
+                answer = transactionExecutor.isTransactional();
+            } finally {
+                ClientSessionHolder.remove();
+            }
+        }
+
+        assertThat(answer).as("[with a session bound and no transaction started]").isFalse();
+    }
+
+    @Test
+    void isTransactional_is_true_for_a_session_bound_to_the_thread_once_its_transaction_has_started_and_false_again_after_it_committed() {
+        boolean started;
+        boolean committed;
+        try (ClientSession session = mongoClient.startSession()) {
+            ClientSessionHolder.set(session);
+            try {
+                session.startTransaction();
+                started = transactionExecutor.isTransactional();
+                session.commitTransaction();
+                committed = transactionExecutor.isTransactional();
+            } finally {
+                ClientSessionHolder.remove();
+            }
+        }
+
+        assertThat(started).as("[after the transaction started]").isTrue();
+        assertThat(committed).as("[after the transaction committed]").isFalse();
+    }
+
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_after_the_write_reaches_the_caller_without_running_the_command_again_and_every_handler_sees_the_event_in_a_session_bound_without_a_transaction() {
+        String streamId = UUID.randomUUID().toString();
+        WriteConditionNotFulfilledException conflict = new WriteConditionNotFulfilledException(streamId, 1, WriteCondition.anyStreamVersion());
+        AtomicInteger eventsSeenBySecondHandler = new AtomicInteger();
+        SynchronousSubscriptionModel subscriptions = new SynchronousSubscriptionModel();
+        subscriptions.subscribe("failing", null, StartAt.now(), cloudEvent -> {
+            throw conflict;
+        });
+        subscriptions.subscribe("observing", null, StartAt.now(), cloudEvent -> eventsSeenBySecondHandler.incrementAndGet());
+        ApplicationService<NameDefined> applicationService = GenericApplicationService.<NameDefined>builder(eventStore, converter)
+                .transactionExecutor(transactionExecutor)
+                .synchronousSubscriptions(subscriptions)
+                .build();
+        AtomicInteger decisions = new AtomicInteger();
+
+        Throwable thrown = failureInSessionBoundWithoutTransaction(() -> applicationService.execute(streamId, __ -> {
+            decisions.incrementAndGet();
+            return List.of(new NameDefined(UUID.randomUUID().toString(), "session-without-transaction"));
+        }));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(conflict);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+        assertThat(eventStore.read(streamId).eventList()).as("[events in the stream]").hasSize(1);
+        assertThat(eventsSeenBySecondHandler.get()).as("[events seen by the handler after the failing one]").isEqualTo(1);
+    }
+
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_after_the_write_reaches_the_caller_without_running_the_command_again_in_a_session_the_caller_owns_on_a_stream() {
+        String streamId = UUID.randomUUID().toString();
+        WriteConditionNotFulfilledException conflict = new WriteConditionNotFulfilledException(streamId, 1, WriteCondition.anyStreamVersion());
+        ApplicationService<NameDefined> applicationService = GenericApplicationService.<NameDefined>builder(eventStore, converter)
+                .transactionExecutor(transactionExecutor)
+                .synchronousSubscriptions(new FailingOnceDispatcher(conflict))
+                .build();
+        AtomicInteger decisions = new AtomicInteger();
+
+        Throwable thrown = failureInTransactionOwnedByTheCaller(() -> applicationService.execute(streamId, __ -> {
+            decisions.incrementAndGet();
+            return List.of(new NameDefined(UUID.randomUUID().toString(), "caller-owned"));
+        }));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(conflict);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+        assertThat(eventStore.read(streamId).eventList()).as("[events in the stream once the caller committed]").hasSize(1);
+    }
+
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_after_the_append_reaches_the_caller_without_running_the_command_again_in_a_session_the_caller_owns_on_a_dcb_boundary() {
+        Tag tag = Tag.parse("name:caller-owned");
+        DcbCriteria criteria = DcbCriteria.tags(tag);
+        DcbAppendConditionNotFulfilledException conflict = new DcbAppendConditionNotFulfilledException(DcbAppendCondition.failIfEventsMatch(criteria), 1);
+        DcbApplicationService<NameDefined> applicationService = GenericDcbApplicationService.<NameDefined>builder(eventStore, converter)
+                .tagGenerator(event -> Set.of(tag))
+                .transactionExecutor(transactionExecutor)
+                .synchronousSubscriptions(new FailingOnceDispatcher(conflict))
+                .build();
+        AtomicInteger decisions = new AtomicInteger();
+
+        Throwable thrown = failureInTransactionOwnedByTheCaller(() -> applicationService.execute(criteria, __ -> {
+            decisions.incrementAndGet();
+            return List.of(new NameDefined(UUID.randomUUID().toString(), "caller-owned"));
+        }));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(conflict);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+        assertThat(eventStore.read(criteria).events()).as("[events in the boundary once the caller committed]").hasSize(1);
+    }
+
+    @Test
+    void a_failure_after_the_write_of_a_service_called_from_a_handler_is_retried_by_the_outer_service_not_in_the_joined_transaction() {
+        String outerStreamId = "outer-" + UUID.randomUUID();
+        String innerStreamId = "inner-" + UUID.randomUUID();
+        AtomicInteger innerDecisions = new AtomicInteger();
+        AtomicInteger outerDecisions = new AtomicInteger();
+        ApplicationService<NameDefined> inner = GenericApplicationService.<NameDefined>builder(eventStore, converter)
+                .transactionExecutor(transactionExecutor)
+                .synchronousSubscriptions(new FailingOnceDispatcher(new WriteConditionNotFulfilledException(innerStreamId, 1, WriteCondition.anyStreamVersion())))
+                .build();
+        ApplicationService<NameDefined> outer = GenericApplicationService.<NameDefined>builder(eventStore, converter)
+                .transactionExecutor(transactionExecutor)
+                .synchronousSubscriptions(new RunningDispatcher(() -> inner.execute(innerStreamId, __ -> {
+                    innerDecisions.incrementAndGet();
+                    return List.of(new NameDefined(UUID.randomUUID().toString(), "inner"));
+                })))
+                .build();
+
+        outer.execute(outerStreamId, __ -> {
+            outerDecisions.incrementAndGet();
+            return List.of(new NameDefined(UUID.randomUUID().toString(), "outer"));
+        });
+
+        assertThat(outerDecisions.get()).as("[outer domain function runs, one per transaction]").isEqualTo(2);
+        assertThat(innerDecisions.get()).as("[inner domain function runs, one per transaction]").isEqualTo(2);
+        assertThat(eventStore.read(outerStreamId).eventList()).as("[events in the outer stream]").hasSize(1);
+        assertThat(eventStore.read(innerStreamId).eventList()).as("[events in the inner stream]").hasSize(1);
+    }
+
+    /**
+     * Runs {@code command} in a transaction the test opened and bound with {@link ClientSessionHolder}, as a caller that
+     * owns its transaction does, and commits it afterwards whatever the command did, so the events that stay are the ones
+     * written.
+     */
+    private @Nullable Throwable failureInTransactionOwnedByTheCaller(Runnable command) {
+        try (ClientSession session = mongoClient.startSession()) {
+            ClientSessionHolder.set(session);
+            try {
+                session.startTransaction();
+                Throwable thrown = catchThrowable(command::run);
+                session.commitTransaction();
+                return thrown;
+            } finally {
+                ClientSessionHolder.remove();
+            }
+        }
+    }
+
+    /**
+     * Runs {@code command} with a session bound with {@link ClientSessionHolder} that has no transaction, as a caller does
+     * that holds a session only to give reads a causal order. Writes through it commit as they are made.
+     */
+    private @Nullable Throwable failureInSessionBoundWithoutTransaction(Runnable command) {
+        try (ClientSession session = mongoClient.startSession()) {
+            ClientSessionHolder.set(session);
+            try {
+                return catchThrowable(command::run);
+            } finally {
+                ClientSessionHolder.remove();
+            }
+        }
+    }
+
     private DcbApplicationService<NameDefined> dcbApplicationService(SynchronousSubscriptionModel subscriptions) {
         TagGenerator<NameDefined> tagGenerator = event -> Set.of(Tag.parse("name:" + event.name()));
         return GenericDcbApplicationService.<NameDefined>builder(eventStore, converter)
@@ -240,6 +472,53 @@ class NativeMongoTransactionExecutorTest {
             NameDefined domainEvent = converter.toDomainEvent(cloudEvent);
             sideEffectCollection.insertOne(ambientSession, new Document("name", domainEvent.name()).append("eventId", domainEvent.eventId()));
         };
+    }
+
+    /**
+     * As {@link #recordSideEffectUsingAmbientSession()}, then throws {@code failure} the first time only. The first
+     * attempt's side effect has to be rolled back with its event for the second attempt to leave exactly one.
+     */
+    private java.util.function.Consumer<CloudEvent> recordSideEffectUsingAmbientSessionAndFailOnce(RuntimeException failure) {
+        AtomicBoolean failed = new AtomicBoolean();
+        return cloudEvent -> {
+            recordSideEffectUsingAmbientSession().accept(cloudEvent);
+            if (failed.compareAndSet(false, true)) {
+                throw failure;
+            }
+        };
+    }
+
+    private static final class FailingOnceDispatcher implements SynchronousEventDispatcher {
+        private final AtomicBoolean failed = new AtomicBoolean();
+        private final RuntimeException failure;
+
+        FailingOnceDispatcher(RuntimeException failure) {
+            this.failure = failure;
+        }
+
+        @Override
+        public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+            if (failed.compareAndSet(false, true)) {
+                throw failure;
+            }
+        }
+
+        @Override
+        public boolean hasSubscriptions() {
+            return true;
+        }
+    }
+
+    private record RunningDispatcher(Runnable onDispatch) implements SynchronousEventDispatcher {
+        @Override
+        public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+            onDispatch.run();
+        }
+
+        @Override
+        public boolean hasSubscriptions() {
+            return true;
+        }
     }
 
     // ------------------------------------------------------------------------------------------------------------
