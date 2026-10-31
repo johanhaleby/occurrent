@@ -46,9 +46,10 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.tag;
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEvent;
 
 /**
- * What the Spring blocking store answers to a conditional append when it runs against a mongos. A transaction there can read the
- * markers and the events from different snapshots, so the store doesn't query the events and refuses what the markers
- * can't settle (ADR 149). The markers still settle an item that has a tag marker that didn't move.
+ * What the Spring blocking store answers to a conditional append when it runs against a mongos.
+ * A read there can tear across shards, so a token can hold one marker from after an event and another from before
+ * it. The store refuses a conditional append when any marker of its criteria moved, and doesn't try to settle it
+ * (ADR 149).
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -107,13 +108,23 @@ class SpringMongoEventStoreDcbShardedClusterTest {
     }
 
     @Test
-    void accepts_an_append_after_an_event_with_only_some_of_the_tags_of_the_criteria() {
+    void refuses_an_append_after_an_event_with_only_some_of_the_tags_of_the_criteria() {
         DcbCriteria criteria = DcbCriteria.type(ENROLLED).tags(tag("course:c1"), tag("student:s1"));
         DcbConsistencyToken token = eventStore.read(criteria).consistencyToken();
         eventStore.append(List.of(taggedEvent(ENROLLED, "course:c1", "student:s2")));
 
-        assertThatCode(() -> eventStore.append(List.of(taggedEvent(ENROLLED, "course:c1", "student:s1")), failIfEventsMatch(token)))
-                .as("The marker of student s1 didn't move, so the markers rule out a matching event and nothing needs the events")
+        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent(ENROLLED, "course:c1", "student:s1")), failIfEventsMatch(token)))
+                .as("The marker of student s1 didn't move, but a token read through a mongos can hold it from before a matching event, so it doesn't rule the event out")
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+    }
+
+    @Test
+    void accepts_an_append_after_an_event_that_shares_no_tag_with_the_criteria() {
+        DcbConsistencyToken token = eventStore.read(TICKETS_OF_K1).consistencyToken();
+        eventStore.append(List.of(taggedEvent(CONCERT_RENAMED, "concert:k2")));
+
+        assertThatCode(() -> eventStore.append(List.of(taggedEvent(TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)))
+                .as("The event moved no marker of the criteria, so the refusals above are not the store refusing every condition")
                 .doesNotThrowAnyException();
     }
 
@@ -123,7 +134,7 @@ class SpringMongoEventStoreDcbShardedClusterTest {
         eventStore.append(List.of(taggedEvent(TICKET_SOLD, CONCERT_K1)));
 
         assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent(TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)))
-                .as("The control of the cases above: a matching event is refused as well, so the store works against a mongos and doesn't refuse for another reason")
+                .as("A matching event is refused too, as it is whenever a marker moved")
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 

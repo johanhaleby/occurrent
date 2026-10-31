@@ -707,7 +707,7 @@ On MongoDB, a token also holds what the read saw of each marker. On a replica se
 doesn't match a condition's criteria no longer fails it, so you'll see fewer `DcbAppendConditionNotFulfilledException`s
 on a busy tag. A condition can still fail with no matching event, for example after a marker was deleted, when a
 0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written. On anything else, such as a
-sharded cluster, only an event with some of a criteria item's tags stops failing it.
+sharded cluster, this doesn't apply, and any event that moves a marker of the criteria still fails it.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
@@ -726,7 +726,7 @@ Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
 example. On a sharded cluster the MongoDB stores can still refuse an append the in-memory store accepts, for example
-after an event of another type that has every one of the criteria's tags. On a replica set that event no longer refuses
+after an event of another type that has one of the criteria's tags. On a replica set that event no longer refuses
 it, as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. With a token, an item without
 tags still reads its type markers. The change is the first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
 [ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)

@@ -74,9 +74,9 @@ public enum DcbAppendConditionModel {
      *     {@link DcbAppendCondition#wholeStoreLock()} already documents, and the reason it is correct only for a single
      *     writer or a bootstrap append that races only with other bootstrap appends (ADR 30).</li>
      * </ul>
-     * On a deployment where the store can't query, such as a sharded cluster, a MongoDB store refuses where the
-     * query would have run. That is the {@link #TAG_MARKER} answer to the first question, and the suite doesn't assert
-     * it for this model.
+     * On a deployment where the store can't query, such as a sharded cluster, a MongoDB store refuses when a marker of
+     * the criteria moved. That is the {@link #TAG_MARKER} answer to the first question, and the suite doesn't assert it
+     * for this model.
      */
     MARKERS_THEN_EVENTS,
 
