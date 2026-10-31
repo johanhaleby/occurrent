@@ -19,6 +19,7 @@ package org.occurrent.application.service.blocking;
 import org.jspecify.annotations.NullMarked;
 
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -35,12 +36,12 @@ import java.util.function.Supplier;
  * real implementation (for example a Spring-backed one) to make the write and the handlers commit atomically.
  * <p>
  * A failure after the write, in the re-read of the written events or in a handler, reaches the application service's
- * retry strategy only when {@link #isTransactional()} answers {@code false} before this executor is entered and
- * {@code true} inside it, which the service takes to mean this attempt opened a transaction that undoes the write. That
- * takes a store that joins the transaction and a rollback rule that covers the failure, and the service can't check
- * either. Otherwise it reaches the caller, since running the command again could write its events twice. The retry
- * strategy still sees a failure of the write itself. An implementation that opens a transaction and doesn't override {@link #isTransactional()} still sees an
- * exception pass through and can roll back, but the command doesn't run again. See ADR 165.
+ * retry strategy only when {@link #inTransactionTellingIfOpened(Function)} says this attempt opened a transaction, which
+ * the service takes to mean that transaction undoes the write. That takes a store that joins the transaction and a
+ * rollback rule that covers the failure, and the service can't check either. Otherwise it reaches the caller, since
+ * running the command again could write its events twice. The retry strategy still sees a failure of the write itself.
+ * An implementation that opens a transaction and overrides neither that method nor {@link #isTransactional()} still sees
+ * an exception pass through and can roll back, but the command doesn't run again. See ADR 165.
  */
 @FunctionalInterface
 @NullMarked
@@ -61,19 +62,32 @@ public interface TransactionExecutor {
     <T> T inTransaction(Supplier<T> action);
 
     /**
+     * Runs {@code action} as {@link #inTransaction(Supplier)} does, and tells it whether this call opened the transaction
+     * it runs in. The default infers that from {@link #isTransactional()} answering {@code false} here and {@code true}
+     * inside. Override this when the implementation can tell, for example when it can suspend a transaction the caller
+     * opened and open its own, which that inference reports as joining. See ADR 165.
+     *
+     * @param action The unit of work to run, given {@code true} if this call opened the transaction it runs in.
+     * @param <T>    The result type produced by the action.
+     * @return The value returned by the action.
+     */
+    default <T> T inTransactionTellingIfOpened(Function<Boolean, T> action) {
+        boolean openBefore = isTransactional();
+        return inTransaction(() -> action.apply(!openBefore && isTransactional()));
+    }
+
+    /**
      * Whether a transaction is in force right now. A synchronous subscription reads this to decide what happens to the
      * handlers behind one that throws: inside a transaction dispatch stops at the first failure, outside one every
-     * handler is offered the event and the failures are reported together. The application service reads it to decide
-     * whether its retry strategy sees a failure after the write.
+     * handler is offered the event and the failures are reported together. The default of
+     * {@link #inTransactionTellingIfOpened(Function)} reads it to tell whether this call opened the transaction.
      * <p>
      * <strong>Answer for the moment of the call, not for the executor as a whole.</strong> The application service asks
      * before entering {@link #inTransaction(Supplier)}, and again inside it before the write, so an implementation whose
      * transaction depends on how it was configured or on what the caller already opened should read the live state rather
      * than return a fixed value. {@code SpringTransactionExecutor} answers from
-     * {@code TransactionSynchronizationManager.isActualTransactionActive()} for exactly that reason. The service takes an
-     * answer of {@code true} before entering to mean the action only joins a transaction, so the retry strategy doesn't see
-     * a failure after the write. This must not throw when no transaction is open, or an execute with synchronous
-     * subscriptions fails before the write.
+     * {@code TransactionSynchronizationManager.isActualTransactionActive()} for exactly that reason. This must not throw
+     * when no transaction is open, or an execute with synchronous subscriptions fails before the write.
      * <p>
      * The default is {@code false}, so an implementation that does not override it gets the isolating behaviour, which
      * cannot lose a reaction. See the 2026-08-04 amendment to ADR 57.

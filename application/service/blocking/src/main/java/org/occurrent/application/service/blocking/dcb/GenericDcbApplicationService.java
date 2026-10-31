@@ -182,7 +182,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                             DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
                     synchronousEventDispatcher.dispatch(writtenEnriched, transactional);
                 } catch (Throwable failure) {
-                    throw failureAfterWrite.propagate(failure, transactional && openedTransaction);
+                    throw failureAfterWrite.propagate(failure, openedTransaction);
                 }
             }
 
@@ -197,7 +197,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     // that costs nothing, since a store already reports no marker versions in the open transaction.
                     // Their failure goes around the executor, so it can't mark that transaction rollback-only.
                     AtomicReference<@Nullable Throwable> failedBeforeAppend = new AtomicReference<>();
-                    Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransaction(() -> {
+                    Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> {
                         // An executor can run this action again, so a failure kept from an earlier run must not be thrown after a later run appends
                         failedBeforeAppend.set(null);
                         final Optional<Decision<E>> decision;
@@ -208,7 +208,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                             failedBeforeAppend.set(failure);
                             return new Attempt<>(Optional.empty(), List.of());
                         }
-                        return decision.map(it -> appendAndDispatch.apply(it, false)).orElseGet(() -> new Attempt<>(Optional.empty(), List.of()));
+                        return decision.map(it -> appendAndDispatch.apply(it, openedTransaction)).orElseGet(() -> new Attempt<>(Optional.empty(), List.of()));
                     });
                     Throwable failure = failedBeforeAppend.get();
                     if (failure != null) {
@@ -226,7 +226,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
                 // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
                 // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0074.
-                return dispatchSynchronously ? transactionExecutor.inTransaction(() -> appendAndDispatch.apply(decision.get(), true)) : appendAndDispatch.apply(decision.get(), true);
+                return dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> appendAndDispatch.apply(decision.get(), openedTransaction)) : appendAndDispatch.apply(decision.get(), false);
             } catch (Throwable failure) {
                 if (!failureAfterWrite.isHeldAfter(failure)) {
                     throw failure;

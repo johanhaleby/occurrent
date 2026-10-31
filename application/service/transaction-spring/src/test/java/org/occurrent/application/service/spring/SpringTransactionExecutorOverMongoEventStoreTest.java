@@ -76,7 +76,8 @@ import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
  * The executor against a real {@link SpringMongoEventStore}. A transaction it owns is undone when a synchronous handler
  * fails, so the command runs again and leaves one event and one side effect. Under {@code PROPAGATION_NOT_SUPPORTED} it
  * opens no transaction and reports none, yet the store's session synchronization is active and still rolls the write back
- * when the handler fails.
+ * when the handler fails. A transaction the caller opened changes nothing for an executor that opens its own, on
+ * {@code PROPAGATION_REQUIRES_NEW} or on another transaction manager.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -191,6 +192,123 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
         assertThat(eventsInBoundary()).as("[events in the boundary]").isEmpty();
     }
 
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_rolls_back_the_write_and_the_command_runs_again_under_propagation_requires_new_in_the_callers_transaction_on_a_stream() {
+        WriteConditionNotFulfilledException conflict = new WriteConditionNotFulfilledException(streamId, 1, WriteCondition.anyStreamVersion());
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(new RecordsSideEffectAndFailsOnce(conflict))
+                .transactionExecutor(new SpringTransactionExecutor(templateWith(TransactionDefinition.PROPAGATION_REQUIRES_NEW)))
+                .build();
+
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> applicationService.execute(streamId, this::decide));
+
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(2);
+        assertThat(sideEffects()).as("[side effects]").isEqualTo(1);
+        assertThat(eventsInStream()).as("[events in the stream]").containsExactly(decidedEventIds.getLast());
+    }
+
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_rolls_back_the_append_and_the_command_runs_again_under_propagation_requires_new_in_the_callers_transaction_on_a_dcb_boundary() {
+        DcbAppendConditionNotFulfilledException conflict = new DcbAppendConditionNotFulfilledException(DcbAppendCondition.failIfEventsMatch(CRITERIA), 1);
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new RecordsSideEffectAndFailsOnce(conflict))
+                .transactionExecutor(new SpringTransactionExecutor(templateWith(TransactionDefinition.PROPAGATION_REQUIRES_NEW)))
+                .build();
+
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(2);
+        assertThat(sideEffects()).as("[side effects]").isEqualTo(1);
+        assertThat(eventsInBoundary()).as("[events in the boundary]").containsExactly(decidedEventIds.getLast());
+    }
+
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_rolls_back_the_write_and_the_command_runs_again_in_a_callers_transaction_on_another_transaction_manager_on_a_stream() {
+        WriteConditionNotFulfilledException conflict = new WriteConditionNotFulfilledException(streamId, 1, WriteCondition.anyStreamVersion());
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(new RecordsSideEffectAndFailsOnce(conflict))
+                .transactionExecutor(new SpringTransactionExecutor(transactionManager))
+                .build();
+
+        anotherTransactionTemplate().executeWithoutResult(status -> applicationService.execute(streamId, this::decide));
+
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(2);
+        assertThat(sideEffects()).as("[side effects]").isEqualTo(1);
+        assertThat(eventsInStream()).as("[events in the stream]").containsExactly(decidedEventIds.getLast());
+    }
+
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_rolls_back_the_append_and_the_command_runs_again_in_a_callers_transaction_on_another_transaction_manager_on_a_dcb_boundary() {
+        DcbAppendConditionNotFulfilledException conflict = new DcbAppendConditionNotFulfilledException(DcbAppendCondition.failIfEventsMatch(CRITERIA), 1);
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new RecordsSideEffectAndFailsOnce(conflict))
+                .transactionExecutor(new SpringTransactionExecutor(transactionManager))
+                .build();
+
+        anotherTransactionTemplate().executeWithoutResult(status -> applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(2);
+        assertThat(sideEffects()).as("[side effects]").isEqualTo(1);
+        assertThat(eventsInBoundary()).as("[events in the boundary]").containsExactly(decidedEventIds.getLast());
+    }
+
+    @Test
+    void a_handler_on_a_service_without_a_transaction_loses_its_reaction_when_the_store_rolls_back_the_write_it_asked_for_under_propagation_not_supported() {
+        WriteConditionNotFulfilledException conflict = new WriteConditionNotFulfilledException(streamId, 1, WriteCondition.anyStreamVersion());
+        String reactionStreamId = UUID.randomUUID().toString();
+        var reacting = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(new RecordsSideEffectAndFailsOnce(conflict))
+                .transactionExecutor(new SpringTransactionExecutor(templateWith(TransactionDefinition.PROPAGATION_NOT_SUPPORTED)))
+                .build();
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(new Reacts(() -> reacting.execute(reactionStreamId, this::decide)))
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(streamId, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(conflict);
+        assertThat(eventsInStream()).as("[events in the stream]").containsExactly(decidedEventIds.getFirst());
+        assertThat(eventStore.read(reactionStreamId).events().toList()).as("[events in the reaction's stream]").isEmpty();
+    }
+
+    @Test
+    void the_action_is_told_that_the_executor_opened_a_transaction_when_none_is_open() {
+        var executor = new SpringTransactionExecutor(transactionManager);
+
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)).isTrue();
+    }
+
+    @Test
+    void the_action_is_told_that_the_executor_opened_a_transaction_under_propagation_requires_new_in_the_callers_transaction() {
+        var executor = new SpringTransactionExecutor(templateWith(TransactionDefinition.PROPAGATION_REQUIRES_NEW));
+
+        boolean opened = requireNonNull(new TransactionTemplate(transactionManager).execute(status -> executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)));
+
+        assertThat(opened).isTrue();
+    }
+
+    @Test
+    void the_action_is_told_that_the_executor_opened_no_transaction_when_it_joins_the_callers() {
+        var executor = new SpringTransactionExecutor(transactionManager);
+
+        boolean opened = requireNonNull(new TransactionTemplate(transactionManager).execute(status -> executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)));
+
+        assertThat(opened).isFalse();
+    }
+
+    @Test
+    void the_action_is_told_that_the_executor_opened_no_transaction_under_propagation_not_supported() {
+        var executor = new SpringTransactionExecutor(templateWith(TransactionDefinition.PROPAGATION_NOT_SUPPORTED));
+
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)).isFalse();
+    }
+
+    private TransactionTemplate anotherTransactionTemplate() {
+        return new TransactionTemplate(new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, "another")));
+    }
+
     private TransactionTemplate templateWith(int propagationBehavior) {
         TransactionTemplate template = new TransactionTemplate(transactionManager);
         template.setPropagationBehavior(propagationBehavior);
@@ -214,6 +332,20 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
 
     private long sideEffects() {
         return mongoTemplate.getCollection(SIDE_EFFECT_COLLECTION).countDocuments();
+    }
+
+    // A handler that reacts to the event by running a command of its own
+    private record Reacts(Runnable command) implements SynchronousEventDispatcher {
+
+        @Override
+        public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+            command.run();
+        }
+
+        @Override
+        public boolean hasSubscriptions() {
+            return true;
+        }
     }
 
     // Records a side effect through the same template as the store, so it joins the transaction the store's write is in, then fails the first dispatch

@@ -35,13 +35,16 @@ reason itself, that a retry only works where it owns the transaction.
 ## Decision
 
 A failure after a successful write, in the re-read of the written events or in a handler, reaches the service's retry
-strategy only when `isTransactional()` answers `false` before the service enters the executor and `true` inside it, before
-the write. The service takes those two answers to mean the attempt opened a transaction that undoes the write. Otherwise
-the failure reaches the caller without the retry strategy seeing it.
+strategy only when the attempt opened a transaction, which the service takes to mean that transaction undoes the write.
+Otherwise the failure reaches the caller without the retry strategy seeing it.
 
-- **It's an inference.** The service can't ask who owns the transaction or see whether the store joined it. Consequences
-  lists where the inference is wrong. A first answer of `true` means a transaction is already open, so the attempt counts as
-  joining it.
+- **Who says the attempt opened it.** The service runs the attempt through `inTransactionTellingIfOpened`, a new default
+  method on `TransactionExecutor` and `ReactiveTransactionExecutor`, which tells the action whether this call opened the
+  transaction it runs in. The two Spring executors answer from `status.isNewTransaction()`. The default infers it from
+  `isTransactional()` answering `false` before the executor and `true` inside it, so a first answer of `true` counts as
+  joining. `NativeMongoTransactionExecutor` keeps the default, since it joins a transaction already open on the thread.
+- **It's still an inference about the write.** The service can't see whether the store joined the transaction. Consequences
+  lists where that goes wrong.
 - **What the retry strategy still sees.** A failure of the write itself, which normally means nothing was written. Whether that
   retries is up to the strategy's predicate.
 - **How the failure stays away from the retry.** One object per `execute`, or per subscription on the reactive stack, holds
@@ -57,10 +60,15 @@ the failure reaches the caller without the retry strategy seeing it.
 
 ## Alternatives
 
-**Add a method to the executor that says whether this call owns the transaction.** It's the direct question, and it would
-get `PROPAGATION_REQUIRES_NEW` and a fixed `true` right. It adds public API in 0.35.0, and it can't help with the two cases
-where the store does something the executor can't see. Those need the same inference. An executor can get that method later
-without breaking anyone.
+**Infer it from `isTransactional()` alone, with no new method.** It's what I built first, and it adds no public API. It
+counted `PROPAGATION_REQUIRES_NEW` under a caller's transaction, and a caller's transaction on another transaction manager,
+as joining, because `isActualTransactionActive` covers the whole thread. Those attempts roll back their own write, so they
+lost a retry that was safe.
+
+**Ask the store whether the write survived.** A prototype that called `isConfirmed` after the failure got the retry back on
+`PROPAGATION_NOT_SUPPORTED`, `SUPPORTS` and `NEVER`, on the DCB service only, since the stream service has no such call. A
+read that fails answers `false` too, so it would run a command again whose write is stored. I didn't run that case or the
+native store.
 
 **Hold the failure inside the executor and return normally.** It keeps the code in one place, but the executor then sees
 success. An executor that opens a transaction and doesn't override `isTransactional()`, which answers `false` by default,
@@ -92,34 +100,42 @@ that matches the failure, on both stacks unless a row says otherwise. Every Spri
 | Spring, `REQUIRED` | the caller's | doesn't catch it | gets the failure | 0 |
 | `SpringTransactionExecutor`, `REQUIRED` | the caller's | catches it and commits | `UnexpectedRollbackException` | 0 |
 | `SpringReactiveTransactionExecutor`, `REQUIRED` | the caller's | catches it and commits | the commit succeeds | 1 |
-| `SpringTransactionExecutor`, `REQUIRED` | the caller's, on another transaction manager | catches it and commits | the commit succeeds | 0 on the stream service, 1 on the DCB service |
 | `NativeMongoTransactionExecutor` | the caller's | catches it and commits | the commit succeeds | 1 |
-| Spring, `REQUIRES_NEW` or `NOT_SUPPORTED` | the caller's | catches it and commits | the commit succeeds | 0 |
+| Spring, `REQUIRES_NEW` | the caller's | | the command runs again, no exception | 1 |
+| Spring, `REQUIRED` | the caller's, on another transaction manager | | the command runs again, no exception | 1 |
+| Spring, `NOT_SUPPORTED` | the caller's | catches it and commits | the commit succeeds | 0 |
 | Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none | | gets the failure | 0 |
 
 The Spring MongoDB stores set `SessionSynchronization.ALWAYS` themselves, so with no transaction reported the store still
 writes in a synchronization-based transaction that rolls back. In the last two rows a strategy that matched the failure used
 to run the command again and store one event with no exception. That retry is now withheld, so those rows are a regression
-that loses a retry rather than an event. By reading the code at the tag, so is the row with another transaction manager on the stream service.
-When `isTransactional()` answers `true` inside the executor, the dispatch stops at the first failure, so in a row with a
-transaction that stores 1, the handlers behind the failing one don't get the events.
+that loses a retry rather than an event.
+
+That lost retry costs more when a handler runs the command. A handler on a service with no transaction that calls a service
+in those rows loses its reaction. I ran that on both stacks over a stream, with the handler's service on
+`PROPAGATION_NOT_SUPPORTED`. The first command's event is stored, the handler's write rolls back, and the first `execute`
+throws. Nothing runs the handler's command again, since the first service's retry doesn't see a failure after its write and
+a synchronous subscription has no replay. On the commit before this decision the same setup stored both events and threw
+nothing. An executor that opens a transaction on the handler's service keeps the retry.
+
+When `isTransactional()` answers `true` inside the executor, the dispatch stops at the first failure, so in a row where the
+caller gets the failure and a transaction stores 1, the handlers behind the failing one don't get the events.
 I didn't key on `isSynchronizationActive`, since a store that ignores the
 synchronization doesn't roll back under it, and the service can't see the store.
 
-The answers are also wrong in two other ways:
+The service is also wrong in two other cases:
 
-- **An executor that answers a fixed `true`, and one entered under an open transaction, even on another transaction manager
-  or on a propagation that opens another.** `isActualTransactionActive` covers the whole thread, so the first answer is `true`, so they count as joining and the retry is withheld, which can't write twice. Answering for the moment of the
-  call gets the retry back for the first one only.
-- **A store that doesn't join the executor's transaction, or a rollback rule that doesn't cover the failure.** The answers
-  are `false` then `true`, nothing undoes the write, and a strategy that matches the failure writes again. The native
-  MongoDB store under `SpringTransactionExecutor` did that and reported success.
+- **An executor of your own that answers a fixed `true`, or that opens a transaction with another already open, and doesn't
+  override `inTransactionTellingIfOpened`.** The default counts both as joining and the retry is withheld, which can't write
+  twice. Overriding the method gets the retry back.
+- **A store that doesn't join the executor's transaction, or a rollback rule that doesn't cover the failure.** The attempt
+  opened a transaction, nothing undoes the write, and a strategy that matches the failure writes again. The native MongoDB
+  store under `SpringTransactionExecutor` did that and reported success.
 
-An executor that opens a transaction and doesn't override `isTransactional()` still rolls back when its rollback rule
-covers any `RuntimeException`. A rule keyed on the handler's exception type sees the stand-in instead. The command doesn't
+An executor that opens a transaction and overrides neither `isTransactional()` nor `inTransactionTellingIfOpened` still
+rolls back when its rollback rule covers any `RuntimeException`. A rule keyed on the handler's exception type sees the stand-in instead. The command doesn't
 run again, because the service can't tell a rollback from no transaction, and that includes a retry inside the executor,
-such as the one in `ClientSession.withTransaction`, for a failure after the write. Overriding `isTransactional()` gets both
-back.
+such as the one in `ClientSession.withTransaction`, for a failure after the write. Overriding either method gets both back.
 
 The service now asks `isTransactional()` outside any transaction. An executor whose answer fails there makes an `execute`
 with synchronous subscriptions fail before the write.

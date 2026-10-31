@@ -859,25 +859,27 @@ blocking and reactive.
 
 ### Who is affected
 
-You use synchronous subscriptions and `isTransactional()` doesn't answer `false` before the service enters the executor and
-`true` inside it. That's `noTransaction()`, the default, an executor of your own that doesn't override `isTransactional()` or
-answers a fixed `true`, a Spring executor on a propagation that opens no transaction, such as `PROPAGATION_NOT_SUPPORTED`,
-and any executor entered while a transaction is open, whether yours or an outer service's. That last one includes
-`PROPAGATION_REQUIRES_NEW`, where the attempt does open a transaction. A service without synchronous subscriptions behaves
-as before.
+You use synchronous subscriptions and the attempt doesn't open a transaction. That's `noTransaction()`, the default, an
+executor of your own that overrides neither `isTransactional()` nor `inTransactionTellingIfOpened`, or that answers a fixed
+`true`, a Spring executor on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or `PROPAGATION_NEVER`, and an executor that
+joins a transaction already open, whether yours or an outer service's. A Spring executor that opens its own transaction
+under yours, on `PROPAGATION_REQUIRES_NEW` or on another transaction manager, isn't affected. A service without synchronous
+subscriptions behaves as before.
 
 ### What changes
 
 - `execute` throws the original failure to the caller, and the service's retry strategy doesn't see it.
 - The `sideEffect` doesn't run.
-- The retry strategy still sees a failure of the write itself, and any failure when `isTransactional()` answered `false`
-  before the executor and `true` inside it. The service takes those two answers to mean the attempt opened a transaction. It
-  can't see whether the store joined, so a store that doesn't join keeps the first write and the retry writes again. The
-  native MongoDB store under `SpringTransactionExecutor` does that.
+- The retry strategy still sees a failure of the write itself, and any failure when the attempt opened a transaction. The
+  service asks through `inTransactionTellingIfOpened`, a new default method on `TransactionExecutor` and
+  `ReactiveTransactionExecutor`. The Spring executors answer from the transaction status, and the default infers it from
+  `isTransactional()` answering `false` before the executor and `true` inside it. The service can't see whether the store
+  joined, so a store that doesn't join keeps the first write and the retry writes again. The native MongoDB store under
+  `SpringTransactionExecutor` does that.
 - The service asks `isTransactional()` outside the executor too. An executor whose answer fails when no transaction is open
   makes an `execute` with synchronous subscriptions fail before the write.
-- An executor that opens a transaction and doesn't override `isTransactional()`, which answers `false` by default, still
-  sees an exception pass through and can roll back, but the command no longer runs again. A rollback rule keyed on the
+- An executor that opens a transaction and overrides neither `isTransactional()`, which answers `false` by default, nor
+  `inTransactionTellingIfOpened` still sees an exception pass through and can roll back, but the command no longer runs again. A rollback rule keyed on the
   handler's exception type sees a different exception now.
 - `NativeMongoTransactionExecutor.isTransactional()` answers whether the session bound to the thread has a transaction in
   force, where it used to answer `true` always.
@@ -887,13 +889,18 @@ as before.
 - If you catch nothing around `execute` because a retry used to hide a handler's failure, handle it now. What's stored by
   then depends on your executor, its propagation and the store, so read it back before you run the command again. With
   `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring MongoDB stores the write often rolled
-  back, even on a propagation that opens no transaction, and there a retry that used to work is gone.
+  back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or `PROPAGATION_NEVER`, and there a retry that used to
+  work is gone.
   [ADR 165](../architecture/decisions/0165-the-retry-sees-a-failure-after-the-write-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
-  so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one, and so does one
-  entered under an open transaction, even on a propagation that opens another.
+  so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open
+  one with another already open, override `inTransactionTellingIfOpened` too, since the default counts that as joining.
 - If a retry predicate was how a handler's work got done again, retry inside the handler, or use a transaction so the
   write and the handler commit together.
+- If a handler on a service with no transaction runs a command on a service with a Spring executor on one of those three
+  propagations, over a Spring MongoDB store, that handler can lose its reaction. The first command's events are stored, the handler's write rolls back, nothing runs the
+  handler's command again, and a synchronous subscription has no replay. Use an executor that opens a transaction on the
+  handler's service, which keeps the retry, or retry inside the handler.
 
 ## A read by position makes no promise about resuming
 

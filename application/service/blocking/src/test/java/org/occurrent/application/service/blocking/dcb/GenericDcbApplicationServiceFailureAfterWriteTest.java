@@ -50,6 +50,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -187,6 +188,23 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
     void a_retried_conflict_thrown_by_a_handler_still_runs_the_command_again_when_the_executor_reports_a_transaction() {
         DcbAppendConditionNotFulfilledException conflict = new DcbAppendConditionNotFulfilledException(DcbAppendCondition.failIfEventsMatch(CRITERIA), 1);
         OwnsTransaction executor = new OwnsTransaction();
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(conflict))
+                .transactionExecutor(executor)
+                .build();
+
+        catchThrowable(() -> applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(decisions.get()).as("domain function runs").isEqualTo(2);
+        assertThat(executor.rollbacks).as("rollbacks").isEqualTo(1);
+        assertThat(executor.commits).as("commits").isEqualTo(1);
+    }
+
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_still_runs_the_command_again_when_the_executor_only_says_that_it_opened_one() {
+        DcbAppendConditionNotFulfilledException conflict = new DcbAppendConditionNotFulfilledException(DcbAppendCondition.failIfEventsMatch(CRITERIA), 1);
+        SaysItOpensTransaction executor = new SaysItOpensTransaction();
         var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
                 .tagGenerator(event -> Set.of(TAG))
                 .synchronousSubscriptions(new FailingOnceDispatcher(conflict))
@@ -458,6 +476,15 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
             }
             commits++;
             return result;
+        }
+    }
+
+    // Stand-in for an executor that says it opened its transaction and doesn't override isTransactional()
+    private static final class SaysItOpensTransaction extends OpensTransaction {
+
+        @Override
+        public <T> T inTransactionTellingIfOpened(Function<Boolean, T> action) {
+            return inTransaction(() -> action.apply(true));
         }
     }
 

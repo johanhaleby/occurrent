@@ -162,7 +162,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                                 // get the events enriched with their positions, then dispatch inside the transaction.
                                 Mono.defer(() -> eventStore.read(DcbCriteria.all(), DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())))
                                         .flatMap(enrichedStream -> synchronousEventDispatcher.dispatch(enrichedStream.events(), transactional))
-                                        .onErrorMap(failure -> !transactional || !openedTransaction, failureAfterWrite::hold)
+                                        .onErrorMap(failure -> !openedTransaction, failureAfterWrite::hold)
                                         .thenReturn(appendResult)));
                 return appended.map(appendResult -> new Result<>(withCheckedVersions(appendResult, versionsRequested, decision.eventStream()), decision.newDomainEvents()));
             });
@@ -172,13 +172,13 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     // The executor can leave the transaction that's open here for the append, so a read here could miss what the
                     // append's condition sees and fail on every attempt. The read and the decision go in the executor too, and
                     // that costs nothing, since a store already reports no marker versions in the open transaction.
-                    return transactionExecutor.inTransaction(() -> readAndDecide.flatMap(decision -> appendAndDispatch.apply(decision, false)));
+                    return transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> readAndDecide.flatMap(decision -> appendAndDispatch.apply(decision, openedTransaction)));
                 }
                 // The read and the decision run outside the transaction, since a store reports no marker versions inside one. The
                 // append's condition holds this read's token, and a failed condition goes to the retry around this, which can read
                 // and decide again. Enter the transaction executor only when synchronous dispatch must commit atomically with the
                 // append. Otherwise the append keeps exactly its prior semantics and no transaction overhead is added.
-                return readAndDecide.flatMap(decision -> dispatchSynchronously ? transactionExecutor.inTransaction(() -> appendAndDispatch.apply(decision, true)) : appendAndDispatch.apply(decision, true));
+                return readAndDecide.flatMap(decision -> dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> appendAndDispatch.apply(decision, openedTransaction)) : appendAndDispatch.apply(decision, false));
             });
             // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
             return attempt.onErrorResume(failureAfterWrite::isHeldAfter, failure -> Mono.empty())

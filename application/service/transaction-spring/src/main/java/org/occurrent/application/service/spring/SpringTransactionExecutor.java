@@ -27,6 +27,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -133,13 +134,23 @@ public class SpringTransactionExecutor implements TransactionExecutor {
     @Override
     public <T> T inTransaction(Supplier<T> action) {
         Objects.requireNonNull(action, "action cannot be null");
+        return inTransactionTellingIfOpened(openedTransaction -> action.get());
+    }
+
+    /**
+     * Asks the transaction status rather than inferring it from {@link #isTransactional()}, since a caller-supplied
+     * {@link TransactionTemplate} on {@code PROPAGATION_REQUIRES_NEW} opens a transaction with one already open.
+     */
+    @Override
+    public <T> T inTransactionTellingIfOpened(Function<Boolean, T> action) {
+        Objects.requireNonNull(action, "action cannot be null");
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             // A transaction is already open, so this executor takes it as the caller's and runs the action once, also on a
             // propagation that opens a new one. A conflict aborts a joined transaction, which only its owner can start
             // again, so the error goes to that owner. See ADR 0074.
-            return transactionTemplate.execute(status -> action.get());
+            return transactionTemplate.execute(status -> action.apply(status.isNewTransaction()));
         }
-        return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.get()));
+        return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.apply(status.isNewTransaction())));
     }
 
     /**

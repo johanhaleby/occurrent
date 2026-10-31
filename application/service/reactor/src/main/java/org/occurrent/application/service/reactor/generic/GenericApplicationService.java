@@ -126,38 +126,35 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         // overhead. The side-effect is composed after the retry so it runs once on success, not per attempt.
         return Mono.defer(() -> {
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
-            // A transaction already open here counts as joined, so the retry doesn't see a failure after the write
-            Mono<Result<E>> attempt = reportsTransaction(dispatchSynchronously).flatMap(joined -> {
-                // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
-                Supplier<Mono<Result<E>>> readDecideWriteUnit = () -> Mono.defer(() -> {
-                    failureAfterWrite.refuseIfHeld();
-                    return reportsTransaction(dispatchSynchronously).flatMap(transactional -> read(streamId, filter, skip).flatMap(eventStream ->
-                            eventStream.events().collectList().flatMap(currentCloudEvents -> {
-                                List<E> domainEvents = cloudEventConverter.toDomainEvents(currentCloudEvents.stream()).toList();
-                                List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
-                                if (newDomainEvents == null) {
-                                    newDomainEvents = List.of();
-                                }
-                                List<CloudEvent> newCloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-                                List<E> writtenDomainEvents = newDomainEvents;
-                                return eventStore.write(streamId, eventStream.version(), Flux.fromIterable(newCloudEvents))
-                                        .flatMap(writeResult -> {
-                                            Result<E> result = new Result<>(writeResult, writtenDomainEvents);
-                                            if (!dispatchSynchronously || newCloudEvents.isEmpty()) {
-                                                return Mono.just(result);
-                                            }
-                                            // Re-read exactly the just-written tail so synchronous handlers get events enriched by
-                                            // the store (stream version and global position), then dispatch inside the transaction.
-                                            return Mono.defer(() -> eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newCloudEvents.size()))
-                                                    .flatMap(enrichedStream -> enrichedStream.events().collectList())
-                                                    .flatMap(enriched -> synchronousEventDispatcher.dispatch(enriched, transactional))
-                                                    .onErrorMap(failure -> !transactional || joined, failureAfterWrite::hold)
-                                                    .thenReturn(result);
-                                        });
-                            })));
-                });
-                return dispatchSynchronously ? transactionExecutor.inTransaction(readDecideWriteUnit) : Mono.defer(readDecideWriteUnit);
+            // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
+            Function<Boolean, Mono<Result<E>>> readDecideWriteUnit = openedTransaction -> Mono.defer(() -> {
+                failureAfterWrite.refuseIfHeld();
+                return reportsTransaction(dispatchSynchronously).flatMap(transactional -> read(streamId, filter, skip).flatMap(eventStream ->
+                        eventStream.events().collectList().flatMap(currentCloudEvents -> {
+                            List<E> domainEvents = cloudEventConverter.toDomainEvents(currentCloudEvents.stream()).toList();
+                            List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
+                            if (newDomainEvents == null) {
+                                newDomainEvents = List.of();
+                            }
+                            List<CloudEvent> newCloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
+                            List<E> writtenDomainEvents = newDomainEvents;
+                            return eventStore.write(streamId, eventStream.version(), Flux.fromIterable(newCloudEvents))
+                                    .flatMap(writeResult -> {
+                                        Result<E> result = new Result<>(writeResult, writtenDomainEvents);
+                                        if (!dispatchSynchronously || newCloudEvents.isEmpty()) {
+                                            return Mono.just(result);
+                                        }
+                                        // Re-read exactly the just-written tail so synchronous handlers get events enriched by
+                                        // the store (stream version and global position), then dispatch inside the transaction.
+                                        return Mono.defer(() -> eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newCloudEvents.size()))
+                                                .flatMap(enrichedStream -> enrichedStream.events().collectList())
+                                                .flatMap(enriched -> synchronousEventDispatcher.dispatch(enriched, transactional))
+                                                .onErrorMap(failure -> !openedTransaction, failureAfterWrite::hold)
+                                                .thenReturn(result);
+                                    });
+                        })));
             });
+            Mono<Result<E>> attempt = dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(readDecideWriteUnit) : readDecideWriteUnit.apply(false);
             // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
             return attempt.onErrorResume(failureAfterWrite::isHeldAfter, failure -> Mono.empty())
                     .retryWhen(retry)

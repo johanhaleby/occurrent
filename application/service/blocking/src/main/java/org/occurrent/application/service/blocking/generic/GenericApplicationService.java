@@ -137,9 +137,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         Attempt<@Nullable WriteResult, List<E>> result = retryStrategy.execute(() -> {
             Long fromStreamVersion = executeOptions.fromStreamVersion();
             int skip = fromStreamVersion == null ? 0 : Math.toIntExact(fromStreamVersion);
-            // A transaction already open here counts as joined, so the retry doesn't see a failure after the write
-            boolean joined = dispatchSynchronously && transactionExecutor.isTransactional();
-            Supplier<Attempt<@Nullable WriteResult, List<E>>> readDecideWrite = () -> {
+            Function<Boolean, Attempt<@Nullable WriteResult, List<E>>> readDecideWrite = openedTransaction -> {
                 failureAfterWrite.refuseIfHeld();
                 // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
                 boolean transactional = dispatchSynchronously && transactionExecutor.isTransactional();
@@ -162,7 +160,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                         List<CloudEvent> writtenEnriched = eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newEventCount).events().toList();
                         synchronousEventDispatcher.dispatch(writtenEnriched, transactional);
                     } catch (Throwable failure) {
-                        throw failureAfterWrite.propagate(failure, transactional && !joined);
+                        throw failureAfterWrite.propagate(failure, openedTransaction);
                     }
                 }
 
@@ -172,7 +170,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             // Without synchronous subscriptions there is nothing extra to make atomic, so the write keeps exactly the
             // semantics it had before this feature and applications that do not use it pay no transaction overhead.
             try {
-                return dispatchSynchronously ? transactionExecutor.inTransaction(readDecideWrite) : readDecideWrite.get();
+                return dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(readDecideWrite) : readDecideWrite.apply(false);
             } catch (Throwable failure) {
                 if (!failureAfterWrite.isHeldAfter(failure)) {
                     throw failure;

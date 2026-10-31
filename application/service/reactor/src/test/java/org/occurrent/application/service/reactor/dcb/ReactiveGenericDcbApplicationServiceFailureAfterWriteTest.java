@@ -67,6 +67,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
@@ -224,6 +225,23 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
     void a_retried_conflict_thrown_by_a_handler_still_runs_the_command_again_when_the_executor_reports_a_transaction() {
         DcbAppendConditionNotFulfilledException conflict = new DcbAppendConditionNotFulfilledException(DcbAppendCondition.failIfEventsMatch(CRITERIA), 1);
         OwnsTransaction executor = new OwnsTransaction();
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(conflict))
+                .transactionExecutor(executor)
+                .build();
+
+        failureOf(applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(decisions.get()).as("domain function runs").isEqualTo(2);
+        assertThat(executor.rollbacks.get()).as("rollbacks").isEqualTo(1);
+        assertThat(executor.commits.get()).as("commits").isEqualTo(1);
+    }
+
+    @Test
+    void a_retried_conflict_thrown_by_a_handler_still_runs_the_command_again_when_the_executor_only_says_that_it_opened_one() {
+        DcbAppendConditionNotFulfilledException conflict = new DcbAppendConditionNotFulfilledException(DcbAppendCondition.failIfEventsMatch(CRITERIA), 1);
+        SaysItOpensTransaction executor = new SaysItOpensTransaction();
         var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
                 .tagGenerator(event -> Set.of(TAG))
                 .synchronousSubscriptions(new FailingOnceDispatcher(conflict))
@@ -414,11 +432,17 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
     @Test
     void a_failure_after_the_append_reaches_the_caller_rather_than_a_result_when_the_executor_answers_with_the_result_of_an_earlier_command() {
         RuntimeException failure = new RuntimeException("handler failed");
-        DcbAppendResult earlierResult = requireNonNull(mongoEventStore.append(cloudEventConverter.toCloudEvents(List.of(nameWasChanged())).stream().map(event -> DcbCloudEvents.withTags(event, Set.of(UNREAD_TAG))).toList()).block(TIMEOUT));
+        AnswersWithAnEarlierResultWhenTheActionFails executor = new AnswersWithAnEarlierResultWhenTheActionFails();
+        var earlierCommand = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(UNREAD_TAG))
+                .synchronousSubscriptions(new NeverFailingDispatcher())
+                .transactionExecutor(executor)
+                .build();
+        earlierCommand.execute(DcbCriteria.tags(UNREAD_TAG), events -> List.of(nameWasChanged())).block(TIMEOUT);
         var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
                 .tagGenerator(event -> Set.of(TAG))
                 .synchronousSubscriptions(new FailingOnceDispatcher(failure))
-                .transactionExecutor(new AnswersWithAnEarlierResultWhenTheActionFails(earlierResult))
+                .transactionExecutor(executor)
                 .build();
 
         Throwable thrown = failureOf(applicationService.execute(CRITERIA, this::decide));
@@ -520,6 +544,19 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
         throw (T) throwable;
     }
 
+    private static final class NeverFailingDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+            return Mono.empty();
+        }
+
+        @Override
+        public boolean hasSubscriptions() {
+            return true;
+        }
+    }
+
     private static final class FailingOnceDispatcher implements ReactiveSynchronousEventDispatcher {
         private final AtomicReference<Throwable> failure;
 
@@ -586,6 +623,15 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
         @Override
         public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
             return Mono.defer(action).doOnError(__ -> rollbacks.incrementAndGet()).doOnSuccess(__ -> commits.incrementAndGet());
+        }
+    }
+
+    // Stand-in for an executor that says it opened its transaction and doesn't override isTransactional()
+    private static final class SaysItOpensTransaction extends OpensTransaction {
+
+        @Override
+        public <T> Mono<T> inTransactionTellingIfOpened(Function<Boolean, Mono<T>> action) {
+            return inTransaction(() -> action.apply(true));
         }
     }
 
@@ -674,16 +720,12 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
 
     // Stand-in for an executor that swallows what the action fails with and answers with a result it kept from an earlier command. It opens no transaction.
     private static final class AnswersWithAnEarlierResultWhenTheActionFails implements ReactiveTransactionExecutor {
-        private final Object earlierResult;
-
-        AnswersWithAnEarlierResultWhenTheActionFails(Object earlierResult) {
-            this.earlierResult = earlierResult;
-        }
+        private volatile @Nullable Object earlierResult;
 
         @Override
         @SuppressWarnings("unchecked")
         public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
-            return Mono.defer(action).onErrorResume(__ -> Mono.just((T) earlierResult));
+            return Mono.defer(action).doOnNext(result -> earlierResult = result).onErrorResume(__ -> Mono.just((T) requireNonNull(earlierResult)));
         }
     }
 

@@ -30,6 +30,7 @@ import reactor.util.retry.Retry;
 import java.time.Duration;
 
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -132,7 +133,17 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
     @Override
     public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
         Objects.requireNonNull(action, "action cannot be null");
-        Mono<T> transaction = Mono.defer(action).as(transactionalOperator::transactional);
+        return inTransactionTellingIfOpened(openedTransaction -> action.get());
+    }
+
+    /**
+     * Asks the transaction status rather than inferring it from {@link #isTransactional()}, since a caller-supplied
+     * {@link TransactionalOperator} on {@code PROPAGATION_REQUIRES_NEW} opens a transaction with one already open.
+     */
+    @Override
+    public <T> Mono<T> inTransactionTellingIfOpened(Function<Boolean, Mono<T>> action) {
+        Objects.requireNonNull(action, "action cannot be null");
+        Mono<T> transaction = transactionalOperator.execute(status -> Mono.defer(() -> action.apply(status.isNewTransaction()))).singleOrEmpty();
         // currentContext() signals an error when the subscriber context carries no transaction. Spring keeps that
         // exception type private, so match it by simple name rather than swallowing every error: anything else means
         // we cannot tell who owns the transaction, and guessing "nobody" would restore the futile retry.
