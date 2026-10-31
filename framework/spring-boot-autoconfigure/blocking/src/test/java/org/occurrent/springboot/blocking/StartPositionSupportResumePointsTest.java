@@ -239,6 +239,52 @@ class StartPositionSupportResumePointsTest {
         assertThat(asked).containsExactly(ID);
     }
 
+    @ParameterizedTest
+    @EnumSource(Annotation.class)
+    void with_a_bean_a_same_as_start_at_now_start_stays_off_for_the_competing_consumer_and_the_durable_model_without_asking(Annotation annotation) {
+        // Given
+        StartPositionSupport support = supportAnswering(ANSWER);
+        Object start = start(annotation, support, StartPosition.NOW, ResumeBehavior.SAME_AS_START_AT);
+
+        // When
+        @Nullable StartAt competingConsumer = resolve(start, CompetingConsumerSubscriptionModel.class);
+        @Nullable StartAt durable = resolve(start, DurableSubscriptionModel.class);
+
+        // Then
+        assertThat(competingConsumer).isNull();
+        assertThat(durable).isNull();
+        assertThat(asked).isEmpty();
+    }
+
+    @ParameterizedTest
+    @EnumSource(Annotation.class)
+    void with_a_bean_a_same_as_start_at_now_start_starts_the_catch_up_from_the_answer_rather_than_now(Annotation annotation) {
+        // Given
+        StartPositionSupport support = supportAnswering(ANSWER);
+        Object start = start(annotation, support, StartPosition.NOW, ResumeBehavior.SAME_AS_START_AT);
+
+        // When
+        @Nullable StartAt catchup = resolve(start, CatchupSubscriptionModel.class);
+
+        // Then
+        assertThat(checkpointOf(catchup)).isEqualTo(ANSWERED_CHECKPOINT);
+        assertThat(asked).containsExactly(ID);
+    }
+
+    @ParameterizedTest
+    @EnumSource(Annotation.class)
+    void with_a_bean_that_answers_null_a_same_as_start_at_now_start_resolves_to_now_for_the_catch_up(Annotation annotation) {
+        // Given
+        StartPositionSupport support = supportAnswering(null);
+        Object start = start(annotation, support, StartPosition.NOW, ResumeBehavior.SAME_AS_START_AT);
+
+        // When
+        @Nullable StartAt catchup = resolve(start, CatchupSubscriptionModel.class);
+
+        // Then
+        assertThat(catchup).isNotNull().matches(StartAt::isNow);
+    }
+
     private List<@Nullable StartAt> resolveForEveryModel(Object start) {
         return Arrays.asList(
                 resolve(start, CompetingConsumerSubscriptionModel.class),
