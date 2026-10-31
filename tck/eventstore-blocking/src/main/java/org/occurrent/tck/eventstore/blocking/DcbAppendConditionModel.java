@@ -71,7 +71,7 @@ public enum DcbAppendConditionModel {
      *     tag-scoped append committed after the read, because a whole-store lock is keyed on a marker that only
      *     another whole-store append touches. This is the limitation
      *     {@link DcbAppendCondition#wholeStoreLock()} already documents in as many words, and the reason it is
-     *     correct only for a single writer or an empty-store guard (ADR 30).</li>
+     *     correct only for a single writer or a bootstrap append that races only with other bootstrap appends (ADR 30).</li>
      * </ul>
      */
     TAG_MARKER

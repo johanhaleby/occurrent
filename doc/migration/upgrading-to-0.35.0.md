@@ -4,7 +4,8 @@ Each section describes one 0.35.0 change, what the `UpgradeToOccurrent_0_35` Ope
 what you have to do by hand. Find the parts of Occurrent you use in the lists below and read those sections.
 
 The sections that can break the build are listed under "Changes that can break the build", and each bullet says when.
-The compiler finds those for you. The other sections compile fine and behave differently, so read them first.
+The compiler finds those breaks for you, but a section in that list can also describe a change that still compiles. The
+other sections compile fine and behave differently, so read them first.
 
 ### Changes that can break the build
 
@@ -22,6 +23,12 @@ The compiler finds those for you. The other sections compile fine and behave dif
   `DcbStartAt` without a `default`.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
+- [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
+  `DcbConsistencyToken` becomes a class, and `DcbEventStream(List, long)` and `DcbDomainEventStream(List, long)` are
+  removed. **Breaks the build** if you create a token, call one of those constructors or call `value()`, which a
+  `DcbEventStore` of your own usually does.
+- [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). **Breaks the build** if you
+  use a record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`, or call `new DcbEventStream(events, head)`.
 
 ### Sagas
 
@@ -36,7 +43,14 @@ The compiler finds those for you. The other sections compile fine and behave dif
 ### DCB
 
 - [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). **Breaks the build** if you
-  use a record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`.
+  use a record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`, or call `new DcbEventStream(events, head)`.
+- [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
+  A `DcbAppendCondition` with a token read with other criteria throws `IllegalArgumentException`, on every store. A
+  token value saved under 0.34.0 isn't valid. **Breaks the build** if you create a token, call
+  `new DcbEventStream(events, head)` or `new DcbDomainEventStream(events, head)`, or call `value()`, which a
+  `DcbEventStore` of your own usually does.
+- [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, sharing a type
+  with a criteria item that has tags is no longer a reason for a condition to refuse.
 
 ### Subscriptions and catch-up
 
@@ -130,6 +144,8 @@ The compiler finds those for you. The other sections compile fine and behave dif
 - `org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35` adds the new bindings to a record pattern over
   `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`. See
   [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions).
+- No recipe rewrites a `DcbConsistencyToken` or the streams that create one. See
+  [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
 ## A global position is no longer a saga redelivery key
 
@@ -551,7 +567,9 @@ What is new:
 - `read(criteria, DcbReadOptions.afterVersions(saved))` returns every matching event appended after `saved`, including
   one that committed late below a position an earlier read saw. When the store can't compare `saved` with its own
   markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
-  full.
+  full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
+  always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
+  which returns only what comes after them, with no exception.
 - `DcbAppendConfirmation.isConfirmed(result)` answers whether an append is committed at majority, read outside any
   transaction of yours. The MongoDB stores and `InMemoryEventStore` implement it.
 
@@ -576,14 +594,164 @@ rollback to 0.34 followed by a new upgrade, and from a tool that shares the even
 `mv` and is no longer returned by `afterVersions(..)`. A full read still returns it. A store built on
 `MongoTemplate.withSession(..)` or `ReactiveMongoTemplate.withSession(..)` doesn't support reading versions.
 
-Two things break, and only one of them is a compile error:
+Three things break, and two of them are compile errors.
 
 - A record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions` with the old number of components stops
   compiling. `UpgradeToOccurrent_0_35` adds `var markerVersions` to the first two, and `var versionsRequested` and
   `var afterVersions` to the third.
+- `DcbEventStream(List, long)` is removed, so a store or a test double that builds a stream with it stops compiling.
+  [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
+  says what to call instead.
 - An `isEqualTo(...)` on a whole `DcbAppendResult` or `DcbEventStream` that a store returned still compiles, and fails
-  when the store reported versions. Compare the components you mean instead. Every existing constructor stays, and sets
-  the new components to empty.
+  when the store reported versions. Compare the components you mean instead. Every other existing constructor stays,
+  and sets the new components to empty.
+
+## A consistency token holds the criteria it was read with
+
+A `DcbConsistencyToken` holds the criteria of the read that returned it, and a `DcbAppendCondition` throws
+`IllegalArgumentException` when it's created with a token read with other criteria. In 0.34.0 the token was a bare
+number that a condition could pair with any criteria. On MongoDB that number was a sum of marker versions, so a
+condition with other criteria than the read compared sums over other markers, and could let an append through after an
+event matching its criteria had committed. The in-memory store refused the same code. The change is
+[#1228](https://github.com/johanhaleby/occurrent/issues/1228), and
+[ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
+describes it.
+
+### What changes
+
+- `DcbConsistencyToken` is a final class instead of a record. A store creates one with
+  `DcbConsistencyToken.of(criteria, version)`, and `criteria()` and `version()` read it back. The public constructor,
+  `DcbConsistencyToken.of(long)` and `value()` are removed.
+- `DcbEventStream(List, long)` and `DcbDomainEventStream(List, long)` are removed, since they create a token without
+  criteria.
+- `DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken)` takes its criteria from the token.
+- `failIfEventsMatch(DcbCriteria, DcbConsistencyToken)` is deprecated. It still works, and throws
+  `IllegalArgumentException` when the criteria aren't the same as the token's.
+- `wholeStoreLock(DcbConsistencyToken)` throws `IllegalArgumentException` for a token not read with `DcbCriteria.all()`.
+
+Two criteria are the same when they hold the same set of alternatives. `anyOf(a, b)` is the same as `anyOf(b, a)`, and
+a `DcbCriterion` is the same as an `anyOf(..)` with only that criterion in it. Criteria with different alternatives
+aren't the same, even when they select the same events, so `types("A", "B")` isn't the same as
+`anyOf(type("A"), type("B"))`.
+
+The check runs in the condition's constructor, before any store is called, so it works the same on every store, a
+`DcbEventStore` of your own included. `GenericDcbApplicationService` reads and appends with the same criteria on both
+stacks, so it isn't affected on a store that returns the criteria it was given.
+
+### Who is affected
+
+- **A `DcbEventStore` of your own.** It stops compiling where it calls `new DcbConsistencyToken(..)`,
+  `DcbConsistencyToken.of(long)`, `value()` or `new DcbEventStream(events, head)`.
+- **Code that creates a token, or a stream with a two-argument constructor**, such as a test double that returns a
+  `DcbEventStream` or a `DcbDomainEventStream`. It stops compiling the same way. A stream created with a token you
+  already hold, `new DcbEventStream(events, head, token)`, still compiles. A call to `value()` stops compiling too, and
+  so does a record pattern over `DcbConsistencyToken`, since the token is no longer a record.
+- **A `DcbEventStore` decorator that rewrites criteria**, adding a tenant tag for example, and passes the inner store's
+  token through. It compiles, but the token holds the rewritten criteria, so a condition on the caller's criteria throws
+  `IllegalArgumentException`. In `read`, return
+  `new DcbEventStream(inner.events(), inner.lastSequencePosition(), DcbConsistencyToken.of(criteria, innerToken.version()), inner.markerVersions())`,
+  since the three-argument constructor sets `markerVersions` to empty. Those versions hold the rewritten criteria's
+  markers, the added tag's included, so pass them back to the inner store unchanged with the rewritten criteria. A store
+  reports no versions for `all()`, on a read or on a conditional append, and throws `DcbSnapshotInvalidException` on a
+  read of `all()` with `afterVersions`. So when `all()` becomes a tag, use the three-argument constructor on that read,
+  drop the versions from that append's result, and throw on that read yourself. In `append`, rewrite the criteria the
+  same way, and give the inner store a condition with
+  `DcbConsistencyToken.of(rewrittenCriteria, token.version())`. On MongoDB the added tag then counts in the check like
+  any other tag, so appending any event with that tag can make the check refuse, whether or not the event matches.
+- **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
+  condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
+  deprecation warning, and `wholeStoreLock(token)` and `new DcbAppendCondition(criteria, Optional.of(token))` compile
+  with no warning, so the compiler doesn't find all of this code.
+- **Code that saved a token value**, in an ETag or a queued command for example. A token value saved under 0.34.0 isn't
+  valid on 0.35.0.
+
+### What to do
+
+In a store, pass the read's criteria when you create the token, and read `version()` where you read `value()`:
+
+```java
+return new DcbEventStream(events, head, DcbConsistencyToken.of(criteria, version));
+```
+
+Compute the version the same way you computed the value for `DcbConsistencyToken.of(long)`. `DcbEventStream(List, long)`
+used the head as the token, so `new DcbEventStream(events, head, DcbConsistencyToken.of(criteria, head))` does what it
+did. For a `DcbDomainEventStream`, pass the token of the `DcbEventStream` it was built from. A test double with no
+`DcbEventStream` behind it creates the token with `DcbConsistencyToken.of(criteria, version)`.
+
+Build a conditional append from the token alone:
+
+```java
+DcbEventStream stream = eventStore.read(criteria);
+// decide on stream.events()
+eventStore.append(newEvents, DcbAppendCondition.failIfEventsMatch(stream.consistencyToken()));
+```
+
+Where you passed the criteria the read was given and the token separately, drop the criteria. If the append really needs
+other criteria than the read, read with those criteria before you decide, and decide from that read. A token read after
+the decision can hide an event committed in between, so don't swap in a fresh token for the one the decision was made with.
+
+Don't save a token value to use later. Read again when the command runs, and decide from that read. That includes a
+client's ETag. Replacing a stale ETag with a fresh token makes the append check against a read the client's decision
+wasn't made from. To refuse a client's stale write, keep a version of your own in your events, and compare the client's
+ETag against it in the decision.
+
+### Why there is no recipe
+
+A recipe could rewrite `value()` to `version()`. That rename would compile, and it would keep a token value saved under
+0.34.0 in use, although such a value isn't valid on 0.35.0. `DcbConsistencyToken.of(criteria, version)`
+needs the criteria the read was given, and a recipe can't tell from the call site which criteria those were. Rewriting
+`failIfEventsMatch(criteria, token)` to `failIfEventsMatch(token)` would compile too, but a condition that used other
+criteria than its read would then append on the read's criteria instead of throwing.
+
+## Criteria with tags conflict on their tags
+
+On the MongoDB stores, the check of a conditional append with a token reads only the tag markers of an item with tags,
+and no longer the markers of its types. Sharing a type with such an item is then no longer a reason for the check to
+refuse. Such an item also no longer adds its type markers to what a conditional append increments.
+Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
+`SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
+`DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
+example. The MongoDB stores can still refuse an append the in-memory store accepts, for example after an event that has
+only one of the criteria's tags. With a token, an item without tags is checked against its type markers as before. The change is the
+first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
+[ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
+describes it.
+
+### What stays the same
+
+- A conditional append on criteria with tags is still refused when an event that matches them committed after the
+  read, unless the markers were pruned in between ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)).
+- Every append still increments a marker for each type and each tag of its events, so two appends of one type still
+  can't commit at the same time on MongoDB, whatever their tags.
+- This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the
+  limits in [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). A conditional
+  append from a 0.34.0 node still increments the type markers of its criteria, also for an item with tags. A conditional
+  append from a 0.35.0 node doesn't add them for such an item. A 0.35.0 check reads a type marker only for an item
+  without tags, so a 0.34.0 increment can make that check refuse an append and the command retry, and it can't let an
+  append through. This change doesn't stop you going back to 0.34.0 either, within the same limits.
+
+### Who is affected
+
+- **Code that counted on the refusal.** A command whose conditional append failed because an event of the same type
+  with other tags was appended can now succeed. If the decision depends on every event of that type, read with criteria
+  that hold only the type. A conditional append on `type("X").tags(a)` that appends an event of another type also no
+  longer makes an append with a token read on `type("X")` alone refuse, since it no longer increments that type marker.
+  When many commands append one type with different tags, an append that used to be refused can now wait for seconds in
+  the store's retries of a write conflict. When those retries run out, it fails with the store's write conflict exception,
+  `DataIntegrityViolationException` on the Spring stores, and not with `DcbAppendConditionNotFulfilledException`, so the
+  default retry of `GenericDcbApplicationService` doesn't retry it.
+- **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
+  `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
+  succeed, so a store that still reads the type marker for an item with tags fails the case.
+- **Code that saved a token value.** For an item with both types and tags, a 0.34.0 token value is a sum over its tag
+  and type markers, and 0.35.0 no longer counts the type markers of that item. An old value can then let an append through
+  that should have been refused. Read again instead, as
+  [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
+  says.
+- **Code or an operator that prunes markers.** For an item with both types and tags, a token no longer counts the type
+  markers, so a prune between the read and the append can let through a conflicting append that 0.34.0 refused, until
+  [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. Prune only when no command holds a token it
+  can still append with.
 
 ## A catch-up needs the event store itself
 

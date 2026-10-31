@@ -89,7 +89,7 @@ public abstract class DcbLateCommitConformance extends LateCommitConformance {
                 List.of(inFlight), () -> isVisible(boundary, inFlight))) {
             DcbEventStream decidedOn = dcbEventStore().read(boundary);
             DcbAppendResult overtook = dcbEventStore().append(List.of(overtaking),
-                    failIfEventsMatch(boundary, decidedOn.consistencyToken()));
+                    failIfEventsMatch(decidedOn.consistencyToken()));
             DcbMarkerVersions resumeFrom = overtook.markerVersions().orElseThrow(() -> new AssertionError(
                     "A conditional append with a consistency token over a tag boundary must report its marker versions, "
                             + "so a decider has the versions to resume from. The append reported none"));
@@ -156,7 +156,7 @@ public abstract class DcbLateCommitConformance extends LateCommitConformance {
             late.release();
 
             Throwable thrown = catchThrowable(() ->
-                    dcbEventStore().append(List.of(decided), failIfEventsMatch(boundary, read.consistencyToken())));
+                    dcbEventStore().append(List.of(decided), failIfEventsMatch(read.consistencyToken())));
             if (thrown != null) {
                 assertThat(thrown)
                         .describedAs("a refused append must say the condition was not fulfilled")

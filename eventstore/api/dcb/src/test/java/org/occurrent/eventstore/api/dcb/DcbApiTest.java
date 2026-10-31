@@ -168,9 +168,9 @@ class DcbApiTest {
         assertThatThrownBy(() -> DcbReadOptions.afterPosition(-1))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("After position cannot be negative");
-        assertThatThrownBy(() -> DcbAppendCondition.failIfEventsMatch(DcbCriteria.all(), DcbConsistencyToken.of(-1)))
+        assertThatThrownBy(() -> DcbAppendCondition.failIfEventsMatch(DcbCriteria.all(), DcbConsistencyToken.of(DcbCriteria.all(), -1)))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Consistency token value cannot be negative");
+                .hasMessage("Consistency token version cannot be negative");
     }
 
     @Test
@@ -217,7 +217,7 @@ class DcbApiTest {
                 reads.incrementAndGet();
                 assertThat(criteria).isEqualTo(DcbCriteria.all());
                 assertThat(options).isEqualTo(DcbReadOptions.afterPosition(4));
-                return new DcbEventStream(List.of(cloudEvent("First"), cloudEvent("Second")), 6);
+                return new DcbEventStream(List.of(cloudEvent("First"), cloudEvent("Second")), 6, DcbConsistencyToken.of(criteria, 6));
             }
 
             @Override
@@ -253,7 +253,7 @@ class DcbApiTest {
     void whole_store_lock_is_equivalent_to_fail_if_events_match_with_match_all() {
         assertThat(DcbAppendCondition.wholeStoreLock()).isEqualTo(DcbAppendCondition.failIfEventsMatch(DcbCriteria.all()));
 
-        DcbConsistencyToken token = DcbConsistencyToken.of(3);
+        DcbConsistencyToken token = DcbConsistencyToken.of(DcbCriteria.all(), 3);
         assertThat(DcbAppendCondition.wholeStoreLock(token)).isEqualTo(DcbAppendCondition.failIfEventsMatch(DcbCriteria.all(), token));
     }
 

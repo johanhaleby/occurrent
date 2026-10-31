@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
@@ -129,10 +130,11 @@ class DcbCatchupHandoverTest {
             long fromExclusive = range.afterPosition().orElse(0L);
             long toInclusive = range.upToPosition().orElse(0L);
             if (fromExclusive == 0 && toInclusive == 0) {
-                return new DcbEventStream(List.of(), nextHead());
+                long head = nextHead();
+                return new DcbEventStream(List.of(), head, DcbConsistencyToken.of(criteria, head));
             }
             List<CloudEvent> events = byPosition.subMap(fromExclusive, false, toInclusive, true).values().stream().toList();
-            return new DcbEventStream(events, 0);
+            return new DcbEventStream(events, 0, DcbConsistencyToken.of(criteria, 0));
         }
 
         @Override

@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
@@ -43,6 +44,7 @@ import java.util.TreeMap;
 import java.util.function.UnaryOperator;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.tck.ConformanceEvents.extension;
@@ -103,13 +105,13 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             DcbEventStream decidedOn = dcbEventStore().read(criteria);
 
             DcbAppendResult result = dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)),
-                    failIfEventsMatch(criteria, decidedOn.consistencyToken()));
+                    failIfEventsMatch(decidedOn.consistencyToken()));
 
             assertThat(result.markerVersions())
                     .as("A conditional append with a consistency token must report the versions its criteria ended at")
                     .isPresent();
             assertThat(result.markerVersions().orElseThrow().keys())
-                    .as("One entry per marker key of the criteria, a tag key per tag and a type key per type")
+                    .as("One entry per marker key of the criteria, a tag key per tag for an item with tags and a type key per type for an item without tags")
                     .containsExactly(KEY_A, KEY_DEPOSITED);
         }
 
@@ -119,7 +121,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             DcbEventStream decidedOn = dcbEventStore().read(criteria);
 
             DcbAppendResult result = dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A, REGION)),
-                    failIfEventsMatch(criteria, decidedOn.consistencyToken()));
+                    failIfEventsMatch(decidedOn.consistencyToken()));
 
             assertThat(result.markerVersions().orElseThrow().keys())
                     .as("The events carry a region tag and a type, but the criteria names only the account tag")
@@ -127,12 +129,25 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
         }
 
         @Test
+        void reports_only_the_tag_key_for_a_criterion_with_both_a_type_and_a_tag() {
+            DcbCriteria criteria = DcbCriteria.type(DEPOSITED).tags(tag(ACCOUNT_A));
+            DcbEventStream decidedOn = dcbEventStore().read(criteria);
+
+            DcbAppendResult result = dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)),
+                    failIfEventsMatch(decidedOn.consistencyToken()));
+
+            assertThat(result.markerVersions().orElseThrow().keys())
+                    .as("Every event the criterion matches has the tag, so the tag key stands for it and the type key is left out")
+                    .containsExactly(KEY_A);
+        }
+
+        @Test
         void reports_a_higher_version_of_the_same_epoch_after_each_conditional_append() {
             DcbCriteria criteria = DcbCriteria.tags(tag(ACCOUNT_A));
             DcbAppendResult first = dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)),
-                    failIfEventsMatch(criteria, dcbEventStore().read(criteria).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(criteria).consistencyToken()));
             DcbAppendResult second = dcbEventStore().append(List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)),
-                    failIfEventsMatch(criteria, dcbEventStore().read(criteria).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(criteria).consistencyToken()));
 
             MarkerVersion afterFirst = first.markerVersions().orElseThrow().get(KEY_A).orElseThrow();
             MarkerVersion afterSecond = second.markerVersions().orElseThrow().get(KEY_A).orElseThrow();
@@ -193,6 +208,19 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
 
             assertThat(read.markerVersions()).as("A full forward read that asks must report versions").isPresent();
             assertThat(read.markerVersions().orElseThrow().keys()).containsExactly(KEY_A, KEY_DEPOSITED);
+        }
+
+        @Test
+        void reports_only_the_tag_key_for_a_criterion_with_both_a_type_and_a_tag() {
+            DcbCriteria criteria = DcbCriteria.type(DEPOSITED).tags(tag(ACCOUNT_A));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
+
+            DcbEventStream read = dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions());
+
+            assertThat(read.events()).as("The read must have found the event, or it proves nothing").hasSize(1);
+            assertThat(read.markerVersions().orElseThrow().keys())
+                    .as("Every event the criterion matches has the tag, so the tag key stands for it and the type key is left out")
+                    .containsExactly(KEY_A);
         }
 
         @Test
@@ -281,6 +309,106 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
     }
 
     @Nested
+    @DisplayName("the consistency token of a read with versions")
+    class TheConsistencyTokenOfAReadWithVersions {
+
+        @Test
+        void holds_the_criteria_of_a_read_with_versions_and_conflicts_on_a_matching_append_committed_after_it() {
+            DcbCriteria boundary = DcbCriteria.anyOf(DcbCriteria.tags(tag(ACCOUNT_A)), DcbCriteria.tags(tag(ACCOUNT_B)));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
+            DcbEventStream read = dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions());
+
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_B)));
+
+            Throwable thrown = catchThrowable(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)), failIfEventsMatch(read.consistencyToken())));
+            assertThat(read.consistencyToken().criteria())
+                    .as("The token of a read that asked for versions holds the criteria the read was given, both alternatives")
+                    .isEqualTo(boundary);
+            assertThat(thrown)
+                    .as("An event of the second alternative committed after the read must reject the append")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
+        void holds_the_criteria_of_a_read_after_versions_and_conflicts_on_a_matching_append_committed_after_it() {
+            DcbCriteria boundary = DcbCriteria.anyOf(DcbCriteria.tags(tag(ACCOUNT_A)), DcbCriteria.tags(tag(ACCOUNT_B)));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A), taggedEvent(DEPOSITED, ACCOUNT_B)));
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions()));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
+            DcbEventStream resumed = dcbEventStore().read(boundary, DcbReadOptions.afterVersions(saved));
+
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_B)));
+
+            Throwable thrown = catchThrowable(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)), failIfEventsMatch(resumed.consistencyToken())));
+            assertThat(resumed.consistencyToken().criteria())
+                    .as("The token of a resumed read holds the criteria the read was given, not only the part it resumed")
+                    .isEqualTo(boundary);
+            assertThat(thrown)
+                    .as("An event of the second alternative committed after the resumed read must reject the append")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
+        void a_read_with_versions_lets_a_conditional_append_through_when_nothing_matching_was_committed_after_it() {
+            DcbCriteria boundary = DcbCriteria.anyOf(DcbCriteria.tags(tag(ACCOUNT_A)), DcbCriteria.tags(tag(ACCOUNT_B)));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A), taggedEvent(DEPOSITED, ACCOUNT_B)));
+            DcbEventStream read = dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions());
+
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)), failIfEventsMatch(read.consistencyToken())))
+                    .as("The token of a read that asked for versions must be accepted when no event of the boundary "
+                            + "was committed after the read, or it refuses an append it should let through")
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        void a_read_after_versions_lets_a_conditional_append_through_when_nothing_matching_was_committed_after_it() {
+            DcbCriteria boundary = DcbCriteria.anyOf(DcbCriteria.tags(tag(ACCOUNT_A)), DcbCriteria.tags(tag(ACCOUNT_B)));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A), taggedEvent(DEPOSITED, ACCOUNT_B)));
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions()));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
+            DcbEventStream resumed = dcbEventStore().read(boundary, DcbReadOptions.afterVersions(saved));
+
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)), failIfEventsMatch(resumed.consistencyToken())))
+                    .as("The token of a resumed read must be accepted when no event of the boundary was committed "
+                            + "after the read, or it refuses an append it should let through")
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        void holds_all_criteria_for_a_read_of_everything_with_versions_and_conflicts_on_a_whole_store_append_committed_after_it() {
+            DcbEventStream read = dcbEventStore().read(DcbCriteria.all(), DcbReadOptions.fromBeginning().withVersions());
+
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)), DcbAppendCondition.wholeStoreLock());
+
+            Throwable thrown = catchThrowable(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_B)), DcbAppendCondition.wholeStoreLock(read.consistencyToken())));
+            assertThat(read.consistencyToken().criteria())
+                    .as("The token of a read of everything that asked for versions holds all criteria, not other criteria")
+                    .isEqualTo(DcbCriteria.all());
+            assertThat(thrown)
+                    .as("A whole-store append committed after the read must reject a whole-store lock built from its token")
+                    .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+
+        @Test
+        void a_read_of_everything_with_versions_lets_a_whole_store_lock_through_when_nothing_was_committed_after_it() {
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)), DcbAppendCondition.wholeStoreLock());
+            DcbEventStream read = dcbEventStore().read(DcbCriteria.all(), DcbReadOptions.fromBeginning().withVersions());
+
+            assertThatCode(() -> dcbEventStore().append(
+                    List.of(taggedEvent(WITHDRAWN, ACCOUNT_B)), DcbAppendCondition.wholeStoreLock(read.consistencyToken())))
+                    .as("The token of a read of everything that asked for versions must be accepted by a whole-store lock "
+                            + "when nothing was committed after the read, on a store that already holds an event, "
+                            + "or it refuses an append it should let through")
+                    .doesNotThrowAnyException();
+        }
+    }
+
+    @Nested
     @DisplayName("a read after versions")
     class AReadAfterVersions {
 
@@ -294,7 +422,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             dcbEventStore().append(List.of(taggedEventWithId("after-1", DEPOSITED, ACCOUNT_A)));
             dcbEventStore().append(List.of(taggedEventWithId("after-other", DEPOSITED, ACCOUNT_B)));
             dcbEventStore().append(List.of(taggedEventWithId("after-2", WITHDRAWN, ACCOUNT_A, REGION)),
-                    failIfEventsMatch(boundary, dcbEventStore().read(boundary).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(boundary).consistencyToken()));
 
             DcbEventStream resumed = dcbEventStore().read(boundary, DcbReadOptions.afterVersions(saved));
 
@@ -425,7 +553,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
         void does_not_return_the_events_of_the_append_that_reported_the_versions_but_returns_a_later_one() {
             DcbCriteria boundary = DcbCriteria.tags(tag(ACCOUNT_A));
             DcbAppendResult decided = dcbEventStore().append(List.of(taggedEventWithId("decided", WITHDRAWN, ACCOUNT_A)),
-                    failIfEventsMatch(boundary, dcbEventStore().read(boundary).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(boundary).consistencyToken()));
             DcbMarkerVersions saved = decided.markerVersions().orElseThrow(() -> new AssertionError(
                     "A conditional append with a consistency token over a tag boundary must report its marker versions"));
             dcbEventStore().append(List.of(taggedEventWithId("later", DEPOSITED, ACCOUNT_A)));
@@ -439,7 +567,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
         void returns_an_event_of_the_boundary_that_an_unconditional_append_added() {
             DcbCriteria boundary = DcbCriteria.tags(tag(ACCOUNT_A));
             DcbAppendResult decided = dcbEventStore().append(List.of(taggedEventWithId("decided", WITHDRAWN, ACCOUNT_A)),
-                    failIfEventsMatch(boundary, dcbEventStore().read(boundary).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(boundary).consistencyToken()));
             DcbMarkerVersions saved = decided.markerVersions().orElseThrow();
 
             dcbEventStore().append(List.of(taggedEventWithId("unconditional", DEPOSITED, ACCOUNT_A)));
@@ -633,7 +761,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             dcbEventStore().append(List.of(taggedEventWithId("before", DEPOSITED, ACCOUNT_A)));
             DcbMarkerVersions saved = versionsOf(dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions()));
             dcbEventStore().append(List.of(taggedEventWithId("after", DEPOSITED, ACCOUNT_A)),
-                    failIfEventsMatch(boundary, dcbEventStore().read(boundary).consistencyToken()));
+                    failIfEventsMatch(dcbEventStore().read(boundary).consistencyToken()));
 
             List<CloudEvent> events = new ArrayList<>();
             events.addAll(dcbEventStore().read(boundary).events());
