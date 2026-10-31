@@ -635,8 +635,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return queryMarkers(criteria, template).map(markers -> DcbMarkerVersionsDocuments.consistencyToken(criteria, markers));
     }
 
-    // Read the markers in one query so that on a replica set their versions come from a single consistent snapshot.
-    // Through a mongos a query over several shards can still tear (ADR 0149).
+    // Read the markers in one query, which narrows the window a concurrent append can tear across and doesn't close
+    // it. A find can yield between documents, and through a mongos it reads each shard on its own (ADR 0149).
     private Mono<Map<String, Document>> queryMarkers(DcbCriteria criteria, ReactiveMongoOperations template) {
         Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
         if (markerKeys.isEmpty()) {

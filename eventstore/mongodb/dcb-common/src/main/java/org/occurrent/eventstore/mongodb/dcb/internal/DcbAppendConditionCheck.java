@@ -47,7 +47,7 @@ public final class DcbAppendConditionCheck {
     }
 
     /**
-     * The markers rule out an event matching the criteria committed after the read.
+     * The markers show no event matching the criteria committed after the read.
      */
     public record Pass() implements Outcome {
     }
