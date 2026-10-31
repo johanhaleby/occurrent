@@ -287,29 +287,29 @@ class DcbAppendConditionCheckTest {
 
     @Test
     void allows_the_query_for_an_answer_with_a_replica_set_name() {
-        assertThat(DcbAppendConditionCheck.queryAllowed(answering(new Document("setName", "rs0")))).isTrue();
+        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(answering(new Document("setName", "rs0")))).isTrue();
     }
 
     @Test
     void refuses_the_query_for_an_answer_from_a_mongos() {
-        assertThat(DcbAppendConditionCheck.queryAllowed(answering(new Document("msg", "isdbgrid")))).isFalse();
+        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(answering(new Document("msg", "isdbgrid")))).isFalse();
     }
 
     @Test
     void refuses_the_query_for_an_answer_with_a_replica_set_name_that_comes_from_a_mongos() {
-        assertThat(DcbAppendConditionCheck.queryAllowed(answering(new Document("setName", "rs0").append("msg", "isdbgrid")))).isFalse();
+        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(answering(new Document("setName", "rs0").append("msg", "isdbgrid")))).isFalse();
     }
 
     @Test
     void refuses_the_query_for_an_answer_without_a_replica_set_name() {
-        assertThat(DcbAppendConditionCheck.queryAllowed(answering(new Document()))).as("a standalone server has no setName").isFalse();
+        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(answering(new Document()))).as("a standalone server has no setName").isFalse();
     }
 
     @Test
     void asks_hello_and_nothing_else_when_the_server_knows_it() {
         List<Document> sent = new ArrayList<>();
 
-        DcbAppendConditionCheck.queryAllowed(command -> {
+        DcbAppendConditionCheck.runsOnReplicaSet(command -> {
             sent.add(command);
             return new Document("setName", "rs0");
         });
@@ -322,7 +322,7 @@ class DcbAppendConditionCheckTest {
         List<Document> sent = new ArrayList<>();
         AtomicBoolean allowed = new AtomicBoolean();
 
-        assertThatCode(() -> allowed.set(DcbAppendConditionCheck.queryAllowed(oldServerAnswering(sent, new Document("setName", "rs0")))))
+        assertThatCode(() -> allowed.set(DcbAppendConditionCheck.runsOnReplicaSet(oldServerAnswering(sent, new Document("setName", "rs0")))))
                 .as("MongoDB 4.2.0 to 4.2.9 answer hello with code 59, and creating the store must not fail on that")
                 .doesNotThrowAnyException();
 
@@ -334,7 +334,7 @@ class DcbAppendConditionCheckTest {
     void falls_back_to_isMaster_when_hello_fails_with_command_not_found_and_refuses_the_query_for_a_mongos() {
         AtomicBoolean allowed = new AtomicBoolean(true);
 
-        assertThatCode(() -> allowed.set(DcbAppendConditionCheck.queryAllowed(oldServerAnswering(new ArrayList<>(), new Document("msg", "isdbgrid")))))
+        assertThatCode(() -> allowed.set(DcbAppendConditionCheck.runsOnReplicaSet(oldServerAnswering(new ArrayList<>(), new Document("msg", "isdbgrid")))))
                 .doesNotThrowAnyException();
 
         assertThat(allowed).as("the isMaster answer is from a mongos").isFalse();
@@ -352,7 +352,7 @@ class DcbAppendConditionCheckTest {
             return new Document("setName", "rs0");
         };
 
-        assertThatCode(() -> allowed.set(DcbAppendConditionCheck.queryAllowed(server)))
+        assertThatCode(() -> allowed.set(DcbAppendConditionCheck.runsOnReplicaSet(server)))
                 .as("a template wraps the driver's exception, so the code is looked for in the causes and not only in the exception thrown")
                 .doesNotThrowAnyException();
 
@@ -365,7 +365,7 @@ class DcbAppendConditionCheckTest {
         MongoCommandException unauthorized = commandFailed(13);
         List<Document> sent = new ArrayList<>();
 
-        assertThatThrownBy(() -> DcbAppendConditionCheck.queryAllowed(command -> {
+        assertThatThrownBy(() -> DcbAppendConditionCheck.runsOnReplicaSet(command -> {
             sent.add(command);
             throw unauthorized;
         })).as("only a server that doesn't know hello gets the fallback, any other failure must stop the store from being created")
@@ -378,7 +378,7 @@ class DcbAppendConditionCheckTest {
     void propagates_a_failure_of_hello_that_is_not_a_command_exception() {
         IllegalStateException failure = new IllegalStateException("The server is unreachable");
 
-        assertThatThrownBy(() -> DcbAppendConditionCheck.queryAllowed(command -> {
+        assertThatThrownBy(() -> DcbAppendConditionCheck.runsOnReplicaSet(command -> {
             throw failure;
         })).isSameAs(failure);
     }
@@ -387,7 +387,7 @@ class DcbAppendConditionCheckTest {
     void propagates_command_not_found_from_isMaster() {
         MongoCommandException notFoundAgain = commandFailed(59);
 
-        assertThatThrownBy(() -> DcbAppendConditionCheck.queryAllowed(command -> {
+        assertThatThrownBy(() -> DcbAppendConditionCheck.runsOnReplicaSet(command -> {
             throw command.containsKey("hello") ? commandFailed(59) : notFoundAgain;
         })).as("a server that knows neither command has nothing left to ask")
                 .isSameAs(notFoundAgain);
@@ -397,9 +397,9 @@ class DcbAppendConditionCheckTest {
         return check(criteria, read, now, true);
     }
 
-    private static DcbAppendConditionCheck.Outcome check(DcbCriteria criteria, Map<String, MarkerObservation> read, Map<String, MarkerObservation> now, boolean queryAllowed) {
+    private static DcbAppendConditionCheck.Outcome check(DcbCriteria criteria, Map<String, MarkerObservation> read, Map<String, MarkerObservation> now, boolean runsOnReplicaSet) {
         DcbConsistencyToken token = DcbConsistencyToken.of(criteria, read.values().stream().mapToLong(MarkerObservation::version).sum(), read);
-        return DcbAppendConditionCheck.check(token, criteria, now, queryAllowed);
+        return DcbAppendConditionCheck.check(token, criteria, now, runsOnReplicaSet);
     }
 
     private static Function<Document, Document> answering(Document answer) {

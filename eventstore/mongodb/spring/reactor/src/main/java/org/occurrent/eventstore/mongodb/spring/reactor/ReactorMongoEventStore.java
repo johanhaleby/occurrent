@@ -167,7 +167,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final boolean requireBackfilledPosition;
     private final boolean requireRepairedEvents;
     private final boolean resumeFromMarkerVersions;
-    private final boolean appendCheckMayQueryEvents;
+    private final boolean runsOnReplicaSet;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
@@ -201,7 +201,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         if (dcbEnabled && !resumeFromMarkerVersions) {
             LOGGER.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
-        this.appendCheckMayQueryEvents = dcbEnabled && DcbAppendConditionCheck.queryAllowed(command -> mongoTemplate.executeCommand(command).block());
+        this.runsOnReplicaSet = dcbEnabled && DcbAppendConditionCheck.runsOnReplicaSet(command -> mongoTemplate.executeCommand(command).block());
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate).block();
     }
 
@@ -589,7 +589,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // bump inside the append transaction.
             conflictMono = queryMarkers(condition.criteria(), mongoTemplate).flatMap(markers -> {
                 Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
-                return switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, appendCheckMayQueryEvents)) {
+                return switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, runsOnReplicaSet)) {
                     case DcbAppendConditionCheck.Pass ignored -> Mono.just(false);
                     case DcbAppendConditionCheck.Refuse ignored -> Mono.just(true);
                     case DcbAppendConditionCheck.QueryEvents query -> mongoTemplate.exists(new Query(new Criteria().orOperator(query.items().stream()

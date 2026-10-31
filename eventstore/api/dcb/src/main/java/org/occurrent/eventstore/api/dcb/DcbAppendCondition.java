@@ -38,6 +38,11 @@ import static java.util.Objects.requireNonNull;
  * concern snapshot on a sharded cluster, and not while a 0.34 node can still append, since 0.34 recreates a deleted
  * marker with no epoch and restarts its version at 1.
  * <p>
+ * A plain read through a mongos can miss a matching event while its token already holds that event's markers, when the
+ * markers and the events are on different shards, and the append then doesn't fail. A read with
+ * {@link DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} doesn't do that. The
+ * same happens when the Spring or reactor store's {@code queryOptions} send the events read to a lagging secondary.
+ * <p>
  * A store can answer from the events as they are when the append runs. A matching event committed after the read that
  * was deleted by then, or changed so that it no longer matches, may not make the append fail. The in-memory store
  * answers that way, and so do the MongoDB stores on a replica set when the markers don't refuse first.
