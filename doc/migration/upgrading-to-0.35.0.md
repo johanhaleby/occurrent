@@ -709,12 +709,11 @@ on a busy tag. A condition can still fail with no matching event, for example af
 0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written. On anything else, such as a
 sharded cluster, this doesn't apply, and any event that moves a marker of the criteria still fails it.
 
-A condition can also miss a matching event in two cases, which the sum in 0.34.0 and earlier didn't catch either. A plain
-read through a mongos can miss an event while its token already holds that event's markers, when the markers and the
-events are on different shards, and an append with that token then passes. A read with `withVersions()` doesn't do that
-when its stream reports `markerVersions()`, because it read both in one snapshot transaction. The same happens on any
-deployment when `queryOptions` sends the events read of the Spring or reactor store to a lagging secondary, because the
-token read doesn't use `queryOptions`.
+A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it,
+and 0.34.0 has the same gap. A plain read through a mongos can do that when the markers and the events are on different
+shards. A read with `withVersions()` doesn't do that when its stream reports `markerVersions()`, because it read both in
+one snapshot transaction. On any deployment, so can a read whose events are behind its token, for example when a read
+preference or a read concern sends the events read to a lagging secondary or to an older snapshot.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at

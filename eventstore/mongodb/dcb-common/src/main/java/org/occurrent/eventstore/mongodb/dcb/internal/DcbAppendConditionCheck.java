@@ -115,7 +115,7 @@ public final class DcbAppendConditionCheck {
         if (!moved) {
             return new Pass();
         }
-        // Through a mongos the token isn't one snapshot, so an unmoved marker rules nothing out (ADR 0149)
+        // Through a mongos a read can hold a marker from after an event and miss the event, so an unmoved marker rules nothing out (ADR 0149)
         if (!runsOnReplicaSet || criteria instanceof DcbCriteria.MatchAll) {
             return new Refuse();
         }
@@ -138,10 +138,9 @@ public final class DcbAppendConditionCheck {
 
     /**
      * Whether this deployment is a replica set, the one case where the store may rule an item out by its markers and
-     * query the events (ADR 149). A read there takes its events after its markers from the same member, unless its
-     * query options send the events read to a secondary, and a transaction reads both from one member. It's false for a
-     * mongos, a load balancer in front of one and anything else that doesn't answer like a replica set. Every failure
-     * except a server that doesn't know {@code hello} propagates.
+     * query the events. ADR 149 says what that assumes. It's false for a mongos, a load balancer in front of one and
+     * anything else that doesn't answer like a replica set. Every failure except a server that doesn't know
+     * {@code hello} propagates.
      *
      * @param runCommand runs a command against the store's database
      */
