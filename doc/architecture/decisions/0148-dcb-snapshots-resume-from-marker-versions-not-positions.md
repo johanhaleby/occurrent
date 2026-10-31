@@ -793,7 +793,8 @@ versions only grow, and a prune changes the epoch. A majority-committed write is
 - **The token and the events in every other read** keep today's path, token first, both at the default read concern.
   This design doesn't change them. In the Spring stores the two may already come from different members, because the
   events read applies `queryOptions` (`SpringMongoEventStore.java:259`) and the token read doesn't (`:596`). The seventh
-  review raised that as a hypothesis, and whether it routes to a secondary while a primary is up is unchecked.
+  review raised that as a hypothesis. With `queryOptions(q -> q.withReadPreference(secondary()))`, a probe for ADR 149
+  saw the events read go to a lagging secondary while a primary was up.
 - **The token a decider read and the token inside its append.** The token it read comes from snapshot P, which is
   majority-committed once the read transaction has committed, if that commit waits for majority, which is unverified.
   The append transaction's snapshot S is later, on the primary, so it contains everything in P. Equal sums then mean no
