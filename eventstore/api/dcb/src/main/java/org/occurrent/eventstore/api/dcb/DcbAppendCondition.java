@@ -33,7 +33,8 @@ import static java.util.Objects.requireNonNull;
  * committed. The MongoDB stores can do that, for example when an event committed after the read shares a tag with
  * {@code criteria} but doesn't match it, or when another conditional append on the same criteria committed after the
  * read, whatever events it appended. The MongoDB stores rely on a marker document being deleted only in a transaction
- * that also finds no event with its tag or type.
+ * that also finds no event with its tag or type, at read concern snapshot on a sharded cluster, and not while a 0.34 node
+ * can still append, since 0.34 recreates a deleted marker with no epoch and restarts its version at 1.
  * <p>
  * A token belongs to the criteria it was read with, so the constructor throws {@link IllegalArgumentException} when the
  * token's criteria aren't the same as {@code criteria}. Every factory goes through the constructor, so this happens

@@ -763,9 +763,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return DcbMarkerVersionsDocuments.consistencyToken(criteria, queryMarkers(clientSession, criteria));
     }
 
-    // Read the query's markers in one query so that on a replica set their versions come from a single consistent
-    // snapshot. Reading them one by one could tear across a concurrent append and capture a token that masks a real
-    // conflict (ADR 0031). Through a mongos a query over several shards can still tear (ADR 0149).
+    // Read the query's markers in one query, which narrows the window a concurrent append can tear across and doesn't close
+    // it. A find can yield between documents, and through a mongos it reads each shard on its own (ADR 0149).
     private Map<String, Document> queryMarkers(@Nullable ClientSession clientSession, DcbCriteria criteria) {
         Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
         if (markerKeys.isEmpty()) {
