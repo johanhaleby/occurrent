@@ -201,8 +201,8 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * Reads only the matching events appended after {@code markerVersions}, the versions a previous read or append
      * reported, and asks for the versions of this read as {@link #withVersions()} does. No position of the previous read
      * is compared, so an event that committed late, below a position the previous read saw, is still returned.
-     * An event the previous read missed although its versions hold the event's markers isn't returned. A failover can
-     * cause that, as {@link DcbAppendCondition} says.
+     * A failover can make a read miss an event, as {@link DcbAppendCondition} says, and a read after versions that hold
+     * the event's markers doesn't return it.
      * <p>
      * The read throws {@link DcbSnapshotInvalidException} when the store can't compare the versions with its own, for
      * example after its markers were pruned or when resuming from versions is turned off. Read the boundary in full
