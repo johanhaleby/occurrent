@@ -4,8 +4,11 @@ Date: 2026-10-30
 
 ## Status
 
-Accepted. Amends [ADR 21](0021-dcb-write-path-query-scoped-concurrency.md) and [ADR 80](0080-concurrent-write-conformance.md),
-which have shipped in a release and are therefore corrected here and not edited. Resolves [#1379](https://github.com/johanhaleby/occurrent/issues/1379).
+Accepted. Amends [ADR 21](0021-dcb-write-path-query-scoped-concurrency.md), [ADR 74](0074-retry-only-where-the-transaction-is-owned.md)
+and [ADR 80](0080-concurrent-write-conformance.md), which have shipped in a release and are therefore corrected here and not edited.
+ADR 74 says the executors match `DataIntegrityViolationException` because they cannot inspect a driver error label, that retrying a genuine
+integrity violation is wasteful rather than wrong, and that the Spring executors treat a duplicate key as retryable. The Decision below corrects all three for the executors. The stores keep
+retrying a duplicate key of their own. Resolves [#1379](https://github.com/johanhaleby/occurrent/issues/1379).
 
 ## Context
 
@@ -34,10 +37,19 @@ attempt can take about 30 seconds, and 240 of them would be two hours.
   jitter makes each wait between 250 and 500 ms once the backoff reaches its cap, 375 ms on average, so 320 retries
   add up to about as much waiting as 240 attempts do on the blocking store.
 - The default `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` get the same budget and the same
-  deadline. With synchronous subscriptions and the default propagation the executor owns the transaction, the store joins it and
+  deadline, and they retry on the error label and not on `DataIntegrityViolationException`. See the next paragraph. With synchronous subscriptions and the default propagation the executor owns the transaction, the store joins it and
   retries nothing, so the executor's retry is the whole budget there. An executor built on a template or operator
   that opens no transaction means the store retries as well. A retry passed to an executor's constructor is used as given.
 - `ReactorMongoEventStore` retries a lost `any()` version race 320 times too. See Consequences.
+- The default executors retry a `TransientDataAccessException`, or any exception that has the `TransientTransactionError`
+  label anywhere in its cause chain. The label is what MongoDB puts on an error that a new transaction can get past,
+  and it is what the driver's own `withTransaction` retries on. ADR 74 matched `DataIntegrityViolationException` instead,
+  because Spring translates a WriteConflict to it and the executor modules did not look at the driver. That also matched a
+  duplicate key and a validation failure, which have no label. The two executor modules now depend on
+  `mongodb-driver-core` as an optional dependency and look for the label only when `com.mongodb.MongoException` is on the
+  classpath, so an application without the driver still gets the executor and still retries a `TransientDataAccessException`.
+  A commit that fails with the `UnknownTransactionCommitResult` label is not retried even though a commit failure
+  can have both labels, since the commit may have gone through and running the unit of work again could apply it twice.
 - There is no setting for the count or the deadline and no extra jitter. A user who needs another budget can raise it
   when a need shows up.
 - The retry still runs only when the store owns the transaction, as in [ADR 74](0074-retry-only-where-the-transaction-is-owned.md).
@@ -59,11 +71,21 @@ Moving the stores to `ClientSession.withTransaction` was considered and rejected
   in a native `withTransaction` call. The native store's 120 seconds applies to each `withTransaction` call, and its append runs that
   call inside a retry of 15 attempts, so the native store can wait longer overall. A caller with a shorter deadline of
   its own sees that deadline first.
-- A genuine integrity violation, such as a duplicate key that MongoDB does not label transient, is retried like a
-  conflict by the default executors, because Spring translates a WriteConflict to the same exception type. It fails
-  the same way every attempt, so the transaction callback runs again for up to two minutes and any side effect it
-  has outside the transaction repeats. Narrowing the predicate would miss an unlabelled collision that a retry does
-  resolve, and ADR 74 already chose it.
+- A duplicate key or a validation failure inside the transaction now runs the unit of work once and reaches the caller,
+  as against the 214 runs in 120 seconds that a duplicate key got under the old predicate in a measurement on MongoDB 8.0.
+  One case that was retried before is not any more. It is a duplicate from a write made outside the transaction, for
+  example through a template that does not join it. MongoDB labels no such error, so a unit of work that checks, loses
+  a race to a rival and then gets the duplicate used to succeed on its second run, and now fails with the duplicate. A
+  caller that relied on it handles the duplicate itself, or does the write through a template that joins the transaction.
+- A commit that fails with `UnknownTransactionCommitResult` is also not retried. The old predicate did not retry it
+  either, since a commit failure surfaces as a `MongoException` and not as a `DataAccessException`.
+- The budget of 240 attempts and 120 seconds was chosen when a retry could be spent on an error no retry could cure. Now
+  that only a conflict uses it, I measured how much a conflict needs, on a single-node MongoDB 8.0 with a
+  `TransientTransactionError` predicate. 64 threads appending 10 times each to one marker needed at most 21 attempts, and 256
+  threads appending 3 times each needed at most 36, in runs that took 46 seconds. None of the 768 commands in the larger run
+  failed. The budget is about seven times the worst case seen, so it stays. The measurement does not cover a stuck rival
+  transaction, which can hold a document for up to a minute under the server's default transaction lifetime, and the 120
+  second budget is what rides that out.
 - A reserved position block is still abandoned when an append exhausts its retries, so `dcbposition` can still have
   gaps, as ADR 21 says.
 - The reactive stream write retries a lost version race for an append with `StreamVersionWriteCondition.any()`. That is a

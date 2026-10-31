@@ -16,14 +16,15 @@
 
 package org.occurrent.application.service.spring;
 
+import com.mongodb.MongoException;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.retry.RetryStrategy;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.ClassUtils;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -66,16 +67,25 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * example while MongoDB has no primary, don't stretch the budget to hours. A retry passed to a constructor is
      * used as given, this default included.
      * <p>
-     * {@link DataIntegrityViolationException} is matched as well as {@link TransientDataAccessException} because
-     * MongoDB labels a WriteConflict transient while Spring translates it to the non-transient type, so the obvious
-     * predicate would miss the most common conflict there is. A genuine integrity violation is therefore retried too.
-     * It fails the same way every attempt, so the transaction callback runs again until the budget runs out, and any
-     * side effect it has outside the transaction repeats with it.
+     * A conflict is a {@link TransientDataAccessException}, or any exception with the {@code TransientTransactionError}
+     * label that MongoDB puts on an error a fresh transaction can get past, found anywhere in its cause chain. That
+     * label is what the driver's own {@code withTransaction} retries on. The label is needed because Spring translates
+     * the most common conflict, a WriteConflict, to {@link org.springframework.dao.DataIntegrityViolationException},
+     * which is not transient. Retrying that type would retry a genuine duplicate key or validation error for two
+     * minutes, running the transaction callback again each time along with any side effect it has outside the
+     * transaction. Without the MongoDB driver on the classpath only the transient type applies.
+     * <p>
+     * Three things are not retried. A commit that fails with {@code UnknownTransactionCommitResult} may have gone
+     * through, so running the callback again could apply it twice. A duplicate key or validation error is a result,
+     * not a conflict. A duplicate from a write made outside any transaction has no label either, which 0.34.0 did
+     * retry.
      */
     private static final RetryStrategy.Retry DEFAULT_CONFLICT_RETRY = RetryStrategy
             .exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
             .maxAttempts(240)
-            .retryIf(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException);
+            .retryIf(SpringTransactionExecutor::isTransientConflict);
+
+    private static final boolean MONGO_DRIVER_PRESENT = ClassUtils.isPresent("com.mongodb.MongoException", SpringTransactionExecutor.class.getClassLoader());
 
     private static final Duration DEFAULT_CONFLICT_DEADLINE = Duration.ofSeconds(120);
 
@@ -159,6 +169,27 @@ public class SpringTransactionExecutor implements TransactionExecutor {
         }
         RetryStrategy retry = stopAfterDefaultDeadline ? DEFAULT_CONFLICT_RETRY.mapRetryPredicate(withinDeadline()) : conflictRetry;
         return retry.execute(() -> transactionTemplate.execute(status -> action.get()));
+    }
+
+    private static boolean isTransientConflict(Throwable throwable) {
+        return throwable instanceof TransientDataAccessException || (MONGO_DRIVER_PRESENT && MongoTransientTransactionError.isCarriedBy(throwable));
+    }
+
+    /**
+     * Kept in a class of its own so that {@link SpringTransactionExecutor} loads when the driver is absent. This class
+     * is not touched then.
+     */
+    private static final class MongoTransientTransactionError {
+        static boolean isCarriedBy(Throwable throwable) {
+            // Bounded walk so a cyclic cause chain cannot spin forever.
+            Throwable cause = throwable;
+            for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
+                if (cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     private static Function<Predicate<Throwable>, Predicate<Throwable>> withinDeadline() {

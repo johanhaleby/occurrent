@@ -16,14 +16,15 @@
 
 package org.occurrent.application.service.spring.reactor;
 
+import com.mongodb.MongoException;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.service.reactor.ReactiveTransactionExecutor;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.ReactiveTransactionManager;
 import org.springframework.transaction.reactive.TransactionContextManager;
 import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
+import org.springframework.util.ClassUtils;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
@@ -66,11 +67,26 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * default also schedules no retry once 120 seconds have passed since the subscription started, so attempts that are slow themselves,
      * for example while MongoDB has no primary, don't stretch the budget to hours. A retry passed to a constructor is
      * used as given, this default included. See ADR 0074.
+     * <p>
+     * A conflict is a {@link TransientDataAccessException}, or any exception with the {@code TransientTransactionError}
+     * label that MongoDB puts on an error a fresh transaction can get past, found anywhere in its cause chain. That
+     * label is what the driver's own {@code withTransaction} retries on. The label is needed because Spring translates
+     * the most common conflict, a WriteConflict, to {@link org.springframework.dao.DataIntegrityViolationException},
+     * which is not transient. Retrying that type would retry a genuine duplicate key or validation error for two
+     * minutes, running the unit of work again each time along with any side effect it has outside the transaction.
+     * Without the MongoDB driver on the classpath only the transient type applies.
+     * <p>
+     * Three things are not retried. A commit that fails with {@code UnknownTransactionCommitResult} may have gone
+     * through, so running the unit of work again could apply it twice. A duplicate key or validation error is a
+     * result, not a conflict. A duplicate from a write made outside any transaction has no label either, which
+     * 0.34.0 did retry.
      */
     private static final RetryBackoffSpec DEFAULT_CONFLICT_RETRY = Retry.backoff(320, Duration.ofMillis(10))
             .maxBackoff(Duration.ofMillis(500))
-            .filter(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException)
+            .filter(SpringReactiveTransactionExecutor::isTransientConflict)
             .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+
+    private static final boolean MONGO_DRIVER_PRESENT = ClassUtils.isPresent("com.mongodb.MongoException", SpringReactiveTransactionExecutor.class.getClassLoader());
 
     private static final Duration DEFAULT_CONFLICT_DEADLINE = Duration.ofSeconds(120);
 
@@ -162,6 +178,27 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                         // action once and let the error reach that owner. See ADR 0074.
                         ? transaction
                         : Mono.defer(() -> transaction.retryWhen(stopAfterDefaultDeadline ? withinDeadline() : conflictRetry)));
+    }
+
+    private static boolean isTransientConflict(Throwable throwable) {
+        return throwable instanceof TransientDataAccessException || (MONGO_DRIVER_PRESENT && MongoTransientTransactionError.isCarriedBy(throwable));
+    }
+
+    /**
+     * Kept in a class of its own so that {@link SpringReactiveTransactionExecutor} loads when the driver is absent.
+     * This class is not touched then.
+     */
+    private static final class MongoTransientTransactionError {
+        static boolean isCarriedBy(Throwable throwable) {
+            // Bounded walk so a cyclic cause chain cannot spin forever.
+            Throwable cause = throwable;
+            for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
+                if (cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     private static Retry withinDeadline() {
