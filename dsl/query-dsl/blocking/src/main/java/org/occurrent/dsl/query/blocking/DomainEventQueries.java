@@ -369,6 +369,11 @@ public class DomainEventQueries<T> {
     /**
      * Reads domain events matching {@code filter} within {@code range}, in ascending position order.
      * <p>
+     * A position read is a range query. It returns the events in the range it can see when it runs, and it makes
+     * no promise about resuming. A position isn't a safe place to resume from on MongoDB. An event can reserve a position
+     * below the one you kept and commit after you read it, and a read after your position never returns it. To process
+     * every event, resume a catch-up subscription from the checkpoint it stores.
+     * <p>
      * <b>The returned stream must be closed</b>, for the same reason as the underlying
      * {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)}: it is lazy and may hold a database
      * resource, such as a server cursor. Use it in a try-with-resources block, or close it explicitly, in particular
@@ -387,6 +392,8 @@ public class DomainEventQueries<T> {
     /**
      * The store's current position high-watermark, i.e. the position of the most recently positioned event.
      * Returns {@code 0} when no positioned event has been written yet.
+     * <p>
+     * It isn't a safe place to resume from, for the reason given on {@link #readInPositionOrder(Filter, PositionRange)}.
      *
      * @throws UnsupportedOperationException if the underlying event store does not write a position.
      * @see PositionOrderedReader#currentPosition()

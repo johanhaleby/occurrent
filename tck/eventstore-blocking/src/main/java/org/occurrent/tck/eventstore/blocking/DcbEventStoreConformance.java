@@ -56,9 +56,9 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.*;
  *     equality where the contract promises they are equal, which is a different thing from interpreting one. The
  *     suite does read {@code criteria()}, because the contract promises a token holds the criteria it was read
  *     with.</li>
- *     <li><strong>{@code lastSequencePosition} as a concurrency boundary.</strong> It is the store's DCB head, not the
- *     highest matched position, and it reports the head even for a read that matched nothing. A store that assigns
- *     positions before its events commit can report a head ahead of what a reader can see, which is exactly why
+ *     <li><strong>{@code lastSequencePosition} as a concurrency boundary.</strong> It is the store's position counter as the read saw it,
+ *     not the highest matched position, and it reports that even for a read that matched nothing. A store that assigns
+ *     positions before its events commit can report a value ahead of what a reader can see, which is exactly why
  *     {@link DcbEventStream#consistencyToken()} exists.</li>
  *     <li><strong>Position contiguity across appends, or any literal position value.</strong> A block is contiguous
  *     within one append and nothing more. A rejected append can reserve and abandon a block, leaving a permanent gap
@@ -99,7 +99,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             assertThat(read.events()).as("A read of an empty store must return no events").isEmpty();
             assertThat(read.lastSequencePosition())
-                    .as("lastSequencePosition must be 0, and only 0, while the store holds no DCB events")
+                    .as("lastSequencePosition must be 0 on a store nothing has written to")
                     .isZero();
         }
 
@@ -292,7 +292,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             assertThat(matchesNothing.events()).as("A criteria matching nothing must select no events").isEmpty();
             assertThat(matchesNothing.lastSequencePosition())
-                    .as("lastSequencePosition is the store's DCB head, not the highest matched position, so a read "
+                    .as("lastSequencePosition is the store's position counter as the read saw it, not the highest matched position, so a read "
                             + "that matched nothing must still report at least the position last appended")
                     .isGreaterThanOrEqualTo(last.lastSequencePosition());
         }

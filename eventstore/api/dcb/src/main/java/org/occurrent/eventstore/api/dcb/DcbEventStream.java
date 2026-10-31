@@ -30,15 +30,18 @@ import static java.util.Objects.requireNonNull;
  * Immutable result of a DCB read.
  *
  * @param events the CloudEvents matched by the DCB query and read options
- * @param lastSequencePosition the event store's global DCB head at the time of the read, that is the highest DCB
- *                             sequence position assigned anywhere in the store. This is NOT the highest position among
- *                             the matched {@code events}: the highest matched position can be lower than the head, and
- *                             when the query matches nothing there is no matched position at all, yet
- *                             {@code lastSequencePosition} still reports the store head. It is {@code 0} only when the
- *                             store holds no DCB events yet. It is a monotonic global cursor, suitable for replay and
- *                             catch-up, but it is NOT a safe optimistic-concurrency boundary on its own: a store that
- *                             assigns positions before the events commit can report a head that is ahead of the data a
- *                             reader can actually see. Use {@code consistencyToken} for optimistic concurrency.
+ * @param lastSequencePosition the value of the event store's position counter as this read saw it. A write that
+ *                             doesn't commit can raise it. This is NOT the highest position among the matched
+ *                             {@code events}: that can be lower, and when the query matches nothing there is no matched position at all, yet
+ *                             {@code lastSequencePosition} still reports the counter. Inside a transaction it can be
+ *                             below what the store has reserved by then. It is {@code 0} when the read saw no
+ *                             reservation. It isn't a safe place to resume from on MongoDB. To read on
+ *                             from a read that reports versions, use {@link DcbReadOptions#withVersions()} and
+ *                             {@link DcbReadOptions#afterVersions(DcbMarkerVersions)}, or a catch-up subscription's
+ *                             checkpoint. It is NOT a safe optimistic-concurrency boundary on its
+ *                             own: a store that assigns positions before the events commit can report a value that is
+ *                             ahead of the data a reader can actually see. Use {@code consistencyToken} for optimistic
+ *                             concurrency.
  * @param consistencyToken     the token a conditional append is checked against. It holds the criteria the read was
  *                             given, so pass it unchanged to
  *                             {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)} and the append is
@@ -99,7 +102,7 @@ public record DcbEventStream(List<CloudEvent> events, long lastSequencePosition,
 
     /**
      * The highest position among the events returned by the read, or {@code 0} when it returned none. It isn't
-     * {@link #lastSequencePosition()}, which is the head of the whole store.
+     * {@link #lastSequencePosition()}, which is the store's position counter as the read saw it.
      */
     public long highestEventPosition() {
         return events.stream().mapToLong(OccurrentCloudEventExtension::getPosition).max().orElse(0);

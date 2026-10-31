@@ -13,6 +13,10 @@ markers and no longer its `type:` markers, so sharing a type with such an item i
 refuse. What an append increments for its own events is unchanged, so two
 appends of one type that run at the same time still write the same `type:` marker.
 
+See [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) and
+[ADR 155](0155-a-catch-up-reads-its-live-start-from-the-event-store-and-refuses-to-resume-where-it-could-skip-an-event.md)
+for why a `dcbposition` isn't a safe place to resume from on MongoDB.
+
 ## Context
 
 `SpringMongoEventStore.appendDcb` appends DCB events under an optional `DcbAppendCondition`, which is the DCB optimistic-concurrency check: fail the append if any event matching the condition's `DcbQuery` exists after the position the command read. The current implementation has three concurrency problems.

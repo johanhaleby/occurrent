@@ -21,9 +21,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.occurrent.tck.latecommit.LateCommits;
 
 /**
- * What {@link DcbLateCommitConformance} and {@link StreamLateCommitConformance} share. It touches
- * {@link EventStoreFixture#lateCommits()} in setup, so a fixture that never answered fails before the first assertion
- * rather than halfway through a test.
+ * What {@link DcbLateCommitConformance} builds on. It touches {@link EventStoreFixture#lateCommits()} in setup, so a
+ * fixture that never answered fails before the first assertion rather than halfway through a test.
  */
 @NullMarked
 abstract class LateCommitConformance extends EventStoreConformance {

@@ -67,8 +67,8 @@ resume from a position:
 A catch-up that stored its live start together with the position
 ([ADR 144](0144-a-catch-up-checkpoint-keeps-the-live-start-it-read-before-the-replay.md)) doesn't have this problem,
 because it keeps the live start the earlier attempt read before 41 committed. It happens when the position is stored
-alone. That's a position the application stored itself, a checkpoint written by 0.34 or earlier, or a checkpoint stored
-during a catch-up that only replays and never goes live.
+alone. That's a position the application stored itself or a checkpoint written by 0.34 or earlier. A no-live catch-up
+on 0.35 stores its live start too, as ADR 155 decides.
 
 [#1298](https://github.com/johanhaleby/occurrent/issues/1298) has the same defect in the saga position watermark. It's
 fixed separately and this ADR doesn't change it.
@@ -405,7 +405,7 @@ The search had two more store-wide candidates. One is a committed-block ledger, 
 other is a finalizer, a leader-elected process that follows the event collection's change stream, which delivers commits
 in commit order, and writes a second, commit-ordered position on each event with one update per event. I rejected the
 finalizer. Each of those updates is itself a write to the event collection, so every event shows up a second time in the
-change stream that subscriptions read. Which store-wide design to use is still open, and it's searched separately.
+change stream that subscriptions read. No store-wide design is part of 0.35.
 
 The search's main finding was that the DCB consumers don't need a global CT at all. A snapshot decider or a `@Snapshot`
 view covers one boundary, and MongoDB already orders the appends on one boundary by their marker versions. That is the
@@ -920,21 +920,21 @@ For 0.35, a bare position is documented as unsafe to resume from on MongoDB:
   adds the
   deprecations lists every public method that takes a position as a lower bound for reading or subscribing, and every
   method that hands out a position meant to resume from.
-- A catch-up that only replays and never goes live promises "everything committed before I started". Every event that
-  committed before the run started has a position at or below the head the run reads, and the replay reads it. A run
-  resumed after a crash reads a new head and replays after its stored position, which still covers everything committed
-  before the first start. What it doesn't promise is "everything up to position H", which would need a CT.
-- That promise holds only when the window reads run on a member that has every write the head read saw. Today the head
-  (`PositionCatchupPipeline.java:84`) and the windows are both read at the default read concern, and on the primary that
-  holds. Three cases void it, and the javadoc names them. Stream window reads routed to a secondary can miss an event
-  the primary's head covers, and the Spring stream read applies `queryOptions` (`SpringMongoEventStore.java:664`). DCB
-  window reads go through `queryOptions` too (`SpringMongoEventStore.java:259`). And a later change that moves the
-  windows to majority without moving the head is the seventh review's third blocker again.
-- A position-only checkpoint written by 0.34 can't be repaired by anything. The migration guide says to rebuild it or
-  accept it.
+- A read by position, `readInPositionOrder` on `PositionOrderedReader` and `DomainEventQueries`, is a range query with no
+  promise about resuming. That follows from [ADR 84](0084-what-a-position-guarantees.md), which says a position is not
+  commit order. The store can't tell where a position came from, so it can't refuse a resume loop the way a catch-up
+  refuses a bare position. Such a loop gets a deprecation warning if it calls `afterPosition`, and none if it calls
+  `readInPositionOrder` with `PositionRange.afterPosition`. No TCK suite asks a reader that resumes from a position to
+  get an append that committed late. `CatchupReadScopeLateCommitConformance` checks a catch-up's live start instead.
+- What a catch-up reads and promises is ADR 155's subject, for a no-live catch-up and for a run resumed after a crash
+  alike.
+- A position-only checkpoint written by 0.34 can't be repaired, and a catch-up refuses it, as ADR 155 decides.
 
-A store-wide fix, one that gives a bare position a safe meaning, is still open and searched separately. It has to meet
-two constraints. It must not change the DCB path above. And if it reads windows at majority, it reads the head and the
+A store-wide fix would give a bare position a safe meaning. It's not part of 0.35.
+[#1322](https://github.com/johanhaleby/occurrent/issues/1322), for 0.36.0, is an opt-in mode that reserves the position
+inside the append transaction, and it's the only recorded path. The default mode keeps the window, since
+[#1375](https://github.com/johanhaleby/occurrent/issues/1375), a `currentPosition()` that stays below every append still
+in flight, was closed as not planned. Any such fix has to meet two constraints. It must not change the DCB path above. And if it reads windows at majority, it reads the head and the
 live start (ADR 144) in the same causal session, with `afterClusterTime` at or above the head read.
 
 ## Consequences
@@ -1007,8 +1007,10 @@ the store unchanged.
   boundary in full on every command or delivery.
 - The `@Snapshot` view can lag behind the event that triggered it until the next delivery for that boundary. It never
   loses the event.
-- Store-wide positions stay as ADR 84 describes them. A catch-up that resumes from a bare position can still miss an
-  event until the store-wide fix, and a 0.34 position-only checkpoint stays unrepairable.
+- Store-wide positions stay as ADR 84 describes them. A read after a position can still miss an event, and nothing tells
+  the reader. A catch-up refuses a start from a bare position instead
+  ([ADR 155](0155-a-catch-up-reads-its-live-start-from-the-event-store-and-refuses-to-resume-where-it-could-skip-an-event.md)),
+  and a 0.34 position-only checkpoint stays unrepairable.
 - Some things can't be settled until the code exists, and are checked when it's built:
   - The in-transaction read-back returns the transaction's own increments.
   - The Spring store can open its own session for the read-only transaction when no caller transaction is active.
