@@ -843,7 +843,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             run = pause(subscriptionId);
             // A run that ends frees its id without the monitor, so the id can be gone by now
             if (run == null) {
-                throw new SubscriptionNotRunningException(subscriptionId);
+                throw new UnknownSubscriptionException(subscriptionId);
             }
         }
         closeOutsideTheMonitor(run);
@@ -898,8 +898,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 throw new SubscriptionAlreadyRunningException(subscriptionId);
             }
             InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
+            // A run that ends frees its id without the monitor, so the id can be gone by now
             if (internalSubscription == null) {
-                throw new SubscriptionNotRunningException(subscriptionId);
+                throw new UnknownSubscriptionException(subscriptionId);
             }
             running = true;
             // Reuses the same currentStartAt reference so resume continues from the position the paused run reached,
@@ -929,8 +930,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 throw new SubscriptionAlreadyRunningException(subscriptionId);
             }
             InternalSubscription paused = pausedSubscriptions.remove(subscriptionId);
+            // A run that ends frees its id without the monitor, so the id can be gone by now
             if (paused == null) {
-                throw new SubscriptionNotRunningException(subscriptionId);
+                throw new UnknownSubscriptionException(subscriptionId);
             }
             running = true;
             // A position of its own, since a step of the paused run that is still under way can move the old one

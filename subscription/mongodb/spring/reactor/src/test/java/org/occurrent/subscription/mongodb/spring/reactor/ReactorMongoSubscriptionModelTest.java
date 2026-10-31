@@ -16,6 +16,8 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.UnsynchronizedAppenderBase;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.model.Filters;
@@ -44,6 +46,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.DcbSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
@@ -52,6 +55,7 @@ import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
@@ -75,8 +79,10 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Function;
 
 import static com.mongodb.client.model.Aggregates.match;
@@ -534,6 +540,37 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
+        void pausing_an_id_whose_run_ends_after_the_id_was_found_is_refused_as_unknown() throws Exception {
+            assertAnIdFreedByARunThatEndsIsRefusedAsUnknown(Hook.IS_PAUSED, (model, subscriptionId) -> model.pauseSubscription(subscriptionId));
+        }
+
+        @Test
+        void resuming_an_id_whose_run_ends_after_the_id_was_found_is_refused_as_unknown() throws Exception {
+            assertAnIdFreedByARunThatEndsIsRefusedAsUnknown(Hook.IS_RUNNING, (model, subscriptionId) -> model.resumeSubscription(subscriptionId));
+        }
+
+        @Test
+        void resuming_at_a_position_an_id_whose_run_ends_after_the_id_was_found_is_refused_as_unknown() throws Exception {
+            assertAnIdFreedByARunThatEndsIsRefusedAsUnknown(Hook.IS_RUNNING, (model, subscriptionId) -> model.resumeSubscription(subscriptionId, StartAt.now()));
+        }
+
+        @Test
+        void a_run_that_ends_after_a_pause_and_a_resume_replaced_it_leaves_the_resumed_run_registered() throws Exception {
+            assertTheRunThatReplacedAnEndingRunStaysRegistered((subscriptionId, action) -> {
+                subscription.pauseSubscription(subscriptionId);
+                return subscription.resumeSubscription(subscriptionId);
+            });
+        }
+
+        @Test
+        void a_run_that_ends_after_a_cancel_and_a_new_subscribe_replaced_it_leaves_the_new_run_registered() throws Exception {
+            assertTheRunThatReplacedAnEndingRunStaysRegistered((subscriptionId, action) -> {
+                subscription.cancelSubscription(subscriptionId).block(Duration.ofSeconds(10));
+                return subscription.subscribe(subscriptionId, StartAt.now(), action);
+            });
+        }
+
+        @Test
         void the_flux_subscribed_at_a_dynamic_position_answering_a_global_checkpoint_fails_when_subscribed_to() {
             assertFluxAtADynamicPositionFailsWhenSubscribedTo(GlobalCheckpoint.of(0), startAt -> subscription.subscribe(startAt));
         }
@@ -829,6 +866,164 @@ public class ReactorMongoSubscriptionModelTest {
         @Test
         void an_action_that_fails_with_another_exception_on_a_delivering_subscription_is_delivered_the_event_again() {
             assertTheEventIsDeliveredAgainAfterTheActionFailsWith(new IllegalStateException("failed by the action"));
+        }
+
+        private interface Replacement {
+            Subscription replace(String subscriptionId, Function<CloudEvent, Mono<Void>> action);
+        }
+
+        private void assertTheRunThatReplacedAnEndingRunStaysRegistered(Replacement replacement) throws Exception {
+            // Given a run whose position answers a catchup checkpoint on its retry, and so ends, parked in the log of its failure
+            LocalDateTime now = LocalDateTime.now();
+            String subscriptionId = UUID.randomUUID().toString();
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            Function<CloudEvent, Mono<Void>> action = cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent));
+            AtomicInteger asks = new AtomicInteger();
+            StartAt startAt = StartAt.dynamic(ctx -> switch (asks.incrementAndGet()) {
+                case 1 -> throw new IllegalStateException("Fails once");
+                case 2 -> StartAt.checkpoint(GlobalCheckpoint.of(0));
+                default -> StartAt.now();
+            });
+            ParksTheRunThatEnds parked = new ParksTheRunThatEnds(subscriptionId);
+            parked.start();
+            ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
+            modelLogger.addAppender(parked);
+            try {
+                Subscription ending = subscription.subscribe(subscriptionId, startAt, action);
+                assertThat(parked.entered.await(10, SECONDS)).as("the run ended and was parked in its log").isTrue();
+
+                // When a newer run takes over the id before the ending run frees it
+                Subscription newer = replacement.replace(subscriptionId, action);
+                assertThat(newer.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+                parked.release.countDown();
+                Throwable told = catchThrowable(() -> ending.waitUntilStarted().block(Duration.ofSeconds(10)));
+
+                // Then the ending run was let through, and it left the newer run registered
+                assertThat(told).isExactlyInstanceOf(UnsupportedStartAtException.class);
+                assertThat(subscription.isRunning(subscriptionId)).isTrue();
+
+                // And the newer run delivers an event written afterwards
+                NameDefined written = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+                mongoEventStore.write("1", 0, serialize(written)).block();
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(delivered).extracting(CloudEvent::getId).contains(written.eventId()));
+            } finally {
+                parked.release.countDown();
+                modelLogger.detachAppender(parked);
+                parked.stop();
+            }
+        }
+
+        // Holds the thread that logs the end of the run of one subscription until released
+        private static final class ParksTheRunThatEnds extends UnsynchronizedAppenderBase<ILoggingEvent> {
+            private final String subscriptionId;
+            private final AtomicBoolean first = new AtomicBoolean(true);
+            final CountDownLatch entered = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+
+            private ParksTheRunThatEnds(String subscriptionId) {
+                this.subscriptionId = subscriptionId;
+            }
+
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getFormattedMessage().contains("Subscription " + subscriptionId + " terminated") && first.getAndSet(false)) {
+                    entered.countDown();
+                    try {
+                        release.await(15, SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+        }
+
+        private enum Hook {IS_PAUSED, IS_RUNNING}
+
+        private interface LifecycleCall {
+            void call(ReactorMongoSubscriptionModel model, String subscriptionId);
+        }
+
+        private void assertAnIdFreedByARunThatEndsIsRefusedAsUnknown(Hook hook, LifecycleCall call) throws Exception {
+            // Given a run whose position fails with a plain exception first, and answers a catchup checkpoint on its retry once it is let go
+            String subscriptionId = UUID.randomUUID().toString();
+            AtomicInteger asks = new AtomicInteger();
+            CountDownLatch mayAnswer = new CountDownLatch(1);
+            StartAt startAt = StartAt.dynamic(ctx -> {
+                if (asks.incrementAndGet() == 1) {
+                    throw new IllegalStateException("Fails once");
+                }
+                try {
+                    mayAnswer.await(10, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return StartAt.checkpoint(GlobalCheckpoint.of(0));
+            });
+            ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+            ReactiveMongoTemplate template = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+            RunEndsAfterTheIdWasFound model = new RunEndsAfterTheIdWasFound(template, "events-" + UUID.randomUUID(), mayAnswer);
+            try {
+                model.subscribe(subscriptionId, startAt, cloudEvent -> Mono.empty());
+
+                // When the run ends between the call finding the id and the call acting on it
+                model.endTheRunWhen(hook);
+                Throwable throwable = catchThrowable(() -> call.call(model, subscriptionId));
+
+                // Then the call refuses the id as unknown, since the model no longer has it
+                assertThat(throwable).isExactlyInstanceOf(UnknownSubscriptionException.class);
+                assertAll(
+                        () -> assertThat(((UnknownSubscriptionException) throwable).subscriptionId()).isEqualTo(subscriptionId),
+                        () -> assertThat(model.sawTheIdFreed).as("the run ended inside the call").isTrue(),
+                        () -> assertThat(asks).as("times the position was asked").hasValue(2),
+                        () -> assertThat(model.isPaused(subscriptionId)).isFalse(),
+                        () -> assertThat(model.isRunning(subscriptionId)).isFalse()
+                );
+            } finally {
+                mayAnswer.countDown();
+                model.shutdown();
+            }
+        }
+
+        // Frees the id of a run that fails, in the middle of a call that has found the id, by holding the call at the check
+        // it makes next until the run has ended
+        private static final class RunEndsAfterTheIdWasFound extends ReactorMongoSubscriptionModel {
+            private final CountDownLatch mayAnswer;
+            private final AtomicReference<Hook> armedAt = new AtomicReference<>();
+            volatile boolean sawTheIdFreed;
+
+            RunEndsAfterTheIdWasFound(ReactiveMongoTemplate template, String eventCollection, CountDownLatch mayAnswer) {
+                super(template, eventCollection, TimeRepresentation.RFC_3339_STRING);
+                this.mayAnswer = mayAnswer;
+            }
+
+            void endTheRunWhen(Hook hook) {
+                armedAt.set(hook);
+            }
+
+            @Override
+            public boolean isPaused(String subscriptionId) {
+                endTheRunIfArmedAt(Hook.IS_PAUSED, subscriptionId);
+                return super.isPaused(subscriptionId);
+            }
+
+            @Override
+            public boolean isRunning(String subscriptionId) {
+                endTheRunIfArmedAt(Hook.IS_RUNNING, subscriptionId);
+                return super.isRunning(subscriptionId);
+            }
+
+            // Disarms first, so the wait below does not enter the hook again
+            private void endTheRunIfArmedAt(Hook hook, String subscriptionId) {
+                if (armedAt.compareAndSet(hook, null)) {
+                    mayAnswer.countDown();
+                    long giveUpAt = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+                    while (super.isRunning(subscriptionId) && System.nanoTime() < giveUpAt) {
+                        LockSupport.parkNanos(Duration.ofMillis(1).toNanos());
+                    }
+                    sawTheIdFreed = !super.isRunning(subscriptionId);
+                }
+            }
         }
 
         private void assertNamedSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint) {
