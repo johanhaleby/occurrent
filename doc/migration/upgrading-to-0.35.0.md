@@ -645,14 +645,14 @@ stacks, so it isn't affected on a store that returns the criteria it was given.
 - **A `DcbEventStore` decorator that rewrites criteria**, adding a tenant tag for example, and passes the inner store's
   token through. It compiles, but the token holds the rewritten criteria, so a condition on the caller's criteria throws
   `IllegalArgumentException`. In `read`, return
-  `new DcbEventStream(inner.events(), inner.lastSequencePosition(), DcbConsistencyToken.of(criteria, innerToken.version()), inner.markerVersions())`,
+  `new DcbEventStream(inner.events(), inner.lastSequencePosition(), DcbConsistencyToken.of(criteria, innerToken.version(), innerToken.markers()), inner.markerVersions())`,
   since the three-argument constructor sets `markerVersions` to empty. Those versions hold the rewritten criteria's
   markers, the added tag's included, so pass them back to the inner store unchanged with the rewritten criteria. A store
   reports no versions for `all()`, on a read or on a conditional append, and throws `DcbSnapshotInvalidException` on a
   read of `all()` with `afterVersions`. So when `all()` becomes a tag, use the three-argument constructor on that read,
   drop the versions from that append's result, and throw on that read yourself. In `append`, rewrite the criteria the
   same way, and give the inner store a condition with
-  `DcbConsistencyToken.of(rewrittenCriteria, token.version())`. On MongoDB the added tag then counts in the check like
+  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`. On MongoDB the added tag then counts in the check like
   any other tag, so appending any event with that tag can make the check refuse, whether or not the event matches.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
   condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
@@ -699,6 +699,19 @@ needs the criteria the read was given, and a recipe can't tell from the call sit
 `failIfEventsMatch(criteria, token)` to `failIfEventsMatch(token)` would compile too, but a condition that used other
 criteria than its read would then append on the read's criteria instead of throwing.
 
+### What else a token holds on MongoDB
+
+On MongoDB, a token also holds what the read saw of each marker. An event with only some of a criteria item's tags no
+longer fails the condition.
+
+If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
+finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
+read concern snapshot. Earlier versions said pruning during quiescence was harmless. It isn't, because a token can be
+held across the prune.
+
+A `DcbEventStore` of your own needs no change, and `DcbConsistencyToken.of(criteria, version)` keeps working for it.
+A MongoDB store throws `IllegalArgumentException` for a token built that way.
+
 ## Criteria with tags conflict on their tags
 
 On the MongoDB stores, the check of a conditional append with a token reads only the tag markers of an item with tags,
@@ -707,8 +720,8 @@ refuse. Such an item also no longer adds its type markers to what a conditional 
 Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
-example. The MongoDB stores can still refuse an append the in-memory store accepts, for example after an event that has
-only one of the criteria's tags. With a token, an item without tags is checked against its type markers as before. The change is the
+example. The MongoDB stores can still refuse an append the in-memory store accepts, for example after an event of
+another type that has every one of the criteria's tags. With a token, an item without tags is checked against its type markers as before. The change is the
 first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
 [ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
 describes it.
@@ -716,7 +729,7 @@ describes it.
 ### What stays the same
 
 - A conditional append on criteria with tags is still refused when an event that matches them committed after the
-  read, unless the markers were pruned in between ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)).
+  read.
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
 - This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the
@@ -744,10 +757,8 @@ describes it.
   that should have been refused. Read again instead, as
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
   says.
-- **Code or an operator that prunes markers.** For an item with both types and tags, a token no longer counts the type
-  markers, so a prune between the read and the append can let through a conflicting append that 0.34.0 refused, until
-  [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. Prune only when no command holds a token it
-  can still append with.
+- **Code or an operator that deletes marker documents.** Follow the rule at the end of
+  [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
 ## A catch-up needs the event store itself
 

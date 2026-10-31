@@ -42,7 +42,7 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass
  * <strong>Running a suite against a store that honours nothing.</strong> {@link StreamEventStoreConformance},
  * {@link StreamConcurrencyConformance}, {@link StreamPositionConformance}, {@link StreamPositionDisabledConformance},
  * {@link DcbEventStoreConformance}, {@link DcbStreamInteropConformance}, {@link DcbConcurrencyConformance},
- * {@link DcbMarkerVersionsConformance}, {@link DcbAppendConfirmationConformance} and
+ * {@link DcbMarkerVersionsConformance}, {@link DcbMarkerPruneConformance}, {@link DcbAppendConfirmationConformance} and
  * {@link CapabilityGuardConformance} are each run against {@link NoopStore} and must notice: every test fails, none
  * passes, none is skipped or aborted. That establishes each suite has tests and that they really do assert something.
  * It does not establish the no-skipping rule, because every test dies on its first call into the store, so an
@@ -102,6 +102,11 @@ class SuiteNeverSkipsTest {
     @Test
     void the_dcb_marker_versions_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
         assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbMarkerVersionsConformance.class);
+    }
+
+    @Test
+    void the_dcb_marker_prune_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbMarkerPruneConformance.class);
     }
 
     @Test
@@ -551,6 +556,43 @@ class SuiteNeverSkipsTest {
      * {@link NoopStore} throws {@link UnsupportedOperationException}, so every test must fail rather than pass or skip.
      */
     static class HonoursNothingDcbMarkerVersionsConformance extends DcbMarkerVersionsConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.DCB);
+                }
+
+                @Override
+                public DcbEventStore dcbEventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbAppendConditionModel appendConditionModel() {
+                    return DcbAppendConditionModel.EXACT_CRITERIA;
+                }
+            };
+        }
+    }
+
+    /**
+     * As {@link HonoursNothingDcbMarkerVersionsConformance}, but for {@link DcbMarkerPruneConformance}. The two hooks
+     * delete nothing, and every append against {@link NoopStore} throws before they are reached.
+     */
+    static class HonoursNothingDcbMarkerPruneConformance extends DcbMarkerPruneConformance {
+
+        @Override
+        protected void deleteMarker(String markerKey) {
+            throw new UnsupportedOperationException("a store that honours nothing has no markers");
+        }
+
+        @Override
+        protected void deleteEvents(String... eventIds) {
+            throw new UnsupportedOperationException("a store that honours nothing has no events");
+        }
 
         @Override
         protected EventStoreFixture createFixture() {
