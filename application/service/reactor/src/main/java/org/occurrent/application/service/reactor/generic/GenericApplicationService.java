@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.ExecuteFilter;
+import org.occurrent.application.service.internal.FailureAfterWrite;
 import org.occurrent.application.service.reactor.ApplicationService;
 import org.occurrent.application.service.reactor.ExecuteOptions;
 import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatcher;
@@ -117,43 +118,63 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         @Nullable Long fromStreamVersion = executeOptions.fromStreamVersion();
         int skip = fromStreamVersion == null ? 0 : Math.toIntExact(fromStreamVersion);
 
-        // The read, decide, write, and synchronous dispatch run as one unit and retry from a fresh read on an
-        // optimistic-concurrency conflict, so the decision always runs against the current events. The transaction
+        // The read, decide and write run as one unit and retry from a fresh read on an optimistic-concurrency conflict.
+        // A failure after the write doesn't retry unless the attempt opened a transaction, since the command could write
+        // its events twice. The transaction
         // executor is entered only when synchronous dispatch must commit atomically with the write; otherwise the
         // write keeps exactly its prior semantics and applications without synchronous subscriptions pay no transaction
         // overhead. The side-effect is composed after the retry so it runs once on success, not per attempt.
-        Supplier<Mono<Result<E>>> readDecideWriteUnit = () -> read(streamId, filter, skip).flatMap(eventStream ->
-                eventStream.events().collectList().flatMap(currentCloudEvents -> {
-                    List<E> domainEvents = cloudEventConverter.toDomainEvents(currentCloudEvents.stream()).toList();
-                    List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
-                    if (newDomainEvents == null) {
-                        newDomainEvents = List.of();
-                    }
-                    List<CloudEvent> newCloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-                    List<E> writtenDomainEvents = newDomainEvents;
-                    return eventStore.write(streamId, eventStream.version(), Flux.fromIterable(newCloudEvents))
-                            .flatMap(writeResult -> {
-                                Result<E> result = new Result<>(writeResult, writtenDomainEvents);
-                                if (!dispatchSynchronously || newCloudEvents.isEmpty()) {
-                                    return Mono.just(result);
+        return Mono.defer(() -> {
+            FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
+            // A transaction already open here counts as joined, so the retry doesn't see a failure after the write
+            Mono<Result<E>> attempt = reportsTransaction(dispatchSynchronously).flatMap(joined -> {
+                // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
+                Supplier<Mono<Result<E>>> readDecideWriteUnit = () -> Mono.defer(() -> {
+                    failureAfterWrite.refuseIfHeld();
+                    return reportsTransaction(dispatchSynchronously).flatMap(transactional -> read(streamId, filter, skip).flatMap(eventStream ->
+                            eventStream.events().collectList().flatMap(currentCloudEvents -> {
+                                List<E> domainEvents = cloudEventConverter.toDomainEvents(currentCloudEvents.stream()).toList();
+                                List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
+                                if (newDomainEvents == null) {
+                                    newDomainEvents = List.of();
                                 }
-                                // Re-read exactly the just-written tail so synchronous handlers get events enriched by
-                                // the store (stream version and global position), then dispatch inside the transaction.
-                                return eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newCloudEvents.size())
-                                        .flatMap(enrichedStream -> enrichedStream.events().collectList())
-                                        .flatMap(enriched -> transactionExecutor.isTransactional()
-                                                .flatMap(transactional -> synchronousEventDispatcher.dispatch(enriched, transactional))
-                                                .thenReturn(result));
-                            });
-                }));
-        Mono<Result<E>> readDecideWrite = (dispatchSynchronously ? transactionExecutor.inTransaction(readDecideWriteUnit) : Mono.defer(readDecideWriteUnit)).retryWhen(retry);
-
-        return readDecideWrite.flatMap(result -> {
-            if (sideEffect == null) {
-                return Mono.just(result.writeResult());
-            }
-            return sideEffect.apply(result.newDomainEvents()).thenReturn(result.writeResult());
+                                List<CloudEvent> newCloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
+                                List<E> writtenDomainEvents = newDomainEvents;
+                                return eventStore.write(streamId, eventStream.version(), Flux.fromIterable(newCloudEvents))
+                                        .flatMap(writeResult -> {
+                                            Result<E> result = new Result<>(writeResult, writtenDomainEvents);
+                                            if (!dispatchSynchronously || newCloudEvents.isEmpty()) {
+                                                return Mono.just(result);
+                                            }
+                                            // Re-read exactly the just-written tail so synchronous handlers get events enriched by
+                                            // the store (stream version and global position), then dispatch inside the transaction.
+                                            return Mono.defer(() -> eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newCloudEvents.size()))
+                                                    .flatMap(enrichedStream -> enrichedStream.events().collectList())
+                                                    .flatMap(enriched -> synchronousEventDispatcher.dispatch(enriched, transactional))
+                                                    .onErrorMap(failure -> !transactional || joined, failureAfterWrite::hold)
+                                                    .thenReturn(result);
+                                        });
+                            })));
+                });
+                return dispatchSynchronously ? transactionExecutor.inTransaction(readDecideWriteUnit) : Mono.defer(readDecideWriteUnit);
+            });
+            // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
+            return attempt.onErrorResume(failureAfterWrite::isHeldAfter, failure -> Mono.empty())
+                    .retryWhen(retry)
+                    // An executor can swallow the stand-in and return a value, which says nothing about the failure
+                    .filter(result -> !failureAfterWrite.isHeld())
+                    .switchIfEmpty(Mono.defer(() -> failureAfterWrite.isHeld() ? Mono.error(failureAfterWrite.failure()) : Mono.empty()))
+                    .flatMap(result -> {
+                        if (sideEffect == null) {
+                            return Mono.just(result.writeResult());
+                        }
+                        return sideEffect.apply(result.newDomainEvents()).thenReturn(result.writeResult());
+                    });
         });
+    }
+
+    private Mono<Boolean> reportsTransaction(boolean dispatchSynchronously) {
+        return dispatchSynchronously ? transactionExecutor.isTransactional().defaultIfEmpty(false) : Mono.just(false);
     }
 
     private Mono<EventStream<CloudEvent>> read(String streamId, @Nullable StreamReadFilter filter, int skip) {

@@ -6,6 +6,10 @@ Date: 2026-07-14
 
 Accepted
 
+[ADR 165](0165-the-retry-sees-a-failure-after-the-write-only-in-a-transaction-the-attempt-opened.md) keeps a failure after a
+write away from the application service's retry unless the attempt opened the transaction, so `execute` throws
+it instead of running the command again.
+
 ## Context
 
 Occurrent has two ways to react to newly written events, and neither runs a decoupled, declared-once handler

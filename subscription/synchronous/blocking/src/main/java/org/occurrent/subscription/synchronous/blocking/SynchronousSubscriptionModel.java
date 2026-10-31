@@ -31,12 +31,12 @@ import java.util.function.Consumer;
  * the thread that supplies the events, rather than asynchronously off a change stream.
  * <p>
  * It exists to be driven by the application service: after a successful write, the application service hands
- * the just-written cloud events to {@link #dispatch(List, boolean)}, which routes each event to the registered
- * handlers whose {@link SubscriptionFilter} matches, invoking them in registration order on the calling thread. A
- * handler exception reaches the caller (so, under a transaction, it rolls the write back). Whether it also stops the
- * handlers behind it depends on the transaction, which is what that second argument carries.
- * {@link #accept(List)} routes the same way for callers driving the model directly, and always offers the event to
- * every handler rather than stopping at the first failure, because nothing rolls back on that path.
+ * the just-written cloud events to {@link #dispatch(List, boolean)}, which routes each event to the registered handlers
+ * whose {@link SubscriptionFilter} matches, invoking them in registration order on the calling thread. A handler
+ * exception reaches the caller (so a transaction it passes through can roll the write back). Whether it also stops the
+ * handlers behind it depends on that second argument.
+ * {@link #accept(List)} routes the same way for callers driving the model directly, and offers the event to the
+ * other handlers rather than stopping at the first failure, because nothing rolls back on that path.
  * <p>
  * Unlike the asynchronous {@code SubscriptionModel}s, this model has no start position, checkpoint, catch-up, or
  * replay. It only ever reacts to events fed to it here and now. It is a full {@link org.occurrent.subscription.api.blocking.SubscriptionModel}, so
@@ -51,12 +51,12 @@ import java.util.function.Consumer;
 public class SynchronousSubscriptionModel extends RegisteringSubscribable implements SynchronousEventDispatcher, Consumer<List<CloudEvent>> {
 
     /**
-     * Several handlers, unlike the push models, which take one each. Fan-out is safe here because there is no broker
-     * and no acknowledgement to share: the events arrive from the write that just produced them, and a handler
-     * exception reaches the writer. Under a transaction the write rolls back, so no handler's work survives. Without
-     * one, {@link #dispatch(List, boolean)} offers every handler the event and reports the failures together, so a
-     * failing handler cannot strand the handlers behind it. See ADR 90 for the isolation argument that makes the push
-     * sinks single-consumer, and its ADR 57 follow-up for the no-transaction case here.
+     * Several handlers, unlike the push models, which take one each. There is no broker and no acknowledgement to share
+     * here. The events arrive from the write that just produced them, and a handler exception reaches the writer.
+     * {@link #dispatch(List, boolean)} told {@code true} stops at the failure, and the write usually rolls back. Told
+     * {@code false} it offers the other handlers the event and reports the failures together, so a handler's exception
+     * doesn't strand the handlers behind it. See ADR 90 for the isolation argument that makes the push sinks
+     * single-consumer, and its ADR 57 follow-up for the no-transaction case here.
      */
     public SynchronousSubscriptionModel() {
         super(Consumers.MANY);
@@ -86,16 +86,17 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     }
 
     /**
-     * Dispatch as {@link #dispatch(List)} does, told whether the caller wrapped this in a transaction.
+     * Dispatch as {@link #dispatch(List)} does, told whether the caller reports a transaction.
      * <p>
-     * Inside a transaction the first handler exception stops dispatch, because the write is about to roll back and the
-     * handlers behind it would only be doing work that is discarded, possibly with effects outside the datastore.
-     * Outside one the write has already committed, so every handler is offered every event and the failures are
-     * reported afterwards. That is the difference this argument exists for: a handler skipped because a sibling threw
-     * would never see the event again, since this model has no replay. See the ADR 57 amendment.
+     * With {@code transactional} true the first handler exception stops dispatch, because the write usually rolls back
+     * and the handlers behind it would only be doing work that is discarded, possibly with effects outside the
+     * datastore. Otherwise the write has usually committed, so the other handlers are still offered the event and the
+     * failures are reported afterwards, though a handler that failed gets no more of that batch and an {@link Error}
+     * still stops it. A handler skipped because a sibling threw would never see the event again, since this model has
+     * no replay, which is why this argument exists. See the ADR 57 amendment.
      *
      * @param writtenCloudEvents The newly written cloud events.
-     * @param transactional      Whether the write and these handlers are running inside a transaction.
+     * @param transactional      Whether the caller reports a transaction around the write and these handlers.
      */
     @Override
     public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
@@ -107,7 +108,7 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     }
 
     /**
-     * Feeds the events in as {@link #dispatch(List)} does, so the model can be used directly as a
+     * Feeds the events in, so the model can be used directly as a
      * {@code Consumer<List<CloudEvent>>} listener (for example as an in-memory event-store write listener).
      * <p>
      * Handlers are isolated from each other here, because nothing on this path opens a transaction: the write has

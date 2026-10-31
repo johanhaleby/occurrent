@@ -34,13 +34,13 @@ import java.util.function.Supplier;
  * <p>
  * While the session is bound, the native {@code MongoEventStore}'s write and DCB append join it instead of opening
  * their own session, so the event write and any synchronous subscription handlers dispatched inside the same unit
- * of work commit atomically: a handler that throws rolls the event write back. This gives a native application the
+ * of work commit atomically: in a transaction this executor opens, a handler that throws rolls the event write back. This gives a native application the
  * same "write plus synchronous handler in one transaction" guarantee a Spring-backed executor gives, without the
  * application service depending on Spring or the store changing its public write/append signatures.
  * <p>
  * The transaction is run through {@link ClientSession#withTransaction(com.mongodb.client.TransactionBody, TransactionOptions)},
  * so the driver's automatic retry of transient transaction errors and commit retries are preserved. A re-entrant
- * call (one made while a session is already bound on the thread) runs the action on the existing transaction rather
+ * call (one made while a session is already bound on the thread) runs the action in that session, in its transaction if it has one, rather
  * than opening a nested one.
  */
 @NullMarked
@@ -76,8 +76,8 @@ public class NativeMongoTransactionExecutor implements TransactionExecutor {
         Objects.requireNonNull(action, "action cannot be null");
 
         if (ClientSessionHolder.get() != null) {
-            // Already inside a transaction on this thread (a re-entrant call): join it rather than opening a nested
-            // one. The outermost call owns the session and its commit/abort.
+            // A session is already bound on this thread, so run in it rather than opening a nested transaction. Whoever
+            // bound it owns it and its commit/abort.
             return action.get();
         }
 
@@ -92,13 +92,14 @@ public class NativeMongoTransactionExecutor implements TransactionExecutor {
     }
 
     /**
-     * Always true, unlike the Spring executors, which read the live state. This one either opens a session transaction
-     * or joins the one already bound to the thread, and it takes no propagation setting that could turn that off, so
-     * there is no configuration in which it runs the action without a transaction.
+     * Whether the session bound to this thread has a transaction in force. It's the live state, like the Spring executors
+     * read, so the application service can tell a transaction {@link #inTransaction(java.util.function.Supplier)} would open
+     * from one it would join.
      */
     @Override
     public boolean isTransactional() {
-        return true;
+        ClientSession session = ClientSessionHolder.get();
+        return session != null && session.hasActiveTransaction();
     }
 
     @Override

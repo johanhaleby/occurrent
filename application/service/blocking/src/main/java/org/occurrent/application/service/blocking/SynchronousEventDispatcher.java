@@ -39,14 +39,15 @@ public interface SynchronousEventDispatcher {
      * Dispatch the just-written cloud events to every matching synchronous subscription, synchronously, on the calling
      * thread. A handler exception reaches the caller.
      * <p>
-     * {@code transactional} says whether the caller opened a transaction around the write and this dispatch, which
-     * decides what a handler failure costs the handlers behind it. When it is {@code true} the failure rolls the write
-     * back, so no handler's work survives and stopping at the first one loses nothing. When it is {@code false} the
-     * write has already committed, so give every handler the event and report the failures together: a synchronous
-     * subscription has no replay, and a handler skipped because a sibling threw would never see that event.
+     * {@code transactional} says whether the caller reports a transaction around the write and this dispatch, which
+     * decides what a handler failure costs the handlers behind it. When it is {@code true} the dispatch stops at the
+     * first failure and the handlers behind it don't get the event. A rollback usually undoes the write as well, and
+     * ADR 165 lists where it doesn't. When it is {@code false} the write has usually committed, so give the other
+     * handlers the event and report the failures together: a synchronous subscription has no replay, and a handler
+     * skipped because a sibling threw would never see that event.
      *
      * @param writtenCloudEvents The cloud events written by the current command, enriched with stream metadata.
-     * @param transactional      Whether the caller wrapped this dispatch in a transaction.
+     * @param transactional      Whether the caller reports a transaction around this dispatch.
      */
     void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional);
 
