@@ -125,7 +125,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     /**
-     * Executes a domain function against the current events selected by the DCB query and appends any produced events.
+     * Executes a domain function against the events the DCB query reads and appends any produced events.
      */
     @Override
     public Optional<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel) {
@@ -144,7 +144,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
             // The read and the decision run outside the transaction, since a store reports no marker versions inside one.
-            // The append's condition holds this read's token, so a decision on events that changed fails it and starts over here.
+            // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
             final DcbEventStream eventStream;
             try {
                 eventStream = readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions);

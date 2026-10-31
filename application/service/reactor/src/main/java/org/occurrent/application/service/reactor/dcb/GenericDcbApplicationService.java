@@ -136,8 +136,8 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         boolean versionsRequested = options.versionsRequested();
 
         // The read and the decision run outside the transaction, since a store reports no marker versions inside one. The
-        // append's condition holds this read's token, so a decision on events that changed fails it and retries from a
-        // fresh read. The side-effect is composed after the retry so it runs once on success, not per attempt.
+        // append's condition holds this read's token, and a failed condition goes to the retry around this, which can read
+        // and decide again. The side-effect is composed after the retry so it runs once on success, not per attempt.
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
         Mono<Result<E>> readDecideAppend = Mono.defer(() -> readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions)).doOnNext(eventStream -> refuseEventBelowFoldedPosition(criteria, options, eventStream)).onErrorMap(DcbSnapshotInvalidException.class, refused -> refused.beforeAppend(functionThatCallsDomainModel)).flatMap(eventStream -> {

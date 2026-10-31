@@ -623,14 +623,14 @@ The service now reads and decides first, and only the append, the re-read and th
 is the order the service has without synchronous subscriptions, and these are the consequences:
 
 - The append's condition holds the token of the read, so a transaction around the read adds nothing to the check. A
-  command that would have seen another append's events fails its condition and starts over.
+  failed condition goes to the service's retry strategy, which by default reads and decides again.
 - The executor's own conflict retry from [ADR 74](0074-retry-only-where-the-transaction-is-owned.md) re-runs the
   append, the re-read and the dispatch, with that same token, and not the read or the decision. A handler can run again
-  on such a retry, as it could before. When the conflicting append moved a marker of the read's criteria the condition now
-  fails, and the service's retry strategy reads and decides again. Otherwise the append goes through on the decision it
+  on such a retry, as it could before. When the condition then fails, the service's retry strategy by default reads and decides
+  again. Otherwise the append goes through on the decision it
   already made.
-  The condition has the same limits here as on any append, after a prune
-  ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)) and on `DcbCriteria.all()`, where the append can go
+  The condition doesn't catch every append that happened since the read, for example after a prune
+  ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)) or on `DcbCriteria.all()`, where the append can go
   through on a decision that didn't see a matching event. A conflict that only the condition can see spends an attempt
   of the service's retry strategy instead of one of the executor's. By default the service allows 5
   attempts and the Spring executors about 15, so a command on a contended boundary can fail sooner, with the same budget
@@ -1013,7 +1013,7 @@ the store unchanged.
   can save.
 - On a DCB application service with synchronous subscriptions the domain function no longer runs in the executor's
   transaction. The executor's conflict retry re-runs the append, the re-read and the dispatch, with the token of the
-  read before it, and not the read or the domain function.
+  read the decision was made on, and not the read or the domain function.
 - A decider inside a transaction the caller owns never saves a snapshot. Saving after that transaction commits isn't in
   0.35.0, and this is a known limitation, tracked in #1307. The warning lists a transaction the caller owns as one of
   the causes.
