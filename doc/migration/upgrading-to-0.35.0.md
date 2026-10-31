@@ -1146,8 +1146,9 @@ again depends on whether it stores a checkpoint.
 
 With the starter's durable model, `NOW` with `DEFAULT` also records where the feed is when a subscription with no stored
 checkpoint registers, the way any start from the model default does. The reactive MongoDB model reads it by asking the
-server. It asks on every restart, and ignores the answer when a checkpoint is stored. A server that cannot be asked, or
-that replies without a clock, therefore makes the model refuse the registration only when no checkpoint is stored. Such
+server, and only when no checkpoint is stored. A model that is stopped when the subscription registers, as with mode
+`manual`, asks every time and ignores the answer when a checkpoint is stored. A server that cannot be asked, or that
+replies without a clock, therefore makes the model refuse the registration only when no checkpoint is stored. Such
 a subscription waits for its start by default when `occurrent.subscription.mode` is `auto`, so the application does not
 start. With `startupMode = BACKGROUND`, with mode `manual`, or on a bean built after startup,
 the refusal does not hold up startup, and the subscription is not running.
