@@ -398,10 +398,9 @@ public class OccurrentProperties {
          * property does not change what it does. A reactive subscription that starts at the present
          * ({@code startAt = NOW}) under the default {@code resumeBehavior} asks the server for the feed position on
          * every restart, and ignores the answer when a checkpoint is stored. Starting anyway means no start position
-         * is recorded before the first
-         * delivery, so a crash before the first checkpoint is saved starts over from wherever the feed has reached
-         * by then, and an event whose delivery failed before the crash is not redelivered. The default is
-         * {@code false}, which refuses such a subscription when it is created.
+         * is recorded before the first delivery, so a crash before the first checkpoint is saved starts over from
+         * wherever the feed has reached by then, and an event whose delivery failed before the crash is not
+         * redelivered. The default is {@code false}, which refuses such a subscription when it is created.
          */
         private boolean startWhenNoStartPositionCanBeRecorded = false;
 
