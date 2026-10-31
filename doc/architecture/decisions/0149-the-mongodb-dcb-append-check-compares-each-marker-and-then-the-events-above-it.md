@@ -81,21 +81,22 @@ the one that asks for versions, the one that doesn't and the catch-up read scope
 Inside the append transaction, the store reads the condition's markers as it does today and compares each one with
 the token's map, never the sums. A token whose map doesn't hold exactly the condition's marker keys wasn't read
 by this store, and the append throws `IllegalArgumentException`. That includes the empty map of a token made with
-`of(DcbCriteria, long)` for a criteria with marker keys. A criteria with no marker keys has an empty map.
+`of(DcbCriteria, long)`.
 
 1. When a marker the token saw has another epoch, or is gone, or has a lower version, the check refuses. That's a
    prune or a recreated marker, and it's #1300's fix. A marker the read didn't find isn't one the token saw, so that
    marker existing now is no reason to refuse.
 2. When every marker has the token's version, the check passes, as it does today.
-3. Otherwise some markers moved. The check skips an item that can't have a matching event committed after the read.
+3. Otherwise some markers moved. On anything but a replica set the check refuses here, for the reason in the section
+   on sharded clusters below. On a replica set it skips an item that can't have a matching event committed after the
+   read.
    That's an item with tags that has a marker that didn't move, because such an event increments every tag marker of
    the item (ADR 147, I2). It's also an item without tags none of whose markers moved, because such an event increments
    one of them.
 4. For every other item the check needs the query in the next section. When it can't run that query, it refuses.
 
-Steps 1 to 3 need nothing but the markers, so they also work for a marker a 0.34 writer incremented, and on any
-topology. Step 3 removes the second case of #1231 whenever the other append lacks one of the item's
-tags. It also keeps an untouched item out of the query, such as `type(X)` in `anyOf(type(X), tags(a, b))` when only
+Steps 1 to 3 need nothing but the markers, so they also work for a marker a 0.34 writer incremented. Step 3 removes
+the second case of #1231 whenever the other append lacks one of the item's tags. It also keeps an untouched item out of the query, such as `type(X)` in `anyOf(type(X), tags(a, b))` when only
 `a` moved.
 
 ### The check queries the events above the versions the read saw
@@ -111,23 +112,38 @@ and has an `mv` element with a selection key of the item, the epoch the token sa
 The query uses the `{mv.k, mv.e, mv.v}` index ADR 148 created, runs on the transaction's session, takes the first
 match and doesn't apply the Spring stores' `queryOptions`. A match refuses the append, and no match passes it.
 
-The store runs the query only when all of these hold, and refuses otherwise:
+On a replica set, the store runs the query only when both of these hold, and refuses otherwise:
 
 - The token saw the marker with an epoch, or didn't see it at all. A marker that existed without an epoch at the read
   was last written by 0.34, and its events may have no `mv`.
 - The marker's u is the token's u. When u moved, a writer that writes no `mv` incremented the marker since the read,
   and its event can't be found by `mv`.
-- The store runs on a replica set. On a sharded cluster, a transaction at read concern local or majority opens a
-  snapshot on each shard when it first touches it, and MongoDB doesn't promise that these come from the same point in
-  time. The query could then read the events from before the markers the check just read. The store asks the server
-  once, when the store is created, with a `hello` command, or with `isMaster` on MongoDB 4.2.0 to 4.2.9, which don't
-  know `hello` and answer it with error code 59. All three stores apply the same test to the answer. The query runs only
-  when the answer has a `setName` and its `msg` isn't `isdbgrid`. On anything else the check refuses instead of
-  querying. That covers a mongos, a load balancer in front of one and a standalone server. Any other failure of the
-  command makes creating the store fail, as the store's own initialization already does when it can't reach the server.
-  A wrong "no" costs a refusal the sum check would also make, and a wrong "yes" would let a matching append
-  through.
 
+### On a sharded cluster the check refuses when a marker moved
+
+Two things stop working through a mongos. A transaction at read concern local or majority opens a snapshot on each shard
+when it first touches it, and MongoDB doesn't promise that these come from the same point in time, so the query could
+read the events from before the markers the check just read. And a plain read isn't one snapshot either, so a token can
+hold one marker from after a matching event E and another from before it, while the read misses E. Step 3 would pass
+that token, because the marker from after E didn't move, and the sum check would refuse it. A probe on two shards with
+`_dcb_checkpoints` range-sharded on `_id` showed this, with a fail point holding E's commit on one shard. Natural timing
+didn't reproduce it in 1600 iterations.
+
+So on anything but a replica set, steps 1 and 2 still apply, and any marker that moved refuses the append. That refuses
+everything the sum check refused, and it means a sharded deployment keeps 0.34's refusals.
+
+The store asks the server once, when the store is created, with a `hello` command. A server too old to know `hello`,
+such as MongoDB 4.2.8, answers with error code 59, and the store then uses `isMaster`. All three stores apply the same
+test to the answer. The store counts as running on a replica set only when the answer has a `setName` and its `msg`
+isn't `isdbgrid`. A mongos, a load balancer in front of one and a standalone server don't count. Any other failure of
+the command makes creating the store fail, as the store's own initialization already does when it can't reach the
+server. A wrong "no" costs a refusal the sum check would also make, and a wrong "yes" would let a matching append
+through.
+
+This doesn't make a plain read through a mongos safe. With the markers on one shard and the events on another, a token
+can hold E's markers while the read misses E, and then no marker moves and the append passes. The sum check has the same
+hole, so it isn't new. A read with `withVersions()` runs in a snapshot transaction, and in the same probe it blocked
+during the window and the append was refused.
 The query doesn't depend on `resumeFromMarkerVersions` (ADR 148). That setting is for deployments that can't run the
 read-only transaction a snapshot read needs, and the check runs inside the append's own transaction. Every append
 writes `mv`, `s` and the epoch whatever the setting says.
@@ -158,7 +174,7 @@ E's position never enters the argument, so it holds while positions are reserved
 The first two cases need the transaction to read the markers and the events from one snapshot. On a replica set,
 MongoDB's documentation says only that a transaction at read concern local "might observe" a snapshot taken when it
 opened. A probe on a single-node replica set at the D2 branch saw one snapshot across both collections. That's the
-assumption, and on a sharded cluster the store doesn't make it, so the query refuses there.
+assumption, and on a sharded cluster the store doesn't make it.
 
 The argument assumes two more things. First, nothing replaces the document of an event a 0.35 node wrote, which ADR 148
 also needs. The sum check doesn't read events, so this is new for an ordinary conditional append, also with
@@ -178,7 +194,8 @@ isn't supported. ADR 21 and the two store comments that call pruning during quie
 Two conditions come with it. On a sharded cluster the transaction runs at read concern snapshot. At local or majority
 it can read an empty event shard, and then delete the marker on another shard at a later point in time, so an append
 that commits between the two conflicts with nothing. And no 0.34 node may append while markers are deleted. A 0.34 node
-recreates a marker with no epoch at the version it had, so a token that saw the old one can't tell them apart.
+recreates a marker with no epoch, starting again at version 1. A token that saw the old marker with no epoch can't tell
+the two apart once the new one is at the token's version.
 
 With that rule, a marker the token didn't see and that is still missing at the check has no event committed after the
 read that still exists. Without it, an operator could delete the marker of an event that still exists, and a token
@@ -207,6 +224,11 @@ keeps a `snapshot` read in step across shards. The store would have to override 
 for their writes, and whether the Spring and reactor stores can set or read the read concern of the transaction their
 `TransactionTemplate` or `TransactionalOperator` runs hasn't been checked. A sharded deployment keeps 0.34's
 refusals, which is no worse than today, and this stays open for when one asks.
+
+**Read the token in a snapshot transaction on a sharded cluster**, so that step 3 could stay there and a read could no
+longer miss an event its token holds. That would keep the second case of #1231 on a sharded cluster and close the hole
+the sum check also has. It costs a transaction on every read and a branch in each store's read path, and it can't be
+tested on the single-shard cluster the test suite starts. It stays open with the option above.
 
 **Let `resumeFromMarkerVersions` turn the query off.** It would give a deployment that replaces event documents a
 way back to today's check. But the setting means something else, and someone who turns it off because the read-only
@@ -244,7 +266,7 @@ still be used.** No store can find the tokens a caller holds, so nobody can foll
   append by a 0.35 node, committed after the read, that shares a tag with its criteria and matches none of them. That
   covers the three cases in #1231. It can still fail without a match when the query's conditions above don't hold, for
   example after a marker's epoch changed or a 0.34 node incremented a marker. On anything else, such as a sharded
-  cluster, only the second case is covered, by step 3.
+  cluster, none of the three is covered, and any marker of the criteria that moved refuses the append.
 - When such an append runs at the same time as the conditional one, both still increment the shared tag marker, and
   MongoDB aborts one of them with a transient transaction error. When the store runs the transaction itself, it
   retries it without a new read or decision. Inside a transaction of yours, the error aborts your transaction, as it
@@ -263,7 +285,7 @@ still be used.** No store can find the tokens a caller holds, so nobody can foll
   supported, and no setting turns the query off.
 - The token gets a factory, an accessor and a nested record. Nothing that exists in 0.35 is removed or changed, so a
   `DcbEventStore` of your own keeps working with `of(DcbCriteria, long)`. A token built with that factory and passed to
-  a MongoDB store throws `IllegalArgumentException`, unless its criteria has no marker keys.
+  a MongoDB store throws `IllegalArgumentException`.
 - The token map holds one entry per marker key, so with ADR 162 an item without tags has one entry per stripe.
 - This decision changes no marker document, field or index, and neither the events' `mv` nor `version()`. A 0.34 node
   and a 0.35 node can append to the same store as far as this decision goes, and going back to 0.34 is safe for the
