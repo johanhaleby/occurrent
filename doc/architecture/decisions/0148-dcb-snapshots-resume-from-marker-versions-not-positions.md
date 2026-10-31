@@ -15,11 +15,10 @@ Extends [ADR 84](0084-what-a-position-guarantees.md) with what a position can't 
 
 ### The defect
 
-The MongoDB stores reserve a block of positions before the append transaction starts. The reservation is one
-`findOneAndUpdate` with `$inc` on a counter document, outside the transaction (`MongoEventStore.java:471` reserves,
-`:485-487` starts the transaction, and `SpringMongoEventStore.java:426` and `ReactorMongoEventStore.java:359` do the
-same when they run the transaction themselves). The block is reused when the transaction is retried. So an append can
-own a position for a long time before its events are visible, and an append that reserved later can commit first.
+A MongoDB store that runs the append transaction itself reserves a block of positions before that transaction starts.
+The reservation is one `findOneAndUpdate` with `$inc` on a counter document, outside the transaction, in each store's
+`reservePositions`. The block is reused when the transaction is retried. So an append can own a position for a long time
+before its events are visible, and an append that reserved later can commit first.
 
 [ADR 84](0084-what-a-position-guarantees.md) states this as the contract:
 
@@ -162,7 +161,7 @@ its own block had a fence in that snapshot.
 The second review removed a step that deleted the append's own entry with a `$pull` after commit. That doubled the
 writes on the counter document, made appends in a caller's transaction conflict on it, and couldn't work in native
 ambient mode, where the caller commits after `append` returns. It also found that the native store reserves outside the
-caller's ambient transaction (`MongoEventStore.java:471` runs before the ambient session check at `:476-482`).
+caller's ambient transaction (`reservePositions` runs before the ambient session check).
 
 Fences expired after an hour, so the fence collection wouldn't grow for ever. That hour comes from a draft I no longer
 have, so it's unchecked. The third review found that once a fence expires, its entry looks open again. CT then drops
