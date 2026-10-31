@@ -86,6 +86,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -259,9 +261,52 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         assertConflictThenRefusedResumeReadIsReadInFull(controlled);
     }
 
+    @Test
+    void a_conflict_followed_by_a_refused_resume_read_reads_in_full_and_decides_on_that_state_when_a_wrapper_passes_other_options_for_the_same_function() {
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.refuseReadsAfterVersions = true;
+
+        assertConflictThenRefusedResumeReadIsReadInFull(controlled, wrapped -> new RewritingService(wrapped, options -> options.sideEffect(events -> Mono.empty()), function -> function));
+    }
+
+    @Test
+    void a_conflict_followed_by_a_refused_resume_read_reaches_the_caller_and_the_command_is_not_run_a_second_time_when_a_wrapper_passes_another_function_that_calls_the_same_function() {
+        // The refusal is marked for the wrapper's function, which the decider can't tell from another service's, so it fails safe
+        ControlledStore controlled = new ControlledStore(eventStore);
+        controlled.refuseReadsAfterVersions = true;
+        var wrapping = new RewritingService(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry()), options -> options, function -> tail -> function.apply(tail));
+        var wrappingService = new ReactiveSnapshotDcbDeciderApplicationService<>(wrapping);
+        AtomicInteger decideCount = new AtomicInteger();
+        var account = ReactiveSnapshotDcbDecider.from(DcbDecider.from(decideCounting(countingDecider(evolveCount, time), decideCount), command -> criteria(), event -> Set.of(tag())), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+        wrappingService.execute(new Define("A"), account).block(TIMEOUT);
+        decideCount.set(0);
+        wrapping.given.clear();
+        wrapping.passedOn.clear();
+        // The first resume read succeeds, then the append loses to this event, and the retry's resume read is refused
+        controlled.afterVersionsReadsAllowed = 1;
+        controlled.beforeNextAppend = appendOutOfBandLater(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "X")).then();
+
+        Throwable thrown = catchThrowable(() -> wrappingService.execute(new Change("B"), account).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(
+                        () -> assertThat(wrapping.passedOn).as("functions the wrapper passed on").hasSize(1).allMatch(refused::isBeforeAppendOf),
+                        () -> assertThat(wrapping.given).as("functions given to the wrapper by the execute").hasSize(1).noneMatch(refused::isBeforeAppendOf))),
+                () -> assertThat(decideCount.get()).as("times the command was decided").isEqualTo(1),
+                // The seed, A and X, with no B since the append lost to X
+                () -> assertThat(eventStore.count(criteria()).block(TIMEOUT)).as("events in the boundary").isEqualTo(3L),
+                () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("A")
+        );
+    }
+
     private void assertConflictThenRefusedResumeReadIsReadInFull(ControlledStore controlled) {
+        assertConflictThenRefusedResumeReadIsReadInFull(controlled, wrapped -> wrapped);
+    }
+
+    private void assertConflictThenRefusedResumeReadIsReadInFull(ControlledStore controlled, UnaryOperator<DcbApplicationService<DomainEvent>> wrapper) {
         List<String> decidedOnStates = new CopyOnWriteArrayList<>();
-        var conflictingService = new ReactiveSnapshotDcbDeciderApplicationService<>(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry()));
+        var conflictingService = new ReactiveSnapshotDcbDeciderApplicationService<>(wrapper.apply(new GenericDcbApplicationService<>(controlled, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry())));
         var account = ReactiveSnapshotDcbDecider.from(DcbDecider.from(decideRecordingStates(countingDecider(evolveCount, time), decidedOnStates), command -> criteria(), event -> Set.of(tag())), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
         seed();
         conflictingService.execute(new Define("A"), account).block(TIMEOUT);
@@ -340,15 +385,16 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
 
     @Test
     void a_refusal_marked_by_another_service_in_a_subscription_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
-        // The subscription calls a second service whose read is refused, so the refusal it lets through is marked beforeAppend
+        // The subscription calls a second service whose read is refused, so the refusal it lets through is marked for that service's function
         ControlledStore refusingStore = new ControlledStore(eventStore);
         refusingStore.refuseEveryRead = true;
         var otherService = new GenericDcbApplicationService<>(refusingStore, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry());
         AtomicBoolean callOtherService = new AtomicBoolean();
+        Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction = events -> List.of();
         ReactiveSynchronousEventDispatcher dispatcherCallingOtherService = new ReactiveSynchronousEventDispatcher() {
             @Override
             public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
-                return callOtherService.get() ? otherService.execute(criteria(), events -> List.of()).then() : Mono.empty();
+                return callOtherService.get() ? otherService.execute(criteria(), otherServicesFunction).then() : Mono.empty();
             }
 
             @Override
@@ -356,23 +402,27 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
                 return true;
             }
         };
-        var dispatchingService = new ReactiveSnapshotDcbDeciderApplicationService<>(GenericDcbApplicationService.builder(eventStore, converter)
+        var recordingService = new FunctionRecordingService(GenericDcbApplicationService.builder(eventStore, converter)
                 .tagGenerator((DomainEvent event) -> Set.of(tag()))
                 .synchronousSubscriptions(dispatcherCallingOtherService)
                 .transactionExecutor(ReactiveTransactionExecutor.noTransaction())
                 .build());
+        var dispatchingService = new ReactiveSnapshotDcbDeciderApplicationService<>(recordingService);
         AtomicInteger decideCount = new AtomicInteger();
         var account = ReactiveSnapshotDcbDecider.from(DcbDecider.from(decideCounting(countingDecider(evolveCount, time), decideCount), command -> criteria(), event -> Set.of(tag())), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
         seed();
         dispatchingService.execute(new Define("A"), account).block(TIMEOUT);
         decideCount.set(0);
         callOtherService.set(true);
+        recordingService.given.clear();
 
         Throwable thrown = catchThrowable(() -> dispatchingService.execute(new Change("B"), account).block(TIMEOUT));
 
         assertAll(
                 () -> assertThat(thrown).isInstanceOf(DcbSnapshotInvalidException.class),
-                () -> assertThat(thrown).as("the refusal is no longer marked as thrown before the append").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertThat(refused.isBeforeAppend()).isFalse()),
+                () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(
+                        () -> assertThat(recordingService.given).as("functions given to the service by the execute").hasSize(1).noneMatch(refused::isBeforeAppendOf),
+                        () -> assertThat(refused.isBeforeAppendOf(otherServicesFunction)).as("marked for the other service's function").isTrue())),
                 () -> assertThat(decideCount.get()).as("times the command was decided").isEqualTo(1),
                 // The seed, A and the one B that committed before the other service's refusal
                 () -> assertThat(requireNonNull(eventStore.read(criteria()).block(TIMEOUT)).events()).as("events in the boundary").hasSize(3),
@@ -383,30 +433,34 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
 
     @Test
     void a_refusal_marked_by_another_service_in_a_side_effect_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
-        // The side-effect calls a second service whose read is refused, so the refusal it lets through is marked beforeAppend
+        // The side-effect calls a second service whose read is refused, so the refusal it lets through is marked for that service's function
         ControlledStore refusingStore = new ControlledStore(eventStore);
         refusingStore.refuseEveryRead = true;
         var otherService = new GenericDcbApplicationService<>(refusingStore, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry());
+        Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction = events -> List.of();
 
-        assertSideEffectRefusalReachesTheCallerWithoutRunningTheCommandAgain(events -> otherService.execute(criteria(), written -> List.of()).then());
+        assertSideEffectRefusalReachesTheCallerWithoutRunningTheCommandAgain(otherServicesFunction, events -> otherService.execute(criteria(), otherServicesFunction).then());
     }
 
     @Test
     void a_refusal_marked_by_another_service_thrown_synchronously_from_a_side_effect_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
         // The function throws instead of returning an erroring Mono, which the service has to defer to see
-        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by another service (test double)").beforeAppend();
+        Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction = events -> List.of();
+        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by another service (test double)").beforeAppend(otherServicesFunction);
 
-        assertSideEffectRefusalReachesTheCallerWithoutRunningTheCommandAgain(events -> {
+        assertSideEffectRefusalReachesTheCallerWithoutRunningTheCommandAgain(otherServicesFunction, events -> {
             throw refusal;
         });
     }
 
-    private void assertSideEffectRefusalReachesTheCallerWithoutRunningTheCommandAgain(Function<List<DomainEvent>, Mono<Void>> sideEffect) {
+    private void assertSideEffectRefusalReachesTheCallerWithoutRunningTheCommandAgain(Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction, Function<List<DomainEvent>, Mono<Void>> sideEffect) {
         AtomicBoolean addSideEffect = new AtomicBoolean();
+        List<Function<List<DomainEvent>, List<DomainEvent>>> given = new CopyOnWriteArrayList<>();
         // The decider sets no side-effect, so a decorator adds one before it delegates
         DcbApplicationService<DomainEvent> addingSideEffect = new DcbApplicationService<>() {
             @Override
             public Mono<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<DomainEvent> options, Function<List<DomainEvent>, List<DomainEvent>> functionThatCallsDomainModel) {
+                given.add(functionThatCallsDomainModel);
                 return applicationService.execute(criteria, addSideEffect.get() ? options.sideEffect(sideEffect) : options, functionThatCallsDomainModel);
             }
 
@@ -422,14 +476,157 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         decoratedService.execute(new Define("A"), account).block(TIMEOUT);
         decideCount.set(0);
         addSideEffect.set(true);
+        given.clear();
 
         Throwable thrown = catchThrowable(() -> decoratedService.execute(new Change("B"), account).block(TIMEOUT));
 
         assertAll(
                 () -> assertThat(thrown).isInstanceOf(DcbSnapshotInvalidException.class),
-                () -> assertThat(thrown).as("the refusal is no longer marked as thrown before the append").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertThat(refused.isBeforeAppend()).isFalse()),
+                () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(
+                        () -> assertThat(given).as("functions given to the service by the execute").hasSize(1).noneMatch(refused::isBeforeAppendOf),
+                        () -> assertThat(refused.isBeforeAppendOf(otherServicesFunction)).as("marked for the other service's function").isTrue())),
                 () -> assertThat(decideCount.get()).as("times the command was decided").isEqualTo(1),
                 // The seed, A and the one B that committed before the other service's refusal
+                () -> assertThat(requireNonNull(eventStore.read(criteria()).block(TIMEOUT)).events()).as("events in the boundary").hasSize(3),
+                // The refusal escapes before the snapshot is saved, so the one from A is left in place
+                () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("A")
+        );
+    }
+
+    @Test
+    void a_refusal_marked_by_another_service_after_the_delegate_completed_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
+        // The decorator calls a second service after the append has committed, and that service's read is refused
+        ControlledStore refusingStore = new ControlledStore(eventStore);
+        refusingStore.refuseEveryRead = true;
+        var otherService = new GenericDcbApplicationService<>(refusingStore, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry());
+        Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction = events -> List.of();
+        AtomicBoolean callOtherService = new AtomicBoolean();
+        List<Function<List<DomainEvent>, List<DomainEvent>>> given = new CopyOnWriteArrayList<>();
+        DcbApplicationService<DomainEvent> callingOtherServiceAfterTheDelegate = new DcbApplicationService<>() {
+            @Override
+            public Mono<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<DomainEvent> options, Function<List<DomainEvent>, List<DomainEvent>> functionThatCallsDomainModel) {
+                given.add(functionThatCallsDomainModel);
+                return applicationService.execute(criteria, options, functionThatCallsDomainModel)
+                        .flatMap(result -> callOtherService.get() ? otherService.execute(criteria(), otherServicesFunction).then(Mono.just(result)) : Mono.just(result));
+            }
+
+            @Override
+            public Mono<Boolean> isAppendConfirmed(DcbAppendResult appendResult) {
+                return applicationService.isAppendConfirmed(appendResult);
+            }
+        };
+        var decoratedService = new ReactiveSnapshotDcbDeciderApplicationService<>(callingOtherServiceAfterTheDelegate);
+        AtomicInteger decideCount = new AtomicInteger();
+        var account = ReactiveSnapshotDcbDecider.from(DcbDecider.from(decideCounting(countingDecider(evolveCount, time), decideCount), command -> criteria(), event -> Set.of(tag())), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+        decoratedService.execute(new Define("A"), account).block(TIMEOUT);
+        decideCount.set(0);
+        callOtherService.set(true);
+        given.clear();
+
+        Throwable thrown = catchThrowable(() -> decoratedService.execute(new Change("B"), account).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(
+                        () -> assertThat(given).as("functions given to the service by the execute").hasSize(1).noneMatch(refused::isBeforeAppendOf),
+                        () -> assertThat(refused.isBeforeAppendOf(otherServicesFunction)).as("marked for the other service's function").isTrue())),
+                () -> assertThat(decideCount.get()).as("times the command was decided").isEqualTo(1),
+                // The seed, A and the one B that committed before the other service's refusal
+                () -> assertThat(requireNonNull(eventStore.read(criteria()).block(TIMEOUT)).events()).as("events in the boundary").hasSize(3),
+                // The refusal escapes before the snapshot is saved, so the one from A is left in place
+                () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("A")
+        );
+    }
+
+    @Test
+    void a_refusal_marked_by_a_second_service_that_is_given_the_same_options_after_the_delegate_completed_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
+        // The options are shared, and the second service marks its refusal for its own function
+        ControlledStore refusingStore = new ControlledStore(eventStore);
+        refusingStore.refuseEveryRead = true;
+        var mirror = new GenericDcbApplicationService<>(refusingStore, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry());
+        Function<List<DomainEvent>, List<DomainEvent>> mirrorsFunction = events -> List.of();
+        AtomicBoolean callMirror = new AtomicBoolean();
+        List<DcbExecuteOptions<DomainEvent>> optionsGiven = new CopyOnWriteArrayList<>();
+        DcbApplicationService<DomainEvent> mirroring = new DcbApplicationService<>() {
+            @Override
+            public Mono<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<DomainEvent> options, Function<List<DomainEvent>, List<DomainEvent>> functionThatCallsDomainModel) {
+                optionsGiven.add(options);
+                return applicationService.execute(criteria, options, functionThatCallsDomainModel)
+                        .flatMap(result -> callMirror.get() ? mirror.execute(criteria, options, mirrorsFunction).then(Mono.just(result)) : Mono.just(result));
+            }
+
+            @Override
+            public Mono<Boolean> isAppendConfirmed(DcbAppendResult appendResult) {
+                return applicationService.isAppendConfirmed(appendResult);
+            }
+        };
+        var mirroringService = new ReactiveSnapshotDcbDeciderApplicationService<>(mirroring);
+        AtomicInteger decideCount = new AtomicInteger();
+        var account = ReactiveSnapshotDcbDecider.from(DcbDecider.from(decideCounting(countingDecider(evolveCount, time), decideCount), command -> criteria(), event -> Set.of(tag())), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+        mirroringService.execute(new Define("A"), account).block(TIMEOUT);
+        decideCount.set(0);
+        callMirror.set(true);
+        optionsGiven.clear();
+
+        Throwable thrown = catchThrowable(() -> mirroringService.execute(new Change("B"), account).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(
+                        () -> assertThat(optionsGiven).as("options given to the wrapper by the execute").hasSize(1).noneMatch(refused::isBeforeAppendOf),
+                        () -> assertThat(refused.isBeforeAppendOf(mirrorsFunction)).as("marked for the second service's function").isTrue())),
+                () -> assertThat(decideCount.get()).as("times the command was decided").isEqualTo(1),
+                // The seed, A and the one B that committed before the second service's refusal
+                () -> assertThat(requireNonNull(eventStore.read(criteria()).block(TIMEOUT)).events()).as("events in the boundary").hasSize(3),
+                // The refusal escapes before the snapshot is saved, so the one from A is left in place
+                () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("A")
+        );
+    }
+
+    @Test
+    void a_refusal_marked_by_another_service_and_raised_by_the_transaction_executor_after_the_action_completed_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
+        // The executor raises it after the action committed the append, for example when it runs more work in the same transaction
+        Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction = events -> List.of();
+        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by another service (test double)").beforeAppend(otherServicesFunction);
+        AtomicBoolean refuseAfterTheAction = new AtomicBoolean();
+        ReactiveTransactionExecutor raisingAfterTheAction = new ReactiveTransactionExecutor() {
+            @Override
+            public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
+                return Mono.defer(action).flatMap(result -> refuseAfterTheAction.get() ? Mono.<T>error(refusal) : Mono.just(result));
+            }
+        };
+        ReactiveSynchronousEventDispatcher dispatcherWithoutEffect = new ReactiveSynchronousEventDispatcher() {
+            @Override
+            public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+                return Mono.empty();
+            }
+
+            @Override
+            public boolean hasSubscriptions() {
+                return true;
+            }
+        };
+        var recordingService = new FunctionRecordingService(GenericDcbApplicationService.builder(eventStore, converter)
+                .tagGenerator((DomainEvent event) -> Set.of(tag()))
+                .synchronousSubscriptions(dispatcherWithoutEffect)
+                .transactionExecutor(raisingAfterTheAction)
+                .build());
+        var executorService = new ReactiveSnapshotDcbDeciderApplicationService<>(recordingService);
+        AtomicInteger decideCount = new AtomicInteger();
+        var account = ReactiveSnapshotDcbDecider.from(DcbDecider.from(decideCounting(countingDecider(evolveCount, time), decideCount), command -> criteria(), event -> Set.of(tag())), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        seed();
+        executorService.execute(new Define("A"), account).block(TIMEOUT);
+        decideCount.set(0);
+        refuseAfterTheAction.set(true);
+        recordingService.given.clear();
+
+        Throwable thrown = catchThrowable(() -> executorService.execute(new Change("B"), account).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what reached the caller").isSameAs(refusal),
+                () -> assertThat(recordingService.given).as("functions given to the service by the execute").hasSize(1).noneMatch(refusal::isBeforeAppendOf),
+                () -> assertThat(decideCount.get()).as("times the command was decided").isEqualTo(1),
+                // The seed, A and the one B that committed before the refusal
                 () -> assertThat(requireNonNull(eventStore.read(criteria()).block(TIMEOUT)).events()).as("events in the boundary").hasSize(3),
                 // The refusal escapes before the snapshot is saved, so the one from A is left in place
                 () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("A")
@@ -821,6 +1018,60 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
         throw (T) failure;
+    }
+
+    /**
+     * Records the domain function each execute gives the service it decorates.
+     */
+    private static final class FunctionRecordingService implements DcbApplicationService<DomainEvent> {
+        final List<Function<List<DomainEvent>, List<DomainEvent>>> given = new CopyOnWriteArrayList<>();
+        private final DcbApplicationService<DomainEvent> delegate;
+
+        FunctionRecordingService(DcbApplicationService<DomainEvent> delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Mono<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<DomainEvent> options, Function<List<DomainEvent>, List<DomainEvent>> functionThatCallsDomainModel) {
+            given.add(functionThatCallsDomainModel);
+            return delegate.execute(criteria, options, functionThatCallsDomainModel);
+        }
+
+        @Override
+        public Mono<Boolean> isAppendConfirmed(DcbAppendResult appendResult) {
+            return delegate.isAppendConfirmed(appendResult);
+        }
+    }
+
+    /**
+     * Passes on what each execute gives it after rewriting the options and the domain function, as a wrapper that
+     * derives them would.
+     */
+    private static final class RewritingService implements DcbApplicationService<DomainEvent> {
+        final List<Function<List<DomainEvent>, List<DomainEvent>>> given = new CopyOnWriteArrayList<>();
+        final List<Function<List<DomainEvent>, List<DomainEvent>>> passedOn = new CopyOnWriteArrayList<>();
+        private final DcbApplicationService<DomainEvent> delegate;
+        private final UnaryOperator<DcbExecuteOptions<DomainEvent>> rewriteOptions;
+        private final UnaryOperator<Function<List<DomainEvent>, List<DomainEvent>>> rewriteFunction;
+
+        RewritingService(DcbApplicationService<DomainEvent> delegate, UnaryOperator<DcbExecuteOptions<DomainEvent>> rewriteOptions, UnaryOperator<Function<List<DomainEvent>, List<DomainEvent>>> rewriteFunction) {
+            this.delegate = delegate;
+            this.rewriteOptions = rewriteOptions;
+            this.rewriteFunction = rewriteFunction;
+        }
+
+        @Override
+        public Mono<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<DomainEvent> options, Function<List<DomainEvent>, List<DomainEvent>> functionThatCallsDomainModel) {
+            given.add(functionThatCallsDomainModel);
+            Function<List<DomainEvent>, List<DomainEvent>> function = rewriteFunction.apply(functionThatCallsDomainModel);
+            passedOn.add(function);
+            return delegate.execute(criteria, rewriteOptions.apply(options), function);
+        }
+
+        @Override
+        public Mono<Boolean> isAppendConfirmed(DcbAppendResult appendResult) {
+            return delegate.isAppendConfirmed(appendResult);
+        }
     }
 
     /**

@@ -63,9 +63,11 @@ import java.util.function.Function;
  * A snapshot is saved only when the store reported marker versions for the append and confirms that the append is
  * committed ({@link DcbApplicationService#isAppendConfirmed(DcbAppendResult)}). Otherwise the save is skipped, and the
  * first skip for each reason is logged as a warning. When the store refuses to read after the saved versions, for
- * example because a marker was pruned, the execute reads the whole boundary from the initial state instead. A snapshot
- * that 0.34 saved at a DCB position is never used, so after an upgrade an execute reads the whole boundary until one
- * can save over it.
+ * example because a marker was pruned, the execute reads the whole boundary from the initial state instead. A wrapper
+ * around the service that replaces the domain function makes a refused read after a conflict reach the caller instead.
+ * A wrapper that gives the function to a second service as well can run the command again.
+ * A snapshot that 0.34 saved at a DCB position is never used, so after an upgrade an execute reads the whole boundary
+ * until one can save over it.
  * <p>
  * Deliberate asymmetry with the stream executor: this executor only advances the base (calls
  * {@code maybeSaveBestEffort}) when the decision actually appended events, since a no-op decision returns no
@@ -163,14 +165,13 @@ public final class SnapshotDcbDeciderApplicationService<E> {
 
         SnapshotSupport.DcbBase<S> base = SnapshotSupport.resolveDcbBase(store.findLatest(key), options.schemaVersion(), decider::initialState);
         Executed<S, E> executed;
-        AtomicBoolean decided = new AtomicBoolean();
+        AtomicBoolean lastAttemptMayHaveAppended = new AtomicBoolean();
         try {
-            executed = executeFrom(base, criteria, commands, dcbDecider, decided);
+            executed = executeFrom(base, criteria, commands, dcbDecider, lastAttemptMayHaveAppended);
         } catch (DcbSnapshotInvalidException e) {
             // After a decision the append may have committed, for example when a synchronous subscription throws this
-            // without a transaction, and reading in full would run the command twice. A refusal marked as before the
-            // append comes from a read, so the attempt that threw it appended nothing
-            if (base.markerVersions().isEmpty() || (decided.get() && !e.isBeforeAppend())) {
+            // without a transaction, and reading in full would run the command twice
+            if (base.markerVersions().isEmpty() || lastAttemptMayHaveAppended.get()) {
                 throw e;
             }
             log.debug("Reading the whole boundary of snapshot '{}' since the store can't read after its marker versions: {}", key, e.getMessage());
@@ -195,21 +196,30 @@ public final class SnapshotDcbDeciderApplicationService<E> {
         return executed;
     }
 
-    private <C, S extends @Nullable Object> Executed<S, E> executeFrom(SnapshotSupport.DcbBase<S> base, DcbCriteria criteria, List<C> commands, DcbDecider<C, S, E> dcbDecider, AtomicBoolean decided) {
+    private <C, S extends @Nullable Object> Executed<S, E> executeFrom(SnapshotSupport.DcbBase<S> base, DcbCriteria criteria, List<C> commands, DcbDecider<C, S, E> dcbDecider, AtomicBoolean lastAttemptMayHaveAppended) {
         Decider<C, S, E> decider = dcbDecider.decider();
         DcbExecuteOptions<E> withTags = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
         DcbExecuteOptions<E> executeOptions = base.markerVersions().map(markerVersions -> withTags.fromVersions(markerVersions, base.highestFoldedPosition())).orElseGet(withTags::withVersions);
         AtomicReference<Decider.Decision<S, E>> decisionRef = new AtomicReference<>();
         AtomicInteger tailSize = new AtomicInteger();
-        Optional<DcbAppendResult> appendResult = applicationService.execute(criteria, executeOptions,
-                tail -> {
-                    tailSize.set(tail.size());
-                    S current = decider.evolve(base.state(), tail);
-                    Decider.Decision<S, E> decision = decider.decideOnState(current, commands);
-                    decisionRef.set(decision);
-                    decided.set(true);
-                    return decision.events();
-                });
+        Function<List<E>, List<E>> decide = tail -> {
+            tailSize.set(tail.size());
+            S current = decider.evolve(base.state(), tail);
+            Decider.Decision<S, E> decision = decider.decideOnState(current, commands);
+            decisionRef.set(decision);
+            lastAttemptMayHaveAppended.set(true);
+            return decision.events();
+        };
+        Optional<DcbAppendResult> appendResult;
+        try {
+            appendResult = applicationService.execute(criteria, executeOptions, decide);
+        } catch (DcbSnapshotInvalidException e) {
+            // A refusal marked with this function comes from the read of an attempt, and that attempt appended nothing
+            if (e.isBeforeAppendOf(decide)) {
+                lastAttemptMayHaveAppended.set(false);
+            }
+            throw e;
+        }
         Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
         return new Executed<>(appendResult, decision, tailSize.get());
     }

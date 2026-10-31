@@ -21,9 +21,12 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -48,30 +51,75 @@ class DcbSnapshotInvalidExceptionTest {
     }
 
     @Test
-    void a_refusal_is_not_marked_as_before_the_append_until_an_application_service_marks_it() {
+    void a_refusal_is_not_marked_for_any_execute_until_an_application_service_marks_it() {
         DcbSnapshotInvalidException exception = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused");
 
-        assertThat(exception.isBeforeAppend()).isFalse();
+        assertThat(exception.isBeforeAppendOf(new Object())).isFalse();
     }
 
     @Test
-    void marking_a_refusal_as_before_the_append_returns_a_marked_copy_and_leaves_the_original_unmarked() {
+    void marking_a_refusal_as_before_the_append_of_an_execute_returns_a_marked_copy_and_leaves_the_original_unmarked() {
         DcbSnapshotInvalidException original = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused");
+        Object execute = new Object();
 
-        DcbSnapshotInvalidException marked = original.beforeAppend();
+        DcbSnapshotInvalidException marked = original.beforeAppend(execute);
 
         assertAll(
                 () -> assertThat(marked).isNotSameAs(original),
-                () -> assertThat(marked.isBeforeAppend()).isTrue(),
-                () -> assertThat(original.isBeforeAppend()).isFalse()
+                () -> assertThat(marked.isBeforeAppendOf(execute)).isTrue(),
+                () -> assertThat(original.isBeforeAppendOf(execute)).isFalse()
         );
+    }
+
+    @Test
+    void a_marked_refusal_is_not_marked_for_another_execute() {
+        Object execute = new Object();
+
+        DcbSnapshotInvalidException marked = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused").beforeAppend(execute);
+
+        assertThat(marked.isBeforeAppendOf(new Object())).isFalse();
+    }
+
+    @Test
+    void a_marked_refusal_is_not_marked_for_another_execute_that_is_equal_to_the_one_it_is_marked_for() {
+        List<String> execute = new ArrayList<>(List.of("same"));
+        List<String> equalToExecute = new ArrayList<>(List.of("same"));
+
+        DcbSnapshotInvalidException marked = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused").beforeAppend(execute);
+
+        assertAll(
+                () -> assertThat(equalToExecute).as("the other execute is equal").isEqualTo(execute),
+                () -> assertThat(marked.isBeforeAppendOf(execute)).as("marked for the instance it was marked with").isTrue(),
+                () -> assertThat(marked.isBeforeAppendOf(equalToExecute)).as("marked for an equal instance").isFalse()
+        );
+    }
+
+    @Test
+    void a_refusal_cannot_be_marked_for_a_null_execute() {
+        DcbSnapshotInvalidException original = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused");
+
+        assertThatThrownBy(() -> original.beforeAppend(null)).isInstanceOf(NullPointerException.class).hasMessage("execute cannot be null");
+    }
+
+    @Test
+    void an_unmarked_refusal_cannot_be_asked_whether_it_is_marked_for_a_null_execute() {
+        DcbSnapshotInvalidException unmarked = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused");
+
+        assertThatThrownBy(() -> unmarked.isBeforeAppendOf(null)).isInstanceOf(NullPointerException.class).hasMessage("execute cannot be null");
+    }
+
+    @Test
+    void a_marked_refusal_cannot_be_asked_whether_it_is_marked_for_a_null_execute() {
+        DcbSnapshotInvalidException marked = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused").beforeAppend(new Object());
+
+        assertThatThrownBy(() -> marked.isBeforeAppendOf(null)).isInstanceOf(NullPointerException.class).hasMessage("execute cannot be null");
     }
 
     @Test
     void a_marked_refusal_keeps_the_criteria_the_versions_and_the_message_and_has_the_original_as_its_cause() {
         DcbSnapshotInvalidException original = DcbSnapshotInvalidException.eventBelowFoldedPosition(CRITERIA, AFTER, 42);
 
-        DcbSnapshotInvalidException marked = original.beforeAppend();
+        DcbSnapshotInvalidException marked = original.beforeAppend(new Object());
 
         assertAll(
                 () -> assertThat(marked.criteria()).isEqualTo(CRITERIA),
@@ -79,46 +127,5 @@ class DcbSnapshotInvalidExceptionTest {
                 () -> assertThat(marked).hasMessage(original.getMessage()),
                 () -> assertThat(marked).hasCause(original)
         );
-    }
-
-    @Test
-    void a_marked_refusal_after_the_append_is_unmarked_and_has_the_marked_one_as_its_cause() {
-        DcbSnapshotInvalidException marked = DcbSnapshotInvalidException.eventBelowFoldedPosition(CRITERIA, AFTER, 42).beforeAppend();
-
-        DcbSnapshotInvalidException afterAppend = marked.afterAppend();
-
-        assertAll(
-                () -> assertThat(afterAppend).isNotSameAs(marked),
-                () -> assertThat(afterAppend.isBeforeAppend()).as("the copy is marked").isFalse(),
-                () -> assertThat(marked.isBeforeAppend()).as("the original is marked").isTrue(),
-                () -> assertThat(afterAppend).hasCause(marked)
-        );
-    }
-
-    @Test
-    void an_unmarked_copy_after_the_append_keeps_the_criteria_the_versions_and_the_message() {
-        DcbSnapshotInvalidException marked = DcbSnapshotInvalidException.eventBelowFoldedPosition(CRITERIA, AFTER, 42).beforeAppend();
-
-        DcbSnapshotInvalidException afterAppend = marked.afterAppend();
-
-        assertAll(
-                () -> assertThat(afterAppend.criteria()).isEqualTo(CRITERIA),
-                () -> assertThat(afterAppend.afterVersions()).isEqualTo(AFTER),
-                () -> assertThat(afterAppend).hasMessage(marked.getMessage())
-        );
-    }
-
-    @Test
-    void an_unmarked_refusal_after_the_append_is_returned_as_it_is() {
-        DcbSnapshotInvalidException unmarked = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused");
-
-        assertThat(unmarked.afterAppend()).isSameAs(unmarked);
-    }
-
-    @Test
-    void a_refusal_unmarked_after_the_append_can_be_marked_again_by_the_service_that_reads() {
-        DcbSnapshotInvalidException afterAppend = new DcbSnapshotInvalidException(CRITERIA, AFTER, "refused").beforeAppend().afterAppend();
-
-        assertThat(afterAppend.beforeAppend().isBeforeAppend()).isTrue();
     }
 }

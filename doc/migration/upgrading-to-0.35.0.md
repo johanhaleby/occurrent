@@ -815,7 +815,10 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 ### What to do
 
 - If you have a `DcbApplicationService` of your own that wraps another one, override `isAppendConfirmed(..)` and
-  delegate it. Without that the deciders save no snapshot.
+  delegate it. Without that the deciders save no snapshot. Pass the domain function on as it is, and to that one service
+  only, since a decider knows a refusal of its own read by that function. If you wrap it, a refused read after a conflict
+  reaches the caller instead of reading in full. If you give it to a second service as well, a refused read there can
+  run the command again.
 - Replace `DcbExecuteOptions.fromPosition(..)`, which is deprecated for removal, with `fromVersions(..)`. Save the
   `DcbAppendResult.markerVersions()` and `lastSequencePosition()` of an execute with `withVersions()` and pass both on
   the next one.

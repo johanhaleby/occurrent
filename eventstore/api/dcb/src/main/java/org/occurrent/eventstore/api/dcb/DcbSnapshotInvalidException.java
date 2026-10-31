@@ -19,6 +19,7 @@ package org.occurrent.eventstore.api.dcb;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 
+import java.util.Objects;
 import java.util.StringJoiner;
 
 /**
@@ -30,7 +31,8 @@ import java.util.StringJoiner;
  * the saved versions cover other marker keys than the criteria has, when a marker is missing or has no epoch, when an
  * epoch differs from the saved one, when a saved version is above the store's, when a marker was incremented by a
  * writer that wrote no marker versions, when the criteria is {@link DcbCriteria.MatchAll}, when resuming from marker
- * versions is turned off for the store, and when the store couldn't take a consistent snapshot to compare against.
+ * versions is turned off for the store, when the read runs inside a transaction the caller owns, and when the store
+ * couldn't take a consistent snapshot to compare against.
  * <p>
  * The stores don't check the order of what they return, so an application service and a snapshot view throw it too, via
  * {@link #eventBelowFoldedPosition(DcbCriteria, DcbMarkerVersions, long)}.
@@ -39,7 +41,7 @@ import java.util.StringJoiner;
 public class DcbSnapshotInvalidException extends RuntimeException {
     private final DcbCriteria criteria;
     private final DcbMarkerVersions afterVersions;
-    private final boolean beforeAppend;
+    private final @Nullable Object beforeAppendOf;
 
     /**
      * Creates an exception for a refused read.
@@ -61,14 +63,14 @@ public class DcbSnapshotInvalidException extends RuntimeException {
      * @param cause         the error that kept the store from comparing the versions, or {@code null}
      */
     public DcbSnapshotInvalidException(DcbCriteria criteria, DcbMarkerVersions afterVersions, String message, @Nullable Throwable cause) {
-        this(criteria, afterVersions, message, cause, false);
+        this(criteria, afterVersions, message, cause, null);
     }
 
-    private DcbSnapshotInvalidException(DcbCriteria criteria, DcbMarkerVersions afterVersions, String message, @Nullable Throwable cause, boolean beforeAppend) {
+    private DcbSnapshotInvalidException(DcbCriteria criteria, DcbMarkerVersions afterVersions, String message, @Nullable Throwable cause, @Nullable Object beforeAppendOf) {
         super(message, cause);
         this.criteria = criteria;
         this.afterVersions = afterVersions;
-        this.beforeAppend = beforeAppend;
+        this.beforeAppendOf = beforeAppendOf;
     }
 
     /**
@@ -99,36 +101,31 @@ public class DcbSnapshotInvalidException extends RuntimeException {
     }
 
     /**
-     * This refusal, marked as thrown by the read of an application service's attempt, with {@code this} as its cause.
-     * That attempt has appended nothing. The mark says nothing about an earlier attempt of the same execute, which has
+     * This refusal, marked as thrown by the read of an attempt of {@code execute}, with {@code this} as its cause. That
+     * attempt has appended nothing. The mark says nothing about an earlier attempt of the same execute, which has
      * committed if the retry strategy retried after a committed append. Without a transaction, a synchronous subscription
      * that throws what the retry strategy retries on does that.
      *
+     * @param execute what identifies the execute, compared by identity. The application services use the domain
+     *                function they were given, so a refusal from an execute with another function doesn't pass for the
+     *                caller's own. A refusal from a second service given the same function does.
      * @return the marked exception to throw
      */
-    public DcbSnapshotInvalidException beforeAppend() {
-        return new DcbSnapshotInvalidException(criteria, afterVersions, String.valueOf(getMessage()), this, true);
+    public DcbSnapshotInvalidException beforeAppend(Object execute) {
+        return new DcbSnapshotInvalidException(criteria, afterVersions, String.valueOf(getMessage()), this, Objects.requireNonNull(execute, "execute cannot be null"));
     }
 
     /**
-     * This refusal without the mark of {@link #beforeAppend()}, for an application service whose append has succeeded.
-     * A synchronous subscription or a side-effect can call another application service and let its marked refusal through,
-     * and that mark says nothing about the append of the service that ran it.
+     * Whether an application service marked this refusal with {@link #beforeAppend(Object)} for this {@code execute}. A
+     * caller can then read in full and decide again, since the attempt that threw it appended nothing. It can't tell
+     * whether an earlier attempt of the same execute committed, or whether another service given the same function did,
+     * see {@link #beforeAppend(Object)}. Any other refusal can have reached the caller after its append committed, for
+     * example from another application service called by a synchronous subscription.
      *
-     * @return the unmarked exception to throw
+     * @param execute what the caller gave the application service to identify the execute
      */
-    public DcbSnapshotInvalidException afterAppend() {
-        return beforeAppend ? new DcbSnapshotInvalidException(criteria, afterVersions, String.valueOf(getMessage()), this, false) : this;
-    }
-
-    /**
-     * Whether an application service marked this refusal with {@link #beforeAppend()}. A caller can then read in full
-     * and decide again, since the attempt that threw it appended nothing. It can't tell whether an earlier attempt of the
-     * same execute committed, see {@link #beforeAppend()}. A refusal without the mark can come from a synchronous
-     * subscription or a side-effect, after the append committed.
-     */
-    public boolean isBeforeAppend() {
-        return beforeAppend;
+    public boolean isBeforeAppendOf(Object execute) {
+        return beforeAppendOf == Objects.requireNonNull(execute, "execute cannot be null");
     }
 
     @Override
@@ -137,7 +134,7 @@ public class DcbSnapshotInvalidException extends RuntimeException {
                 .add("message=" + getMessage())
                 .add("criteria=" + criteria)
                 .add("afterVersions=" + afterVersions)
-                .add("beforeAppend=" + beforeAppend)
+                .add("beforeAppend=" + (beforeAppendOf != null))
                 .toString();
     }
 }

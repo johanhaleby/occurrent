@@ -154,7 +154,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     eventStream = readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions);
                     refuseEventBelowFoldedPosition(criteria, options, eventStream);
                 } catch (DcbSnapshotInvalidException refused) {
-                    refusal.set(refused.beforeAppend());
+                    refusal.set(refused.beforeAppend(functionThatCallsDomainModel));
                     return new Tuple<>(Optional.empty(), List.of());
                 }
                 List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
@@ -173,12 +173,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     // to get the events enriched with their positions, then dispatch on this thread, inside the transaction.
                     List<CloudEvent> writtenEnriched = eventStore.read(DcbCriteria.all(),
                             DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
-                    try {
-                        synchronousEventDispatcher.dispatch(writtenEnriched, transactionExecutor.isTransactional());
-                    } catch (DcbSnapshotInvalidException refused) {
-                        // A subscription can let through a refusal another service marked, which says nothing about this append
-                        throw refused.afterAppend();
-                    }
+                    synchronousEventDispatcher.dispatch(writtenEnriched, transactionExecutor.isTransactional());
                 }
 
                 return new Tuple<>(Optional.of(withCheckedVersions(appendResult, versionsRequested, eventStream)), newDomainEvents);
@@ -198,12 +193,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // Invoke the side-effect once, after a successful append, with the newly written events. It is not invoked
         // on the no-new-events path, and it is outside the retry so it does not run per attempt.
         if (sideEffect != null && result.v1.isPresent()) {
-            try {
-                sideEffect.accept(result.v2);
-            } catch (DcbSnapshotInvalidException refused) {
-                // A side-effect can let through a refusal another service marked, which says nothing about this append
-                throw refused.afterAppend();
-            }
+            sideEffect.accept(result.v2);
         }
         return result.v1;
     }

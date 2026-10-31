@@ -43,6 +43,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -217,13 +218,20 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             var dispatcher = new RecordingDispatcher();
             var domainFunctionRan = new AtomicBoolean();
 
-            Throwable thrown = catchThrowable(() -> transactionalService(store, executor, dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3), events -> {
+            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3);
+            Function<List<DomainEvent>, List<DomainEvent>> domainFunction = events -> {
                 domainFunctionRan.set(true);
                 return List.of(new DomainEvent("Changed", "name:1"));
-            }).block());
+            };
+            Function<List<DomainEvent>, List<DomainEvent>> anotherFunction = events -> List.of();
+            Throwable thrown = catchThrowable(() -> transactionalService(store, executor, dispatcher).execute(CRITERIA, options, domainFunction).block());
 
             assertAll(
-                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal), () -> assertThat(refused.isBeforeAppend()).as("marked as before the append").isTrue())),
+                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(
+                            () -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal),
+                            () -> assertThat(refused.isBeforeAppendOf(domainFunction)).as("marked for the function it was given").isTrue(),
+                            () -> assertThat(refused.isBeforeAppendOf(anotherFunction)).as("marked for another function").isFalse(),
+                            () -> assertThat(refused.isBeforeAppendOf(options)).as("marked for the options it was given").isFalse())),
                     () -> assertThat(executor.completed).as("transactions that completed normally").isEqualTo(1),
                     () -> assertThat(executor.failed).as("transactions that saw an error").isZero(),
                     () -> assertThat(domainFunctionRan).as("domain function ran").isFalse(),
@@ -236,10 +244,17 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         void the_refusal_reaches_the_caller_without_a_transaction_when_there_are_no_synchronous_subscriptions() {
             var store = new ScriptedStore(Optional.empty(), Optional.empty()).refusingTheFirstReads(1);
 
-            Throwable thrown = catchThrowable(() -> service(store).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3), events -> List.of(new DomainEvent("Changed", "name:1"))).block());
+            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3);
+            Function<List<DomainEvent>, List<DomainEvent>> domainFunction = events -> List.of(new DomainEvent("Changed", "name:1"));
+            Function<List<DomainEvent>, List<DomainEvent>> anotherFunction = events -> List.of();
+            Throwable thrown = catchThrowable(() -> service(store).execute(CRITERIA, options, domainFunction).block());
 
             assertAll(
-                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal), () -> assertThat(refused.isBeforeAppend()).as("marked as before the append").isTrue())),
+                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(
+                            () -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal),
+                            () -> assertThat(refused.isBeforeAppendOf(domainFunction)).as("marked for the function it was given").isTrue(),
+                            () -> assertThat(refused.isBeforeAppendOf(anotherFunction)).as("marked for another function").isFalse(),
+                            () -> assertThat(refused.isBeforeAppendOf(options)).as("marked for the options it was given").isFalse())),
                     () -> assertThat(store.readOptions).as("reads, since a refusal isn't retried").hasSize(1),
                     () -> assertThat(store.appendCalls).as("appends").isZero()
             );
@@ -281,17 +296,21 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Test
-        void a_refusal_marked_by_another_service_and_thrown_by_the_synchronous_dispatch_reaches_the_caller_unmarked_and_rolls_the_transaction_back() {
+        void a_refusal_marked_by_another_service_and_thrown_by_the_synchronous_dispatch_reaches_the_caller_as_it_is_and_not_marked_for_this_execute_and_rolls_the_transaction_back() {
             var store = new ScriptedStore(Optional.empty(), Optional.empty());
             var executor = new RecordingExecutor();
-            var markedByAnotherService = new DcbSnapshotInvalidException(CRITERIA, versions("epoch-1", 2), "refused by another service").beforeAppend();
+            Function<List<DomainEvent>, List<DomainEvent>> anotherServicesFunction = events -> List.of();
+            var markedByAnotherService = new DcbSnapshotInvalidException(CRITERIA, versions("epoch-1", 2), "refused by another service").beforeAppend(anotherServicesFunction);
+            Function<List<DomainEvent>, List<DomainEvent>> thisExecutesFunction = events -> List.of(new DomainEvent("Changed", "name:1"));
             var dispatcher = new RecordingDispatcher();
             dispatcher.failure = markedByAnotherService;
 
-            Throwable thrown = catchThrowable(() -> transactionalService(store, executor, dispatcher).execute(CRITERIA, events -> List.of(new DomainEvent("Changed", "name:1"))).block());
+            Throwable thrown = catchThrowable(() -> transactionalService(store, executor, dispatcher).execute(CRITERIA, thisExecutesFunction).block());
 
             assertAll(
-                    () -> assertThat(thrown).as("what reached the caller").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the refusal of the other service").isSameAs(markedByAnotherService), () -> assertThat(refused.isBeforeAppend()).as("marked as before the append").isFalse())),
+                    () -> assertThat(thrown).as("what reached the caller").isSameAs(markedByAnotherService),
+                    () -> assertThat(markedByAnotherService.isBeforeAppendOf(thisExecutesFunction)).as("marked for this execute").isFalse(),
+                    () -> assertThat(markedByAnotherService.isBeforeAppendOf(anotherServicesFunction)).as("marked for the other service's execute").isTrue(),
                     () -> assertThat(store.appendCalls).as("appends made before the rollback").isEqualTo(1),
                     () -> assertThat(executor.failed).as("transactions that saw the error").isEqualTo(1),
                     () -> assertThat(executor.completed).as("transactions that completed normally").isZero()
@@ -323,14 +342,21 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         @Test
         void each_subscription_to_the_returned_mono_keeps_its_own_refusal() {
             var store = new ScriptedStore(Optional.empty(), Optional.empty()).refusingTheFirstReads(1);
+            var options = DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3);
+            Function<List<DomainEvent>, List<DomainEvent>> domainFunction = events -> List.of();
+            Function<List<DomainEvent>, List<DomainEvent>> anotherFunction = events -> List.of();
             var execution = transactionalService(store, new RecordingExecutor(), new RecordingDispatcher())
-                    .execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromVersions(versions("epoch-1", 2), 3), events -> List.of());
+                    .execute(CRITERIA, options, domainFunction);
 
             Throwable first = catchThrowable(execution::block);
             Throwable second = catchThrowable(execution::block);
 
             assertAll(
-                    () -> assertThat(first).as("first subscription").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(() -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal), () -> assertThat(refused.isBeforeAppend()).as("marked as before the append").isTrue())),
+                    () -> assertThat(first).as("first subscription").isInstanceOfSatisfying(DcbSnapshotInvalidException.class, refused -> assertAll(
+                            () -> assertThat(refused.getCause()).as("the store's refusal").isSameAs(store.refusal),
+                            () -> assertThat(refused.isBeforeAppendOf(domainFunction)).as("marked for the function it was given").isTrue(),
+                            () -> assertThat(refused.isBeforeAppendOf(anotherFunction)).as("marked for another function").isFalse(),
+                            () -> assertThat(refused.isBeforeAppendOf(options)).as("marked for the options it was given").isFalse())),
                     () -> assertThat(second).as("second subscription, whose domain function has nothing to append").isNull(),
                     () -> assertThat(store.readOptions).as("reads, one for each subscription").hasSize(2)
             );

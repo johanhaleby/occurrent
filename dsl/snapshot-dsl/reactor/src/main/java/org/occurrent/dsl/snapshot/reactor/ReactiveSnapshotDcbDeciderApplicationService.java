@@ -64,9 +64,11 @@ import java.util.function.Function;
  * A snapshot is saved only when the store reported marker versions for the append and confirms that the append is
  * committed ({@link DcbApplicationService#isAppendConfirmed(DcbAppendResult)}). Otherwise the save is skipped, and the
  * first skip for each reason is logged as a warning. When the store refuses to read after the saved versions, for
- * example because a marker was pruned, the execute reads the whole boundary from the initial state instead. A snapshot
- * that 0.34 saved at a DCB position is never used, so after an upgrade an execute reads the whole boundary until one
- * can save over it.
+ * example because a marker was pruned, the execute reads the whole boundary from the initial state instead. A wrapper
+ * around the service that replaces the domain function makes a refused read after a conflict reach the caller instead.
+ * A wrapper that gives the function to a second service as well can run the command again.
+ * A snapshot that 0.34 saved at a DCB position is never used, so after an upgrade an execute reads the whole boundary
+ * until one can save over it.
  * <p>
  * An empty result Mono from {@link #execute} means the domain function produced no new events, so nothing is appended and
  * no snapshot is written. {@link #executeAndReturnDecision} still emits the decided state for a no-op, nullable or not.
@@ -185,13 +187,12 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
 
             return ReactiveSnapshotSupport.resolveDcbBase(store, key, options.schemaVersion(), decider::initialState)
                     .flatMap(base -> {
-                        AtomicBoolean decided = new AtomicBoolean();
-                        return executeFrom(base, criteria, commands, dcbDecider, refuseNullState, decided)
+                        AtomicBoolean lastAttemptMayHaveAppended = new AtomicBoolean();
+                        return executeFrom(base, criteria, commands, dcbDecider, refuseNullState, lastAttemptMayHaveAppended)
                             .onErrorResume(DcbSnapshotInvalidException.class, e -> {
                                 // After a decision the append may have committed, and reading in full would run the
-                                // command twice. A refusal marked as before the append comes from a read, so the
-                                // attempt that threw it appended nothing
-                                if (base.markerVersions().isEmpty() || (decided.get() && !e.isBeforeAppend())) {
+                                // command twice
+                                if (base.markerVersions().isEmpty() || lastAttemptMayHaveAppended.get()) {
                                     return Mono.error(e);
                                 }
                                 log.debug("Reading the whole boundary of snapshot '{}' since the store can't read after its marker versions: {}", key, e.getMessage());
@@ -226,28 +227,34 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
     }
 
     private <C, S extends @Nullable Object> Mono<Executed<S, E>> executeFrom(SnapshotSupport.DcbBase<S> base, DcbCriteria criteria, List<C> commands,
-                                                                            DcbDecider<C, S, E> dcbDecider, boolean refuseNullState, AtomicBoolean decided) {
+                                                                            DcbDecider<C, S, E> dcbDecider, boolean refuseNullState, AtomicBoolean lastAttemptMayHaveAppended) {
         return Mono.defer(() -> {
             Decider<C, S, E> decider = dcbDecider.decider();
             DcbExecuteOptions<E> withTags = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
             DcbExecuteOptions<E> executeOptions = base.markerVersions().map(markerVersions -> withTags.fromVersions(markerVersions, base.highestFoldedPosition())).orElseGet(withTags::withVersions);
             AtomicReference<Decider.Decision<S, E>> decisionRef = new AtomicReference<>();
             AtomicInteger tailSize = new AtomicInteger();
-            return applicationService.execute(criteria, executeOptions,
-                            tail -> {
-                                tailSize.set(tail.size());
-                                S current = decider.evolve(base.state(), tail);
-                                Decider.Decision<S, E> decision = decider.decideOnState(current, commands);
-                                // The decision is known before functionThatCallsDomainModel returns, which is before
-                                // the application service appends anything, so refusing a null state here (rather
-                                // than after the append) keeps a rejected command from ever being committed.
-                                if (refuseNullState) {
-                                    requireNonNullState(decision);
-                                }
-                                decisionRef.set(decision);
-                                decided.set(true);
-                                return decision.events();
-                            })
+            Function<List<E>, List<E>> decide = tail -> {
+                tailSize.set(tail.size());
+                S current = decider.evolve(base.state(), tail);
+                Decider.Decision<S, E> decision = decider.decideOnState(current, commands);
+                // The decision is known before functionThatCallsDomainModel returns, which is before
+                // the application service appends anything, so refusing a null state here (rather
+                // than after the append) keeps a rejected command from ever being committed.
+                if (refuseNullState) {
+                    requireNonNullState(decision);
+                }
+                decisionRef.set(decision);
+                lastAttemptMayHaveAppended.set(true);
+                return decision.events();
+            };
+            return applicationService.execute(criteria, executeOptions, decide)
+                    // A refusal marked with this function comes from the read of an attempt, and that attempt appended nothing
+                    .doOnError(DcbSnapshotInvalidException.class, e -> {
+                        if (e.isBeforeAppendOf(decide)) {
+                            lastAttemptMayHaveAppended.set(false);
+                        }
+                    })
                     .map(result -> new Executed<>(Optional.of(result), requireDecision(decisionRef), tailSize.get()))
                     // The domain function produced no events, so nothing was appended, but the decider still folded a
                     // decision, so return it for executeAndReturnState/Decision (execute filters it back to empty).
