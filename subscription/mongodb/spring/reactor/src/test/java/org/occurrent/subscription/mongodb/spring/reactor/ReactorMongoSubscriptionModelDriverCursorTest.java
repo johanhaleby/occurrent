@@ -30,6 +30,7 @@ import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonDocument;
+import org.bson.BsonString;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -50,8 +51,10 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -67,6 +70,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
@@ -79,6 +83,7 @@ import java.util.List;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -301,6 +306,73 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
+    void a_dynamic_position_answering_a_catchup_position_is_refused_when_the_model_reads_through_the_change_stream_of_spring() {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position answering a global checkpoint
+        useTheChangeStreamOfSpring();
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        GlobalCheckpoint answered = GlobalCheckpoint.of(0);
+
+        // When it subscribes
+        Subscription subscription = subscriptionModel.subscribe("refused", StartAt.dynamic(ctx -> StartAt.checkpoint(answered)), event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
+
+        // Then the subscription stops with the refusal and delivers nothing
+        StepVerifier.create(subscription.waitUntilStarted())
+                .expectErrorSatisfies(throwable -> assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                        .hasMessageContaining("\"" + answered.asString() + "\""))
+                .verify(Duration.ofSeconds(10));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning("refused")).isFalse());
+        assertThat(delivered).isEmpty();
+    }
+
+    @Test
+    void a_first_answer_the_server_rejects_ends_the_check_of_a_subscription_when_the_model_reads_through_the_change_stream_of_spring() throws InterruptedException {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position whose first answer is a resume token the server rejects
+        useTheChangeStreamOfSpring();
+        AtomicInteger answers = new AtomicInteger();
+        CountDownLatch askedAgain = new CountDownLatch(1);
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        StartAt startAt = StartAt.dynamic(ctx -> {
+            if (answers.incrementAndGet() == 1) {
+                return StartAt.checkpoint(new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("not-a-token"))));
+            }
+            askedAgain.countDown();
+            return StartAt.checkpoint(GlobalCheckpoint.of(0));
+        });
+
+        // When it subscribes, so the retry asks the position again, and the answer is a catch-up's
+        subscriptionModel.subscribe("not-refused", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
+        assertThat(askedAgain.await(10, SECONDS)).as("the position was asked again").isTrue();
+
+        // Then the subscribe of the first answer ended the check, so the second isn't refused and the subscription opens at the present
+        NameDefined written = nameDefined();
+        write(written);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(written.eventId()));
+        assertThat(subscriptionModel.isRunning("not-refused")).isTrue();
+    }
+
+    @Test
+    void a_dynamic_position_answering_a_catchup_position_is_refused_when_the_model_falls_back_to_the_change_stream_of_spring_while_it_subscribes() {
+        // Given a model whose driver cursor turns out unreadable on the first subscription, and a dynamic position that answers the present first and a global checkpoint when it is asked again
+        subscriptionModel.shutdown();
+        subscriptionModel = modelOver(templateWithoutBatchCursors(), configuration());
+        AtomicInteger asked = new AtomicInteger();
+        GlobalCheckpoint answered = GlobalCheckpoint.of(0);
+        StartAt startAt = StartAt.dynamic(ctx -> asked.incrementAndGet() == 1 ? StartAt.now() : StartAt.checkpoint(answered));
+
+        // When it subscribes
+        Subscription subscription = subscriptionModel.subscribe("refused-after-falling-back", startAt, event -> Mono.empty());
+
+        // Then the subscription stops with the refusal, after the handle has answered that it started, since the driver's cursor was asked to open before the position was asked again
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning("refused-after-falling-back")).isFalse());
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(10)).block()).as("subscription started").isTrue();
+        assertThat(asked).as("times the position was asked").hasValue(2);
+        assertThat(modelLog.list).filteredOn(event -> event.getLevel() == Level.ERROR && event.getThrowableProxy() != null)
+                .extracting(event -> event.getThrowableProxy().getClassName())
+                .as("exceptions logged as errors").containsOnly(UnsupportedStartAtException.class.getName());
+        assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions").isFalse();
+    }
+
+    @Test
     void a_model_that_cannot_read_the_cursor_of_the_driver_warns_once_however_many_subscriptions_fall_back() {
         // Given
         subscriptionModel.shutdown();
@@ -438,6 +510,14 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
             }
             return result;
         };
+    }
+
+    // The first subscription finds out that the driver's cursor can't be read, and the model reads through Spring's changeStream from then on
+    private void useTheChangeStreamOfSpring() {
+        subscriptionModel.shutdown();
+        subscriptionModel = modelOver(templateWithoutBatchCursors(), configuration());
+        waitUntilStarted(subscriptionModel.subscribe("first-to-fall-back", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.empty()));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions").isFalse());
     }
 
     private static void waitUntilStarted(Subscription subscription) {

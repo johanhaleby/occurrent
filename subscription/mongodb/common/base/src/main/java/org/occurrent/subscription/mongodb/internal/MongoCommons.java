@@ -50,6 +50,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -526,19 +527,69 @@ public class MongoCommons {
      * present for them, which skips every event written before it.
      * <p>
      * A subscription model calls it when a subscription starts, not when one resumes. A durable subscription model
-     * wrapping a MongoDB subscription model resumes a subscription at the position a catch-up stored on purpose, and
-     * the change stream then goes on from the position the subscription has read to. A dynamic {@link StartAt} is not
-     * checked, for the reason {@link #checkStartPosition(StartAt, SubscriptionModelContext)} gives.
+     * wrapping a blocking MongoDB subscription model resumes a subscription at the position a catch-up stored on
+     * purpose, and the change stream then goes on from the position the subscription has read to. A dynamic
+     * {@link StartAt} is not checked here, for the reason {@link #checkStartPosition(StartAt, SubscriptionModelContext)}
+     * gives. {@link #refusingCatchupPositionUntilOpened(StartAt, String, BooleanSupplier)} checks the positions it
+     * answers instead.
      *
      * @throws UnsupportedStartAtException If {@code startAt} is a position a catch-up subscription model stores.
      */
     public static void refuseCatchupPosition(@Nullable StartAt startAt) {
-        if (startAt instanceof StartAtCheckpoint position
-                && (GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(position.checkpoint))) {
-            throw new UnsupportedStartAtException(startAt, "Cannot open a change stream at checkpoint \"" + position.checkpoint.asString()
-                    + "\", which is a position a catch-up subscription model stores and not a change stream position. Opening it at the present instead would skip every event written before it. "
-                    + "Start the subscription through the catch-up subscription model that stored the checkpoint.");
+        if (catchupPositionIn(startAt) instanceof Checkpoint checkpoint) {
+            throw new UnsupportedStartAtException(startAt, "Cannot open a change stream at checkpoint \"" + checkpoint.asString()
+                    + "\", " + NOT_A_CHANGE_STREAM_POSITION + "Start the subscription through the catch-up subscription model that stored the checkpoint.");
         }
+    }
+
+    /**
+     * {@code startAt} itself when it isn't dynamic. A dynamic one is wrapped, so that a position its function answers
+     * before a change stream of the subscription has opened is refused when it is a position a catch-up subscription
+     * model stores, as {@link #refuseCatchupPosition(StartAt)} refuses a fixed one. What counts as opened is up to the
+     * subscription model. A blocking one counts a run that reported its cursor open, so an answer whose opening a pause
+     * or a failure stopped doesn't end the check. The reactor one counts a driver cursor that opened for a subscription
+     * that reads through one. Where it has no such cursor to wait for it counts a {@code Flux} that was subscribed to, so
+     * a pause after that, or an answer the server rejects, ends it. The {@link UnsupportedStartAtException} is thrown
+     * where the subscription model resolves the position, as the change stream opens.
+     * <p>
+     * An answer after that isn't checked. When the earlier answer was a position of its own rather than the present, the
+     * subscription model asks again as a change stream opens again before the first event, and such an answer opens at
+     * another position than the earlier one. It can skip what the earlier one would have delivered, or deliver what it
+     * wouldn't have.
+     *
+     * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
+     * @param opened         Whether a change stream of the subscription has opened, as the subscription model counts it
+     */
+    public static StartAt refusingCatchupPositionUntilOpened(StartAt startAt, @Nullable String subscriptionId, BooleanSupplier opened) {
+        if (!startAt.isDynamic()) {
+            return startAt;
+        }
+        return StartAt.dynamic(ctx -> {
+            StartAt resolved = startAt.get(ctx);
+            if (!opened.getAsBoolean() && catchupPositionIn(resolved) instanceof Checkpoint checkpoint) {
+                String subscription = subscriptionId == null ? "a subscription" : "subscription \"" + subscriptionId + "\"";
+                throw new UnsupportedStartAtException(requireNonNull(resolved), "The dynamic start position of " + subscription + " answered checkpoint \""
+                        + checkpoint.asString() + "\", " + NOT_A_CHANGE_STREAM_POSITION + "Start the subscription through a catch-up subscription model. "
+                        + "When one already wraps this model, restore the start position its replay had or remove the stored checkpoint.");
+            }
+            return resolved;
+        });
+    }
+
+    private static final String NOT_A_CHANGE_STREAM_POSITION = "which is a position a catch-up subscription model stores and not a change stream position. "
+            + "Opening it at the present instead would skip every event written before it. ";
+
+    /**
+     * Whether {@code startAt} is a position a catch-up subscription model stores, which a change stream can't open at.
+     */
+    public static boolean isCatchupPosition(@Nullable StartAt startAt) {
+        return catchupPositionIn(startAt) != null;
+    }
+
+    private static @Nullable Checkpoint catchupPositionIn(@Nullable StartAt startAt) {
+        return startAt instanceof StartAtCheckpoint position
+                && (GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(position.checkpoint))
+                ? position.checkpoint : null;
     }
 
     /**

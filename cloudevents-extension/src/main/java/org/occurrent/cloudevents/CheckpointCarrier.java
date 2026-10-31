@@ -31,9 +31,12 @@ public interface CheckpointCarrier {
      * {@code StartAt.checkpoint(new StringBasedCheckpoint(stored))}, or with {@code DcbStartAt.checkpoint(stored)}
      * for a DCB subscription.
      * <p>
-     * The string means something only to a catch-up subscription. A MongoDB subscription model with no catch-up
-     * subscription wrapping it refuses the checkpoint of a replayed event when a subscription starts from a
-     * {@code StartAt} that names it. From a dynamic {@code StartAt} it still opens at the present.
+     * The checkpoint of a replayed event means something only to a catch-up subscription. A MongoDB subscription model
+     * with no catch-up subscription wrapping it refuses that checkpoint when a subscription starts from a
+     * {@code StartAt} that names it, or from a dynamic {@code StartAt} whose function returns it before the model counts
+     * a change stream of the subscription as opened. The reactor model counts a {@code Flux} that was subscribed to when
+     * the subscription has no id or can't read through the driver's cursor, so a position the server rejects ends that
+     * check.
      * <p>
      * The checkpoint of a live event holds a change stream resume token. Once the oplog no longer reaches back to it,
      * a catch-up subscription doesn't restart a subscription from the present. On the blocking stack a subscribe from

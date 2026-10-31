@@ -23,6 +23,8 @@ other sections compile fine and behave differently, so read them first.
   `DcbStartAt` without a `default`.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
+- [A record pattern over `NativeMongoSubscription` stops compiling](#a-record-pattern-over-nativemongosubscription-stops-compiling).
+  `NativeMongoSubscription` gains a third record component. **Breaks the build** if you use a record pattern over it.
 - [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
   `DcbConsistencyToken` becomes a class, and `DcbEventStream(List, long)` and `DcbDomainEventStream(List, long)` are
   removed. **Breaks the build** if you create a token, call one of those constructors or call `value()`, which a
@@ -87,8 +89,9 @@ other sections compile fine and behave differently, so read them first.
   `StartAt.checkpoint(GlobalCheckpoint.of(0))` replays the history where it used to go live, and a position above 0
   throws `UnsupportedStartAtException`. Compiles unchanged.
 - [A MongoDB subscription model refuses a catch-up's checkpoint](#a-mongodb-subscription-model-refuses-a-catch-ups-checkpoint).
-  A subscribe at a `GlobalCheckpoint` or a `CatchupTimeCheckpoint` throws `UnsupportedStartAtException` instead of
-  opening at the present. Compiles unchanged.
+  A subscribe at a `GlobalCheckpoint` or a `CatchupTimeCheckpoint`, or at a dynamic start that returns one, is refused
+  with `UnsupportedStartAtException` instead of opening at the present. Compiles unchanged, except a record pattern
+  over `NativeMongoSubscription`.
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   Every subscription a catch-up subscription runs on MongoDB, which in Spring Boot is every subscription by default.
   Compiles unchanged.
@@ -140,6 +143,9 @@ other sections compile fine and behave differently, so read them first.
 - `org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35` adds the new bindings to a record pattern over
   `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`. See
   [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions).
+- `org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35` adds the new binding to a record pattern over
+  `NativeMongoSubscription`. See
+  [A record pattern over `NativeMongoSubscription` stops compiling](#a-record-pattern-over-nativemongosubscription-stops-compiling).
 - No recipe rewrites a `DcbConsistencyToken` or the streams that create one. See
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
@@ -876,10 +882,11 @@ resumes the whole replay from where it started.
 To rewind a read model to a point you know is good, keep the checkpoint of the event at that point, and start the
 subscription from it.
 
-The string means something only to a catch-up subscription. A MongoDB subscription model with no catch-up wrapping it
-refuses the checkpoint of a replayed event in a `StartAt` that names it, as
+The checkpoint of a replayed event means something only to a catch-up subscription. A MongoDB subscription model with
+no catch-up wrapping it refuses that checkpoint, in a `StartAt` that names it or as a position a `StartAt.dynamic(..)`
+returns before its change stream has opened, as
 [A MongoDB subscription model refuses a catch-up's checkpoint](#a-mongodb-subscription-model-refuses-a-catch-ups-checkpoint)
-describes. From a `StartAt.dynamic(..)` it still opens the change stream at the present.
+describes.
 
 The checkpoint of a live event holds a change stream resume token, so a restart from it needs the change stream
 history to still reach back to it. On MongoDB that is the oplog. Once it no longer does, a catch-up subscription
@@ -1084,20 +1091,85 @@ catch-up stores, and skipped every event before it with no error. Their `subscri
 `UnsupportedStartAtException`, and the reactor model's unnamed `subscribe(..)` fails its `Flux` with it. See
 [#1336](https://github.com/johanhaleby/occurrent/issues/1336).
 
-Only a `StartAt` that names the checkpoint is refused. A `StartAt.dynamic(..)` that answers one still opens the change
-stream at the present. A blocking `DurableSubscriptionModel` does that when it reads one from its storage for a dynamic
-start, which [#1346](https://github.com/johanhaleby/occurrent/issues/1346) tracks.
+A `StartAt.dynamic(..)` whose function returns one of these checkpoints opened the change stream at the present too,
+in 0.34.0 and before. `DcbStartAt.dynamic(..)` returning `DcbStartAt.beginning()` is one. The models now refuse that
+as well. They call the function only as the change stream opens, so `subscribe(..)` returns, and the subscription then
+stops with the `UnsupportedStartAtException` instead of delivering events. `waitUntilStarted(..)` throws it on the
+blocking models, which also log it at `ERROR`, and `waitUntilStarted()` fails with it on the reactor model, except on
+the handle `subscribe(..)` returns while the model is stopped, which never completes. A reactor handle that has answered
+that it started keeps that answer. It answers once the change stream is subscribed to, so a refusal on a retry after a
+failed opening stops the subscription and is only logged at `ERROR`. A
+resume straight after it answered can be refused too, when the function returns one of these checkpoints, since the
+cursor may not have opened. The handle that resume returns fails with it. See
+[#1371](https://github.com/johanhaleby/occurrent/issues/1371).
+
+The function is checked until a change stream of the subscription has opened. On the blocking models that means a run
+has reported its cursor open, so an answer from an opening that a pause or a failure stopped doesn't end the check. The
+reactor model counts a driver cursor that opened for a subscription with an id. A reactor `subscribe(..)` without an id,
+and a subscription with an id when the model can't read through the driver's cursor, count a `Flux` that was subscribed
+to instead, so an answer the server rejects ends the check, and on a subscription with an id so does a pause after
+that. A position the function returns after that isn't checked. When its earlier answer was a resume token or an
+operation time and a change stream opens again before the first event, one of these checkpoints from the function
+opens at another position than that earlier answer. It can skip what the earlier answer would have delivered, or deliver what it wouldn't have.
 
 ### Who is affected
 
 Code that subscribes a MongoDB subscription model directly at a checkpoint a catch-up stored, or delivered with a
-replayed event. The Spring Boot starters put a catch-up in front of the MongoDB model, so they are not affected. A
-resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, still goes on from the position the
-subscription has read to.
+replayed event, in a `StartAt` that names it or from a dynamic start that returns it. A
+resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, isn't refused. The blocking models go on
+from the position the subscription has read to. The reactor model opens at the moment of the resume, for such a
+checkpoint and for a dynamic position that returns one, as it did in 0.34.0, and can skip what was written while the
+subscription was paused.
+
+The function `subscribe(..)` was given is another matter. When no change stream has opened yet, a resume can still ask
+that function, and it's refused when the function returns one of these checkpoints. On the blocking models that
+includes `resumeSubscription(subscriptionId, startAt)` at such a checkpoint, or at a dynamic position that returns one.
+
+A blocking `DurableSubscriptionModel` hands the MongoDB model a dynamic start that returns the checkpoint in its
+`CheckpointStorage`. A subscription whose storage holds a catch-up's checkpoint now stops in the same
+way, where it skipped the history before. A Spring Boot starter subscription gets there when a catch-up's replay stopped
+before it went live and the subscription's start then changed to `DEFAULT`, as
+[#1346](https://github.com/johanhaleby/occurrent/issues/1346) describes. `ReactorDurableSubscriptionModel` hands the
+reactor model the stored checkpoint itself, so a subscription at the model default whose storage holds one of these
+stops too, its handle fails with the `UnsupportedStartAtException`, and the checkpoint stays in storage.
+
+A `TimeBasedCheckpoint` isn't refused. A catch-up writes one when it can't get a global position, and reads it back. A
+`DurableSubscriptionModel` with no catch-up around it and one of these in its storage still opens at the present.
+
+A `CompetingConsumerSubscriptionModel` wrapping one of these models doesn't see a refusal of a dynamic start, since it
+comes after `subscribe(..)` has returned. The node holds the lease and the subscription id, and it delivers nothing. A
+pause, a stop or a lost lease gives the lease back, and the node then delivers nothing either, and may log warnings as
+it tries to resume the subscription. Cancel the subscription to free the id.
 
 ### What to do
 
-Subscribe through the catch-up subscription model that stored the checkpoint.
+Subscribe through the catch-up subscription model that stored the checkpoint. For a `DcbStartAt.dynamic(..)` that
+returns `DcbStartAt.beginning()`, subscribe through a model composed with `DcbCatchupSubscriptionModel` or
+`ReactorDcbCatchupSubscriptionModel`, which replays the history before going live, or return `DcbStartAt.now()` when
+the subscription doesn't need the history.
+
+For a subscription behind a catch-up whose `CheckpointStorage` holds a catch-up's checkpoint, restore the start it had
+when the replay stopped, so the catch-up finishes the replay, or remove the stored checkpoint to start from the new
+start position without the history. A Spring Boot starter subscription at `DEFAULT` waits for its start by default, so
+the exception can stop the application from starting.
+
+### A record pattern over `NativeMongoSubscription` stops compiling
+
+The `Subscription` that `NativeMongoSubscriptionModel.subscribe(..)` returns is a `NativeMongoSubscription`, and it
+now holds a supplier of the failure that `waitUntilStarted(..)` throws, as a third record component called
+`startFailure`. A record pattern has to name every component of the canonical constructor:
+
+```java
+// Before, stops compiling
+case NativeMongoSubscription(var id, var latch) -> ...
+
+// After
+case NativeMongoSubscription(var id, var latch, var startFailure) -> ...
+```
+
+`org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35`, which `UpgradeToOccurrent_0_35` runs, adds the
+binding to a `switch` case and an `instanceof` pattern alike. Constructor calls aren't affected. The two-argument
+constructor stays, and `waitUntilStarted(..)` on an instance built with it only waits.
 
 ## A subscription whose resume token is gone stops instead of restarting from now
 

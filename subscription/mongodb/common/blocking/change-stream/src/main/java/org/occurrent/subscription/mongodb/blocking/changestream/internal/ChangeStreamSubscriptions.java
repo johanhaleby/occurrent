@@ -42,6 +42,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions.HistoryLossListener;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions.QuietPositionListener;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -58,6 +59,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -94,12 +96,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <p>
  * Every method that changes which subscriptions are known is called with the model's monitor held, the one
  * {@link #ChangeStreamSubscriptions the constructor} is given, except {@link #start(boolean)}, {@link #stop()} and
- * {@link #shutdown()}, which take it themselves. The threads that read the change streams take it only to pause a
- * subscription a history loss listener takes over, and wait for no action while they hold it. Nothing
- * waits for an action to return, or for the executor to shut down, while it holds the monitor or a lock of this class,
- * since a virtual thread that waits in a monitor keeps its carrier thread on JDK 21 to 23. So a pause returns the wait
- * for the running action to the model, which runs it once it has let go of its monitor. A pause, a cancel and a
- * shutdown still close the cursor with the monitor held.
+ * {@link #shutdown()}, which take it themselves. The threads that read the change streams take it only when a history
+ * is lost, to see whether the run still holds the subscription and to pause one a listener takes over, and wait for no
+ * action while they hold it. Nothing waits for an action to return, or for the executor to shut down, while it holds
+ * the monitor or a lock of this class, since a virtual thread that waits in a monitor keeps its carrier thread on JDK 21
+ * to 23. So a pause returns the wait for the running action to the model, which runs it once it has let go of its
+ * monitor. A pause, a cancel and a shutdown still close the cursor with the monitor held.
  */
 @NullMarked
 public final class ChangeStreamSubscriptions {
@@ -137,9 +139,11 @@ public final class ChangeStreamSubscriptions {
 
         /**
          * Returns the handle the model gives its caller for a subscription whose change stream has opened once
-         * {@code started} is released.
+         * {@code started} is released. {@code startFailure} answers what the start failed with, when it failed for good
+         * rather than opened. It holds the failure before {@code started} is released, so a timed wait that runs out can
+         * read it too.
          */
-        Subscription subscription(String subscriptionId, CountDownLatch started);
+        Subscription subscription(String subscriptionId, CountDownLatch started, Supplier<@Nullable RuntimeException> startFailure);
 
         /**
          * The model's own {@code resumeSubscription(String)}, so an override of it also runs for a subscription that
@@ -242,10 +246,11 @@ public final class ChangeStreamSubscriptions {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
         }
 
-        StartAt subscribedAt = ownInstanceOf(startAt);
+        FirstStart firstStart = new FirstStart();
+        StartAt subscribedAt = MongoCommons.refusingCatchupPositionUntilOpened(ownInstanceOf(startAt), subscriptionId, firstStart::hasStarted);
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(subscribedAt);
         PresentAtSubscribe presentAtSubscribe = new PresentAtSubscribe(subscribedAt, (present, cancelled) -> recordThePresent(subscriptionId, currentStartAt, present, cancelled));
-        InternalSubscription internalSubscription = new InternalSubscription(log, currentStartAt, action, changeStreamPipeline, presentAtSubscribe);
+        InternalSubscription internalSubscription = new InternalSubscription(log, currentStartAt, action, changeStreamPipeline, presentAtSubscribe, firstStart);
         // Known from here on rather than once its change stream opens, so a pause or a cancel reaches it while MongoDB
         // cannot be reached, and a wrapper asking which subscriptions the model runs gets the right answer. On a
         // running model a run that opens at the present asks for it first.
@@ -266,7 +271,7 @@ public final class ChangeStreamSubscriptions {
         }
         // Follows every run of the subscription, so it answers true once start() or a resume opens the change stream of
         // one subscribed while the model was stopped, or paused before its change stream opened
-        return model.subscription(subscriptionId, internalSubscription.firstStartedLatch);
+        return model.subscription(subscriptionId, internalSubscription.firstStart.latch, internalSubscription.firstStart::failure);
     }
 
     // A position of the subscription's own, so a resume given the very instance subscribe was given isn't taken for the
@@ -469,6 +474,24 @@ public final class ChangeStreamSubscriptions {
                 // nothing else would say why the node went quiet.
                 log.error("Checkpoint write for subscription {} was refused: {}. A node with a newer lease has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it. The refused write was for an event, or for a position reached while no event matched.", subscriptionId, e.getMessage(), e);
                 throw e;
+            } else if (cursor == null && e instanceof UnsupportedStartAtException unsupportedStartAt && MongoCommons.isCatchupPosition(unsupportedStartAt.startAt())) {
+                // Refused rather than retried, since a retry runs without end by default and the start never ends. Only
+                // a catch-up's position before the cursor exists, since an action can throw this type too, as can the
+                // function with another position, and those restart like any other failure
+                log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, e);
+                // Whoever takes the run out of the map first decides. A pause or a cancel that got there first owns what
+                // happens next, and a resume asks the start again. Recorded inside the map's atomic update, so whoever reads
+                // the run as gone finds the failure, and without the model's monitor, since whoever holds it may be waiting
+                // for this handle. Waiters are released after the update, so the id is free before a released waiter
+                // throws. A timed wait that runs out during the update can read the failure before that.
+                runningSubscriptions.computeIfPresent(subscriptionId, (__, current) -> {
+                    if (current != internalSubscription) {
+                        return current;
+                    }
+                    internalSubscription.recordFailureToStart(unsupportedStartAt);
+                    return null;
+                });
+                internalSubscription.releaseWaitersOfAFailedStart();
             } else if (isChangeStreamHistoryLost(e)) {
                 if (takenOverAfterHistoryLoss(subscriptionId, internalSubscription, openedAt, e)) {
                     return;
@@ -750,6 +773,11 @@ public final class ChangeStreamSubscriptions {
                 for (String subscriptionId : new ArrayList<>(runningSubscriptions.keySet())) {
                     try {
                         model.pauseSubscription(subscriptionId);
+                    } catch (UnknownSubscriptionException | SubscriptionNotRunningException e) {
+                        // The executor thread removes a run without the monitor, and such a run has nothing left to pause
+                        if (isKnown(subscriptionId)) {
+                            failures.add(e);
+                        }
                     } catch (RuntimeException e) {
                         failures.add(e);
                     }
@@ -791,11 +819,13 @@ public final class ChangeStreamSubscriptions {
                     try {
                         Subscription subscription = model.resumeSubscription(subscriptionId);
                         // Only the executor thread writes to this map without the monitor, and it only removes a run
-                        // whose history was lost, so this is the run the resume started, or nothing when there is
-                        // nothing to wait for
+                        // that lost its history or was refused, so this is the run the resume started, or nothing to
+                        // wait for. A refused run has recorded its failure by the time it's gone, which the handle throws
                         InternalSubscription run = runningSubscriptions.get(subscriptionId);
                         if (run != null) {
                             resumed.put(subscriptionId, new ResumedByStart(subscription, run));
+                        } else {
+                            subscription.waitUntilStarted(Duration.ZERO);
                         }
                     } catch (RuntimeException e) {
                         failures.add(e);
@@ -826,6 +856,8 @@ public final class ChangeStreamSubscriptions {
         InternalSubscription internalSubscription = resumedByStart.run();
         while (!subscription.waitUntilStarted(Duration.ofMillis(100))) {
             if (shutdown || runningSubscriptions.get(subscriptionId) != internalSubscription || internalSubscription.hasStoppedRestarting()) {
+                // Asked once more, since a refused run has recorded its failure by then, which the handle throws
+                subscription.waitUntilStarted(Duration.ZERO);
                 return;
             }
         }
@@ -906,7 +938,7 @@ public final class ChangeStreamSubscriptions {
             throw e;
         }
 
-        return model.subscription(subscriptionId, resumed.startedLatch);
+        return model.subscription(subscriptionId, resumed.startedLatch, resumed::startFailure);
     }
 
     // Replaces the position the subscription has read to with repositionTo, or keeps it when repositionTo is a
@@ -1120,6 +1152,34 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
+    // The answer of the handle subscribe returns. The first run to report it opened or to record a failure decides it,
+    // in one step.
+    private static final class FirstStart {
+        final CountDownLatch latch = new CountDownLatch(1);
+        private final AtomicReference<@Nullable Optional<RuntimeException>> outcome = new AtomicReference<>();
+
+        // A run that recorded a failure releases the waiters itself, once the id is free
+        void started() {
+            if (outcome.compareAndSet(null, Optional.empty())) {
+                latch.countDown();
+            }
+        }
+
+        void recordFailure(RuntimeException failure) {
+            outcome.compareAndSet(null, Optional.of(failure));
+        }
+
+        @Nullable RuntimeException failure() {
+            Optional<RuntimeException> decided = outcome.get();
+            return decided == null ? null : decided.orElse(null);
+        }
+
+        boolean hasStarted() {
+            Optional<RuntimeException> decided = outcome.get();
+            return decided != null && decided.isEmpty();
+        }
+    }
+
     // One run of a subscription, from a subscribe or a resume until a pause, a cancel or a shutdown closes it. A
     // restart after an error reuses the same run, and a resume starts a new one, so a closed run never opens a change
     // stream again.
@@ -1129,8 +1189,10 @@ public final class ChangeStreamSubscriptions {
         // same filter.
         private final List<Bson> pipeline;
         final CountDownLatch startedLatch = new CountDownLatch(1);
-        // Shared by every run of the subscription, and released the first time one of them opens its change stream
-        final CountDownLatch firstStartedLatch;
+        // Set before startedLatch is released, when this run failed for good instead of opening its change stream
+        private volatile @Nullable RuntimeException startFailure;
+        // Shared by every run of the subscription
+        final FirstStart firstStart;
         private final CountDownLatch stoppedRestartingLatch = new CountDownLatch(1);
         final AtomicReference<StartAt> currentStartAt;
         // Shared by every run of the subscription
@@ -1149,17 +1211,13 @@ public final class ChangeStreamSubscriptions {
         private @Nullable MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
         private @Nullable Thread delivering;
 
-        private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe) {
-            this(log, currentStartAt, action, pipeline, presentAtSubscribe, new CountDownLatch(1));
-        }
-
-        private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, CountDownLatch firstStartedLatch) {
+        private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, FirstStart firstStart) {
             this.log = log;
             this.pipeline = pipeline;
             this.currentStartAt = currentStartAt;
             this.presentAtSubscribe = presentAtSubscribe;
             this.action = action;
-            this.firstStartedLatch = firstStartedLatch;
+            this.firstStart = firstStart;
         }
 
         // Under the same lock as movedUnlessReplacedTo, so an action of this run that returns after the pause waited
@@ -1172,7 +1230,7 @@ public final class ChangeStreamSubscriptions {
                     // In one step, since the operation time asked for at subscribe can be recorded meanwhile
                     currentStartAt.updateAndGet(reposition);
                 }
-                return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStartedLatch);
+                return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStart);
             } finally {
                 lock.unlock();
             }
@@ -1254,8 +1312,30 @@ public final class ChangeStreamSubscriptions {
         }
 
         void started() {
+            firstStart.started();
             startedLatch.countDown();
-            firstStartedLatch.countDown();
+        }
+
+        // Only for a run that is still in the map, so a pause or a resume can't come after it. A handle that has already
+        // answered it started keeps that answer.
+        void recordFailureToStart(RuntimeException failure) {
+            if (startedLatch.getCount() > 0) {
+                startFailure = failure;
+            }
+            firstStart.recordFailure(failure);
+        }
+
+        // Does nothing for a run that recorded no failure, because it had started or something else took it out of the map
+        // first
+        void releaseWaitersOfAFailedStart() {
+            if (startFailure != null) {
+                startedLatch.countDown();
+                firstStart.latch.countDown();
+            }
+        }
+
+        @Nullable RuntimeException startFailure() {
+            return startFailure;
         }
 
         void stopped() {

@@ -17,6 +17,7 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.api.blocking.Subscription;
 
@@ -24,6 +25,7 @@ import java.time.Duration;
 import java.util.StringJoiner;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -32,11 +34,13 @@ public class SpringMongoSubscription implements Subscription {
 
     private final String subscriptionId;
     private final CountDownLatch started;
+    private final Supplier<@Nullable RuntimeException> startFailure;
     private final BooleanSupplier modelIsShutDown;
 
-    SpringMongoSubscription(String subscriptionId, CountDownLatch started, BooleanSupplier modelIsShutDown) {
+    SpringMongoSubscription(String subscriptionId, CountDownLatch started, Supplier<@Nullable RuntimeException> startFailure, BooleanSupplier modelIsShutDown) {
         this.subscriptionId = subscriptionId;
         this.started = started;
+        this.startFailure = startFailure;
         this.modelIsShutDown = modelIsShutDown;
     }
 
@@ -51,9 +55,21 @@ public class SpringMongoSubscription implements Subscription {
      * <p>
      * An open change stream doesn't mean that MongoDB has confirmed it is healthy. A failure right after this returns
      * is still possible, and the subscription model then restarts the change stream.
+     * <p>
+     * Throws the {@link org.occurrent.subscription.UnsupportedStartAtException} when the model refused the start
+     * position, since the change stream then never opens.
      */
     @Override
     public boolean waitUntilStarted(Duration timeout) {
+        boolean released = awaitStarted(timeout);
+        RuntimeException failure = startFailure.get();
+        if (failure != null) {
+            throw failure;
+        }
+        return released;
+    }
+
+    private boolean awaitStarted(Duration timeout) {
         long timeoutMillis = DurationToTimeoutConverter.convertDurationToTimeout(timeout, MILLISECONDS).timeout();
         long startTime = System.currentTimeMillis();
         try {

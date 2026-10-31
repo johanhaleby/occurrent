@@ -66,6 +66,8 @@ public interface Subscribable extends SubscriptionModelCapability {
      *                                               subscription-model default, reports it through {@link Subscription#waitUntilStarted()}
      *                                               instead.
      * @throws UnsupportedStartAtException            If this model does not accept that start position.
+     *                                               A model that hears of the refusal only once the call has returned can report it
+     *                                               through {@link Subscription#waitUntilStarted()} instead.
      */
     default Subscription subscribe(String subscriptionId, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         return subscribe(subscriptionId, null, startAt, action);

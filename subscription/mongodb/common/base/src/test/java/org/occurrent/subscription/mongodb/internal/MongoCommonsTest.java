@@ -29,6 +29,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
@@ -36,14 +37,34 @@ import java.time.Duration;
 import java.util.Date;
 import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class MongoCommonsTest {
+
+    @Test
+    void is_catchup_position_is_true_for_the_positions_a_catchup_subscription_model_stores() {
+        assertAll(
+                () -> assertThat(MongoCommons.isCatchupPosition(StartAt.checkpoint(GlobalCheckpoint.of(7)))).isTrue(),
+                () -> assertThat(MongoCommons.isCatchupPosition(StartAt.checkpoint(CatchupTimeCheckpoint.of("2026-01-01T00:00:00Z", GlobalCheckpoint.of(7), "2026-01-01T00:00:00Z")))).isTrue()
+        );
+    }
+
+    @Test
+    void is_catchup_position_is_false_for_the_present_a_resume_token_and_null() {
+        assertAll(
+                () -> assertThat(MongoCommons.isCatchupPosition(StartAt.now())).isFalse(),
+                () -> assertThat(MongoCommons.isCatchupPosition(StartAt.checkpoint(new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("token")))))).isFalse(),
+                () -> assertThat(MongoCommons.isCatchupPosition(null)).isFalse()
+        );
+    }
 
     @Test
     void extract_write_version_returns_empty_when_document_is_null() {
@@ -469,5 +490,108 @@ class MongoCommonsTest {
 
     private static Checkpoint checkpointOf(StartAt startAt) {
         return ((StartAt.StartAtCheckpoint) startAt).checkpoint;
+    }
+
+    @Test
+    void refusing_catchup_position_until_opened_leaves_a_start_that_is_not_dynamic_as_it_is() {
+        // Given
+        StartAt startAt = StartAt.checkpoint(GlobalCheckpoint.of(0));
+
+        // When
+        StartAt wrapped = MongoCommons.refusingCatchupPositionUntilOpened(startAt, "id", () -> false);
+
+        // Then
+        assertThat(wrapped).isSameAs(startAt);
+    }
+
+    @Test
+    void refusing_catchup_position_until_opened_refuses_a_global_checkpoint_answer_naming_the_subscription_and_the_checkpoint() {
+        // Given
+        StartAt answer = StartAt.checkpoint(GlobalCheckpoint.of(0));
+        StartAt wrapped = MongoCommons.refusingCatchupPositionUntilOpened(StartAt.dynamic(ctx -> answer), "mySubscription", () -> false);
+
+        // When
+        Throwable throwable = catchThrowable(() -> wrapped.get(new SubscriptionModelContext(MongoCommonsTest.class)));
+
+        // Then
+        assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageContaining("subscription \"mySubscription\"")
+                .hasMessageContaining("\"" + GlobalCheckpoint.of(0).asString() + "\"");
+        assertThat(((UnsupportedStartAtException) throwable).startAt()).isSameAs(answer);
+    }
+
+    @Test
+    void refusing_catchup_position_until_opened_refuses_a_catchup_time_checkpoint_answer() {
+        // Given
+        CatchupTimeCheckpoint checkpoint = CatchupTimeCheckpoint.of("2026-01-01T00:00:00Z", GlobalCheckpoint.of(3), "2026-01-01T00:00:00Z");
+        StartAt wrapped = MongoCommons.refusingCatchupPositionUntilOpened(StartAt.dynamic(ctx -> StartAt.checkpoint(checkpoint)), "id", () -> false);
+
+        // When
+        Throwable throwable = catchThrowable(() -> wrapped.get(new SubscriptionModelContext(MongoCommonsTest.class)));
+
+        // Then
+        assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("\"" + checkpoint.asString() + "\"");
+    }
+
+    @Test
+    void refusing_catchup_position_until_opened_names_no_subscription_when_there_is_no_id() {
+        // Given
+        StartAt wrapped = MongoCommons.refusingCatchupPositionUntilOpened(StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(0))), null, () -> false);
+
+        // When
+        Throwable throwable = catchThrowable(() -> wrapped.get(new SubscriptionModelContext(MongoCommonsTest.class)));
+
+        // Then
+        assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("a subscription");
+    }
+
+    @Test
+    void refusing_catchup_position_until_opened_still_refuses_a_catchup_answer_after_an_earlier_answer_was_accepted_while_nothing_has_opened() {
+        // Given
+        AtomicInteger asked = new AtomicInteger();
+        StartAt accepted = StartAt.checkpoint(new StringBasedCheckpoint("2026-01-01T00:00:00Z"));
+        StartAt catchup = StartAt.checkpoint(GlobalCheckpoint.of(0));
+        StartAt wrapped = MongoCommons.refusingCatchupPositionUntilOpened(StartAt.dynamic(ctx -> asked.getAndIncrement() == 0 ? accepted : catchup), "id", () -> false);
+        SubscriptionModelContext context = new SubscriptionModelContext(MongoCommonsTest.class);
+
+        // When
+        StartAt first = wrapped.get(context);
+        Throwable second = catchThrowable(() -> wrapped.get(context));
+
+        // Then
+        assertThat(first).isSameAs(accepted);
+        assertThat(second).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("\"" + GlobalCheckpoint.of(0).asString() + "\"");
+        assertThat(((UnsupportedStartAtException) second).startAt()).isSameAs(catchup);
+    }
+
+    @Test
+    void refusing_catchup_position_until_opened_passes_on_a_catchup_answer_once_a_change_stream_has_opened() {
+        // Given
+        AtomicBoolean opened = new AtomicBoolean();
+        StartAt catchup = StartAt.checkpoint(GlobalCheckpoint.of(0));
+        StartAt wrapped = MongoCommons.refusingCatchupPositionUntilOpened(StartAt.dynamic(ctx -> catchup), "id", opened::get);
+        SubscriptionModelContext context = new SubscriptionModelContext(MongoCommonsTest.class);
+        Throwable beforeItOpened = catchThrowable(() -> wrapped.get(context));
+
+        // When
+        opened.set(true);
+        StartAt afterItOpened = wrapped.get(context);
+
+        // Then
+        assertThat(beforeItOpened).isExactlyInstanceOf(UnsupportedStartAtException.class);
+        assertThat(afterItOpened).isSameAs(catchup);
+    }
+
+    @Test
+    void refusing_catchup_position_until_opened_passes_on_an_answer_that_is_not_a_catchup_position() {
+        // Given
+        StartAt answer = StartAt.checkpoint(new StringBasedCheckpoint("2026-01-01T00:00:00Z"));
+        StartAt wrapped = MongoCommons.refusingCatchupPositionUntilOpened(StartAt.dynamic(ctx -> answer), "id", () -> false);
+
+        // When
+        StartAt resolved = wrapped.get(new SubscriptionModelContext(MongoCommonsTest.class));
+
+        // Then
+        assertThat(resolved).isSameAs(answer);
     }
 }

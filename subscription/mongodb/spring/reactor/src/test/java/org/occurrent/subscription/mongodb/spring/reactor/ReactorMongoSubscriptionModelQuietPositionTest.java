@@ -43,8 +43,10 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions.QuietPositionListener;
 import org.occurrent.subscription.api.reactor.Subscription;
@@ -69,6 +71,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -313,6 +316,91 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
         NameDefined matched = nameDefined();
         write(matched);
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));
+    }
+
+    @Test
+    void a_quiet_position_listener_that_fails_with_the_refusal_type_restarts_the_subscription() {
+        // Given a listener whose first hand-over fails with the refusal type
+        CopyOnWriteArrayList<Checkpoint> quietPositions = new CopyOnWriteArrayList<>();
+        AtomicInteger handedOver = new AtomicInteger();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> Mono.just(quietPosition -> {
+            quietPositions.add(quietPosition);
+            return handedOver.incrementAndGet() == 1 ? Mono.error(new UnsupportedStartAtException(StartAt.now(), "thrown by the listener")) : Mono.empty();
+        }));
+        CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+
+        // When it subscribes
+        subscriptionModel.subscribe("refusing-hand-over", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event)));
+
+        // Then the change stream is opened again at the position that could not be handed over, and the subscription keeps delivering
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
+        assertThat(CommandLog.changeStreamField(commands.changeStreamsOpened().getLast(), "startAfter")).isEqualTo(resumeTokenOf(quietPositions.getFirst()));
+        assertThat(subscriptionModel.isRunning("refusing-hand-over")).isTrue();
+        NameDefined matched = nameDefined();
+        write(matched);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));
+    }
+
+    @Test
+    void a_quiet_position_listener_that_fails_with_the_refusal_type_naming_a_catchup_position_restarts_the_subscription() {
+        // Given a listener whose first hand-over fails with the refusal type naming a catch-up position
+        CopyOnWriteArrayList<Checkpoint> quietPositions = new CopyOnWriteArrayList<>();
+        AtomicInteger handedOver = new AtomicInteger();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> Mono.just(quietPosition -> {
+            quietPositions.add(quietPosition);
+            return handedOver.incrementAndGet() == 1 ? Mono.error(new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown by the handler")) : Mono.empty();
+        }));
+        CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+
+        // When it subscribes
+        subscriptionModel.subscribe("refusing-handler", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event)));
+
+        // Then the change stream is opened again at the position that could not be handed over, and the subscription keeps delivering
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
+        assertThat(CommandLog.changeStreamField(commands.changeStreamsOpened().getLast(), "startAfter")).isEqualTo(resumeTokenOf(quietPositions.getFirst()));
+        assertThat(subscriptionModel.isRunning("refusing-handler")).isTrue();
+        NameDefined matched = nameDefined();
+        write(matched);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));
+    }
+
+    @Test
+    void a_quiet_position_listener_that_fails_before_reading_with_the_refusal_type_naming_a_catchup_position_is_asked_again_and_the_change_stream_opens_at_the_same_position() {
+        assertThatAListenerFailingBeforeReadingWithIsAskedAgainAndTheChangeStreamOpensAtTheSamePosition(new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown before reading"));
+    }
+
+    @Test
+    void a_quiet_position_listener_that_fails_before_reading_with_a_plain_exception_is_asked_again_and_the_change_stream_opens_at_the_same_position() {
+        assertThatAListenerFailingBeforeReadingWithIsAskedAgainAndTheChangeStreamOpensAtTheSamePosition(new IllegalStateException("thrown before reading"));
+    }
+
+    private void assertThatAListenerFailingBeforeReadingWithIsAskedAgainAndTheChangeStreamOpensAtTheSamePosition(Throwable failure) {
+        // Given a listener whose first answer fails once an event has been written, so the event is written after the change stream opened and before the model reads
+        AtomicInteger asked = new AtomicInteger();
+        CompletableFuture<Void> written = new CompletableFuture<>();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> asked.incrementAndGet() == 1
+                ? Mono.fromFuture(written).then(Mono.<Function<Checkpoint, Mono<Void>>>error(failure))
+                : Mono.just(quietPosition -> Mono.empty()));
+        CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe("failing-before-reading", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event)));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(asked).as("times the listener was asked").hasValue(1));
+        NameDefined matched = nameDefined();
+        write(matched);
+        // The present moves past the position the first change stream opened at, so a reopen at the present is told apart from one at that position
+        await().pollDelay(Duration.ofSeconds(2)).until(() -> true);
+
+        // When the listener fails
+        written.complete(null);
+
+        // Then the listener is asked again, and the change stream opens at the operation time the first one opened at
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
+        assertThat(commands.changeStreamsOpened().getLast().changeStreamStage().get("startAtOperationTime")).as("operation time the second change stream opens at")
+                .isEqualTo(commands.changeStreamsOpened().getFirst().changeStreamStage().get("startAtOperationTime"));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(asked.get()).as("times the listener was asked").isGreaterThanOrEqualTo(2));
+
+        // And the event written before the reopen is delivered once, while the subscription keeps running
+        await().atMost(10, SECONDS).during(Duration.ofSeconds(1)).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).containsExactly(matched.eventId()));
+        assertThat(subscriptionModel.isRunning("failing-before-reading")).isTrue();
     }
 
     @Test
