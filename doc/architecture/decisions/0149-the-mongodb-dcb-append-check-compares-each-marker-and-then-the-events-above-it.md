@@ -156,10 +156,9 @@ through.
 This doesn't make a plain read through a mongos safe. With the markers on one shard and the events on another, a token
 can hold E's markers while the read misses E, and then no marker moves and the append passes. The sum check has the same
 hole, so it isn't new. A read with `withVersions()` whose stream reports versions ran in a snapshot transaction, and in the
-same probe it blocked during the window and the append was refused. A stream that reports none came from a plain read
-and has the hole. In that probe, holding E's commit for 9 seconds made the read give up on its snapshot after 5 seconds,
-report no versions and let the append pass. The store also reads plainly with `resumeFromMarkerVersions` off, for
-`DcbCriteria.all()` and inside a session of the caller's (ADR 148).
+same probe it blocked during the window and the append was refused. A stream that reports none may have come from a
+plain read, and then has the hole. In that probe, holding E's commit for 9 seconds made the read give up on its snapshot
+after 5 seconds, report no versions and let the append pass. ADR 148 has the other reasons a read reports none.
 
 ### Why a matching event can't get through
 
@@ -184,22 +183,27 @@ opened. A probe on a single-node replica set at the D2 branch saw one snapshot a
 assumption, and on a sharded cluster the store doesn't make it.
 
 The markers of a plain read aren't one snapshot on a replica set either, since a find can yield between documents. A
-probe that forced a yield got a token with one marker from before E and one from after it. The read takes the position
-and the events after the token and from the same primary, so it holds E, and the caller decides with E in hand. That,
-and not a snapshot, is what makes step 3 sound for such a token.
+probe that forced a yield got a token with one marker from before E and one from after it, and step 3 can pass that token
+where the sum check refused it. That's sound when the read's events hold E, because the caller then decides with E in
+hand. A read of the whole boundary from the primary at read concern local holds E, because it takes the position and the
+events after the token. The assumptions below say when a read doesn't.
 
-The argument assumes three more things. First, nothing replaces the document of an event a 0.35 node wrote, which ADR 148
+The argument assumes four more things. First, nothing replaces the document of an event a 0.35 node wrote, which ADR 148
 also needs. The sum check doesn't read events, so this is new for an ordinary conditional append, also with
 `resumeFromMarkerVersions(false)`. A 0.34 `updateEvent` during a rolling upgrade can remove an event's `mv`, and the
 query then passes a token that the sum check refused. Second, and the sum check assumes this too, a marker version a
 token holds isn't rolled back and then given to another append under the same epoch. A plain read takes the token at
 the collection's default read concern, so a failover that rolls back an increment written at w:1 can break that. So can
 a token read inside a transaction after that transaction's own append, when the transaction then rolls back. Third, a
-read takes its events from the member its markers came from, or from one ahead of it. The Spring and reactor stores apply
-`queryOptions` to the events read and not to the marker read, so `withReadPreference(secondary())` breaks this. In a probe
-on the Spring store, a torn marker read on the primary and a secondary that hadn't applied E passed a token the sum check
-refused. A secondary that lags with no tear leaves the sum equal, so the sum check has that hole, and this is a rarer
-path beside it.
+read's events aren't behind its markers, by member or by read concern. The Spring and reactor stores apply `queryOptions`
+to the events read and not to the marker read, so `withReadPreference(secondary())` breaks this, and so does read concern
+majority with the secondaries stalled. A native store built on a collection with its own read preference does the same,
+and it reads a token outside a caller's session and the events inside it. In a probe on the Spring store, a torn marker
+read on the primary and a secondary that hadn't applied E passed a token the sum check refused. With no tear these reads
+keep the sum equal, so the sum check has the same hole, and the tear is a rarer path beside it. Fourth, the read returned the whole
+boundary. A read with `limit`, `skip` or `upToPosition` may not return E, and in a probe a torn token from such a read
+passed where the sum check refused it. With no tear the same read passes on the sum too, because the token doesn't depend
+on the window, as `DcbReadOptions` says.
 
 ### Pruning markers
 
@@ -242,8 +246,8 @@ for their writes, and whether the Spring and reactor stores can set or read the 
 `TransactionTemplate` or `TransactionalOperator` runs hasn't been checked. A sharded deployment keeps refusing on a
 moved marker, and this stays open for when one asks.
 
-**Read the token in a snapshot transaction on a sharded cluster**, so that step 3 could stay there and a read could no
-longer miss an event its token holds. That would fix the second case of #1231 on a sharded cluster too and close the hole
+**Read the token and the events in a snapshot transaction on a sharded cluster**, so that step 3 could stay there and a
+read could no longer miss an event its token holds. That would fix the second case of #1231 on a sharded cluster too and close the hole
 the sum check also has. It costs a transaction on every read and a branch in each store's read path, and it can't be
 tested on the single-shard cluster the test suite starts. It stays open with the option above.
 
