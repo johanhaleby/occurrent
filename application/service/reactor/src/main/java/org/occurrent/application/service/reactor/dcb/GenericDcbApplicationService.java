@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.dcb.TagGenerator;
+import org.occurrent.application.service.internal.FailureAfterWrite;
 import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatcher;
 import org.occurrent.application.service.reactor.ReactiveTransactionExecutor;
 import org.occurrent.eventstore.api.dcb.*;
@@ -140,38 +141,56 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // and decide again. The side-effect is composed after the retry so it runs once on success, not per attempt.
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
-        Mono<Result<E>> readDecideAppend = Mono.defer(() -> readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions)).doOnNext(eventStream -> refuseEventBelowFoldedPosition(criteria, options, eventStream)).onErrorMap(DcbSnapshotInvalidException.class, refused -> refused.beforeAppend(functionThatCallsDomainModel)).flatMap(eventStream -> {
-            List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
-            List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
-            if (newDomainEvents == null || newDomainEvents.isEmpty()) {
-                return Mono.empty();
-            }
-            List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-            List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
-            DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(eventStream.consistencyToken());
-            Supplier<Mono<DcbAppendResult>> appendAndDispatch = () -> eventStore.append(dcbEvents, appendCondition).flatMap(appendResult -> {
-                if (!dispatchSynchronously) {
-                    return Mono.just(appendResult);
+        return Mono.defer(() -> {
+            FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
+            Mono<Result<E>> readDecideAppend = Mono.defer(() -> readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions))
+                    .doOnNext(eventStream -> refuseEventBelowFoldedPosition(criteria, options, eventStream))
+                    .onErrorMap(DcbSnapshotInvalidException.class, refused -> refused.beforeAppend(functionThatCallsDomainModel))
+                    .flatMap(eventStream -> {
+                List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
+                List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
+                if (newDomainEvents == null || newDomainEvents.isEmpty()) {
+                    return Mono.empty();
                 }
-                // A successful append is assigned a contiguous global-position block, so re-read exactly that block to
-                // get the events enriched with their positions, then dispatch inside the transaction.
-                return eventStore.read(DcbCriteria.all(), DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition()))
-                        .flatMap(enrichedStream -> transactionExecutor.isTransactional()
-                                .flatMap(transactional -> synchronousEventDispatcher.dispatch(enrichedStream.events(), transactional))
-                                .thenReturn(appendResult));
+                List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
+                List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
+                DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(eventStream.consistencyToken());
+                // A transaction already open here counts as joined, so the retry doesn't see a failure after the write
+                return reportsTransaction(dispatchSynchronously).flatMap(joined -> {
+                    // Asked inside the transaction, since the answer depends on what's open, and before the append, so a failure here undoes nothing
+                    Supplier<Mono<DcbAppendResult>> appendAndDispatch = () -> Mono.defer(() -> {
+                        failureAfterWrite.refuseIfHeld();
+                        return !dispatchSynchronously ? eventStore.append(dcbEvents, appendCondition) : reportsTransaction(dispatchSynchronously).flatMap(transactional ->
+                                eventStore.append(dcbEvents, appendCondition).flatMap(appendResult ->
+                                        // A successful append is assigned a contiguous global-position block, so re-read exactly that block to
+                                        // get the events enriched with their positions, then dispatch inside the transaction.
+                                        Mono.defer(() -> eventStore.read(DcbCriteria.all(), DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())))
+                                                .flatMap(enrichedStream -> synchronousEventDispatcher.dispatch(enrichedStream.events(), transactional))
+                                                .onErrorMap(failure -> !transactional || joined, failureAfterWrite::hold)
+                                                .thenReturn(appendResult)));
+                    });
+                    // Enter the transaction executor only when synchronous dispatch must commit atomically with the append.
+                    // Otherwise the append keeps exactly its prior semantics and no transaction overhead is added.
+                    return dispatchSynchronously ? transactionExecutor.inTransaction(appendAndDispatch) : Mono.defer(appendAndDispatch);
+                }).map(appendResult -> new Result<>(withCheckedVersions(appendResult, versionsRequested, eventStream), newDomainEvents));
             });
-            // Enter the transaction executor only when synchronous dispatch must commit atomically with the append.
-            // Otherwise the append keeps exactly its prior semantics and no transaction overhead is added.
-            return (dispatchSynchronously ? transactionExecutor.inTransaction(appendAndDispatch) : Mono.defer(appendAndDispatch))
-                    .map(appendResult -> new Result<>(withCheckedVersions(appendResult, versionsRequested, eventStream), newDomainEvents));
-        }).retryWhen(retry);
-
-        return readDecideAppend.flatMap(result -> {
-            if (sideEffect == null) {
-                return Mono.just(result.appendResult());
-            }
-            return Mono.defer(() -> sideEffect.apply(result.newDomainEvents())).thenReturn(result.appendResult());
+            // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
+            return readDecideAppend.onErrorResume(failureAfterWrite::isHeldAfter, failure -> Mono.empty())
+                    .retryWhen(retry)
+                    // An executor can swallow the stand-in and return a value, which says nothing about the failure
+                    .filter(result -> !failureAfterWrite.isHeld())
+                    .switchIfEmpty(Mono.defer(() -> failureAfterWrite.isHeld() ? Mono.error(failureAfterWrite.failure()) : Mono.empty()))
+                    .flatMap(result -> {
+                        if (sideEffect == null) {
+                            return Mono.just(result.appendResult());
+                        }
+                        return Mono.defer(() -> sideEffect.apply(result.newDomainEvents())).thenReturn(result.appendResult());
+                    });
         });
+    }
+
+    private Mono<Boolean> reportsTransaction(boolean dispatchSynchronously) {
+        return dispatchSynchronously ? transactionExecutor.isTransactional().defaultIfEmpty(false) : Mono.just(false);
     }
 
     @Override

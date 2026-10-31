@@ -23,6 +23,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.application.service.dcb.TagGenerator;
+import org.occurrent.application.service.internal.FailureAfterWrite;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
@@ -139,10 +140,12 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         boolean versionsRequested = options.versionsRequested();
 
         // @formatter:off
-        record Tuple<T1, T2>(T1 v1, T2 v2) {}
+        record Attempt<T1, T2>(T1 v1, T2 v2) {}
         // @formatter:on
 
-        Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
+        FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
+
+        Attempt<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
             // The read and the decision run outside the transaction, since a store reports no marker versions inside one.
             // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
             final DcbEventStream eventStream;
@@ -155,21 +158,30 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
             List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
             if (newDomainEvents == null || newDomainEvents.isEmpty()) {
-                return new Tuple<>(Optional.empty(), List.of());
+                return new Attempt<>(Optional.empty(), List.of());
             }
 
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
             List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
             DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(eventStream.consistencyToken());
+            // A transaction already open here counts as joined, so the retry doesn't see a failure after the write
+            boolean joined = dispatchSynchronously && transactionExecutor.isTransactional();
             Supplier<DcbAppendResult> appendAndDispatch = () -> {
+                failureAfterWrite.refuseIfHeld();
+                // Asked inside the transaction, since the answer depends on what's open, and before the append, so a failure here undoes nothing
+                boolean transactional = dispatchSynchronously && transactionExecutor.isTransactional();
                 DcbAppendResult appendResult = eventStore.append(dcbEvents, appendCondition);
 
                 if (dispatchSynchronously) {
-                    // A successful append is assigned a contiguous global-position block, so re-read exactly that block
-                    // to get the events enriched with their positions, then dispatch on this thread, inside the transaction.
-                    List<CloudEvent> writtenEnriched = eventStore.read(DcbCriteria.all(),
-                            DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
-                    synchronousEventDispatcher.dispatch(writtenEnriched, transactionExecutor.isTransactional());
+                    try {
+                        // A successful append is assigned a contiguous global-position block, so re-read exactly that block
+                        // to get the events enriched with their positions, then dispatch on this thread, inside the transaction.
+                        List<CloudEvent> writtenEnriched = eventStore.read(DcbCriteria.all(),
+                                DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
+                        synchronousEventDispatcher.dispatch(writtenEnriched, transactional);
+                    } catch (Throwable failure) {
+                        throw failureAfterWrite.propagate(failure, transactional && !joined);
+                    }
                 }
 
                 return appendResult;
@@ -178,9 +190,19 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
             // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
             // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0074.
-            DcbAppendResult appendResult = dispatchSynchronously ? transactionExecutor.inTransaction(appendAndDispatch) : appendAndDispatch.get();
-            return new Tuple<>(Optional.of(withCheckedVersions(appendResult, versionsRequested, eventStream)), newDomainEvents);
+            try {
+                DcbAppendResult appendResult = dispatchSynchronously ? transactionExecutor.inTransaction(appendAndDispatch) : appendAndDispatch.get();
+                return new Attempt<>(Optional.of(withCheckedVersions(appendResult, versionsRequested, eventStream)), newDomainEvents);
+            } catch (Throwable failure) {
+                if (!failureAfterWrite.isHeldAfter(failure)) {
+                    throw failure;
+                }
+                // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
+                return new Attempt<>(Optional.empty(), List.of());
+            }
         });
+
+        failureAfterWrite.rethrowIfHeld();
 
         // Invoke the side-effect once, after a successful append, with the newly written events. It is not invoked
         // on the no-new-events path, and it is outside the retry so it does not run per attempt.

@@ -41,7 +41,7 @@ import java.util.function.Supplier;
  * It relies on the standard Spring transaction propagation ({@code PROPAGATION_REQUIRED}): the operator opens (or
  * joins) a transaction bound to the Reactor context, and the reactive MongoDB event store - configured with a
  * {@code ReactiveMongoTransactionManager} and {@code SessionSynchronization.ALWAYS} - participates in that same
- * transaction rather than opening its own. A handler whose {@code Mono} errors therefore rolls the write back.
+ * transaction rather than opening its own. In a transaction this executor opens, a handler whose {@code Mono} errors therefore rolls the write back.
  *
  * <h4>There is no free lunch</h4>
  * <p>
@@ -142,9 +142,9 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                         ? Mono.just(false)
                         : Mono.error(throwable))
                 .flatMap(ownedByCaller -> ownedByCaller
-                        // A transaction is already open, so the operator joins it and this executor is not its owner.
-                        // A conflict aborts the whole transaction, which only its owner can start again, so run the
-                        // action once and let the error reach that owner. See ADR 0074.
+                        // A transaction is already open, so this executor takes it as the caller's and runs the action
+                        // once, also on a propagation that opens a new one. A conflict aborts a joined transaction, which
+                        // only its owner can start again, so the error goes to that owner. See ADR 0074.
                         ? transaction
                         : transaction.retryWhen(conflictRetry));
     }
@@ -153,8 +153,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * Reads the live transaction state rather than emitting {@code true} unconditionally, because a caller-supplied
      * {@link TransactionalOperator} can be configured not to open one at all, for example with
      * {@code PROPAGATION_NOT_SUPPORTED} or {@code PROPAGATION_NEVER}. Claiming a transaction that does not exist would
-     * make a synchronous dispatch stop at the first handler failure with nothing rolling back, stranding the handlers
-     * behind it.
+     * make a synchronous dispatch stop at the first handler failure, stranding the handlers behind it.
      */
     @Override
     public Mono<Boolean> isTransactional() {
