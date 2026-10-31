@@ -466,9 +466,8 @@ saga until one does. A saga on a model that answers true holds nothing and keeps
 - A failed event that the instance cannot list as pending is held too, and the next input applies it. That covers an
   instance at its limit of 10 000 pending versions, a pending write that keeps losing its compare-and-set or fails in the
   store, and an event that another delivery passed by a whole reorder window while it was failing. A subscription in
-  commit order holds such an event only when the delivery met a held copy of its own stream. Otherwise the exception
-  reaches the source, which retries it in place.
-- When a held event fails while it is applied, the delivery that was handling it is kept as a held event of its own, and
+  commit order doesn't hold such an event. It logs an ERROR and the exception reaches the source, which retries it in place.
+- When a held event fails while it is applied, a delivery not yet applied is kept as a held event of its own, and
   the held event has its own quarantine clock. The delivery is refused, unless that clock has run out and quarantines the
   instance, which acknowledges it.
 - Nothing drops a pending version any more. The saga logs a warning once one stream's pending versions of one type

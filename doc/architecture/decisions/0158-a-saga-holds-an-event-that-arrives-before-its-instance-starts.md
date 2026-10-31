@@ -66,7 +66,10 @@ stores, `InMemorySagaStateStore` and `SpringMongoSagaStateStore`, implement it.
 
 Each attempt of an input to a started instance, a delivery or a timer, reads the instance and then the held index, each
 held copy without its body. The read leaves out a copy that waits, using `heldIndexWithoutWaiting`, unless the instance
-has no `startMark` or has completed. The attempt decides each copy it read before it handles the input:
+has no `startMark` or has completed. The attempt decides the copies up to the input, handles the input, then decides the
+copies it left. A copy above a delivery's version on the delivery's own stream is left, unless the marks prove it applied.
+Every other copy comes first, including one of another stream or with no version, and a timer has no stream, so all of
+them do. Each copy is decided the same way:
 
 | The copy | What the attempt does |
 |---|---|
@@ -75,10 +78,18 @@ has no `startMark` or has completed. The attempt decides each copy it read befor
 | anything else | applies it as an input of its own, whatever the marks say, then releases it |
 
 This walk is the sweep. A copy applied in it can lower the start or complete the instance, and then the sweep reads the
-index again, so the copies that were waiting apply in version order or are released in that same attempt. The sweep runs
+index again, so the copies that were waiting apply in version order or are released in that same attempt. That read stops
+at the delivery too, and the copies it leaves apply once the delivery is decided. The sweep runs
 whatever `holds` is, whenever the state store can hold, so a copy held before a deploy
 moved the saga to a commit-order model is still applied. A quarantined instance has no sweep and keeps every copy. An
 instance that has not started has no sweep either, and the attempt doesn't read the index.
+
+**The delivery goes before the copies above it, so those copies can't move the instance past it.** Once the delivery is
+applied, is its own copy, or is skipped below the start or behind the window, the attempt decides what it left. A lost save
+there retries the attempt, which finds the delivery decided. A copy that fails there refuses a delivery that needs nothing
+kept, so its redelivery is skipped and tries the copy again. A delivery whose own reaction fails leaves
+the copies above it held. Its next attempt, a later version of its stream or an input of another stream applies them. If
+its budget quarantines the instance first, they stay held, as every copy does on a quarantined instance.
 
 The marks prove a copy applied when its version is a mark, or among the `applied` versions, of any type of its stream,
 since a stream version names one event. A copy with no redelivery key has no version, so nothing proves it applied and
@@ -91,8 +102,8 @@ compare-and-set, which a lost save retries from the first read.
 
 **Why that order of reads stops a double apply.** The instance is read first, so a copy in the index that the instance
 doesn't show applied was not forgotten by that read. A save can only forget a version by trimming it from the marks, and
-the attempt that makes the save has swept on the instance it read, or its compare-and-set fails because that instance
-changed. So a copy is released before the marks that prove it can go. A release that fails in the sweep fails the
+the attempt that makes the save has released every copy those marks prove, on the instance it read, or its compare-and-set
+fails because that instance changed. So a copy is released before the marks that prove it can go. A release that fails in the sweep fails the
 attempt and its input isn't saved. The failure counts as the copy's, so the delivery is kept and not blamed. An apply
 save the sweep already made stands, and the next attempt tries the release again on the marks.
 
@@ -153,12 +164,10 @@ failures on that path end differently:
   start would have applied it. 0.34.0 skips that event too.
 - A store failure reading a held copy's body charges that copy's budget, so it can quarantine the instance and acknowledge
   the delivery.
-- A delivery that met a copy of its own stream, and whose read of the index and first read on the failure path both fail,
-  gets a plain copy, because nothing there asks whether the feed would skip it. The copy waits like any other, and
-  completing the instance releases it.
+- When the read on the failure path fails too, the delivery is refused with an ERROR that says it could not be listed, and
+  nothing is stored. A source that offers it again gets it skipped.
 - A converter that fails while the failure path decides the skip counts the event as a start event. The event can then be
-  listed as pending with no later delivery to clear the entry, charge a budget, or be held as a start event that applies
-  on the next attempt.
+  listed as pending with no later delivery to clear the entry, or charge a budget.
 
 **A copy from another stream than the start's is applied, wherever it committed.** Telling a copy that committed before
 the start from one that committed after needs positions that become visible in commit order. The MongoDB event store
@@ -190,8 +199,8 @@ A copy that fails in a sweep is not released. The clock for it is on the copy, i
 writes with `SagaHeldEvents.failing` and no later failure moves. A copy has no failure record and no pending entry of its
 own while it fails.
 
-**The delivery that drove the sweep is held before it is refused**, so a delivery is never refused for another event's
-failure with nothing keeping it. A delivery that isn't itself the copy that failed, that the instance doesn't already count as
+**The delivery that drove the sweep is held before it is refused**, when the copy that failed comes before the delivery is
+decided, so a delivery is never refused for another event's failure with nothing keeping it. A delivery that isn't itself the copy that failed, that the instance doesn't already count as
 handled, and that a feed in commit order wouldn't skip below the start, is held as a plain copy, and the next sweep decides
 it like any other copy. A read that fails on the way there leaves the attempt's own read to answer, since a copy of an event the instance has
 forgotten applying would react again. The copies applied since can have moved the start, so a skip on that answer doesn't
@@ -231,13 +240,11 @@ proves the version applied or lists it pending, no copy is written. An instance 
 longer active, gets none either. A copy kept while the instance has the version behind the window logs a WARN, since
 nothing proves it applied, and if it did, its reaction runs again.
 
-Cause 5 has three entrances. The failure path's own read is the first. A later compare-and-set attempt of the same
+Cause 5 has two entrances. The failure path's own read is the first. A later compare-and-set attempt of the same
 delivery is the second. There, attempt 1 classifies the version new, dispatches and loses its save, and attempt 2 finds the version
 behind the window. 0.34.0 skips and acknowledges it there, and the executor now throws `OvertakenInFlight`, which takes
-the failure path. Without held copies, the first two need deliverers that run in parallel to apply a window of the
-version's stream and type in that gap. The third is the delivery's own sweep. The attempt's read classifies the version
-new, the copies it applies move the instance past the version, and the same exception takes the failure path, on one
-thread. A sweep also reaches the first on one thread, when a later copy fails or the read after the sweep throws.
+the failure path. Both need a second deliverer to move the instance a window past the version in that gap, with deliveries
+or with a sweep. One deliverer doesn't get there, since the copies above a delivery wait until it is decided.
 
 The evidence for cause 5 is per delivery and keyed. Each call of `onCloudEvent` keeps the keys it classified new by
 position alone, meaning a classification that would still say new with every marker that keeps a version outstanding
@@ -247,18 +254,11 @@ it applied. A delivery whose first successful read already finds the version beh
 empty set, so it is an arrival behind the window, ADR 154's own row, and gets no copy. A read that fails on the failure
 path can't tell, so a delivery that holds writes the copy.
 
-Where the delivery does not hold and met no held copy of its own stream, causes 1 to 4 rethrow as in 0.34.0, since the
-source retries in place and the event is still new when it does. Cause 5 logs an ERROR naming the key and the instance,
+Where the delivery does not hold, no copy is written for any of the five causes. Causes 1 to 4 log an ERROR naming the key
+and the cause and rethrow, since the source retries in place and the event is still new when it does. Cause 5 logs an ERROR naming the key and the instance,
 then rethrows and the redelivery is skipped, as in 0.34.0. On a model that keeps the commit-order contract, a window then
 passes a version only after some deliverer applied it, so a copy would run its reaction again. Otherwise that ERROR shows
 a model that broke the contract, or the first item under "What this does not close".
-
-A delivery that listed a held copy of its own stream on any of its attempts is kept the way a holding delivery is, for all
-five causes, on a feed in commit order too. A copy held before the subscription declared commit order can move the instance
-past that delivery unapplied, on one thread, and its redelivery would then be skipped. A copy of another stream doesn't
-count, since it can't move that stream's marks. A copy of the stream counts whatever its type or version, which is wider than
-what can pass the delivery. Where another deliverer did apply the version, this costs one more reaction, under "A copy can
-apply twice". An event below the start on that feed is still skipped when a read can say so.
 
 ### Completion, quarantine and delete
 
@@ -312,22 +312,23 @@ apply twice". An event below the start on that feed is still skipped when a read
 
 - **An event a parallel deliverer's sweep passes on a feed in commit order.** It takes copies held before the subscription
   declared commit order and two deliverers on one instance. A delivery reads the version as new. The other deliverer's
-  sweep passes the version and releases the last copy of that stream before this delivery lists the copies, so it never
-  meets one. Its save loses, the next attempt finds the version behind the window, the delivery gets the ERROR above and its
-  redelivery is skipped. The reaction ran in the attempt that lost its save, and the instance never applies the event. A
-  list that fails on every attempt reaches the same ERROR before any dispatch, so no reaction runs at all. Holding every
+  sweep passes the version. The delivery's save loses, the next attempt finds the version behind the window, the delivery gets
+  the ERROR above and its redelivery is skipped. The reaction ran in the attempt that lost its save, and the instance never
+  applies the event. A list that fails on every attempt reaches the same ERROR before any dispatch, so no reaction runs at
+  all. A delivery refused with the ERROR for causes 1 to 4 ends the same way when that sweep runs before its redelivery. Holding every
   overtaken version would close it, and would also run the reaction again for every version another deliverer applied, which
   0.34.0 doesn't do.
 - **An event that first arrives behind the window after copies passed it, on a feed in commit order.** With window 2 and
   copies of `I3` to `I8` held before the subscription declared commit order, a delivery on another stream applies them. `I2`
   then arrives, its first read finds it behind the window, and it is acknowledged with the behind-the-window warning. Its
   reaction never runs. It looks the same as a replay of a version applied long ago, so this is ADR 154's row for an arrival
-  behind the window.
+  behind the window. The same late arrival with no held copy and no fault ends the same way, with that warning, once per
+  instance and stream, as its only log. 0.34.0 skips it with no log at all.
 - **An event overtaken in flight whose copy can't be written.** Take window 2, where `I2` fails, `I5` applies in flight
   and the plain-copy hold throws. The delivery is refused with an ERROR naming the event and the store failure, and its
-  redelivery is then skipped as behind the window, so its reaction never runs. It takes a failing store write while the
-  version is overtaken. A failing reaction is one way to get there. The delivery's own sweep is another, where copies above
-  the version already stand, and then that write is the only fault in the delivery. The ERROR is what's left to go on. A read that fails before the hold doesn't
+  redelivery is then skipped as behind the window, so its reaction never runs. It takes a second deliverer that moves the
+  instance a window past the version while this delivery is in flight, and a failing store write. The same arrival with no
+  failing write gets a copy. The ERROR is what's left to go on. A read that fails before the hold doesn't
   count, because the hold is still attempted. A crash between classifying a version new and writing its copy is followed
   by a redelivery whose first read finds it behind the window, which is ADR 154's row for an arrival behind the window and
   [#1320](https://github.com/johanhaleby/occurrent/issues/1320)'s.
@@ -336,11 +337,10 @@ apply twice". An event below the start on that feed is still skipped when a read
   release. That is at-least-once, as a crash in a dispatch already is. A hold that loses to a release can insert a copy again after the event applied, which the next sweep releases while the marks still prove
   it, and applies once more when a reorder window has passed it. And the plain copy of a version that applied and was then
   passed by a full reorder window while this delivery of it was being handled applies again, and the WARN above says so.
-  Where the delivery holds or met copies of its stream, that can't be told from a version passed unapplied, and the other answer is a loss. A replay of
-  a version the marks have forgotten applies again when its reads fail on the failure path of a delivery that holds or met copies of
-  its stream, because nothing then says it is behind the window, and there is no WARN. A replay at or below the floor of an
+  Where the delivery holds, that can't be told from a version passed unapplied, and the other answer is a loss. A replay of
+  a version the marks have forgotten applies again when its reads fail on the failure path of a delivery that holds,
+  because nothing then says it is behind the window, and there is no WARN. A replay at or below the floor of an
   instance stored before 0.35.0 does too, when the first read on that path fails and the second works, since only a version
-  behind the window is refused a copy. A delivery that holds and whose own waiting copy
-  applied in its sweep reacts again the same way, when a later copy fails and the reads on the failure path fail too.
+  behind the window is refused a copy.
 - **A copy left on a completed instance is storage only.** It can never apply. The next input to that instance releases
   it, and `delete` removes it. A TTL on the instance collection doesn't remove it, and the runbook's query finds it.
