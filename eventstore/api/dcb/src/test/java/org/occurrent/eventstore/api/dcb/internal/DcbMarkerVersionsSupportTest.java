@@ -61,11 +61,24 @@ class DcbMarkerVersionsSupportTest {
         }
 
         @Test
-        void is_one_key_per_tag_and_one_per_type_and_never_a_key_that_combines_a_tag_and_a_type() {
+        void is_one_key_per_tag_and_no_type_key_for_an_item_with_tags_and_never_a_key_that_combines_a_tag_and_a_type() {
             DcbCriteria criteria = DcbCriteria.types("Deposited", "Withdrawn").tags(A, B);
 
-            assertThat(DcbMarkerVersionsSupport.queryMarkerKeys(criteria))
-                    .containsExactly(KEY_A, KEY_B, "type:Deposited", "type:Withdrawn");
+            assertThat(DcbMarkerVersionsSupport.queryMarkerKeys(criteria)).containsExactly(KEY_A, KEY_B);
+        }
+
+        @Test
+        void is_one_key_per_type_for_an_item_without_tags() {
+            DcbCriteria criteria = DcbCriteria.types("Deposited", "Withdrawn");
+
+            assertThat(DcbMarkerVersionsSupport.queryMarkerKeys(criteria)).containsExactly("type:Deposited", "type:Withdrawn");
+        }
+
+        @Test
+        void is_the_tag_keys_of_an_item_with_tags_and_the_type_keys_of_an_item_without_tags_in_one_anyOf() {
+            DcbCriteria criteria = DcbCriteria.anyOf(DcbCriteria.type("Deposited").tags(A), DcbCriteria.type("Withdrawn"));
+
+            assertThat(DcbMarkerVersionsSupport.queryMarkerKeys(criteria)).containsExactly(KEY_A, "type:Withdrawn");
         }
 
         @Test

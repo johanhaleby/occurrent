@@ -47,7 +47,14 @@ final class DcbMarkerVersionsStubs {
     static final String DCB_CONSISTENCY_TOKEN = """
             package org.occurrent.eventstore.api.dcb;
 
-            public record DcbConsistencyToken(long value) {
+            public final class DcbConsistencyToken {
+
+                private DcbConsistencyToken() {
+                }
+
+                public long version() {
+                    return 0;
+                }
             }
             """;
 

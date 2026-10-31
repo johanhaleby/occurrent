@@ -9,8 +9,8 @@ recreated with a new epoch, so pruning also invalidates every DCB snapshot on th
 snapshot, and it's rebuilt from a full read on its next use.
 
 Amended by [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md). For a criteria item with at least one tag, the query reads and increments only its `tag:`
-markers and no longer its `type:` markers, so an append that only shares a type with criteria that have tags no longer
-makes the check refuse a later append on them. What an append increments for its own events is unchanged, so two
+markers and no longer its `type:` markers, so sharing a type with such an item is no longer a reason for the check to
+refuse. What an append increments for its own events is unchanged, so two
 appends of one type that run at the same time still write the same `type:` marker.
 
 Amended by [ADR 164](0164-a-spring-mongo-dcb-append-retries-a-transaction-conflict-for-about-two-minutes.md). "Contention surfaces as a retry, not a spurious command failure" holds while an append loses fewer than 240 attempts in a row on the blocking store, or 321 on the reactive one, within about two minutes of waiting. An append that loses every attempt fails with the last error.
