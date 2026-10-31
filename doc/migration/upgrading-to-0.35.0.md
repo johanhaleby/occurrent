@@ -807,8 +807,10 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   service's retry strategy by default reads and decides again. By default the service allows 5 attempts and the Spring executors
   about 15, so a command on a contended boundary can fail sooner, with the same budget a service without synchronous
   subscriptions has. With an executor on `PROPAGATION_REQUIRES_NEW` under a transaction of yours, the service reads in your
-  transaction and the executor appends in its own, so a read that has gone stale stays stale on every attempt and can use
-  up the service's retries. No test in this repository runs this.
+  transaction and the executor appends in its own, so a second command on the same boundary in your transaction doesn't
+  see the first one's event. Its condition fails on every attempt, and it ends with
+  `DcbAppendConditionNotFulfilledException`. A blocking service used to read in the executor's new transaction, where
+  this worked. `PROPAGATION_REQUIRED` isn't affected.
 
 ### Stored snapshots
 

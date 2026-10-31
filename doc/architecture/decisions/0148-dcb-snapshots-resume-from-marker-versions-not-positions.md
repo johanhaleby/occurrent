@@ -647,8 +647,12 @@ needs no marker versions.
 
 A transaction the caller owns stays the limitation described below, because the read still joins it and reports no
 versions. With an executor on `PROPAGATION_REQUIRES_NEW` under such a transaction, the service reads in the caller's
-transaction and the executor appends in its own, so a read that has gone stale stays stale on every attempt and can use
-up the service's retries. No test in this repository runs this.
+transaction and the executor appends in its own. A second command on the same boundary in the caller's transaction then
+doesn't see the first one's event, its condition fails on every attempt, and it ends with
+`DcbAppendConditionNotFulfilledException`. I ran this once on real MongoDB on both stacks. Before this order the blocking
+service stored both events, and the reactive service failed with `NoSuchTransaction`. `PROPAGATION_REQUIRED` stored both
+events on both stacks, before and after. I accept this regression on the blocking stack, since reading in the executor's
+transaction would bring back the skipped saves. No test in this repository runs this, since nothing should come to depend on it.
 
 ### The decider confirms its append before it saves
 
