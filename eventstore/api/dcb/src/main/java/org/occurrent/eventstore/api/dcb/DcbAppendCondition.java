@@ -43,12 +43,12 @@ import static java.util.Objects.requireNonNull;
  * {@link DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} doesn't do that.
  * The append can also pass on any deployment when a read preference or a read concern puts a read's events behind its
  * token, and with a token read inside a transaction after that transaction's own append, once the transaction has
- * rolled back (see {@link DcbEventStream#consistencyToken()}). A MongoDB store can reserve an append's positions below
- * majority even when the transaction commits at majority, because the reservation usually runs outside the
- * transaction. A failover can then lose the reservation, and any read can miss an event its token holds, one with
- * {@link DcbReadOptions#withVersions()} too, and the append can pass. The <a
+ * rolled back (see {@link DcbEventStream#consistencyToken()}). On the Spring and reactor MongoDB stores, an append whose
+ * own transaction is set to {@code REQUIRES_NEW} or {@code NOT_SUPPORTED} on the database factory of a transaction
+ * already open can leave its event above the reserved positions when that open transaction rolls back. Any read can
+ * then miss an event its token holds, one with {@link DcbReadOptions#withVersions()} too, and the append can pass. The <a
  * href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">0.35.0 upgrade
- * guide</a> says which write concern applies. A token also doesn't depend on a read's limit, skip or position range,
+ * guide</a> has the details. A token also doesn't depend on a read's limit, skip or position range,
  * so after such a read the append doesn't fail for a matching event the read left out.
  * <p>
  * A store can answer from the events as they are when the append runs. A matching event committed after the read that
