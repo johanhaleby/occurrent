@@ -756,14 +756,15 @@ describes it.
 The default `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry a transaction they opened when it
 loses a conflict. In 0.34.0 that meant any `DataIntegrityViolationException`, because Spring translates MongoDB's write
 conflict to it. That also matched a duplicate key and a validation failure, which no new transaction can get past, so
-the unit of work ran again for two minutes. A measurement against MongoDB 8.0 saw 214 runs of a callback that inserted a
-duplicate.
+the unit of work ran 15 times before the error reached the caller. The 0.35.0 budget is 240 attempts, so the same
+predicate would have run it for two minutes.
 
 0.35.0 retries a `TransientDataAccessException`, or any exception with the `TransientTransactionError` label anywhere
 in its cause chain. MongoDB puts that label on a write conflict, and the driver's own `withTransaction` retries on it.
 A duplicate key and a validation failure inside the transaction now run the unit of work once and reach the caller.
 A commit that fails with the `UnknownTransactionCommitResult` label is not retried either, since the commit may have
-gone through. The 0.34.0 predicate did not retry it.
+gone through, even when the same error also has the `TransientTransactionError` label. The 0.34.0 predicate did not
+retry it.
 
 The two executor modules now depend on `mongodb-driver-core` as an optional dependency and look for the label only when
 `com.mongodb.MongoException` is on the classpath. Without the driver you still get the executor, and it still retries a
@@ -771,11 +772,15 @@ The two executor modules now depend on `mongodb-driver-core` as an optional depe
 
 ### Who is affected
 
-One case retried in 0.34.0 and doesn't now. A unit of work that writes outside the transaction, for example through a
+Two cases changed. The first retried in 0.34.0 and doesn't now. A unit of work that writes outside the transaction, for example through a
 `MongoTemplate` with `SessionSynchronization.NEVER`, can get a duplicate key that MongoDB does not label. Say it checks
 whether a document exists, a rival inserts it, and the write then fails with the duplicate. The second run saw the
 rival's document and skipped the write, so the command succeeded. In 0.35.0 it fails with the `DuplicateKeyException`
 after the first run.
+
+The second did not retry in 0.34.0 and does now. A commit that fails with the `TransientTransactionError` label reaches
+the executor as a `TransactionSystemException` with a `MongoException` cause, which 0.34.0 did not match. The executor
+now runs the unit of work again, which is safe when the transaction was rolled back, as that label says it was.
 
 An executor you build with a retry of your own uses that retry as given, as before. So does one built on a template or
 operator that opens no transaction.
