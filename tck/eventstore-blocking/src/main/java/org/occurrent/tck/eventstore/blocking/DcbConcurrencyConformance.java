@@ -336,7 +336,6 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
     @Timeout(120)
     void a_conditional_append_is_not_refused_by_appends_of_another_type_that_share_its_tag_and_race_it() {
         int iterations = 50;
-        int started = 0;
         List<Throwable> refusals = new ArrayList<>();
 
         for (int iteration = 0; iteration < iterations; iteration++) {
@@ -364,19 +363,18 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
                     .as("Iteration %d: an append with no condition has nothing to fail on, so failing it is the store giving "
                             + "up on its own collision", iteration)
                     .isEmpty();
-            started++;
             Outcome<String> conditional = outcomes.get(0);
             if (!conditional.succeeded()) {
                 refusals.add(conditional.failure());
             }
         }
 
-        if (expectedToLetAnAppendOfAnotherTypeSharingATagRace()) {
-            assertThat(started - refusals.size())
+        if (expectedToSettleAMovedMarkerByItsEvents()) {
+            assertThat(refusals)
                     .as("Every one of the %d conditional appends must succeed. The events racing it have the tag of its "
                             + "criteria but not its type, so none of them matches, and refusing one is the store failing "
-                            + "to tell a match from a shared tag. Refused: %s", started, refusals)
-                    .isEqualTo(started);
+                            + "to tell a match from a shared tag", iterations)
+                    .isEmpty();
         } else {
             assertThat(refusals)
                     .as("A store that compares only markers may refuse these appends, and then the refusal must be the "
@@ -586,20 +584,10 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
     }
 
     /**
-     * Whether the declared append-condition model owes a conditional append that races appends of another type
-     * sharing its tag a success, since none of them matches. Only a model that compares markers alone may refuse.
-     */
-    private boolean expectedToLetAnAppendOfAnotherTypeSharingATagRace() {
-        return switch (appendConditionModel()) {
-            case EXACT_CRITERIA, MARKERS_THEN_EVENTS -> true;
-            case TAG_MARKER -> false;
-        };
-    }
-
-    /**
      * Whether the declared append-condition model settles a condition whose marker a non-matching event moved by looking
-     * at the events, and so owes one winner of two writers that each match the other's event. A model that compares
-     * markers only may refuse both.
+     * at the events, and so owes one winner of two writers that each match the other's event, and owes a success to a
+     * conditional append that races appends of another type sharing its tag, since none of them matches. A model that
+     * compares markers only may refuse both.
      */
     private boolean expectedToSettleAMovedMarkerByItsEvents() {
         return switch (appendConditionModel()) {

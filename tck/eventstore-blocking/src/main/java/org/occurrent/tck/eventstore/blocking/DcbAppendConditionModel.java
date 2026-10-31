@@ -74,9 +74,9 @@ public enum DcbAppendConditionModel {
      *     {@link DcbAppendCondition#wholeStoreLock()} already documents, and the reason it is correct only for a single
      *     writer or a bootstrap append that races only with other bootstrap appends (ADR 30).</li>
      * </ul>
-     * On a deployment where the store can't query, such as a sharded cluster, a MongoDB store refuses when a marker of
-     * the criteria moved. That is the {@link #TAG_MARKER} answer to the first question, and the suite doesn't assert it
-     * for this model.
+     * On anything but a replica set, such as a sharded cluster, a MongoDB store doesn't query, and refuses when a marker
+     * of the criteria moved. That is the {@link #TAG_MARKER} answer to the first question, and the suite doesn't assert
+     * it for this model.
      */
     MARKERS_THEN_EVENTS,
 
@@ -87,10 +87,12 @@ public enum DcbAppendConditionModel {
      * <p>
      * The two consequences the suite asserts, which are the exact inverse of {@link #EXACT_CRITERIA}:
      * <ul>
-     *     <li>An event whose type the criteria excludes, or that lacks another tag the criteria requires,
-     *     <strong>does</strong> conflict when it carries a tag the criteria requires, because the marker the token was
-     *     derived from is keyed on the tag and knows nothing about types or other tags. It is a false conflict, and it self-heals, because the application service re-reads the
-     *     boundary, which still doesn't select the event, and retries.</li>
+     *     <li>An event whose type the criteria excludes <strong>does</strong> conflict when it has a tag the
+     *     criteria requires, because the marker the token was derived from is keyed on the tag and knows nothing about
+     *     types. It is a false conflict, and it self-heals, because the application service re-reads the boundary, which
+     *     still doesn't select the event, and retries. An event that lacks another tag the criteria requires may conflict
+     *     too. A store that compares a sum of the markers refuses it and one that compares each marker can accept it, so
+     *     the suite allows either.</li>
      *     <li>{@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} does <strong>not</strong> detect a
      *     tag-scoped append committed after the read, because a whole-store lock is keyed on a marker that only
      *     another whole-store append touches. This is the limitation

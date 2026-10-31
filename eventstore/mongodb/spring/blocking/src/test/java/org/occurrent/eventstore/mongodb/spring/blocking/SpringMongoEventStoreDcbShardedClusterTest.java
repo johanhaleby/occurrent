@@ -84,14 +84,14 @@ class SpringMongoEventStoreDcbShardedClusterTest {
     }
 
     @Test
-    void refuses_an_append_after_an_event_of_another_type_with_the_tag_because_the_events_can_t_be_asked() {
+    void refuses_an_append_after_an_event_of_another_type_with_the_tag_because_it_doesn_t_ask_the_events() {
         DcbConsistencyToken token = eventStore.read(TICKETS_OF_K1).consistencyToken();
         eventStore.append(List.of(taggedEvent(CONCERT_RENAMED, CONCERT_K1)));
         CloudEvent event = taggedEvent(TICKET_SOLD, CONCERT_K1);
 
         assertThatThrownBy(() -> eventStore.append(List.of(event), failIfEventsMatch(token)))
-                .as("The marker of the tag moved and a mongos can't run the query that would show no matching event, so the check refuses. "
-                        + "A store that queries here would let this append through")
+                .as("The marker of the tag moved. A token read through a mongos can hold a marker from after a matching event and miss "
+                        + "the event, so the store doesn't ask the events and the check refuses. A store that queried here would let this append through")
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
@@ -103,7 +103,7 @@ class SpringMongoEventStoreDcbShardedClusterTest {
         CloudEvent event = taggedEvent(TICKET_SOLD, CONCERT_K1);
 
         assertThatThrownBy(() -> eventStore.append(List.of(event), failIfEventsMatch(token)))
-                .as("The first append incremented the marker of the criteria without matching it, and a mongos can't tell that from a match")
+                .as("The first append incremented the marker of the criteria without matching it, and on a mongos the check doesn't look further than the marker")
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
