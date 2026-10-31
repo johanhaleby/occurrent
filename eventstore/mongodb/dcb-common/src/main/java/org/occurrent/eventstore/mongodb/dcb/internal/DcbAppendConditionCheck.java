@@ -92,12 +92,13 @@ public final class DcbAppendConditionCheck {
      * @param token        the token of the condition
      * @param criteria     the criteria of the condition
      * @param current      the marker observation of every marker key of {@code criteria}
-     * @param queryAllowed whether the store runs on a replica set and so may query the events. When it doesn't, any marker
-     *                     that moved refuses, see {@link #queryAllowed(Function)}
+     * @param runsOnReplicaSet whether the store may rule an item out by its markers and query the events, see
+     *                         {@link #runsOnReplicaSet(Function)}
+     *                     that moved refuses, see {@link #runsOnReplicaSet(Function)}
      * @throws IllegalArgumentException if the token doesn't hold exactly the marker keys of {@code criteria}, which means
      *                                  this store's read didn't create it
      */
-    public static Outcome check(DcbConsistencyToken token, DcbCriteria criteria, Map<String, MarkerObservation> current, boolean queryAllowed) {
+    public static Outcome check(DcbConsistencyToken token, DcbCriteria criteria, Map<String, MarkerObservation> current, boolean runsOnReplicaSet) {
         Set<String> keys = DcbMarkerVersionsSupport.queryMarkerKeys(criteria);
         Map<String, MarkerObservation> read = token.markers();
         if (!read.keySet().equals(keys)) {
@@ -116,7 +117,7 @@ public final class DcbAppendConditionCheck {
             return new Pass();
         }
         // Through a mongos the token isn't one snapshot, so an unmoved marker rules nothing out (ADR 0149)
-        if (!queryAllowed || criteria instanceof DcbCriteria.MatchAll) {
+        if (!runsOnReplicaSet || criteria instanceof DcbCriteria.MatchAll) {
             return new Refuse();
         }
         List<ItemQuery> items = new ArrayList<>();
@@ -137,14 +138,14 @@ public final class DcbAppendConditionCheck {
     }
 
     /**
-     * Whether a read and a transaction take the markers and the events from one snapshot on this deployment, so the store
-     * may rule an item out by its markers and query the events (ADR 149). It's true for a replica set, and false for a
-     * mongos, a load balancer in front of one and anything else that doesn't answer like a replica set. Every failure
-     * except a server that doesn't know {@code hello} propagates.
+     * Whether this deployment is a replica set, the one case where the store may rule an item out by its markers and query
+     * the events (ADR 149). A read there takes its events after its markers from the same member, and a transaction reads
+     * both from one member. It's false for a mongos, a load balancer in front of one and anything else that doesn't answer
+     * like a replica set. Every failure except a server that doesn't know {@code hello} propagates.
      *
      * @param runCommand runs a command against the store's database
      */
-    public static boolean queryAllowed(Function<Document, Document> runCommand) {
+    public static boolean runsOnReplicaSet(Function<Document, Document> runCommand) {
         Document answer = Objects.requireNonNull(helloOrIsMaster(runCommand), "The server sent no answer to hello or isMaster");
         return answer.get("setName") != null && !"isdbgrid".equals(answer.get("msg"));
     }
