@@ -138,8 +138,7 @@ tagged items only, would never get versions. Each snapshot would read its bounda
 before 0.35, for as long as the setting stays off.
 
 So a stripe key may be saved as absent. `DcbMarkerVersions.MarkerVersion` gets an absent value, with no epoch, version
-0 and an unstamped count of 0. A read that asks for versions reports a stripe it finds no marker for as absent. A tag
-key still needs a marker, and a stripe that exists without an epoch still gives no versions.
+0 and an unstamped count of 0. A read that asks for versions reports a stripe it finds no marker for as absent. A tag key still needs a marker, and a marker that exists without an epoch still gives no versions.
 
 A read after saved versions treats an absent stripe like this:
 
@@ -231,8 +230,7 @@ conditional append of an item without tags.
   decide the rest as before.
 - An upgrade from 0.34 is rolling by default. Turning the setting on needs every 0.34 node gone, and nothing warns a
   deployment that turns it on too early. Going back needs the setting off in every process that appends to the store first.
-- A snapshot of a boundary with an item without tags gets versions from its first read. `MarkerVersion` has an absent
-  value, which only a stripe key may hold.
+- An absent stripe no longer stops a read from reporting versions. A missing tag marker or a marker without an epoch still does. `MarkerVersion` has an absent value, which only a stripe key may hold.
 - `DcbMarkerVersions` no longer promises that a type's key is `type:<type>`, and the TCK no longer asserts exact key
   sets. A key is the store's own, as `version()` already is.
 - The pruning rule of ADR 149 covers stripes. A stripe may be deleted only in a transaction that also finds no event of
