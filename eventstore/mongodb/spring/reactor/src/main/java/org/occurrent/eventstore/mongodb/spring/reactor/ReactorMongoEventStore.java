@@ -336,13 +336,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 });
     }
 
-    // Markers, counter and events come from one point in time, so the reported versions cover exactly the events read
-    // and a read after them misses none. This runs in a read-only snapshot transaction on a session of the store's own,
-    // never through the configured TransactionalOperator, and commits it once by hand. The majority commit makes sure
-    // the snapshot was majority-committed. Inside a reactive transaction it reports no versions, since the
-    // transaction's own increments may still abort and a later append would reuse them. A failure reports no versions
-    // instead of failing the read. A read after versions can't fall back to a full read without double-applying
-    // events, so it is refused in both cases.
+    // Markers, counter and events come from one point in time, so a read after the reported versions misses none of the
+    // boundary's events, unless a failover lost a position reservation (ADR 149). This runs in a read-only snapshot
+    // transaction on a session of the store's own, never through the configured TransactionalOperator, and commits it
+    // once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a reactive transaction
+    // it reports no versions, since the transaction's own increments may still abort and a later append would reuse
+    // them. A failure reports no versions instead of failing the read. A read after versions can't fall back to a full
+    // read without double-applying events, so it is refused in both cases.
     private Mono<DcbEventStream> readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {

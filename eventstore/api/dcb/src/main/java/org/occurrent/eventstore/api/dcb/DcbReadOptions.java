@@ -33,8 +33,8 @@ import static java.util.Objects.requireNonNull;
  * by DCB position. For example, {@code fromBeginning().backwards().skip(1).limit(2)} skips the newest match and returns
  * the 2 matches before it in ascending order.
  * <p>
- * Direction, skip, and limit do not affect the {@link DcbEventStream#consistencyToken() consistency token}. It reflects
- * the whole matching set observed at read time, not only the events returned by these options.
+ * The position range, direction, skip, and limit do not affect the {@link DcbEventStream#consistencyToken() consistency
+ * token}. It reflects the whole matching set observed at read time, not only the events returned by these options.
  *
  * @param positionRange the position window to read
  * @param direction     which end of the matching events to start selecting from

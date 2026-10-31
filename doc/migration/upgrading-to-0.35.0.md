@@ -710,13 +710,17 @@ on a busy tag. A condition can still fail with no matching event, for example af
 0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written. On anything else, such as a
 sharded cluster, this doesn't apply, and any event that moves a marker of the criteria still fails it.
 
-A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it,
-and 0.34.0 has the same gap. A plain read through a mongos can do that when the markers and the events are on different
-shards. A read with `withVersions()` doesn't do that when its stream reports `markerVersions()`, because it read both in
-one snapshot transaction. On any deployment, a read whose events are behind its token can do it too, for example when a
-read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A token also
-doesn't depend on a read's limit, skip or upper position, so after such a read a condition doesn't fail for a matching
-event the read left out.
+A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
+0.34.0 has this gap too, except that it refused the append when the read caught only some of the event's markers. A
+plain read through a mongos can do that when the markers and the events are on different shards. A read with
+`withVersions()` doesn't do that when its stream reports `markerVersions()`, because it read both in one snapshot
+transaction. On any deployment, with a client writing at w:1, a failover can do it to any read, one with
+`withVersions()` too. A store reserves an append's positions outside the transaction, so the failover can lose that
+reservation while the append commits, and a read stops at the last reserved position. A read after such a read's
+versions can then skip the event. Also on any deployment, a read whose events are behind its token can do it too, for
+example when a read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A
+token also doesn't depend on a read's limit, skip or upper position, so after such a read a condition doesn't fail for a
+matching event the read left out.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
