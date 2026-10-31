@@ -118,7 +118,7 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
 
     /**
      * Optional inclusive upper bound. When present, only events with a DCB sequence position less than or equal to
-     * this value are returned. When absent, the read includes everything up to the store's DCB head at read time.
+     * this value are returned. When absent, the read stops at the value of the store's position counter it saw.
      */
     public OptionalLong upToPosition() {
         return positionRange.upToPosition();

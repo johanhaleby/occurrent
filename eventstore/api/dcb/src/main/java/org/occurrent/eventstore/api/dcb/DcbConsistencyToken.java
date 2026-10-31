@@ -42,7 +42,7 @@ import static java.util.Objects.requireNonNull;
  * instead.
  * <p>
  * It's a separate type from the {@link DcbEventStream#lastSequencePosition() sequence position} so the two can't be
- * mixed up. The position is the store's head, which doesn't protect an append on its own.
+ * mixed up. The position is a value of the store's position counter, which doesn't protect an append on its own.
  */
 @NullMarked
 public final class DcbConsistencyToken {

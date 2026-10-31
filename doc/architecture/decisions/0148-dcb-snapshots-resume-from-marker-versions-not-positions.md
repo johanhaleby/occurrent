@@ -928,8 +928,7 @@ For 0.35, a bare position is documented as unsafe to resume from on MongoDB:
   get an append that committed late. `CatchupReadScopeLateCommitConformance` checks a catch-up's live start instead.
 - What a catch-up reads and promises is ADR 155's subject, for a no-live catch-up and for a run resumed after a crash
   alike.
-- A position-only checkpoint written by 0.34 can't be repaired by anything. The migration guide says to rebuild it or
-  accept it.
+- A position-only checkpoint written by 0.34 can't be repaired, and a catch-up refuses it, as ADR 155 decides.
 
 A store-wide fix would give a bare position a safe meaning. It's not part of 0.35.
 [#1322](https://github.com/johanhaleby/occurrent/issues/1322), for 0.36.0, is an opt-in mode that reserves the position
