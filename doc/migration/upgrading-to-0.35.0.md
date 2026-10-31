@@ -645,14 +645,14 @@ stacks, so it isn't affected on a store that returns the criteria it was given.
 - **A `DcbEventStore` decorator that rewrites criteria**, adding a tenant tag for example, and passes the inner store's
   token through. It compiles, but the token holds the rewritten criteria, so a condition on the caller's criteria throws
   `IllegalArgumentException`. In `read`, return
-  `new DcbEventStream(inner.events(), inner.lastSequencePosition(), DcbConsistencyToken.of(criteria, innerToken.version()), inner.markerVersions())`,
+  `new DcbEventStream(inner.events(), inner.lastSequencePosition(), DcbConsistencyToken.of(criteria, innerToken.version(), innerToken.markers()), inner.markerVersions())`,
   since the three-argument constructor sets `markerVersions` to empty. Those versions hold the rewritten criteria's
   markers, the added tag's included, so pass them back to the inner store unchanged with the rewritten criteria. A store
   reports no versions for `all()`, on a read or on a conditional append, and throws `DcbSnapshotInvalidException` on a
   read of `all()` with `afterVersions`. So when `all()` becomes a tag, use the three-argument constructor on that read,
   drop the versions from that append's result, and throw on that read yourself. In `append`, rewrite the criteria the
   same way, and give the inner store a condition with
-  `DcbConsistencyToken.of(rewrittenCriteria, token.version())`. On MongoDB the added tag then counts in the check like
+  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`. On MongoDB the added tag then counts in the check like
   any other tag, so appending any event with that tag can make the check refuse, whether or not the event matches.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
   condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
