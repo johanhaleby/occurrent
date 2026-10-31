@@ -726,7 +726,8 @@ another position can pass. On any deployment, a read whose events are behind its
 read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A token also
 doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a matching
 event the read left out. 0.34.0 has the gap this paragraph describes too, except that it refused the append when the
-read caught only some of the event's markers.
+read caught only some of the event's markers, or when a later event moved a marker of the criteria, even one that didn't
+match.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
