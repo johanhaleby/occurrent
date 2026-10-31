@@ -16,9 +16,9 @@ Extends [ADR 84](0084-what-a-position-guarantees.md) with what a position can't 
 ### The defect
 
 A MongoDB store that runs the append transaction itself reserves a block of positions before that transaction starts.
-The reservation is one `findOneAndUpdate` with `$inc` on a counter document, outside the transaction, in each store's
-`reservePositions`. The block is reused when the transaction is retried. So an append can own a position for a long time
-before its events are visible, and an append that reserved later can commit first.
+The reservation is one atomic `$inc` on a counter document, outside the transaction, in each store's `reservePositions`.
+The block is reused when the transaction is retried. So an append can own a position for a long time before its events
+are visible, and an append that reserved later can commit first.
 
 [ADR 84](0084-what-a-position-guarantees.md) states this as the contract:
 

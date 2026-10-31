@@ -221,16 +221,17 @@ append took E's position first. With no tear the sum is equal, so the sum check 
 event moved a marker of the criteria. The sum refuses then, and this check passes when that event doesn't match. On the
 Spring and reactor stores, the update in a caller's transaction joins it and commits with the event, so a failover can't
 lose it alone. A stepdown on both stores, with that transaction at majority and at w:1, kept E and the counter together,
-or lost both when a w:1 commit was rolled back. A store whose own transaction is set to `REQUIRES_NEW` or
-`NOT_SUPPORTED` is the exception. The update joins the caller's transaction and E commits apart from it, so in a probe
-on both stores a caller's rollback left E above the counter with no failover. An append in a caller's transaction that
-reserves E's position after another append lost its reservation rolls its own back with the duplicate, so in a probe
-that set the counter by hand such appends kept failing at E's position until an append in the store's own transaction
-moved the counter. The probes of the loss itself used a stepdown, and a raw `$inc` standing in for the reservation below
-E's. All three stores lost the update at w:1 on three members, and the native store did at w:2 on five members and on a
-primary, a secondary and an arbiter with no write concern set. The Spring store did on three data-bearing members with
-no write concern on the client and w:1 as the server's default. At w:majority, and on three data-bearing members with no
-write concern set and the server's implicit default, all three stores' reads held E. No probe ran through a mongos.
+or lost both when a w:1 commit was rolled back. The exception is a store whose own transaction uses the caller's
+transaction manager and is set to `REQUIRES_NEW` or `NOT_SUPPORTED`. The update joins the caller's transaction and E
+commits apart from it, so in a probe on both stores a caller's rollback left E above the counter with no failover. An
+append in a caller's transaction that reserves E's position after another append lost its reservation rolls its own back
+with the duplicate, so in a probe that set the counter by hand such appends kept failing at E's position until an append
+in the store's own transaction moved the counter. The probes of the loss itself used a stepdown, and a raw `$inc`
+standing in for the reservation below E's. All three stores lost the update at w:1 on three members, and the native
+store did at w:2 on five members and on a primary, a secondary and an arbiter with no write concern set. The Spring
+store did on three data-bearing members with no write concern on the client and w:1 as the server's default. At
+w:majority, and on three data-bearing members with no write concern set and the server's implicit default, all three
+stores' reads held E. No probe ran through a mongos.
 
 ### Pruning markers
 
