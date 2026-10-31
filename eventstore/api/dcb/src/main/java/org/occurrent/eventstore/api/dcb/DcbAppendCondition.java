@@ -41,8 +41,8 @@ import static java.util.Objects.requireNonNull;
  * A plain read through a mongos can miss a matching event while its token already holds that event's markers, when the
  * markers and the events are on different shards, and the append then doesn't fail. A read with
  * {@link DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} doesn't do that. The
- * same happens when the Spring or reactor store's {@code queryOptions} send the events read to a lagging secondary, and
- * with a token read inside a transaction after that transaction's own append, once the transaction has rolled back (see
+ * same happens on any deployment when a read preference or a read concern puts a read's events behind its token, and with
+ * a token read inside a transaction after that transaction's own append, once the transaction has rolled back (see
  * {@link DcbEventStream#consistencyToken()}).
  * <p>
  * A store can answer from the events as they are when the append runs. A matching event committed after the read that
