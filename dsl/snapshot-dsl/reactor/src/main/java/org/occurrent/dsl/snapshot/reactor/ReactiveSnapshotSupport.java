@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -51,6 +52,17 @@ final class ReactiveSnapshotSupport {
     }
 
     /**
+     * Resolves the {@link SnapshotSupport.DcbBase} to resume a DCB boundary from, reading the latest snapshot from
+     * {@code store} and reusing the pure {@link SnapshotSupport#resolveDcbBase}.
+     */
+    static <S extends @Nullable Object> Mono<SnapshotSupport.DcbBase<S>> resolveDcbBase(ReactiveSnapshotStore<S> store, String key, int expectedSchemaVersion, Supplier<? extends S> initialState) {
+        return store.findLatest(key)
+                .map(Optional::of)
+                .defaultIfEmpty(Optional.empty())
+                .map(loaded -> SnapshotSupport.resolveDcbBase(loaded, expectedSchemaVersion, initialState));
+    }
+
+    /**
      * Best-effort snapshot save for the reactor executors, which save after the command's events have already committed.
      * A snapshot is a discardable optimization, so a save failure is logged and swallowed rather than propagated: failing
      * here would surface as a command failure even though the write succeeded, and a lost snapshot only means the next
@@ -71,12 +83,26 @@ final class ReactiveSnapshotSupport {
      */
     static <S extends @Nullable Object, E> Mono<Void> maybeSaveBestEffort(ReactiveSnapshotStore<S> store, String key, int schemaVersion,
                                                                           SnapshotPolicy<S, E> policy, Supplier<? extends SnapshotDecision<S, E>> decisionSupplier) {
+        return maybeSaveBestEffort(store, key, policy, decisionSupplier,
+                decision -> Mono.just(new Snapshot<>(decision.newState(), decision.newVersion(), schemaVersion)));
+    }
+
+    /**
+     * Best-effort save where {@code toSnapshot} builds the snapshot to save, or completes empty to skip the save. It runs
+     * only when {@code policy} fires, inside the best-effort boundary, so a check that reads the event store before
+     * saving costs nothing on a command the policy declines.
+     *
+     * @param toSnapshot builds the snapshot for a decision the policy accepted, or completes empty to skip the save
+     */
+    static <S extends @Nullable Object, E> Mono<Void> maybeSaveBestEffort(ReactiveSnapshotStore<S> store, String key, SnapshotPolicy<S, E> policy,
+                                                                          Supplier<? extends SnapshotDecision<S, E>> decisionSupplier,
+                                                                          Function<? super SnapshotDecision<S, E>, Mono<Snapshot<S>>> toSnapshot) {
         return deferCatchingEverything(() -> {
                     SnapshotDecision<S, E> decision = decisionSupplier.get();
                     if (!policy.shouldSnapshot(decision)) {
                         return Mono.<Void>empty();
                     }
-                    return store.save(key, new Snapshot<>(decision.newState(), decision.newVersion(), schemaVersion));
+                    return toSnapshot.apply(decision).flatMap(snapshot -> deferCatchingEverything(() -> store.save(key, snapshot)));
                 })
                 .onErrorResume(e -> {
                     log.warn("Best-effort snapshot save failed for key '{}'. The write is committed, the snapshot will be rebuilt from events on the next replay.", key, e);

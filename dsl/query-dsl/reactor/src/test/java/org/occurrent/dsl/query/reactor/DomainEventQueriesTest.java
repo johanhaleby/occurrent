@@ -345,6 +345,7 @@ class DomainEventQueriesTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     void afterPosition_returns_domain_events_strictly_after_the_given_position_in_ascending_position_order() {
         // Given
         ReactorMongoEventStore eventStore = storeWith(new EventStoreConfig.Builder().eventStoreCapabilities(STREAM, DCB));
@@ -389,6 +390,7 @@ class DomainEventQueriesTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     void afterPosition_emits_an_error_when_the_underlying_event_store_does_not_write_a_position() {
         // domainEventQueriesWithoutPosition is backed by a STREAM-only store with stream position opted out.
 

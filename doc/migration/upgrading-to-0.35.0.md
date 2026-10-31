@@ -21,6 +21,8 @@ other sections compile fine and behave differently, so read them first.
 - [A replayed event holds the checkpoint to resume from](#a-replayed-event-holds-the-checkpoint-to-resume-from).
   `DcbStartAt` gains the case `DcbStartAt.AtCheckpoint`. **Breaks the build** if you `switch` exhaustively over
   `DcbStartAt` without a `default`.
+- [DCB snapshots resume from marker versions](#dcb-snapshots-resume-from-marker-versions). `Snapshot` gains a 4th and a 5th
+  record component. **Breaks the build** if you use a record pattern over it.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
@@ -132,14 +134,18 @@ other sections compile fine and behave differently, so read them first.
 
 ### Snapshots
 
+- [DCB snapshots resume from marker versions](#dcb-snapshots-resume-from-marker-versions). The DCB deciders and
+  a `@Snapshot` DCB view save at marker versions, and ignore a snapshot 0.34.0 saved at a position. `Snapshot` gains two
+  components. **Breaks the build** if you use a record pattern over `Snapshot`.
 - [The reactive `executeAndReturnState` emits a non-null state](#the-reactive-executeandreturnstate-emits-a-non-null-state).
   The emitted state is declared non-null. Breaks the build only for a Kotlin `Mono<State?>` written by hand.
 
 ### The rewrite recipe
 
 - `org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35` adds the new bindings to a record pattern over
-  `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`. See
-  [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions).
+  `DcbAppendResult`, `DcbEventStream`, `DcbReadOptions` or `Snapshot`. See
+  [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions) and
+  [DCB snapshots resume from marker versions](#dcb-snapshots-resume-from-marker-versions).
 - No recipe rewrites a `DcbConsistencyToken` or the streams that create one. See
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
@@ -748,6 +754,80 @@ describes it.
   markers, so a prune between the read and the append can let through a conflicting append that 0.34.0 refused, until
   [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. Prune only when no command holds a token it
   can still append with.
+
+## DCB snapshots resume from marker versions
+
+`SnapshotDcbDeciderApplicationService`, `ReactiveSnapshotDcbDeciderApplicationService` and a `@Snapshot` view of a
+`DcbSnapshotView` save a DCB snapshot at the marker versions of its boundary, and then read only the events appended
+after them. In 0.34.0 they saved the position of the last event and lost an append that committed late below it
+([#1230](https://github.com/johanhaleby/occurrent/issues/1230)). The reads they make are the ones
+[DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions) describes.
+
+### What changes
+
+- A decider executes with `DcbExecuteOptions.fromVersions(saved, position)`, or `withVersions()` when it has no snapshot,
+  and saves at the versions and the last position its append reported. It saves only when `DcbApplicationService.isAppendConfirmed(..)` returns
+  `true`. `GenericDcbApplicationService` asks the event store, and returns `false` when the store doesn't implement
+  `DcbAppendConfirmation`.
+- A `@Snapshot` DCB view reads the events after the saved versions on each matching event, and saves at the versions of
+  that read. `everyNEvents` counts the events of that read.
+- When the store refuses to read after the saved versions, for example because a marker was pruned, the decider and the
+  view read the whole boundary from the initial state and save a new snapshot.
+- They do the same when that read returns an event below the highest position folded into the snapshot. It committed
+  late, and folding it last could give another state than a read in position order.
+- When the store reported no versions, or didn't confirm the append, the snapshot isn't saved. The first skip for each
+  reason logs a warning, and later ones log at debug.
+- A boundary reports no versions until each tag of an item with tags, and each type of an item without tags, has a
+  marker. A decider reads the whole boundary, an attempt whose read reported no versions saves nothing, and its append creates the missing markers
+  and gives the others an epoch, so its next command can save. A `@Snapshot` view never appends, so it reads the whole
+  boundary until other appends have done that for every marker. 0.34.0 saved at a position there.
+- A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot and logs a warning at start, since a read of every event
+  has no marker versions. A snapshot 0.34.0 saved for it stays in the store and stops changing, so delete it or give the
+  view a boundary. `dcbSnapshotView { }` in Kotlin uses `DcbCriteria.all()` unless you set tags or criteria. A decider over
+  `DcbCriteria.all()` saves no snapshot either, so every command reads every event of the store, and the first skip logs
+  a warning.
+- A custom key function on a decider should stay keyed on the criteria. If you widen the criteria and keep the key, and
+  the marker keys stay the same, for example when you change only the types of an item with tags, the next execute
+  resumes after the saved versions and doesn't read the older events the wider criteria now matches, and nothing reports
+  it. A widening that changes the marker keys is refused, and the decider reads the whole boundary.
+- Inside a transaction of yours a read reports no versions, so a decider that runs in one reads the whole
+  boundary and saves no snapshot.
+- The same holds on an application service with synchronous subscriptions, since it runs every execute in its
+  transaction executor's transaction. A 0.34 decider in that setup saved snapshots, and a 0.35 one reads the whole
+  boundary on every command.
+
+### Stored snapshots
+
+- `Snapshot` gains two components, `Optional<DcbMarkerVersions> markerVersions` and `long highestFoldedPosition`. The
+  three-argument constructor stays and sets them to empty and 0, and `Snapshot.atMarkerVersions(..)` creates a DCB
+  snapshot, whose `version` is 0.
+- `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` array, a
+  `highestFoldedPosition` field and no `version` field. A stream snapshot is stored as before.
+- A DCB snapshot that 0.34.0 saved at a position is never used. After the upgrade an execute or delivery reads the whole
+  boundary until one can save over it, so nothing needs migrating. On a boundary whose markers 0.34.0 wrote, a decider's
+  append gives them an epoch, and its next command can save.
+- A 0.34.0 node that reads a snapshot 0.35.0 saved, during a rolling upgrade or after a rollback, finds no `version`. It
+  reads the whole boundary and saves a snapshot at a position, which 0.35.0 then doesn't use.
+- A snapshot store of your own has to persist `Snapshot.markerVersions()` and `Snapshot.highestFoldedPosition()`. If it
+  drops the versions, every execute and delivery reads the whole boundary. If it loads a lower position than it was
+  given, a resumed state can differ from a read in position order.
+
+### What to do
+
+- If you have a `DcbApplicationService` of your own that wraps another one, override `isAppendConfirmed(..)` and
+  delegate it. Without that the deciders save no snapshot. Pass the domain function on as it is, and to that one service
+  only, since a decider knows a refusal of its own read by that function. If you wrap it, a refused read after a conflict
+  reaches the caller instead of reading in full. If you give it to a second service as well, a refused read there can
+  run the command again.
+- Replace `DcbExecuteOptions.fromPosition(..)`, which is deprecated for removal, with `fromVersions(..)`. Save the
+  `DcbAppendResult.markerVersions()` and `lastSequencePosition()` of an execute with `withVersions()` and pass both on
+  the next one.
+- `DomainEventQueries.afterPosition(..)` is deprecated, since a position isn't a safe place to resume from on MongoDB.
+  To process every event, resume a catch-up subscription from the checkpoint it stores.
+- A record pattern over `Snapshot` with three bindings stops compiling. `UpgradeToOccurrent_0_35` adds
+  `var markerVersions, var highestFoldedPosition`.
+- A `SnapshotPolicy` of your own that reads `SnapshotDecision.newVersion()` gets 0 from a DCB decider, where 0.34.0 gave
+  it the position of the append. Use `eventsSinceSnapshot()`.
 
 ## A catch-up needs the event store itself
 

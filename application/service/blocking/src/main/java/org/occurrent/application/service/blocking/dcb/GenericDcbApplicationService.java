@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -135,15 +136,27 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         @Nullable Consumer<List<E>> sideEffect = options.sideEffect();
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
-        @Nullable Long fromPosition = options.fromPosition();
+        @Nullable DcbReadOptions readOptions = readOptions(options);
+        boolean versionsRequested = options.versionsRequested();
 
         // @formatter:off
         record Tuple<T1, T2>(T1 v1, T2 v2) {}
         // @formatter:on
 
         Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
+            // A refused read changed nothing, so it's thrown after the transaction. Thrown inside, it would mark a transaction
+            // the caller owns rollback-only, and the caller's commit would fail even when the snapshot decider reads in full instead.
+            AtomicReference<@Nullable DcbSnapshotInvalidException> refusal = new AtomicReference<>();
             Supplier<Tuple<Optional<DcbAppendResult>, List<E>>> readDecideAppend = () -> {
-                DcbEventStream eventStream = fromPosition == null ? eventStore.read(criteria) : eventStore.read(criteria, DcbReadOptions.afterPosition(fromPosition));
+                refusal.set(null);
+                final DcbEventStream eventStream;
+                try {
+                    eventStream = readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions);
+                    refuseEventBelowFoldedPosition(criteria, options, eventStream);
+                } catch (DcbSnapshotInvalidException refused) {
+                    refusal.set(refused.beforeAppend(functionThatCallsDomainModel));
+                    return new Tuple<>(Optional.empty(), List.of());
+                }
                 List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
                 List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
                 if (newDomainEvents == null || newDomainEvents.isEmpty()) {
@@ -163,13 +176,18 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     synchronousEventDispatcher.dispatch(writtenEnriched, transactionExecutor.isTransactional());
                 }
 
-                return new Tuple<>(Optional.of(appendResult), newDomainEvents);
+                return new Tuple<>(Optional.of(withCheckedVersions(appendResult, versionsRequested, eventStream)), newDomainEvents);
             };
             // Only open the transaction executor when synchronous dispatch must commit atomically with the append.
             // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
             // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
             // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0074.
-            return dispatchSynchronously ? transactionExecutor.inTransaction(readDecideAppend) : readDecideAppend.get();
+            Tuple<Optional<DcbAppendResult>, List<E>> attempt = dispatchSynchronously ? transactionExecutor.inTransaction(readDecideAppend) : readDecideAppend.get();
+            DcbSnapshotInvalidException refused = refusal.get();
+            if (refused != null) {
+                throw refused;
+            }
+            return attempt;
         });
 
         // Invoke the side-effect once, after a successful append, with the newly written events. It is not invoked
@@ -178,6 +196,49 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             sideEffect.accept(result.v2);
         }
         return result.v1;
+    }
+
+    @Override
+    public boolean isAppendConfirmed(DcbAppendResult appendResult) {
+        Objects.requireNonNull(appendResult, "appendResult cannot be null");
+        return eventStore instanceof DcbAppendConfirmation confirmation && confirmation.isConfirmed(appendResult);
+    }
+
+    private static void refuseEventBelowFoldedPosition(DcbCriteria criteria, DcbExecuteOptions<?> options, DcbEventStream eventStream) {
+        @Nullable DcbMarkerVersions fromVersions = options.fromVersions();
+        if (fromVersions != null && eventStream.hasEventBelow(options.highestFoldedPosition())) {
+            throw DcbSnapshotInvalidException.eventBelowFoldedPosition(criteria, fromVersions, options.highestFoldedPosition());
+        }
+    }
+
+    @SuppressWarnings("removal")
+    private static @Nullable DcbReadOptions readOptions(DcbExecuteOptions<?> options) {
+        @Nullable Long fromPosition = options.fromPosition();
+        @Nullable DcbMarkerVersions fromVersions = options.fromVersions();
+        if (fromPosition != null) {
+            return DcbReadOptions.afterPosition(fromPosition);
+        } else if (fromVersions != null) {
+            return DcbReadOptions.afterVersions(fromVersions);
+        } else if (options.versionsRequested()) {
+            return DcbReadOptions.fromBeginning().withVersions();
+        }
+        return null;
+    }
+
+    // The append's versions are kept only when the read of the same attempt reported every marker key with the same
+    // epoch, since a marker pruned and created again in between can leave the consistency token unchanged
+    private static DcbAppendResult withCheckedVersions(DcbAppendResult appendResult, boolean versionsRequested, DcbEventStream eventStream) {
+        if (appendResult.markerVersions().isEmpty()) {
+            return appendResult;
+        }
+        DcbMarkerVersions appended = appendResult.markerVersions().get();
+        boolean sameEpochs = versionsRequested && eventStream.markerVersions()
+                .map(read -> appended.markers().entrySet().stream().allMatch(entry -> read.get(entry.getKey())
+                        .map(readVersion -> readVersion.epoch().equals(entry.getValue().epoch()))
+                        .orElse(false)))
+                .orElse(false);
+        return sameEpochs ? appendResult : new DcbAppendResult(appendResult.firstSequencePosition(), appendResult.lastSequencePosition(),
+                appendResult.eventCount(), appendResult.appendId(), Optional.empty());
     }
 
     private List<CloudEvent> addTags(@Nullable TagGenerator<E> perExecuteTagger, List<E> domainEvents, List<CloudEvent> cloudEvents) {

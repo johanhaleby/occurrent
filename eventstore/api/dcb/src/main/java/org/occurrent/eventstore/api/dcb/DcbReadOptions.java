@@ -178,6 +178,10 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
 
     /**
      * Reads only events after the supplied DCB sequence position (exclusive).
+     * <p>
+     * A position isn't a safe place to resume from on MongoDB. An event can reserve a position below the one you kept and
+     * commit after you read it, and a read after your position never returns it. To resume a read, use
+     * {@link #afterVersions(DcbMarkerVersions)} instead.
      */
     public static DcbReadOptions afterPosition(long position) {
         return new DcbReadOptions(PositionRange.afterPosition(position));
@@ -209,6 +213,10 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't always
      * refuse versions from other criteria. Versions from a read on {@code type("X").tags(a)} pass on a read on
      * {@code tags(a)}, which returns only what comes after them, with no exception.
+     * <p>
+     * An event that committed late can come back below a position you already folded. Folding it last can give another
+     * state than a read in position order, so a caller that folds onto saved state checks
+     * {@link DcbEventStream#hasEventBelow(long)} with the highest position it folded, and reads in full when it's true.
      */
     public static DcbReadOptions afterVersions(DcbMarkerVersions markerVersions) {
         requireNonNull(markerVersions, "Marker versions cannot be null");

@@ -16,14 +16,31 @@
 
 package org.occurrent.dsl.snapshot;
 
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
+import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
+import org.occurrent.eventstore.api.dcb.Tag;
 
+import java.net.URI;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SnapshotSupportTest {
+
+    private static final DcbCriteria CRITERIA = DcbCriteria.tags(Tag.parse("name:1"));
 
     @Test
     void resolve_base_uses_the_snapshot_when_the_schema_matches() {
@@ -111,5 +128,100 @@ class SnapshotSupportTest {
 
         // The head is at 7, the snapshot is at 7, and version 5 was already folded: a genuine redelivery to skip.
         assertThat(SnapshotSupport.isRedelivery(loaded, 1, 5, 7)).isTrue();
+    }
+
+    @Test
+    void resolve_dcb_base_uses_the_state_and_marker_versions_of_the_snapshot_when_the_schema_matches() {
+        DcbMarkerVersions versions = versions("tag:a", 4);
+        Optional<Snapshot<Integer>> loaded = Optional.of(Snapshot.atMarkerVersions(42, versions, 17, 1));
+
+        SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.resolveDcbBase(loaded, 1, () -> 0);
+
+        assertThat(base.state()).isEqualTo(42);
+        assertThat(base.markerVersions()).contains(versions);
+    }
+
+    @Test
+    void resolve_dcb_base_carries_the_highest_folded_position_of_the_snapshot() {
+        Optional<Snapshot<Integer>> loaded = Optional.of(Snapshot.atMarkerVersions(42, versions("tag:a", 4), 17, 1));
+
+        SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.resolveDcbBase(loaded, 1, () -> 0);
+
+        assertThat(base.highestFoldedPosition()).isEqualTo(17);
+    }
+
+    @Test
+    void resolve_dcb_base_ignores_a_snapshot_saved_at_a_position_since_it_has_no_marker_versions() {
+        Optional<Snapshot<Integer>> loaded = Optional.of(new Snapshot<>(42, 7, 1));
+
+        SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.resolveDcbBase(loaded, 1, () -> 0);
+
+        assertThat(base.state()).isEqualTo(0);
+        assertThat(base.markerVersions()).isEmpty();
+    }
+
+    @Test
+    void resolve_dcb_base_falls_back_to_initial_state_on_a_schema_mismatch() {
+        Optional<Snapshot<Integer>> loaded = Optional.of(Snapshot.atMarkerVersions(42, versions("tag:a", 4), 17, 1));
+
+        SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.resolveDcbBase(loaded, 2, () -> 0);
+
+        assertThat(base.state()).isEqualTo(0);
+        assertThat(base.markerVersions()).isEmpty();
+        assertThat(base.highestFoldedPosition()).isZero();
+    }
+
+    @Test
+    void resolve_dcb_base_falls_back_to_initial_state_when_no_snapshot_exists() {
+        SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.resolveDcbBase(Optional.empty(), 1, () -> 5);
+
+        assertThat(base.state()).isEqualTo(5);
+        assertThat(base.markerVersions()).isEmpty();
+        assertThat(base.highestFoldedPosition()).isZero();
+    }
+
+    @Test
+    void refuse_event_below_folded_position_refuses_a_read_that_returned_an_event_below_the_highest_folded_position() {
+        SnapshotSupport.DcbBase<Integer> base = new SnapshotSupport.DcbBase<>(10, Optional.of(versions("tag:a", 4)), 42);
+
+        assertThatThrownBy(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, readOf(CRITERIA, List.of(eventAt(41)), 42)))
+                .isInstanceOf(DcbSnapshotInvalidException.class)
+                .hasMessageContaining("below position 42");
+    }
+
+    @Test
+    void refuse_event_below_folded_position_accepts_a_read_whose_events_are_all_above_the_highest_folded_position() {
+        SnapshotSupport.DcbBase<Integer> base = new SnapshotSupport.DcbBase<>(10, Optional.of(versions("tag:a", 4)), 42);
+
+        assertThatCode(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, readOf(CRITERIA, List.of(eventAt(43)), 43)))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void refuse_event_below_folded_position_accepts_a_read_without_events() {
+        SnapshotSupport.DcbBase<Integer> base = new SnapshotSupport.DcbBase<>(10, Optional.of(versions("tag:a", 4)), 42);
+
+        assertThatCode(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, readOf(CRITERIA, List.of(), 42)))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void refuse_event_below_folded_position_accepts_any_event_when_the_read_is_from_the_initial_state() {
+        SnapshotSupport.DcbBase<Integer> base = SnapshotSupport.DcbBase.initial(() -> 0);
+
+        assertThatCode(() -> SnapshotSupport.refuseEventBelowFoldedPosition(CRITERIA, base, readOf(CRITERIA, List.of(eventAt(1)), 1)))
+                .doesNotThrowAnyException();
+    }
+
+    private static DcbEventStream readOf(DcbCriteria criteria, List<CloudEvent> events, long lastSequencePosition) {
+        return new DcbEventStream(events, lastSequencePosition, DcbConsistencyToken.of(criteria, lastSequencePosition));
+    }
+
+    private static CloudEvent eventAt(long position) {
+        return OccurrentCloudEventExtension.withPosition(CloudEventBuilder.v1().withId("id").withSource(URI.create("urn:test")).withType("type").build(), position);
+    }
+
+    private static DcbMarkerVersions versions(String key, long version) {
+        return DcbMarkerVersions.of(Map.of(key, new MarkerVersion("epoch-1", version, 0)));
     }
 }

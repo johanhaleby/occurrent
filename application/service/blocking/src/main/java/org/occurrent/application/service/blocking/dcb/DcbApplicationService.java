@@ -17,10 +17,12 @@
 package org.occurrent.application.service.blocking.dcb;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.eventstore.api.dcb.DcbAppendConfirmation;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -58,4 +60,20 @@ public interface DcbApplicationService<E> {
      * @return the append result, or {@link Optional#empty()} when the domain function produced no new events
      */
     Optional<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel);
+
+    /**
+     * Returns whether the append that produced {@code appendResult} is durably committed, so its
+     * {@link DcbAppendResult#markerVersions() marker versions} can't be given to other events again. A snapshot of the
+     * boundary saves at those versions only when this returns {@code true}.
+     * <p>
+     * Returns {@code false} unless an implementation overrides it. {@link GenericDcbApplicationService} asks the event
+     * store when it implements {@link DcbAppendConfirmation}.
+     *
+     * @param appendResult the result {@code execute} returned
+     * @return whether the append is confirmed
+     */
+    default boolean isAppendConfirmed(DcbAppendResult appendResult) {
+        Objects.requireNonNull(appendResult, "appendResult cannot be null");
+        return false;
+    }
 }

@@ -27,6 +27,7 @@ import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.DcbSnapshotView;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.dsl.snapshot.blocking.SnapshotStore;
+import org.occurrent.dsl.snapshot.internal.SkippedSaves;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -34,7 +35,9 @@ import org.occurrent.dsl.view.View;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
@@ -42,6 +45,8 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationContext;
 
 import java.lang.reflect.Method;
@@ -57,6 +62,8 @@ import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
  * Invoked from the coordinator's {@code afterSingletonsInstantiated}, after projections.
  */
 class SnapshotAnnotationRegistrar {
+
+    private static final Logger log = LoggerFactory.getLogger(SnapshotAnnotationRegistrar.class);
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
@@ -157,10 +164,10 @@ class SnapshotAnnotationRegistrar {
         }
     }
 
-    // A DCB @Snapshot maintains one snapshot per boundary, keyed by the canonical criteria key and versioned by the
-    // global DCB position. On each matching event it folds the events after the stored snapshot's position onto the
-    // stored state and saves at the current position, so a rebuild after a schema change or a gap re-reads the boundary
-    // rather than losing history. everyNEvents throttles by the number of matching events folded since the last save.
+    // A DCB @Snapshot keeps one snapshot per boundary, keyed by the canonical criteria key and saved at the marker
+    // versions of the read that produced it. On each matching event it reads the events after the saved versions, folds
+    // them onto the saved state and saves at the read's versions. A redelivered event is at or below the saved versions,
+    // so the read doesn't return it. everyNEvents counts the events read since the last save.
     @SuppressWarnings("unchecked")
     private <E, S> void processDcbSnapshot(String id, org.occurrent.annotation.Snapshot annotation, boolean synchronous,
                                            CloudEventConverter<E> converter, DcbSnapshotView<S, E> dcbSnapshotView,
@@ -169,7 +176,12 @@ class SnapshotAnnotationRegistrar {
             throw new IllegalArgumentException("@Snapshot '%s' returns a DcbSnapshotView with mode = SYNCHRONOUS, which is not supported. Use the default asynchronous mode for a DCB snapshot, or maintain a synchronous DCB snapshot through the DSL.".formatted(id));
         }
         DcbCriteria criteria = dcbSnapshotView.criteria();
+        if (criteria instanceof DcbCriteria.MatchAll) {
+            log.warn("@Snapshot '{}' reads every event of the store (DcbCriteria.all()), which has no marker versions to save a snapshot at, so no snapshot is kept for it.", id);
+            return;
+        }
         String key = DcbSnapshotKeys.canonicalKey(criteria);
+        SkippedSaves skippedSaves = new SkippedSaves(log);
         View<S, E> view = dcbSnapshotView.snapshotView().view();
         int schemaVersion = dcbSnapshotView.schemaVersion();
         DcbEventStore dcbEventStore = applicationContext.getBean(DcbEventStore.class);
@@ -178,23 +190,29 @@ class SnapshotAnnotationRegistrar {
         startPositionSupport.applyStartupWorkarounds();
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
         var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, (dcbMetadata, event) -> {
-            long position = dcbMetadata.eventMetadata().getPosition();
-            Optional<org.occurrent.dsl.snapshot.Snapshot<S>> loaded = store.findLatest(key);
-            // DCB positions are global and monotonic, they never reset, so a snapshot can never be ahead of the true
-            // head: no head probe is needed and the 3-arg isRedelivery is correct (unlike the stream path above).
-            if (SnapshotSupport.isRedelivery(loaded, schemaVersion, position)) {
-                return; // already folded (a redelivery), keep folding idempotent
+            SnapshotSupport.DcbBase<S> base = SnapshotSupport.resolveDcbBase(store.findLatest(key), schemaVersion, view::initialState);
+            DcbEventStream read;
+            try {
+                read = dcbEventStore.read(criteria, base.markerVersions().map(DcbReadOptions::afterVersions).orElseGet(() -> DcbReadOptions.fromBeginning().withVersions()));
+                SnapshotSupport.refuseEventBelowFoldedPosition(criteria, base, read);
+            } catch (DcbSnapshotInvalidException e) {
+                if (base.markerVersions().isEmpty()) {
+                    throw e;
+                }
+                log.debug("@Snapshot '{}' reads the whole boundary since it can't resume from the saved marker versions: {}", id, e.getMessage());
+                base = SnapshotSupport.DcbBase.initial(view::initialState);
+                read = dcbEventStore.read(criteria, DcbReadOptions.fromBeginning().withVersions());
             }
-            SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, view::initialState);
-            if (position - base.version() < everyNEvents) {
-                return; // throttle before reading, matching events cannot exceed the position gap since the snapshot
-            }
-            List<CloudEvent> range = dcbEventStore.read(criteria, DcbReadOptions.between(base.version(), position)).events();
-            if (range.size() < everyNEvents) {
+            List<CloudEvent> events = read.events();
+            if (events.size() < everyNEvents) {
                 return; // throttle: too few matching events since the last saved snapshot
             }
-            S newState = foldWithMetadata(view, base.state(), range, converter);
-            store.save(key, new org.occurrent.dsl.snapshot.Snapshot<>(newState, position, schemaVersion));
+            if (read.markerVersions().isEmpty()) {
+                skippedSaves.skip(key, SkippedSaves.Reason.NO_MARKER_VERSIONS);
+                return;
+            }
+            S newState = foldWithMetadata(view, base.state(), events, converter);
+            store.save(key, org.occurrent.dsl.snapshot.Snapshot.atMarkerVersions(newState, read.markerVersions().get(), Math.max(base.highestFoldedPosition(), read.highestEventPosition()), schemaVersion));
         });
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {

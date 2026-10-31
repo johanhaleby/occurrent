@@ -349,13 +349,19 @@ public class DomainEventQueries<T> {
      * Reads domain events strictly after the global sequence {@code position}, in ascending position order.
      * Equivalent to {@code readInPositionOrder(Filter.all(), PositionRange.afterPosition(position))}.
      * <p>
+     * A position isn't a safe place to resume from on MongoDB. An event can reserve a position below the one you kept and
+     * commit after you read it, and a read after your position never returns it.
+     * <p>
      * <b>The returned stream must be closed</b>, for the reason given on
      * {@link #readInPositionOrder(Filter, PositionRange)}.
      *
      * @return The matching domain events, in position order. Must be closed.
      * @throws UnsupportedOperationException if the underlying event store does not write a position.
      * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
+     * @deprecated A position isn't a safe place to resume from on MongoDB. To process every event, resume a catch-up
+     * subscription from the checkpoint it stores.
      */
+    @Deprecated
     public Stream<T> afterPosition(long position) {
         return readInPositionOrder(Filter.all(), PositionRange.afterPosition(position));
     }

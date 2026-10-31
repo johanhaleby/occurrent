@@ -19,6 +19,7 @@ package org.occurrent.dsl.snapshot.blocking;
 import org.occurrent.dsl.snapshot.Snapshot;
 
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * A test double whose {@code save} always throws, used to assert how the facades handle a store failure. The failure is
@@ -26,6 +27,7 @@ import java.util.Optional;
  */
 final class ThrowingSnapshotStore<S> implements SnapshotStore<S> {
     private final Throwable failure;
+    private final AtomicInteger saveAttempts = new AtomicInteger();
 
     ThrowingSnapshotStore() {
         this(new RuntimeException("snapshot store save failed (test double)"));
@@ -42,7 +44,12 @@ final class ThrowingSnapshotStore<S> implements SnapshotStore<S> {
 
     @Override
     public void save(String key, Snapshot<S> snapshot) {
+        saveAttempts.incrementAndGet();
         throw ThrowingSnapshotStore.<RuntimeException>sneakyThrow(failure);
+    }
+
+    int saveAttempts() {
+        return saveAttempts.get();
     }
 
     @SuppressWarnings("unchecked")
