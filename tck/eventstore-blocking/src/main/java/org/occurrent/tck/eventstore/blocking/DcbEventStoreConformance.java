@@ -748,13 +748,16 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         void a_condition_with_no_token_succeeds_when_nothing_matches() {
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_2)));
 
+            CloudEvent appended = taggedEvent(CHANGED, NAME_1);
+
             DcbAppendResult result = dcbEventStore().append(
-                    List.of(taggedEvent(CHANGED, NAME_1)),
+                    List.of(appended),
                     failIfEventsMatch(DcbCriteria.tags(tag(NAME_1))));
 
             assertThat(result.eventCount())
                     .as("A guard on an empty boundary must not be tripped by an event in a different boundary")
                     .isEqualTo(1);
+            assertWritten(appended);
         }
 
         @Test
@@ -775,13 +778,15 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             DcbCriteria criteria = DcbCriteria.tags(tag(NAME_1));
             DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
 
-            DcbAppendResult result = dcbEventStore().append(
-                    List.of(taggedEvent(CHANGED, NAME_1)), failIfEventsMatch(token));
+            CloudEvent appended = taggedEvent(CHANGED, NAME_1);
+
+            DcbAppendResult result = dcbEventStore().append(List.of(appended), failIfEventsMatch(token));
 
             assertThat(result.eventCount())
                     .as("A token narrows the condition to what was committed after the read, so the event the read "
                             + "itself saw must not reject the append")
                     .isEqualTo(1);
+            assertWritten(appended);
         }
 
         @Test
@@ -804,13 +809,15 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_2)));
 
-            DcbAppendResult result = dcbEventStore().append(
-                    List.of(taggedEvent(CHANGED, NAME_1)), failIfEventsMatch(token));
+            CloudEvent appended = taggedEvent(CHANGED, NAME_1);
+
+            DcbAppendResult result = dcbEventStore().append(List.of(appended), failIfEventsMatch(token));
 
             assertThat(result.eventCount())
                     .as("A consistency boundary is scoped by its criteria, so a concurrent append to an unrelated "
                             + "boundary must not reject this one. This is the whole point of DCB over a stream lock")
                     .isEqualTo(1);
+            assertWritten(appended);
         }
 
         @Test
@@ -971,13 +978,15 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
             DcbConsistencyToken token = dcbEventStore().read(DcbCriteria.tags(tag(NAME_1))).consistencyToken();
 
-            DcbAppendResult result = dcbEventStore().append(
-                    List.of(taggedEvent(CHANGED, NAME_1)), failIfEventsMatch(token));
+            CloudEvent appended = taggedEvent(CHANGED, NAME_1);
+
+            DcbAppendResult result = dcbEventStore().append(List.of(appended), failIfEventsMatch(token));
 
             assertThat(result.eventCount())
                     .as("The one-argument form uses the criteria the token was read with, so the control for the "
                             + "refusals above must be accepted when nothing matching was committed after the read")
                     .isEqualTo(1);
+            assertWritten(appended);
         }
 
         @Test
@@ -1326,11 +1335,14 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
 
         @Test
         void a_whole_store_lock_with_no_token_succeeds_only_while_the_store_holds_no_dcb_event() {
-            DcbAppendResult result = dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)), wholeStoreLock());
+            CloudEvent bootstrap = taggedEvent(DEFINED, NAME_1);
+
+            DcbAppendResult result = dcbEventStore().append(List.of(bootstrap), wholeStoreLock());
             assertThat(result.eventCount())
                     .as("A whole-store lock is correct for a bootstrap append, so it must let the first append "
                             + "through")
                     .isEqualTo(1);
+            assertWritten(bootstrap);
 
             assertThatThrownBy(() -> dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_2)), wholeStoreLock()))
                     .as("Once any DCB event exists, an untokenized whole-store lock must reject the append whatever "
@@ -1341,7 +1353,9 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         @Test
         void a_whole_store_lock_conflicts_on_a_later_whole_store_append() {
             DcbConsistencyToken token = dcbEventStore().read(DcbCriteria.all()).consistencyToken();
-            dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)), wholeStoreLock(token));
+            CloudEvent first = taggedEvent(DEFINED, NAME_1);
+            dcbEventStore().append(List.of(first), wholeStoreLock(token));
+            assertWritten(first);
 
             assertThatThrownBy(() -> dcbEventStore().append(
                     List.of(taggedEvent(CHANGED, NAME_2)), wholeStoreLock(token)))
@@ -1360,7 +1374,8 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             // ReadingByCriteria), but it carries the positive tag the boundary is keyed on.
             dcbEventStore().append(List.of(taggedEvent(SNAPSHOT, NAME_1)));
 
-            List<CloudEvent> events = List.of(taggedEvent(CHANGED, NAME_1));
+            CloudEvent appended = taggedEvent(CHANGED, NAME_1);
+            List<CloudEvent> events = List.of(appended);
             DcbAppendCondition condition = failIfEventsMatch(token);
             if (expectedToConflictOnANonMatchingEventSharingATag()) {
                 assertThatThrownBy(() -> dcbEventStore().append(events, condition))
@@ -1369,11 +1384,13 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
                                 + "real conflict, and the application service re-reads the still-excluded boundary "
                                 + "and retries")
                         .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+                assertNotWritten(appended);
             } else {
                 assertThat(dcbEventStore().append(events, condition).eventCount())
                         .as("Under the exact-criteria and the markers-then-events models the exclusion is applied to "
                                 + "the event itself, so an excluded event is not a conflict however it is tagged")
                         .isEqualTo(1);
+                assertWritten(appended);
             }
         }
 
@@ -1465,7 +1482,8 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             // A tag-scoped append commits after the whole-store read.
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
 
-            List<CloudEvent> events = List.of(taggedEvent(CHANGED, NAME_2));
+            CloudEvent appended = taggedEvent(CHANGED, NAME_2);
+            List<CloudEvent> events = List.of(appended);
             DcbAppendCondition condition = wholeStoreLock(token);
             if (expectedToMissATagScopedAppendUnderAWholeStoreLock()) {
                 assertThat(dcbEventStore().append(events, condition).eventCount())
@@ -1475,6 +1493,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
                                 + "limitation wholeStoreLock() documents, and the reason it is correct only for a "
                                 + "single writer or a bootstrap append that races only with other bootstrap appends")
                         .isEqualTo(1);
+                assertWritten(appended);
             } else {
                 assertThatThrownBy(() -> dcbEventStore().append(events, condition))
                         .as("Under the exact-criteria model MatchAll matches the tag-scoped event like any other, "
