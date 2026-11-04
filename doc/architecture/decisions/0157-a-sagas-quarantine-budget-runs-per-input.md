@@ -4,7 +4,7 @@ Date: 2026-10-29
 
 ## Status
 
-Proposed. Resolves [#1318](https://github.com/johanhaleby/occurrent/issues/1318). Changes how
+Accepted. Resolves [#1318](https://github.com/johanhaleby/occurrent/issues/1318). Changes how
 [ADR 134](0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md) measures its budget. ADR 134
 shipped in 0.34.0, so it is corrected by reference here and gets a pointer in its Status section.
 
@@ -61,8 +61,8 @@ starting, without closing it, since the record itself is still not written.
   quarantined later than before, or not at all, and a parked input that is replayed past its budget is quarantined on its
   first replay failure. The changelog lists it under Breaking changes.
 - The stored instance grows by one instant per pending version. Nothing is dropped from pending except by applying the
-  version (ADR 154, as amended for [#1330](https://github.com/johanhaleby/occurrent/issues/1330)), so the instants are
-  bounded by the same limit as the pending versions.
+  version (ADR 154, as amended for [#1330](https://github.com/johanhaleby/occurrent/issues/1330)), so there are as many
+  instants as there are pending versions, and nothing limits either.
 - An instance stored by 0.34.0 has no pending versions, since pending arrived with ADR 154. The input its record names
   keeps the record's `firstFailedAt`, and any other input starts its clock on its next failure.
 - An event without a stream id and version writes no record, so it is never quarantined, as in 0.34.0.
