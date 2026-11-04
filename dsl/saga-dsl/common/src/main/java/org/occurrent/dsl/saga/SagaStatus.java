@@ -54,7 +54,7 @@ public enum SagaStatus {
      * from then on, and either source stops for good on a record the model refuses.
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
-     * which input the instance stopped on, when it started failing, and what the saga threw.
+     * which input the instance stopped on, when that input first failed, and what the saga threw.
      * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it.
      * <p>
      * Note that {@code findByStatus(ACTIVE, ...)} does not return a quarantined instance. Enumerate this status too when

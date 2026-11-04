@@ -101,8 +101,8 @@ import static java.util.Objects.requireNonNull;
  *       thread, and any other delivery running then would have met the same thing.
  *       <p>
  *       An event the saga correlated is charged to that instance, and a quarantine records whichever event the
- *       instance is failing on then. The budget is the instance's rather than one event's, so an instance where two
- *       events both fail keeps the instant it started failing and the record names whichever event it stopped on.
+ *       instance is failing on then. Each failing event keeps its own clock, so an instance where two events fail in
+ *       turn measures each from its own first failure, and the record names whichever event it stopped on.
  *       The quarantined instance stops there, and 0.34.0 has no operation that brings it back, so {@code SagaStateStore.delete(sagaId)} is how you abandon it.
  *       <p>
  *       An event the saga could <em>not</em> correlate, because the converter or the id extractor threw, is never let
