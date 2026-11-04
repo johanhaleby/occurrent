@@ -37,6 +37,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.transaction.TransactionSystemException;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -62,6 +63,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class SpringTransactionExecutorMongoErrorLabelTest {
 
     private static final int WRITE_CONFLICT = 112;
+    private static final int NO_SUCH_TRANSACTION = 251;
     private static final String COLLECTION = "label_test";
 
     // enableTestCommands is what lets the server accept configureFailPoint. withCommand replaces the whole command
@@ -189,6 +191,78 @@ class SpringTransactionExecutorMongoErrorLabelTest {
         });
 
         assertThat(runs).hasValue(2);
+    }
+
+    /**
+     * A failover or an expired transaction ends in a commit that MongoDB refuses with NoSuchTransaction and the
+     * transient label, and a fresh transaction gets past it. Two in a row is what the cap of three runs is sized for.
+     */
+    @Test
+    void two_commits_in_a_row_refused_with_no_such_transaction_are_retried_and_the_third_run_commits() {
+        failCommits(NO_SUCH_TRANSACTION, 2);
+        AtomicInteger runs = new AtomicInteger();
+
+        executor.inTransaction(() -> {
+            runs.incrementAndGet();
+            return inTransaction.insert(new Document("_id", "a"), COLLECTION);
+        });
+
+        assertThat(runs).hasValue(3);
+        assertThat(outsideTransaction.count(new Query(), COLLECTION)).isEqualTo(1);
+    }
+
+    @Test
+    void three_commits_in_a_row_refused_with_no_such_transaction_stop_after_three_runs_and_the_message_says_why() {
+        failCommits(NO_SUCH_TRANSACTION, 3);
+        AtomicInteger runs = new AtomicInteger();
+
+        assertThatThrownBy(() -> executor.inTransaction(() -> {
+            failOnAFourthRun(runs);
+            return inTransaction.insert(new Document("_id", "a"), COLLECTION);
+        })).isInstanceOf(TransactionSystemException.class)
+                .hasMessageStartingWith("The commit failed with NoSuchTransaction (code 251) after 3 failed commits, so it was not retried again.")
+                .hasMessageContaining("a failover")
+                .hasMessageContaining("transactionLifetimeLimitSeconds")
+                .hasMessageContaining("caught and swallowed");
+
+        assertThat(runs).hasValue(3);
+        assertThat(outsideTransaction.count(new Query(), COLLECTION)).isZero();
+    }
+
+    /**
+     * The case the cap is for. The callback catches the duplicate key, MongoDB has already aborted the transaction, and
+     * the commit fails with the same NoSuchTransaction a failover gives. Every rerun does the same, so without the cap
+     * this ran for two minutes.
+     */
+    @Test
+    void a_duplicate_key_swallowed_in_the_transaction_stops_after_three_runs() {
+        outsideTransaction.insert(new Document("_id", "a"), COLLECTION);
+        AtomicInteger runs = new AtomicInteger();
+
+        assertThatThrownBy(() -> executor.inTransaction(() -> {
+            failOnAFourthRun(runs);
+            try {
+                return inTransaction.insert(new Document("_id", "a"), COLLECTION);
+            } catch (DuplicateKeyException swallowed) {
+                return null;
+            }
+        })).isInstanceOf(TransactionSystemException.class)
+                .hasMessageStartingWith("The commit failed with NoSuchTransaction (code 251) after 3 failed commits, so it was not retried again.");
+
+        assertThat(runs).hasValue(3);
+    }
+
+    private static void failOnAFourthRun(AtomicInteger runs) {
+        if (runs.incrementAndGet() > 3) {
+            throw new AssertionError("The unit of work ran a fourth time, so the cap did not hold");
+        }
+    }
+
+    private void failCommits(int errorCode, int times) {
+        configureFailPoint(new Document("mode", new Document("times", times))
+                .append("data", new Document("failCommands", List.of("commitTransaction"))
+                        .append("errorCode", errorCode)
+                        .append("errorLabels", List.of("TransientTransactionError"))));
     }
 
     private static void failOnASecondRun(AtomicInteger runs) {

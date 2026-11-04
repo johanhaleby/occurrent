@@ -780,13 +780,16 @@ after the first run.
 
 The second did not retry in 0.34.0 and does now. A commit that fails with the `TransientTransactionError` label reaches
 the executor as a `TransactionSystemException` with a `MongoException` cause, which 0.34.0 did not match. The executor
-now runs the unit of work again, which is safe when the transaction was rolled back, as that label says it was.
+now runs the unit of work again, up to three runs in all, which is safe when the transaction was rolled back, as that
+label says it was. A failover and a transaction that outlives `transactionLifetimeLimitSeconds` fail the commit this way,
+and a second run gets past both.
 The case to watch is a unit of work that catches a duplicate key from a write inside the transaction and returns normally.
 MongoDB has aborted the transaction by then, so the commit fails with the label and the executor runs the unit of work
-again on each attempt, up to 240 of them, where 0.34.0 failed once.
+three times, where 0.34.0 failed once. The third failure is a `TransactionSystemException` whose message says the commit
+failed with `NoSuchTransaction` after 3 failed commits.
 
-An executor you build with a retry of your own uses that retry as given, as before. So does one built on a template or
-operator that opens no transaction.
+An executor you build with a retry of your own uses that retry as given, as before, so it has no cap on failed commits.
+So does one built on a template or operator that opens no transaction.
 
 ### What to do
 

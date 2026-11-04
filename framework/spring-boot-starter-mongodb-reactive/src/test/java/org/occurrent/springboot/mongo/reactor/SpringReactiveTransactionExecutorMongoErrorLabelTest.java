@@ -37,6 +37,7 @@ import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.transaction.TransactionSystemException;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -62,6 +63,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SpringReactiveTransactionExecutorMongoErrorLabelTest {
 
     private static final int WRITE_CONFLICT = 112;
+    private static final int NO_SUCH_TRANSACTION = 251;
     private static final String COLLECTION = "label_test";
 
     // enableTestCommands is what lets the server accept configureFailPoint. withCommand replaces the whole command
@@ -196,8 +198,84 @@ class SpringReactiveTransactionExecutorMongoErrorLabelTest {
         assertThat(runs).hasValue(2);
     }
 
+    /**
+     * A failover or an expired transaction ends in a commit that MongoDB refuses with NoSuchTransaction and the
+     * transient label, and a fresh transaction gets past it. Two in a row is what the cap of three runs is sized for.
+     */
+    @Test
+    void two_commits_in_a_row_refused_with_no_such_transaction_are_retried_and_the_third_run_commits() {
+        failCommits(NO_SUCH_TRANSACTION, 2);
+        AtomicInteger runs = new AtomicInteger();
+
+        Mono<Document> insert = executor.inTransaction(() -> Mono.defer(() -> {
+            runs.incrementAndGet();
+            return inTransaction.insert(new Document("_id", "a"), COLLECTION);
+        }));
+
+        StepVerifier.create(insert).expectNextCount(1).verifyComplete();
+        assertThat(runs).hasValue(3);
+        assertThat(Mono.from(outsideTransaction.countDocuments()).block()).isEqualTo(1L);
+    }
+
+    @Test
+    void three_commits_in_a_row_refused_with_no_such_transaction_stop_after_three_runs_and_the_message_says_why() {
+        failCommits(NO_SUCH_TRANSACTION, 3);
+        AtomicInteger runs = new AtomicInteger();
+
+        Mono<Document> insert = executor.inTransaction(() -> Mono.defer(() -> {
+            failOnAFourthRun(runs);
+            return inTransaction.insert(new Document("_id", "a"), COLLECTION);
+        }));
+
+        StepVerifier.create(insert)
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(TransactionSystemException.class)
+                        .hasMessageStartingWith("The commit failed with NoSuchTransaction (code 251) after 3 failed commits, so it was not retried again.")
+                        .hasMessageContaining("a failover")
+                        .hasMessageContaining("transactionLifetimeLimitSeconds")
+                        .hasMessageContaining("caught and swallowed"))
+                .verify();
+        assertThat(runs).hasValue(3);
+        assertThat(Mono.from(outsideTransaction.countDocuments()).block()).isZero();
+    }
+
+    /**
+     * The case the cap is for. The unit of work catches the duplicate key, MongoDB has already aborted the transaction,
+     * and the commit fails with the same NoSuchTransaction a failover gives. Every rerun does the same, so without the
+     * cap this ran for two minutes.
+     */
+    @Test
+    void a_duplicate_key_swallowed_in_the_transaction_stops_after_three_runs() {
+        Mono.from(outsideTransaction.insertOne(new Document("_id", "a"))).block();
+        AtomicInteger runs = new AtomicInteger();
+
+        Mono<Document> insert = executor.inTransaction(() -> Mono.defer(() -> {
+            failOnAFourthRun(runs);
+            return inTransaction.insert(new Document("_id", "a"), COLLECTION)
+                    .onErrorResume(DuplicateKeyException.class, swallowed -> Mono.empty());
+        }));
+
+        StepVerifier.create(insert)
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(TransactionSystemException.class)
+                        .hasMessageStartingWith("The commit failed with NoSuchTransaction (code 251) after 3 failed commits, so it was not retried again."))
+                .verify();
+        assertThat(runs).hasValue(3);
+    }
+
     private Mono<Void> insertOutsideTransaction() {
         return Mono.from(outsideTransaction.insertOne(new Document("_id", "a"))).then();
+    }
+
+    private static void failOnAFourthRun(AtomicInteger runs) {
+        if (runs.incrementAndGet() > 3) {
+            throw new AssertionError("The unit of work ran a fourth time, so the cap did not hold");
+        }
+    }
+
+    private void failCommits(int errorCode, int times) {
+        configureFailPoint(new Document("mode", new Document("times", times))
+                .append("data", new Document("failCommands", List.of("commitTransaction"))
+                        .append("errorCode", errorCode)
+                        .append("errorLabels", List.of("TransientTransactionError"))));
     }
 
     private static void failOnASecondRun(AtomicInteger runs) {

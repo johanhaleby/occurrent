@@ -16,7 +16,12 @@
 
 package org.occurrent.application.service.spring.reactor;
 
+import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
+import com.mongodb.ServerAddress;
+import org.bson.BsonDocument;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -24,6 +29,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.reactive.AbstractReactiveTransactionManager;
 import org.springframework.transaction.reactive.GenericReactiveTransaction;
 import org.springframework.transaction.reactive.TransactionSynchronizationManager;
@@ -31,7 +37,11 @@ import org.springframework.transaction.reactive.TransactionalOperator;
 import org.springframework.transaction.support.DefaultTransactionDefinition;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import reactor.util.retry.Retry;
 
+import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -262,6 +272,114 @@ class SpringReactiveTransactionExecutorTest {
         assertThat(attempts).hasValue(4);
     }
 
+    @Test
+    void the_default_executor_runs_the_action_a_third_time_when_the_commit_fails_twice_with_the_transient_transaction_error_label() {
+        // Given
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(new StubReactiveTransactionManager(noSuchTransaction(), noSuchTransaction()));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Mono<String> result = executor.inTransaction(() -> Mono.fromCallable(() -> {
+            attempts.incrementAndGet();
+            return "done";
+        }));
+
+        // Then
+        StepVerifier.create(result).expectNext("done").verifyComplete();
+        assertThat(attempts).hasValue(3);
+    }
+
+    @Test
+    void the_default_executor_stops_after_three_failed_commits_and_says_which_error_failed_the_commit() {
+        // Given
+        TransactionSystemException lastCommitFailure = noSuchTransaction();
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(
+                new StubReactiveTransactionManager(noSuchTransaction(), noSuchTransaction(), lastCommitFailure, noSuchTransaction()));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Mono<Integer> result = executor.inTransaction(() -> Mono.fromCallable(attempts::incrementAndGet));
+
+        // Then
+        StepVerifier.create(result)
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(TransactionSystemException.class)
+                        .hasMessage("The commit failed with NoSuchTransaction (code 251) after 3 failed commits, so it was not retried again. "
+                                + "MongoDB no longer had the transaction when the commit arrived. That follows a failover, "
+                                + "a transaction that outlived transactionLifetimeLimitSeconds, or a write error such as a duplicate key "
+                                + "that the transaction body caught and swallowed.")
+                        .hasCause(lastCommitFailure))
+                .verify();
+        assertThat(attempts).hasValue(3);
+    }
+
+    @Test
+    void the_default_executor_names_only_the_error_when_a_failed_commit_is_not_no_such_transaction() {
+        // Given
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(new StubReactiveTransactionManager(writeConflict(), writeConflict(), writeConflict()));
+
+        // When
+        Mono<String> result = executor.inTransaction(() -> Mono.just("unused"));
+
+        // Then
+        StepVerifier.create(result)
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .hasMessage("The commit failed with WriteConflict (code 112) after 3 failed commits, so it was not retried again."))
+                .verify();
+    }
+
+    @Test
+    void the_default_executor_counts_failed_commits_and_not_errors_thrown_from_the_action() {
+        // Given
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(new StubReactiveTransactionManager(noSuchTransaction(), noSuchTransaction()));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Mono<String> result = executor.inTransaction(() -> Mono.fromCallable(() -> {
+            if (attempts.incrementAndGet() <= 5) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        }));
+
+        // Then
+        StepVerifier.create(result).expectNext("done").verifyComplete();
+        assertThat(attempts).hasValue(8);
+    }
+
+    @Test
+    void the_default_executor_does_not_count_a_commit_that_fails_without_the_transient_label() {
+        // Given
+        TransactionSystemException unlabelled = new TransactionSystemException("commit failed", new MongoException("no label"));
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(new StubReactiveTransactionManager(unlabelled));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Mono<Integer> result = executor.inTransaction(() -> Mono.fromCallable(attempts::incrementAndGet));
+
+        // Then
+        StepVerifier.create(result).expectErrorSatisfies(error -> assertThat(error).isSameAs(unlabelled)).verify();
+        assertThat(attempts).hasValue(1);
+    }
+
+    @Test
+    void a_retry_passed_to_the_constructor_is_used_as_given_and_has_no_cap_on_failed_commits() {
+        // Given
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(
+                new StubReactiveTransactionManager(noSuchTransaction(), noSuchTransaction(), noSuchTransaction(), noSuchTransaction(), noSuchTransaction()),
+                Retry.fixedDelay(10, Duration.ofMillis(1)).filter(throwable -> throwable instanceof TransactionSystemException));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Mono<String> result = executor.inTransaction(() -> Mono.fromCallable(() -> {
+            attempts.incrementAndGet();
+            return "done";
+        }));
+
+        // Then
+        StepVerifier.create(result).expectNext("done").verifyComplete();
+        assertThat(attempts).hasValue(6);
+    }
+
     // The action fails the test if it runs a second time, so a retry that should not happen fails on this
     // assertion straight away instead of running the default two minute budget out.
     private static void runsOnceAndFailsWith(RuntimeException failure) {
@@ -289,6 +407,24 @@ class SpringReactiveTransactionExecutorTest {
         return (RuntimeException) cause;
     }
 
+    private static TransactionSystemException noSuchTransaction() {
+        return commitFailure(251, "NoSuchTransaction");
+    }
+
+    private static TransactionSystemException writeConflict() {
+        return commitFailure(112, "WriteConflict");
+    }
+
+    // What the real ReactiveMongoTransactionManager emits when the server refuses the commit.
+    private static TransactionSystemException commitFailure(int code, String codeName) {
+        MongoCommandException failure = new MongoCommandException(new BsonDocument("ok", new BsonInt32(0))
+                .append("code", new BsonInt32(code))
+                .append("codeName", new BsonString(codeName))
+                .append("errmsg", new BsonString("commit refused")), new ServerAddress());
+        failure.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+        return new TransactionSystemException("Could not commit Mongo transaction", failure);
+    }
+
     private static MongoException labelled(String label) {
         MongoException exception = new MongoException("labelled");
         exception.addLabel(label);
@@ -298,7 +434,14 @@ class SpringReactiveTransactionExecutorTest {
     // A transaction manager with no real resource to manage: doBegin/doCommit/doRollback are no-ops, and
     // doGetTransaction hands out a fresh marker object per call so AbstractReactiveTransactionManager treats every
     // call as a request for a new transaction rather than joining an existing one.
+    // The commit fails with each exception it was given, one per commit, and then succeeds.
     private static final class StubReactiveTransactionManager extends AbstractReactiveTransactionManager {
+
+        private final Deque<TransactionSystemException> commitFailures = new ArrayDeque<>();
+
+        StubReactiveTransactionManager(TransactionSystemException... commitFailures) {
+            this.commitFailures.addAll(java.util.List.of(commitFailures));
+        }
 
         @Override
         protected Object doGetTransaction(TransactionSynchronizationManager synchronizationManager) {
@@ -312,7 +455,10 @@ class SpringReactiveTransactionExecutorTest {
 
         @Override
         protected Mono<Void> doCommit(TransactionSynchronizationManager synchronizationManager, GenericReactiveTransaction status) {
-            return Mono.empty();
+            return Mono.defer(() -> {
+                TransactionSystemException failure = commitFailures.poll();
+                return failure == null ? Mono.empty() : Mono.error(failure);
+            });
         }
 
         @Override

@@ -50,6 +50,20 @@ attempt can take about 30 seconds, and 240 of them would be two hours.
   classpath, so an application without the driver still gets the executor and still retries a `TransientDataAccessException`.
   A commit that fails with the `UnknownTransactionCommitResult` label is not retried even though a commit failure
   can have both labels, since the commit may have gone through and running the unit of work again could apply it twice.
+- A commit that fails with the transient label is retried at most twice, three runs in all. That label on a commit
+  covers three causes that the error cannot tell apart. They are a failover, a transaction that outlived
+  `transactionLifetimeLimitSeconds`, and a write error that the unit of work caught and swallowed, because MongoDB
+  aborts the transaction on that error. Each gives `NoSuchTransaction` (code 251) with the transient label. I ran all
+  three against a three-member MongoDB 8.0 replica set with the blocking and the reactive executor. A failover and an
+  expiry succeed on the second run. A swallowed error fails on every run, and without a cap it ran 217 times in 120
+  seconds. Three runs survive two failovers in a row and not three, and every run added to the cap is another rerun of the
+  swallowed case. The count belongs to one call and counts failed commits only, so an error thrown from the unit of work
+  keeps the full budget. At the cap the executor throws a `TransactionSystemException` that names the error and the
+  count, and for code 251 it lists the three causes without choosing one. An executor built with a retry of its own has
+  no cap.
+- Not retrying a failed commit at all, or not retrying code 251, was considered and rejected, since both give up the
+  failover and the expiry that this retry is for. The failover message differs from the other two, but an expiry and a
+  swallowed error have the same code, labels and message, and a message is not something to match on.
 - There is no setting for the count or the deadline and no extra jitter. A user who needs another budget can raise it
   when a need shows up.
 - The retry still runs only when the store owns the transaction, as in [ADR 74](0074-retry-only-where-the-transaction-is-owned.md).
@@ -80,7 +94,7 @@ Moving the stores to `ClientSession.withTransaction` was considered and rejected
 - A commit that fails with `UnknownTransactionCommitResult` is never retried, also when the same error has the
   `TransientTransactionError` label. The old predicate did not retry it either, since a commit failure surfaces as a
   `TransactionSystemException` with a `MongoException` cause, which it did not match. The same reason means a commit
-  that fails with only the transient label, which the old predicate did not retry, is retried now. That includes a unit of work that catches a duplicate key from a write inside the transaction and returns normally. The server has aborted the transaction, the commit fails with the transient label and the callback runs again on each attempt for the whole budget, where 0.34.0 failed once. The executor cannot tell that commit from a conflict, so the caller has to let such a duplicate propagate.
+  that fails with only the transient label, which the old predicate did not retry, is retried now. That includes a unit of work that catches a duplicate key from a write inside the transaction and returns normally. The server has aborted the transaction and the commit fails with the transient label, so the unit of work runs three times and then fails with a message that names the commit, where 0.34.0 failed once. The executor cannot tell that commit from a failover, so the caller has to let such a duplicate propagate.
 - The budget of 240 attempts and 120 seconds was chosen when a retry could be spent on an error no retry could cure. Now
   that only a conflict uses it, I measured how much a conflict needs, on a single-node MongoDB 8.0 with a
   `TransientTransactionError` predicate. 64 threads appending 10 times each to one marker needed at most 21 attempts, and 256

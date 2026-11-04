@@ -16,11 +16,13 @@
 
 package org.occurrent.application.service.spring.reactor;
 
+import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.service.reactor.ReactiveTransactionExecutor;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.ReactiveTransactionManager;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.reactive.TransactionContextManager;
 import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
@@ -35,6 +37,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 /**
@@ -79,6 +82,10 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * minutes, running the unit of work again each time along with any side effect it has outside the transaction.
      * Without the MongoDB driver on the classpath only the transient type applies.
      * <p>
+     * A commit that fails with that label is retried at most twice, three runs in all. At the third failed commit the
+     * executor throws a {@link TransactionSystemException} that names the error and the count. An error thrown from the
+     * unit of work keeps the full budget. A retry passed to a constructor is used as given and has no such cap. See ADR 0164.
+     * <p>
      * Three things are not retried. A commit that fails with {@code UnknownTransactionCommitResult} may have gone
      * through, so running the unit of work again could apply it twice. A duplicate key or validation error is a
      * result, not a conflict. A duplicate from a write made outside any transaction has no label either, which
@@ -92,6 +99,8 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
     private static final boolean MONGO_DRIVER_PRESENT = ClassUtils.isPresent("com.mongodb.MongoException", SpringReactiveTransactionExecutor.class.getClassLoader());
 
     private static final Duration DEFAULT_CONFLICT_DEADLINE = Duration.ofSeconds(120);
+
+    private static final int MAX_FAILED_COMMITS = 3;
 
     private final TransactionalOperator transactionalOperator;
     private final Retry conflictRetry;
@@ -155,7 +164,8 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * The conflict-retry spec applied when this executor opens the transaction: 320 retries with exponential backoff
      * from 10ms to 500ms, about two minutes of waiting, matching the blocking executor and the event store's own
      * transient-conflict retry. It counts retries only. An executor built without a retry of its own adds a
-     * 120 second deadline per subscription on top, which this spec does not include when you pass it to a constructor.
+     * 120 second deadline per subscription and a cap of three failed commits on top, which this spec does not include
+     * when you pass it to a constructor.
      *
      * @return The default retry spec.
      */
@@ -180,12 +190,38 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                         // A conflict aborts the whole transaction, which only its owner can start again, so run the
                         // action once and let the error reach that owner. See ADR 0074.
                         ? transaction
-                        : Mono.defer(() -> transaction.retryWhen(stopAfterDefaultDeadline ? withinDeadline() : conflictRetry)));
+                        : Mono.defer(() -> {
+                            if (!stopAfterDefaultDeadline) {
+                                return transaction.retryWhen(conflictRetry);
+                            }
+                            AtomicInteger failedCommits = new AtomicInteger();
+                            return transaction
+                                    .onErrorMap(TransactionSystemException.class, failure -> commitFailed(failure, failedCommits))
+                                    .retryWhen(withinDeadline());
+                        }));
+    }
+
+    private static TransactionSystemException commitFailed(TransactionSystemException failure, AtomicInteger failedCommits) {
+        return isTransientConflict(failure) && failedCommits.incrementAndGet() >= MAX_FAILED_COMMITS
+                ? new CommitRetriesExhausted(failure, failedCommits.get())
+                : failure;
     }
 
     private static boolean isTransientConflict(Throwable throwable) {
+        if (throwable instanceof CommitRetriesExhausted) {
+            return false;
+        }
         Boolean byLabel = MONGO_DRIVER_PRESENT ? MongoErrorLabels.verdict(throwable) : null;
         return byLabel != null ? byLabel : throwable instanceof TransientDataAccessException;
+    }
+
+    /**
+     * Replaces the commit failure that used up the cap, so that the default retry stops.
+     */
+    private static final class CommitRetriesExhausted extends TransactionSystemException {
+        CommitRetriesExhausted(TransactionSystemException failure, int failedCommits) {
+            super(MongoErrorLabels.describeCommitFailure(failure, failedCommits), failure);
+        }
     }
 
     /**
@@ -193,6 +229,29 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * This class is not touched then.
      */
     private static final class MongoErrorLabels {
+        private static final int NO_SUCH_TRANSACTION = 251;
+
+        /**
+         * Names the error that failed the commit. For NoSuchTransaction it also lists the three causes, because the
+         * code alone does not tell a failover, an expired transaction and a swallowed write error apart.
+         */
+        static String describeCommitFailure(Throwable failure, int failedCommits) {
+            Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+            String error = "failed";
+            int code = 0;
+            for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
+                if (cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
+                    code = mongoException.getCode();
+                    error = "failed with " + (mongoException instanceof MongoCommandException command ? command.getErrorCodeName() + " " : "") + "(code " + code + ")";
+                    break;
+                }
+            }
+            String message = "The commit " + error + " after " + failedCommits + " failed commits, so it was not retried again.";
+            return code == NO_SUCH_TRANSACTION
+                    ? message + " MongoDB no longer had the transaction when the commit arrived. That follows a failover, a transaction that outlived transactionLifetimeLimitSeconds, or a write error such as a duplicate key that the transaction body caught and swallowed."
+                    : message;
+        }
+
         /**
          * What the error labels in the cause chain say, or {@code null} when they say nothing. The unknown commit result
          * label anywhere in the chain wins over the transient label, so a commit that may have gone through is not
