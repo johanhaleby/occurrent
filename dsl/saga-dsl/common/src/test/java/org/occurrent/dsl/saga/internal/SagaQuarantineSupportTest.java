@@ -614,6 +614,50 @@ class SagaQuarantineSupportTest {
     }
 
     @Nested
+    class AFailureRecordFromBefore0_35_0WithNoPendingList {
+
+        @Test
+        void keeps_the_records_instant_as_the_pending_instant_when_the_same_version_fails_again_inside_the_budget() {
+            // Given
+            Instant t0 = NOW;
+            SagaEnvelope<OrderState> stored = withFailure(SagaStatus.ACTIVE, failedOn(7, t0));
+
+            // When
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", stored, at(7), new IllegalStateException("boom"), t0.plus(Duration.ofMinutes(1)), BUDGET);
+
+            // Then
+            StreamMarks marks = record.envelope().streamMarks().get("o1");
+            assertAll(
+                    () -> assertThat(record.quarantined()).isFalse(),
+                    () -> assertThat(marks.pending()).isEqualTo(Map.of("", List.of(7L))),
+                    () -> assertThat(marks.pendingSince()).isEqualTo(Map.of(7L, t0))
+            );
+        }
+
+        @Test
+        void quarantines_on_that_version_once_the_budget_counted_from_the_records_instant_is_used_up() {
+            // Given
+            Instant t0 = NOW;
+            SagaEnvelope<OrderState> stored = withFailure(SagaStatus.ACTIVE, failedOn(7, t0));
+            SagaEnvelope<OrderState> afterAgain = SagaExecutionSupport.onFailure(
+                    saga(), "o1", stored, at(7), new IllegalStateException("boom"), t0.plus(Duration.ofMinutes(1)), BUDGET).envelope();
+
+            // When
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", afterAgain, at(7), new IllegalStateException("boom"), t0.plus(BUDGET), BUDGET);
+
+            // Then
+            assertAll(
+                    () -> assertThat(record).isNotNull(),
+                    () -> assertThat(record.quarantined()).isTrue(),
+                    () -> assertThat(record.envelope().failure().input()).isEqualTo("o1@7"),
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(t0)
+            );
+        }
+    }
+
+    @Nested
     class AnInstanceThatFailedBeforeItStarted {
 
         @Test
