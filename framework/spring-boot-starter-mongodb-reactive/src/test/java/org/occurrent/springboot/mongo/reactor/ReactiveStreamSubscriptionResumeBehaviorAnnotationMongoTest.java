@@ -127,7 +127,8 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
     }
 
     // Whether a boot also asserts that the subscription has no checkpoint stored. Only a start that is dynamic for the
-    // durable layer, BEGINNING_OF_TIME with SAME_AS_START_AT, stores none. A NOW start does store its first position.
+    // durable layer, BEGINNING_OF_TIME with SAME_AS_START_AT, stores none. A NOW start records nothing when it starts,
+    // and stores the position of an event once it has delivered one.
     private enum Checkpoints {
         NOT_ASSERTED,
         NONE_STORED
