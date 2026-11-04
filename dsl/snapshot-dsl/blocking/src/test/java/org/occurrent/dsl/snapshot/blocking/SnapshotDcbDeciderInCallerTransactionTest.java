@@ -68,6 +68,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -275,14 +276,17 @@ class SnapshotDcbDeciderInCallerTransactionTest {
     }
 
     private static Stream<Throwable> failuresFromTheDomainFunction() {
-        return Stream.of(new IllegalStateException("from the domain function"), new AssertionError("from the domain function"));
+        // A domain function in Kotlin can throw a checked exception
+        return Stream.of(new IllegalStateException("from the domain function"), new AssertionError("from the domain function"), new IOException("from the domain function"));
     }
 
     private static List<DomainEvent> rethrow(Throwable failure) {
-        if (failure instanceof Error error) {
-            throw error;
-        }
-        throw (RuntimeException) failure;
+        throw SnapshotDcbDeciderInCallerTransactionTest.<RuntimeException>sneakyThrow(failure);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     private Function<List<DomainEvent>, List<DomainEvent>> appendingAndRecordingWhatItSees(String name, List<Integer> eventsSeen) {

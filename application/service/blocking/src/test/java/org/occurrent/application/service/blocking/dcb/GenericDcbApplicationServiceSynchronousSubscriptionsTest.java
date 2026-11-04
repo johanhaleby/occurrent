@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
+import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.DomainEventConverter;
 import org.occurrent.domain.Name;
@@ -36,8 +37,11 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -85,6 +89,26 @@ class GenericDcbApplicationServiceSynchronousSubscriptionsTest {
         assertThat(dispatcher.dispatched).isEmpty();
     }
 
+    @Test
+    void a_failure_before_the_append_in_an_earlier_run_of_the_executors_action_is_not_thrown_after_a_later_run_appends() {
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(Tag.parse("name:1")))
+                .synchronousSubscriptions(new RecordingDispatcher())
+                .transactionExecutor(new RunsTheActionTwiceInATransactionItReports())
+                .build();
+        AtomicInteger decisions = new AtomicInteger();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(tags(Tag.parse("name:1")), events -> {
+            if (decisions.incrementAndGet() == 1) {
+                throw new IllegalStateException("in the first run");
+            }
+            return Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan");
+        }));
+
+        assertThat(thrown).as("what execute threw").isNull();
+        assertThat(eventStore.read(tags(Tag.parse("name:1"))).events()).as("events stored").hasSize(1);
+    }
+
     private static final class RecordingDispatcher implements SynchronousEventDispatcher {
         private final List<CloudEvent> dispatched = new ArrayList<>();
 
@@ -95,6 +119,20 @@ class GenericDcbApplicationServiceSynchronousSubscriptionsTest {
 
         @Override
         public boolean hasSubscriptions() {
+            return true;
+        }
+    }
+
+    // Stands in for an executor that runs its action again after a failed commit, in a transaction it reports open throughout
+    private static final class RunsTheActionTwiceInATransactionItReports implements TransactionExecutor {
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            action.get();
+            return action.get();
+        }
+
+        @Override
+        public boolean isTransactional() {
             return true;
         }
     }

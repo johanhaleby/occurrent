@@ -186,20 +186,21 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 // Their failure goes around the executor, so it can't mark that transaction rollback-only.
                 AtomicReference<@Nullable Throwable> failedBeforeAppend = new AtomicReference<>();
                 Tuple<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransaction(() -> {
+                    // An executor can run this action again, so a failure kept from an earlier run must not be thrown after a later run appends
+                    failedBeforeAppend.set(null);
                     final Optional<Decision<E>> decision;
                     try {
                         decision = readAndDecide.get();
-                    } catch (RuntimeException | Error failure) {
+                    } catch (Throwable failure) {
+                        // Throwable, since a domain function in Kotlin can throw a checked exception
                         failedBeforeAppend.set(failure);
                         return new Tuple<>(Optional.empty(), List.of());
                     }
                     return decision.map(appendAndDispatch).orElseGet(() -> new Tuple<>(Optional.empty(), List.of()));
                 });
                 Throwable failure = failedBeforeAppend.get();
-                if (failure instanceof Error error) {
-                    throw error;
-                } else if (failure != null) {
-                    throw (RuntimeException) failure;
+                if (failure != null) {
+                    throw GenericDcbApplicationService.<RuntimeException>sneakyThrow(failure);
                 }
                 return attempt;
             }
@@ -228,6 +229,11 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     public boolean isAppendConfirmed(DcbAppendResult appendResult) {
         Objects.requireNonNull(appendResult, "appendResult cannot be null");
         return eventStore instanceof DcbAppendConfirmation confirmation && confirmation.isConfirmed(appendResult);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     private static void refuseEventBelowFoldedPosition(DcbCriteria criteria, DcbExecuteOptions<?> options, DcbEventStream eventStream) {
