@@ -43,7 +43,9 @@ B2, A1, B3.
 
 **An event that would complete the instance is applied last, together with the later versions of its own stream.** Every
 kept event arrived while the instance could not complete, so each of them belongs to the instance. Applying the
-completing event in its arrival place would leave the events after it to a completed instance, which skips them.
+completing event in its arrival place would leave the events after it to a completed instance, which skips them. The
+later versions of the completing event's own stream still find the instance completed and are skipped, as they are when
+a feed delivers that stream in order.
 
 **A start that fails keeps the events.** The failure record is written with `early` copied over, so the redelivered start
 applies them.
