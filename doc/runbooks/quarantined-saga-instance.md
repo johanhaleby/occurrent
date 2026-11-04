@@ -99,9 +99,9 @@ run of refusals, so it says nothing on the redeliveries that follow. It says it 
 handles successfully, and again after a restart, since that memory does not survive one. An alert on it should
 therefore neither expect one line per redelivery nor treat a second line as a second instance.
 
-The elapsed duration is how long the instance has been failing, which can be longer than the named event has. The
-clock belongs to the instance rather than to one event, so an instance where two events both fail keeps the instant it
-started failing and renames the record to whichever event failed last.
+The elapsed duration is how long the named event has been failing, measured from when it first failed. Each failing
+event keeps its own clock, so an instance where two events fail in turn renames the record to whichever event failed
+last, with that event's own instant.
 
 ## The sequence
 

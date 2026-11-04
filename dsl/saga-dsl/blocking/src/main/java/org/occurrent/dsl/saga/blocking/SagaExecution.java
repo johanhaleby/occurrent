@@ -71,9 +71,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link #letTheSubscriptionPast} for the conditions and
  * {@link #refuseUnroutableDelivery} for why the unroutable delivery is the exception.
  * <p>
- * The budget is the instance's rather than one event's. An instance where two events both fail keeps the instant it
- * started failing, so a second event can reach the budget on its first failure, and the record names the event the
- * instance stopped on rather than the one the clock started with.
+ * Each failing event keeps its own clock. An instance where two events fail in turn measures each from its own first
+ * failure, and the record names the event the instance stopped on, with the instant that event first failed.
  * <p>
  * The quarantine decision reads and writes the instance without its application state, through
  * {@link SagaStateStore#findWithoutState} and {@link SagaStateStore#compareAndSaveWithoutState}. An instance whose state
@@ -386,9 +385,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (!stateStore.compareAndSaveWithoutState(sagaId, record.envelope(), record.expectedVersion())) {
                 // Another input advanced the instance while the failing one was being retried, most likely a timer that
                 // fired successfully. The failing event now meets different state and may well succeed, so discard this
-                // write rather than retry one whose premise has gone. Only a first failure loses its budget that way.
-                // A later one keeps the record the winning write left in place, since only the failing input clears it.
-                // The pending version has no such premise, it is true whatever the instance looks like now.
+                // write rather than retry one whose premise has gone. The pending version has no such premise, it is true
+                // whatever the instance looks like now, and listing it keeps the instant the event first failed.
                 recordPending(sagaId, meta, failure);
                 return false;
             }
