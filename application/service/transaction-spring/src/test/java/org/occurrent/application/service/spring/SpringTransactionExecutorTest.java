@@ -265,6 +265,22 @@ class SpringTransactionExecutorTest {
     }
 
     @Test
+    void the_count_of_failed_commits_belongs_to_one_call_and_a_later_call_starts_from_zero() {
+        // Given
+        StubTransactionManager transactionManager = new StubTransactionManager(noSuchTransaction(), noSuchTransaction());
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(transactionManager);
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        executor.inTransaction(() -> attempts.incrementAndGet());
+        transactionManager.failNextCommits(noSuchTransaction(), noSuchTransaction());
+        executor.inTransaction(() -> attempts.incrementAndGet());
+
+        // Then
+        assertThat(attempts).hasValue(6);
+    }
+
+    @Test
     void the_default_executor_stops_after_three_failed_commits_and_says_which_error_failed_the_commit() {
         // Given
         TransactionSystemException lastCommitFailure = noSuchTransaction();
@@ -402,6 +418,10 @@ class SpringTransactionExecutorTest {
         private final Deque<TransactionSystemException> commitFailures = new ArrayDeque<>();
 
         StubTransactionManager(TransactionSystemException... commitFailures) {
+            failNextCommits(commitFailures);
+        }
+
+        void failNextCommits(TransactionSystemException... commitFailures) {
             this.commitFailures.addAll(java.util.List.of(commitFailures));
         }
 

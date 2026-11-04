@@ -290,6 +290,23 @@ class SpringReactiveTransactionExecutorTest {
     }
 
     @Test
+    void the_count_of_failed_commits_belongs_to_one_subscription_and_a_later_subscription_starts_from_zero() {
+        // Given
+        StubReactiveTransactionManager transactionManager = new StubReactiveTransactionManager(noSuchTransaction(), noSuchTransaction());
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(transactionManager);
+        AtomicInteger attempts = new AtomicInteger();
+        Mono<Integer> result = executor.inTransaction(() -> Mono.fromCallable(attempts::incrementAndGet));
+
+        // When
+        StepVerifier.create(result).expectNext(3).verifyComplete();
+        transactionManager.failNextCommits(noSuchTransaction(), noSuchTransaction());
+        StepVerifier.create(result).expectNext(6).verifyComplete();
+
+        // Then
+        assertThat(attempts).hasValue(6);
+    }
+
+    @Test
     void the_default_executor_stops_after_three_failed_commits_and_says_which_error_failed_the_commit() {
         // Given
         TransactionSystemException lastCommitFailure = noSuchTransaction();
@@ -440,6 +457,10 @@ class SpringReactiveTransactionExecutorTest {
         private final Deque<TransactionSystemException> commitFailures = new ArrayDeque<>();
 
         StubReactiveTransactionManager(TransactionSystemException... commitFailures) {
+            failNextCommits(commitFailures);
+        }
+
+        void failNextCommits(TransactionSystemException... commitFailures) {
             this.commitFailures.addAll(java.util.List.of(commitFailures));
         }
 
