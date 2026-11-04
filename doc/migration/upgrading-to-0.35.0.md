@@ -119,9 +119,10 @@ other sections compile fine and behave differently, so read them first.
   On the reactive stack a restart no longer replays the history of a `BEGINNING_OF_TIME` `@StreamSubscription`, and a
   `NOW` subscription no longer misses the events written while the application was down. On the blocking stack `NOW` with
   `SAME_AS_START_AT` starts at the present on every restart and no longer competes with the other instances, so every
-  instance is delivered every event. A reactive `NOW` subscription with the default `resumeBehavior` also reads the
-  position of the feed when it registers with no stored checkpoint, so when it waits for its start, which is the default
-  in `auto` subscription mode, the application does not start when the MongoDB server cannot answer. Compiles unchanged.
+  instance is delivered every event. A reactive `NOW` subscription with the default `resumeBehavior` also asks the
+  server where the feed is each time it registers and needs the answer only when no checkpoint is stored, so when it
+  waits for its start, which is the default in `auto` subscription mode, the application does not start when no
+  checkpoint is stored and the MongoDB server cannot answer. Compiles unchanged.
 
 ### Brokers
 
@@ -1320,7 +1321,7 @@ a subscription waits for its start by default when `occurrent.subscription.mode`
 start. With `startupMode = BACKGROUND`, with mode `manual`, or on a bean built after startup,
 the refusal does not hold up startup, and the subscription is not running.
 `occurrent.subscription.start-when-no-start-position-can-be-recorded=true` does not change this for the reactive MongoDB
-model, which fails when it cannot be asked and never answers nothing. The property is described in
+model, which fails when it cannot be asked or replies without a clock. The property is described in
 [section 7 of the 0.34.0 guide](upgrading-to-0.34.0.md#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
 
 A subscription that handled an event before the upgrade normally has a checkpoint stored already, because the old start

@@ -514,8 +514,8 @@ class ProjectionAnnotationRegistrar {
     //      shipped Mongo composition (issue 865), never assumed for an application-supplied one, whose own DEFAULT
     //      semantics are its own to declare, and never assumed for a projection running on some other model the
     //      context also holds, which the holder was never told anything about (issue 996).
-    // NOW with the default resumeBehavior is the model default (the reactor StartPositionSupport.nowThenResume), so it is case 3
-    // and not case 1. A model default resumes from a stored checkpoint and, on an application-supplied model, may
+    // NOW with the default resumeBehavior is the model default (the reactor StartPositionSupport.nowThenResume and
+    // its DCB counterpart), so it is case 3 and not case 1. A model default resumes from a stored checkpoint and, on an application-supplied model, may
     // replay. DEFAULT on a composition with no registered fact stays silent. This registrar cannot verify it either way.
     private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable CatchupResolution recordingResolution,
                                          @Nullable SubscriptionModelCapability capability) {
