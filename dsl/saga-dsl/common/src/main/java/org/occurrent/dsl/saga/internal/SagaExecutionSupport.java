@@ -387,9 +387,9 @@ public final class SagaExecutionSupport {
             // and an input that is pending already writes nothing.
             return pendingRecord(saga, sagaId, current, meta, now, reorderWindow);
         }
-        // Keep the instant the failing started, refresh the input and what it is failing with, because an input that
-        // fails one way and then another is still the same instance failing, and the later exception is the more useful
-        // one to read.
+        // Name the input failing now, with the instant it first failed and what it is failing with. An input that fails
+        // one way and then another is still the same input failing, and the later exception is the more useful one to
+        // read.
         SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()));
         return failureRecord(saga, sagaId, current, record, budgetUsedUp ? SagaStatus.QUARANTINED : SagaStatus.ACTIVE, now, budgetUsedUp, meta, existing, reorderWindow);
     }
