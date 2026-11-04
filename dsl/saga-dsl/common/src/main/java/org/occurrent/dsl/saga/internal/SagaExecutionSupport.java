@@ -454,7 +454,7 @@ public final class SagaExecutionSupport {
             // before it began. Start detection reads that flag rather than the document, so a later redelivery of the
             // start event still runs onStart.
             SagaEnvelope<S> inserted = new SagaEnvelope<>(sagaId, saga.initialState(), status, 1, List.of(), Map.of(),
-                    null, now, now, null, null, false, record, withPending(Map.of(), Map.of(), meta, reorderWindow, failingSince(null, meta, now)));
+                    null, now, now, null, null, false, record, withPending(Map.of(), Map.of(), meta, reorderWindow, now));
             return new FailureRecord<>(inserted, 0, quarantined);
         }
         return new FailureRecord<>(withFailure(current, record, status, now, meta, replaced, reorderWindow), current.version(), quarantined);
@@ -522,16 +522,22 @@ public final class SagaExecutionSupport {
             return streamMarks;
         }
         StreamMarks marks = streamMarks.get(streamId);
-        if (marks != null && (marks.legacyFailed().contains(version)
-                              || marks.pending().values().stream().anyMatch(versions -> versions.contains(version)))) {
-            return streamMarks;
-        }
-        TreeSet<Long> legacy = new TreeSet<>(marks == null ? List.of() : marks.legacyFailed());
-        legacy.add(version);
-        // The record no longer names its input, so the input's clock moves to the marks with it.
+        // The record no longer names its input, so the input's clock moves to the marks with it
         Map<Long, Instant> pendingSince = marks == null ? new LinkedHashMap<>() : new LinkedHashMap<>(marks.pendingSince());
         pendingSince.putIfAbsent(version, replaced.firstFailedAt());
         Map<String, StreamMarks> updated = new LinkedHashMap<>(streamMarks);
+        if (marks != null && (marks.legacyFailed().contains(version)
+                              || marks.pending().values().stream().anyMatch(versions -> versions.contains(version)))) {
+            // Listed already. A store that does not keep the instants can leave it without one, and the record's is the
+            // only one left.
+            if (marks.pendingSince().containsKey(version)) {
+                return streamMarks;
+            }
+            updated.put(streamId, new StreamMarks(marks.floor(), marks.byType(), marks.pending(), marks.legacyFailed(), pendingSince));
+            return updated;
+        }
+        TreeSet<Long> legacy = new TreeSet<>(marks == null ? List.of() : marks.legacyFailed());
+        legacy.add(version);
         updated.put(streamId, new StreamMarks(floorOf(marks, streamWatermarks.get(streamId)), marks == null ? Map.of() : marks.byType(),
                 marks == null ? Map.of() : marks.pending(), List.copyOf(legacy), pendingSince));
         return updated;

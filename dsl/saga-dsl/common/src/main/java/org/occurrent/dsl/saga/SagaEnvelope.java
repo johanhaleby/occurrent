@@ -155,7 +155,11 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
             pendingSince = Map.copyOf(pendingSince);
         }
 
-        /** Marks that know no instant for their pending versions. */
+        /**
+         * Marks that know no instant for their pending versions. Each pending version then starts its clock on its next
+         * failure, so a store that saves marks this way gives up the quarantine budget of an instance whose failures
+         * alternate between two events, which then never reaches it.
+         */
         public StreamMarks(long floor, Map<String, TypeMark> byType, Map<String, List<Long>> pending, List<Long> legacyFailed) {
             this(floor, byType, pending, legacyFailed, Map.of());
         }
