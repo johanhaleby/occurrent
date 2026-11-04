@@ -336,7 +336,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     @Test
     void startAt_now_with_same_as_start_at_still_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
         // Unlike DEFAULT, an explicit NOW with resumeBehavior = SAME_AS_START_AT resolves to StartAt.now(), a
-        // documented, composition-independent contract (subscribe at this moment, no replay, no stored checkpoint)
+        // documented, composition-independent contract (subscribe at this moment, no replay)
         // every Subscribable must honor regardless of whether it also exposes ReplayAwareSubscriptions, so that fact
         // holds and is worth its own warning alongside resolveEventStorePhase's "cannot tell" one, not instead of it.
         Subscribable model = unobservableModel();
