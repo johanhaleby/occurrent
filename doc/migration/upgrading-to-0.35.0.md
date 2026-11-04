@@ -789,7 +789,7 @@ three times, where 0.34.0 failed once. The third failure is a `TransactionSystem
 failed with `NoSuchTransaction` after 3 failed commits.
 
 An executor you build with a retry of your own uses that retry as given, as before, so it has no cap on failed commits.
-So does one built on a template or operator that opens no transaction.
+An executor built on a template or operator that opens no transaction has no commit to fail, so the cap never applies to it.
 
 ### What to do
 

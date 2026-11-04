@@ -83,7 +83,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * Without the MongoDB driver on the classpath only the transient type applies.
      * <p>
      * A commit that fails with that label is retried at most twice, three runs in all. At the third failed commit the
-     * executor throws a {@link TransactionSystemException} that names the error and the count. An error thrown from the
+     * executor throws a {@link TransactionSystemException} that names the error and the count. Any other error from the
      * unit of work keeps the full budget. A retry passed to a constructor is used as given and has no such cap. See ADR 0164.
      * <p>
      * Three things are not retried. A commit that fails with {@code UnknownTransactionCommitResult} may have gone
