@@ -80,9 +80,9 @@ A failing event that is offered again and again writes once. Each further attemp
 version already pending, which is what the quarantine path costs too.
 
 Every pending version stays pending until a save applies it. Dropping one would acknowledge an event whose reaction
-never ran, once the instance moved the window past it. When the pending versions of one type grow past the window, the
-saga logs a warning naming the stream, the type and the window, because the instance then grows with every further
-failure.
+never ran, once the instance moved the window past it. When a failure takes the pending versions of one type past the
+window, the saga logs a warning naming the stream, the type and the window, because the instance then grows with every
+further failure. An instance that was already past a window that has been lowered since gets no warning.
 
 The failure record keeps its older role as a fallback. A record naming an event still says that the event was never
 applied, so the saga treats that event as new however far behind it is, and at or below the floor too. This covers an

@@ -47,8 +47,8 @@ import static java.util.Objects.requireNonNull;
  *                             applied unless the saga has applied that version already, and one this many versions
  *                             behind or more is skipped with a warning, unless it failed in the saga. A failed version is
  *                             recorded as pending on the instance and applied when it arrives again however far behind
- *                             it is. Nothing drops a pending version, and the saga logs a warning once one stream's
- *                             pending versions of one type outnumber this window. A version that did not fail and is
+ *                             it is. Nothing drops a pending version, and the saga logs a warning when a failure takes
+ *                             one stream's pending versions of one type past this window. A version that did not fail and is
  *                             delivered more than this far behind, by a feed that reorders that deeply, is
  *                             indistinguishable from a redelivery and is lost. Each instance remembers up to this many
  *                             applied versions per stream and event type, so the state it stores grows with the number

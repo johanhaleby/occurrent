@@ -139,7 +139,7 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      *                the version is enough to recognise it. It is treated like a pending version and removed when the
      *                version is applied. It is filled only when such a failure record is replaced by another input's, so
      *                it holds at most the one record an instance carried over from before
-     * @param pendingSince when each version in {@code pending} first failed, by version. The quarantine budget of an input
+     * @param pendingSince when each version in {@code pending} or {@code legacyFailed} first failed, by version. The quarantine budget of an input
      *                runs from here, so a failure of one input never moves the clock of another. A pending version
      *                missing from it falls back to the failure record's {@code firstFailedAt} when the record names it,
      *                and otherwise to the moment it fails again

@@ -369,7 +369,7 @@ An event is pending when it was handed to the saga and failed. The instance reco
 exception reaches the subscription, whether or not quarantine is on, so a broker that parks the event afterwards does
 not lose it. An operator who replays the parked event after the instance has applied more than a window of later
 versions still gets it applied, once. An instance keeps every pending version until it applies, and logs a warning
-naming the stream and the type once one stream's pending versions of one type outnumber the window.
+naming the stream and the type when a failure takes one stream's pending versions of one type past the window.
 
 An instance that failed on an event under 0.34.0 or earlier holds that failure in its failure record, which names the
 event but not its type. If another event fails before the first is offered again, the failure record is replaced, and the
@@ -451,7 +451,8 @@ is in [ADR 157](../architecture/decisions/0157-a-sagas-quarantine-budget-runs-pe
 
 ### Who is affected
 
-A saga with quarantine turned on through `SagaRunnerConfig.withQuarantineAfter(Duration)`.
+A saga with quarantine turned on through `SagaRunnerConfig.withQuarantineAfter(Duration)`, and a saga you turn it on for
+while some of its events are failing. An event that failed while quarantine was off keeps the instant it first failed.
 
 ### What changes
 
@@ -464,9 +465,11 @@ record names first failed.
 | Versions 7, 8, 7, 8 fail in turn | measured from the first failure | each measured from its own first failure, so 7 still reaches the budget |
 | Version 7 fails and is parked, version 8 fails once a week later | 8 quarantines the instance on its first failure | 8 starts its own clock |
 | Version 7 is parked, replayed after `quarantineAfter`, and fails again | measured from the first failure | quarantines the instance on that first replay failure |
+| Version 7 fails while quarantine is off, quarantine is turned on a day later, and 7 fails again | a fresh budget from that failure | quarantines the instance on that failure when a day is past `quarantineAfter` |
 
-The last row is intended, since the parked event has been failing for longer than the budget. Fix the cause before
-replaying a parked event on an instance with quarantine on.
+The last two rows are intended, since the event has been failing for longer than the budget. Fix the cause before
+replaying a parked event on an instance with quarantine on, or before turning quarantine on for a saga with failing
+events.
 
 ### Stored saga state for the clock
 

@@ -22,7 +22,7 @@ What the failing event holds up in the meantime is decided by whatever feeds the
 
 Quarantine is off by default in 0.34.0, so an instance can only be quarantined if you turned it on, with
 `SagaRunnerConfig.withQuarantineAfter(..)` or `occurrent.saga.quarantine-after` on the annotation path. The executor
-then times how long the instance has been failing. Once that reaches the budget, the instance can move to
+then times how long the event it is failing on has been failing. Once that reaches the budget, the instance can move to
 `SagaStatus.QUARANTINED`, and when it does the executor stops rethrowing.
 
 Reaching the budget is not enough on its own. The javadoc on `SagaStatus.QUARANTINED` lists what else has to hold, so
@@ -78,7 +78,7 @@ a later delivery may have succeeded and cleared the record, which the runner doe
 instance's status with step 1 rather than reading the quiet either way.
 
 When an instance is quarantined, the same logger logs an `ERROR` saying it is now `QUARANTINED`. That line is the one
-to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
+to alert on. It names two durations, how long the event had been failing and then the budget, in that order.
 
 The third line is a `WARN` for one of the ways an instance past its budget is not quarantined, where the subscription
 could not confirm it still holds the failing event. That instance stays `ACTIVE`, so it does not appear in step 1,
@@ -248,7 +248,9 @@ finished some other way, which is what you need before step 5.
 
 **Replaying a parked event costs its whole clock.** A parked event's clock keeps running while it is parked. When you
 replay it on an instance with quarantine on and it fails again after `quarantineAfter` has passed since its first
-failure, that first replay failure quarantines the instance. Fix the cause before you replay.
+failure, that first replay failure quarantines the instance, and the `ERROR` line comes with no `WARN` before it. Fix
+the cause before you replay. Turning quarantine on works the same way for an event that failed while it was off, since
+that event has been failing since then.
 
 ### 5. [you] Delete the instance, once you have decided not to recover it
 

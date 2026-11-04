@@ -65,4 +65,8 @@ starting, without closing it, since the record itself is still not written.
   instants as there are pending versions, and nothing limits either.
 - An instance stored by 0.34.0 has no pending versions, since pending arrived with ADR 154. The input its record names
   keeps the record's `firstFailedAt`, and any other input starts its clock on its next failure.
-- An event without a stream id and version writes no record, so it is never quarantined, as in 0.34.0.
+- A version that failed while quarantine was off is pending with the instant it first failed, since pending is
+  recorded whether or not quarantine is on. Once quarantine is turned on, the next failure of that version quarantines
+  the instance if it has been failing for longer than `quarantineAfter`.
+- An event without a stream id and version writes no record, so it is never quarantined. 0.34.0 wrote a record for
+  one under a `position:N` key, which [ADR 150](0150-a-global-position-is-not-a-saga-redelivery-key.md) retired.
