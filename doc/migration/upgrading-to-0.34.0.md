@@ -739,7 +739,8 @@ The blocking `ManualStartSubscriptionModel` and the reactor `ReactorDurableSubsc
 property reaches the reactive starter too, where
 `ReactorDurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true)` now lets
 `ReactorDurableSubscriptionModel` start such a registration as well. The reactive MongoDB subscription model reads
-the position it records with the `hello` command, which does not depend on `hostInfo`, and fails when the server
+the position it records with the `hello` command (`isMaster` on a server that doesn't know it), which does not
+depend on `hostInfo`, and fails when the server
 cannot be asked, so the property does not change what that model does.
 
 

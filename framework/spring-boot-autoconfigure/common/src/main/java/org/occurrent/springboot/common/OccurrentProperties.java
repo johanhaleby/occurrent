@@ -394,8 +394,9 @@ public class OccurrentProperties {
          * subscription model whose {@code globalCheckpoint()} cannot answer, starts anyway instead of being refused.
          * The blocking MongoDB subscription models cannot answer when the server refuses the {@code hostInfo}
          * command, which shared MongoDB Atlas clusters do. The reactive MongoDB model reads the feed position with
-         * the {@code hello} command and fails when the server cannot be asked or replies without a clock, so this
-         * property does not change what it does. A reactive subscription that starts at the present
+         * the {@code hello} command ({@code isMaster} on a server that does not know it) and fails when the server
+         * cannot be asked or replies without a clock, so this property does not change what it does. A reactive
+         * subscription that starts at the present
          * ({@code startAt = NOW}) under the default {@code resumeBehavior} asks the server for the feed position on
          * every restart, and ignores the answer when a checkpoint is stored. Starting anyway means no start position
          * is recorded before the first delivery, so a crash before the first checkpoint is saved starts over from
