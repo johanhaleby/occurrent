@@ -38,6 +38,7 @@ import java.util.IdentityHashMap;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
@@ -83,8 +84,8 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * Without the MongoDB driver on the classpath only the transient type applies.
      * <p>
      * A commit that fails with that label is retried at most twice, three runs in all. At the third failed commit the
-     * executor throws a {@link TransactionSystemException} that names the error and the count. Any other error from the
-     * unit of work keeps the full budget. A retry passed to a constructor is used as given and has no such cap. See ADR 0164.
+     * executor throws a {@link TransactionSystemException} that names the error and the count. An error thrown from the
+     * unit of work, a transaction exception included, keeps the full budget. A retry passed to a constructor is used as given and has no such cap. See ADR 0164.
      * <p>
      * Three things are not retried. A commit that fails with {@code UnknownTransactionCommitResult} may have gone
      * through, so running the unit of work again could apply it twice. A duplicate key or validation error is a
@@ -195,8 +196,11 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                                 return transaction.retryWhen(conflictRetry);
                             }
                             AtomicInteger failedCommits = new AtomicInteger();
-                            return transaction
-                                    .onErrorMap(TransactionSystemException.class, failure -> commitFailed(failure, failedCommits))
+                            AtomicReference<Throwable> actionFailure = new AtomicReference<>();
+                            return Mono.defer(action)
+                                    .doOnError(actionFailure::set)
+                                    .as(transactionalOperator::transactional)
+                                    .onErrorMap(TransactionSystemException.class, failure -> failure == actionFailure.get() ? failure : commitFailed(failure, failedCommits))
                                     .retryWhen(withinDeadline());
                         }));
     }

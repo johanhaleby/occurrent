@@ -307,6 +307,25 @@ class SpringReactiveTransactionExecutorTest {
     }
 
     @Test
+    void the_default_executor_does_not_count_a_transaction_exception_that_the_action_emits_itself() {
+        // Given
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(new StubReactiveTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Mono<String> result = executor.inTransaction(() -> Mono.fromCallable(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw noSuchTransaction();
+            }
+            return "done";
+        }));
+
+        // Then
+        StepVerifier.create(result).expectNext("done").verifyComplete();
+        assertThat(attempts).hasValue(4);
+    }
+
+    @Test
     void the_default_executor_stops_after_three_failed_commits_and_says_which_error_failed_the_commit() {
         // Given
         TransactionSystemException lastCommitFailure = noSuchTransaction();

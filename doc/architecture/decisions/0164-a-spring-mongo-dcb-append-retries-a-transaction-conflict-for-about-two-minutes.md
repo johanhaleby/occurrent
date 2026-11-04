@@ -57,8 +57,8 @@ attempt can take about 30 seconds, and 240 of them would be two hours.
   three against a three-member MongoDB 8.0 replica set with the blocking and the reactive executor. A failover and an
   expiry succeed on the second run. A swallowed error fails on every run, and without a cap it ran 217 times in 120
   seconds. Three runs survive two failovers in a row and not three, and every run added to the cap is another rerun of the
-  swallowed case. The count belongs to one call and counts a `TransactionSystemException` with the transient label, so any other
-  error from the unit of work keeps the full budget. At the cap the executor throws a `TransactionSystemException` that names the error and the
+  swallowed case. The count belongs to one call and counts failed commits only, so an error thrown from the unit of work, a
+  transaction exception included, keeps the full budget. At the cap the executor throws a `TransactionSystemException` that names the error and the
   count, and for code 251 it lists the three causes without choosing one. An executor built with a retry of its own has
   no cap.
 - Not retrying a failed commit at all, or not retrying code 251, was considered and rejected, since both give up the

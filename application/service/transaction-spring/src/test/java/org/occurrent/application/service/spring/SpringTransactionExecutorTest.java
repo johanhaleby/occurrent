@@ -281,6 +281,25 @@ class SpringTransactionExecutorTest {
     }
 
     @Test
+    void the_default_executor_does_not_count_a_transaction_exception_that_the_action_throws_itself() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw noSuchTransaction();
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(4);
+    }
+
+    @Test
     void the_default_executor_stops_after_three_failed_commits_and_says_which_error_failed_the_commit() {
         // Given
         TransactionSystemException lastCommitFailure = noSuchTransaction();

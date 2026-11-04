@@ -34,6 +34,7 @@ import java.util.IdentityHashMap;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -82,8 +83,8 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * transaction. Without the MongoDB driver on the classpath only the transient type applies.
      * <p>
      * A commit that fails with that label is retried at most twice, three runs in all. At the third failed commit the
-     * executor throws a {@link TransactionSystemException} that names the error and the count. Any other error from the
-     * callback keeps the full budget. A retry passed to a constructor is used as given and has no such cap. See ADR 0164.
+     * executor throws a {@link TransactionSystemException} that names the error and the count. An error thrown from the
+     * callback, a transaction exception included, keeps the full budget. A retry passed to a constructor is used as given and has no such cap. See ADR 0164.
      * <p>
      * Three things are not retried. A commit that fails with {@code UnknownTransactionCommitResult} may have gone
      * through, so running the callback again could apply it twice. A duplicate key or validation error is a result,
@@ -185,10 +186,18 @@ public class SpringTransactionExecutor implements TransactionExecutor {
         }
         AtomicInteger failedCommits = new AtomicInteger();
         return DEFAULT_CONFLICT_RETRY.mapRetryPredicate(withinDeadline()).execute(() -> {
+            AtomicReference<Throwable> actionFailure = new AtomicReference<>();
             try {
-                return transactionTemplate.execute(status -> action.get());
+                return transactionTemplate.execute(status -> {
+                    try {
+                        return action.get();
+                    } catch (RuntimeException e) {
+                        actionFailure.set(e);
+                        throw e;
+                    }
+                });
             } catch (TransactionSystemException e) {
-                throw commitFailed(e, failedCommits);
+                throw e == actionFailure.get() ? e : commitFailed(e, failedCommits);
             }
         });
     }
