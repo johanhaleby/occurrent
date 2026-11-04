@@ -79,7 +79,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
-import org.springframework.data.mongodb.ReactiveMongoDatabaseUtils;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
@@ -88,6 +87,8 @@ import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.transaction.NoTransactionException;
+import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -358,7 +359,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 return readWithoutMarkerVersions(criteria, options);
             });
         }
-        return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()).flatMap(callerTransactionActive -> {
+        return callerTransactionActive().flatMap(callerTransactionActive -> {
             if (callerTransactionActive) {
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
             }
@@ -684,9 +685,18 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
      * retrying could never commit. Route every retry on the write path through here so the ownership check cannot be
      * forgotten. See ADR 0074.
      */
-    private <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
-        return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory())
-                .flatMap(transactionAlreadyActive -> transactionAlreadyActive ? action : action.retryWhen(retry));
+    private static <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
+        return callerTransactionActive().flatMap(transactionAlreadyActive -> transactionAlreadyActive ? action : action.retryWhen(retry));
+    }
+
+    // Any transaction in the subscriber context, whichever database factory it was opened on, like the blocking store's
+    // TransactionSynchronizationManager.isActualTransactionActive(). ReactiveMongoDatabaseUtils.isTransactionActive looks
+    // only on this template's factory, so it misses a transaction opened on another until a write through this template
+    // joins it.
+    private static Mono<Boolean> callerTransactionActive() {
+        return TransactionSynchronizationManager.forCurrentTransaction()
+                .map(TransactionSynchronizationManager::isActualTransactionActive)
+                .onErrorResume(NoTransactionException.class, e -> Mono.just(false));
     }
 
     /**
