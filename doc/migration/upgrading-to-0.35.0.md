@@ -477,6 +477,12 @@ Each pending version records when it first failed, in a `pendingSince` list besi
 document without it falls back to the failure record's `firstFailedAt` for the event the record names, and any other
 event starts its clock on its next failure.
 
+A `SagaStateStore` implemented outside this repository has to save `StreamMarks.pendingSince()` and read it back, in
+`compareAndSaveWithoutState` and `findWithoutState` as well as in `compareAndSave` and `find`. A store that saves only the
+other marks, or rebuilds them with the four-argument `StreamMarks` constructor, loses the instants. An instance whose
+failures alternate between two events, such as versions 7, 8, 7, 8 of one stream, then starts each event's clock again
+on every failure and never reaches its budget.
+
 ## The deprecated `accept(..)` on the projection feeds is removed
 
 `accept(E)` and `accept(EventMetadata, E)` are gone from the blocking and the reactor `DomainEventFeed` and
