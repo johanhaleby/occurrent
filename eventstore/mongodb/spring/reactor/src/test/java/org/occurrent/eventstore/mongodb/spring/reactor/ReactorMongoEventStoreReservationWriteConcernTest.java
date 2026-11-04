@@ -47,6 +47,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -65,6 +66,7 @@ class ReactorMongoEventStoreReservationWriteConcernTest {
     private static final String COLLECTION = "events";
     private static final String POSITIONS = DcbMarkerModel.positionCollectionName(COLLECTION);
     private static final long WTIMEOUT_MILLIS = 12_345;
+    private static final long COMMIT_TIMEOUT_MILLIS = 6_789;
 
     @Container
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
@@ -78,7 +80,7 @@ class ReactorMongoEventStoreReservationWriteConcernTest {
     private ReactorMongoEventStore store;
 
     @BeforeEach
-    void open_a_store_on_a_client_at_write_concern_1_with_a_timeout() {
+    void open_a_store_on_a_client_at_write_concern_1_with_a_timeout_other_than_the_stores() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reservation");
         mongoClient = MongoClients.create(MongoClientSettings.builder()
                 .applyConnectionString(connectionString)
@@ -92,6 +94,7 @@ class ReactorMongoEventStoreReservationWriteConcernTest {
                 .transactionConfig(transactionManager)
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(STREAM, DCB)
+                .markerVersionsCommitTimeout(Duration.ofMillis(COMMIT_TIMEOUT_MILLIS))
                 .build();
         store = new ReactorMongoEventStore(new ReactiveMongoTemplate(mongoClient, database), config);
     }
@@ -102,7 +105,7 @@ class ReactorMongoEventStoreReservationWriteConcernTest {
     }
 
     @Test
-    void an_append_reserves_its_position_with_write_concern_majority_and_the_timeout_of_the_client() {
+    void an_append_reserves_its_position_with_write_concern_majority_bounded_by_the_marker_versions_commit_timeout() {
         // Given
         commands.clear();
 
@@ -113,12 +116,12 @@ class ReactorMongoEventStoreReservationWriteConcernTest {
         BsonDocument writeConcern = onlyReservation().document().getDocument("writeConcern", new BsonDocument());
         assertAll(
                 () -> assertThat(writeConcern.get("w")).as("%s", writeConcern).isEqualTo(new BsonString("majority")),
-                () -> assertThat(writeConcern.get("wtimeout")).as("%s", writeConcern).isIn(new BsonInt32((int) WTIMEOUT_MILLIS), new BsonInt64(WTIMEOUT_MILLIS))
+                () -> assertThat(writeConcern.get("wtimeout")).as("%s", writeConcern).isIn(new BsonInt32((int) COMMIT_TIMEOUT_MILLIS), new BsonInt64(COMMIT_TIMEOUT_MILLIS))
         );
     }
 
     @Test
-    void an_append_in_a_callers_transaction_reserves_its_position_in_that_transaction_without_a_write_concern() {
+    void an_append_in_a_callers_transaction_reserves_its_position_outside_that_transaction_with_write_concern_majority() {
         // Given
         CloudEvent event = taggedEvent("Happened", "order:1");
         commands.clear();
@@ -129,9 +132,27 @@ class ReactorMongoEventStoreReservationWriteConcernTest {
         // Then
         Command reservation = onlyReservation();
         assertAll(
-                () -> assertThat(reservation.document().getBoolean("autocommit").getValue()).as("%s", reservation).isFalse(),
-                () -> assertThat(reservation.document().containsKey("writeConcern")).as("%s", reservation).isFalse(),
+                () -> assertThat(reservation.document().containsKey("autocommit")).as("%s", reservation).isFalse(),
+                () -> assertThat(reservation.document().getDocument("writeConcern").get("w")).as("%s", reservation).isEqualTo(new BsonString("majority")),
                 () -> assertThat(store.read(tags(tag("order:1"))).block().events()).extracting(CloudEvent::getId).containsExactly(event.getId())
+        );
+    }
+
+    @Test
+    void a_rollback_of_the_callers_transaction_keeps_the_reserved_position_and_writes_no_event() {
+        // Given
+        CloudEvent event = taggedEvent("Happened", "order:1");
+
+        // When
+        TransactionalOperator.create(transactionManager).execute(status -> {
+            status.setRollbackOnly();
+            return store.append(List.of(event));
+        }).blockLast();
+
+        // Then
+        assertAll(
+                () -> assertThat(store.currentPosition().block()).as("the reservation committed on its own").isEqualTo(1L),
+                () -> assertThat(store.read(tags(tag("order:1"))).block().events()).isEmpty()
         );
     }
 

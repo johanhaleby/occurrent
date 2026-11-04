@@ -152,6 +152,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final boolean resumeFromMarkerVersions;
     private final boolean runsOnReplicaSet;
     private final TransactionOptions markerVersionsTransactionOptions;
+    private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
     /**
@@ -176,6 +177,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventStoreCollectionName, mongoTemplate);
         this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
         this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
+        this.markerVersionsCommitTimeout = config.markerVersionsCommitTimeout;
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
@@ -711,13 +713,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
-        // Reserve the position block once, before the transaction body. When this store owns the transaction the
-        // counter findAndModify runs outside it, as a single atomic document update MongoDB serializes without raising
-        // a transaction conflict, and the reserved block is reused across transient-transaction-error retries. When an
-        // outer transaction is already active the template joins it, so the counter update joins it too and the
-        // counter document becomes a conflict point shared by every concurrent append in that transaction. Either way
-        // a doomed or condition-failed append abandons its block, so position may have gaps (DCB permits this, see
-        // ADR 0021).
+        // Reserve the position block once, before the transaction body, outside the append's transaction and any
+        // caller's. MongoDB serializes the counter findAndModify as one atomic document update without a transaction
+        // conflict, and the block is reused across transient-transaction-error retries. A doomed or condition-failed
+        // append abandons its block, so position may have gaps (DCB permits this, see ADR 0021).
         long firstPosition = reservePositions(eventsToAppend.size());
         long lastPosition = firstPosition + eventsToAppend.size() - 1;
         // A DCB append always persists at least one event (validateDcbEvents above refuses an empty list), so this
@@ -731,9 +730,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     /**
      * Runs the action, applying the retry strategy only when this store owns the transaction. When one is already
      * active the template joins it, a conflict aborts it, and every further attempt fails on its first read with
-     * {@code NoSuchTransaction}, so retrying could never commit. Every retry on the write path goes through here, the
-     * DCB append, the position counter's cold start, and the stream {@code write} condition retry, so none of them can
-     * be written without the check. See ADR 0074.
+     * {@code NoSuchTransaction}, so retrying could never commit. Every retry of a transaction on the write path goes
+     * through here, the DCB append and the stream {@code write} condition retry, so neither can be written without the
+     * check. The position counter's cold-start retry runs outside any transaction and doesn't need it. See ADR 0074.
      */
     private static <T> T retryOnlyWhenThisStoreOwnsTheTransaction(RetryStrategy retry, Supplier<T> action) {
         return TransactionSynchronizationManager.isActualTransactionActive() ? action.get() : retry.execute(action);
@@ -920,24 +919,25 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     /**
      * Reserves a contiguous block of {@code eventCount} DCB positions by incrementing one global counter document. Every
      * DCB append passes through this single document, so it is a serialization point and an inherent throughput ceiling
-     * for the store as a whole under very high append rates. When this store owns the append transaction it is kept
-     * outside that transaction (ADR 0021) so it does not turn into transaction conflicts, and so it waits for
-     * {@link DcbMarkerModel#reservationWriteConcern majority}, but the global monotonic sequence cannot be sharded away.
+     * for the store as a whole under very high append rates. It runs on the database factory's own database, outside
+     * the append transaction and outside any transaction of the caller (ADR 0021), so it does not turn into transaction
+     * conflicts, and so it waits for {@link DcbMarkerModel#reservationWriteConcern majority} for at most
+     * {@code markerVersionsCommitTimeout}. The global monotonic sequence cannot be sharded away.
      */
     private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
-        // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update. Like
-        // the append retry this only runs when the store owns the transaction, because a duplicate inside a joined
-        // transaction aborts it and no further attempt could commit.
-        return retryOnlyWhenThisStoreOwnsTheTransaction(COLD_START_COUNTER_RETRY,
+        // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update. No
+        // transaction holds the upsert, so the retry needs no ownership check.
+        return COLD_START_COUNTER_RETRY.execute(
                 () -> {
-                    // MongoTemplate.findAndModify takes no write concern, so this goes to the collection
-                    Document updated = mongoTemplate.execute(dcbPositionCollectionName, collection -> collection
-                            .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern()))
+                    // Not through mongoTemplate, which would bind the update to a transaction open on this thread
+                    var collection = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase().getCollection(dcbPositionCollectionName);
+                    Document updated = collection
+                            .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout))
                             .findOneAndUpdate(
                                     Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
                                     Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
-                                    new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER)));
+                                    new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
                     long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DcbMarkerModel.COUNTER_POSITION)).longValue();
                     return lastPosition - eventCount + 1;
                 });

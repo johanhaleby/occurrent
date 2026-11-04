@@ -172,6 +172,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final boolean resumeFromMarkerVersions;
     private final boolean runsOnReplicaSet;
     private final TransactionOptions markerVersionsTransactionOptions;
+    private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
     /**
@@ -200,6 +201,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         this.requireRepairedEvents = config.requireRepairedEvents;
         this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
         this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
+        this.markerVersionsCommitTimeout = config.markerVersionsCommitTimeout;
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
         if (dcbEnabled && !resumeFromMarkerVersions) {
             LOGGER.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
@@ -541,12 +543,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
         int eventCount = eventsToAppend.size();
 
-        // Reserve the position block once, before the transaction body. When this store owns the transaction the
-        // counter findAndModify runs outside it, as a single atomic document update MongoDB serializes without raising
-        // a transaction conflict, and the reserved block is reused across transient-transaction-error retries. When an
-        // outer transaction is already active the operator joins it, so the counter update joins it too and the counter
-        // document becomes a conflict point shared by every concurrent append in that transaction. Either way a doomed
-        // or condition-failed append abandons its block, so position may have gaps (DCB permits this, see ADR 0021).
+        // Reserve the position block once, before the transaction body, outside the append's transaction and any
+        // caller's. MongoDB serializes the counter findAndModify as one atomic document update without a transaction
+        // conflict, and the block is reused across transient-transaction-error retries. A doomed or condition-failed
+        // append abandons its block, so position may have gaps (DCB permits this, see ADR 0021).
         return Mono.defer(() -> {
             // A DCB append always persists at least one event (validateDcbEvents above refuses an empty list), so this
             // is minted unconditionally, unlike the stream write path. Minted inside this defer, per subscription, so
@@ -662,28 +662,30 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<Long> reservePositions(int eventCount) {
-        // Waits for majority when it runs outside a transaction, see DcbMarkerModel.reservationWriteConcern.
-        // ReactiveMongoTemplate.findAndModify takes no write concern, so this goes to the collection.
-        return mongoTemplate.execute(dcbPositionCollectionName, collection -> collection
-                        .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern()))
-                        .findOneAndUpdate(
-                                Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
-                                Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
-                                new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER)))
-                .next()
+        // The factory's own database instead of mongoTemplate, which would bind the update to a transaction in the
+        // subscriber context. It waits for majority, see DcbMarkerModel.reservationWriteConcern.
+        return mongoTemplate.getMongoDatabaseFactory().getMongoDatabase()
+                .flatMap(database -> {
+                    var collection = database.getCollection(dcbPositionCollectionName);
+                    return Mono.from(collection
+                            .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout))
+                            .findOneAndUpdate(
+                                    Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
+                                    Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
+                                    new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER)));
+                })
                 .map(updated -> ((Number) updated.get(DcbMarkerModel.COUNTER_POSITION)).longValue() - eventCount + 1)
                 // Cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert it
                 // and all but one get a duplicate key. On retry the document exists and the upsert becomes an update.
-                // Like the append retry this only runs when the store owns the transaction, because a duplicate inside
-                // a joined transaction aborts it and no further attempt could commit.
-                .transform(reserve -> retryOnlyWhenThisStoreOwnsTheTransaction(reserve, COLD_START_COUNTER_RETRY));
+                // No transaction holds the upsert, so the retry needs no ownership check.
+                .retryWhen(COLD_START_COUNTER_RETRY);
     }
 
     /**
      * Applies the retry spec only when this store owns the transaction. When one is already active the operator joins
      * it, a conflict aborts it, and every further attempt fails on its first read with {@code NoSuchTransaction}, so
-     * retrying could never commit. Route every retry on the write path through here so the ownership check cannot be
-     * forgotten. See ADR 0074.
+     * retrying could never commit. Route every retry of a transaction on the write path through here so the ownership
+     * check cannot be forgotten. See ADR 0074.
      */
     private static <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
         return callerTransactionActive().flatMap(transactionAlreadyActive -> transactionAlreadyActive ? action : action.retryWhen(retry));

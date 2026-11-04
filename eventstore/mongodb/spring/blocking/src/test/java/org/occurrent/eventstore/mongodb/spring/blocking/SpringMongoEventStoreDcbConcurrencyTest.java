@@ -18,6 +18,7 @@ package org.occurrent.eventstore.mongodb.spring.blocking;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.ExplainVerbosity;
+import com.mongodb.MongoException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -615,17 +616,16 @@ class SpringMongoEventStoreDcbConcurrencyTest {
 
         List<Throwable> failures = runAppendsInOuterTransaction(store, txManager, threadCount, "ownedbycaller", 1);
 
-        // The store must not retry, so it can never run its transaction body more times than there were appends.
-        // Without the ownership check each losing append would run it up to 15 more times. Some appends never reach
-        // the body at all: inside a caller-owned transaction the position-counter reservation joins that transaction
-        // too, so a conflict often aborts there first, which is why this is an upper bound rather than an equality.
+        // The store must not retry, so it runs its transaction body exactly once per append. Without the ownership
+        // check each losing append would run it up to 15 more times. The position reservation runs outside the
+        // caller's transaction and can't conflict, so every append reaches the body.
         assertThat(transactionBodyRuns.get())
                 .as("The store must not retry its transaction body when it does not own the transaction")
-                .isPositive()
-                .isLessThanOrEqualTo(threadCount);
-        // Whatever does lose the race must surface as something the caller can recognise as worth retrying. Note that
-        // MongoDB's WriteConflict carries the TransientTransactionError label yet Spring translates it to
-        // DataIntegrityViolationException, a non-transient type, so both count here.
+                .isEqualTo(threadCount);
+        // Whatever does lose the race must surface as something the caller can recognise as worth retrying. A
+        // WriteConflict on the event insert reaches the caller as the driver's MongoException with the
+        // TransientTransactionError label, and Spring translates other conflicts to DataIntegrityViolationException, a
+        // non-transient type, so all of them count here.
         //
         // Deliberately not asserting that at least one append fails. A conflict is near-certain with six transactions
         // incrementing one counter document, but it is not guaranteed, and making the test depend on losing a race
@@ -683,7 +683,8 @@ class SpringMongoEventStoreDcbConcurrencyTest {
 
     private static boolean hasRetryableConflictCause(Throwable throwable) {
         for (Throwable cause = throwable; cause != null; cause = cause.getCause()) {
-            if (cause instanceof TransientDataAccessException || cause instanceof DataIntegrityViolationException) {
+            if (cause instanceof TransientDataAccessException || cause instanceof DataIntegrityViolationException
+                    || cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
                 return true;
             }
         }

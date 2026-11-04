@@ -25,9 +25,11 @@ import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static java.util.Objects.requireNonNull;
@@ -73,13 +75,14 @@ public final class DcbMarkerModel {
     }
 
     /**
-     * The write concern of a position reservation that runs outside a transaction, whatever the store is configured
+     * The write concern of a position reservation, which runs outside any transaction, whatever the store is configured
      * with, because a failover that lost the reservation would leave the append's event above the counter, where no
-     * read finds it (ADR 149). A timeout set on the given write concern still applies. MongoDB ignores it inside a
-     * transaction, where the update commits with the transaction.
+     * read finds it (ADR 149). {@code timeout} is the store's {@code markerVersionsCommitTimeout} and replaces any
+     * {@code wtimeout} on the given write concern, so a reservation that majority doesn't acknowledge in time fails the
+     * append instead of blocking it.
      */
-    public static WriteConcern reservationWriteConcern(WriteConcern writeConcern) {
-        return writeConcern.withW("majority");
+    public static WriteConcern reservationWriteConcern(WriteConcern writeConcern, Duration timeout) {
+        return writeConcern.withW("majority").withWTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     public static String positionCollectionName(String eventStoreCollectionName) {

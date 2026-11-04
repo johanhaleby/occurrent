@@ -44,6 +44,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -62,6 +63,7 @@ class MongoEventStoreReservationWriteConcernTest {
     private static final String COLLECTION = "events";
     private static final String POSITIONS = DcbMarkerModel.positionCollectionName(COLLECTION);
     private static final long WTIMEOUT_MILLIS = 12_345;
+    private static final long COMMIT_TIMEOUT_MILLIS = 6_789;
 
     @Container
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
@@ -74,14 +76,14 @@ class MongoEventStoreReservationWriteConcernTest {
     private MongoEventStore store;
 
     @BeforeEach
-    void open_a_store_on_a_client_at_write_concern_1_with_a_timeout() {
+    void open_a_store_on_a_client_at_write_concern_1_with_a_timeout_other_than_the_stores() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reservation");
         mongoClient = MongoClients.create(MongoClientSettings.builder()
                 .applyConnectionString(connectionString)
                 .writeConcern(WriteConcern.W1.withWTimeout(WTIMEOUT_MILLIS, TimeUnit.MILLISECONDS))
                 .addCommandListener(commands)
                 .build());
-        EventStoreConfig config = new EventStoreConfig.Builder().timeRepresentation(TimeRepresentation.RFC_3339_STRING).eventStoreCapabilities(STREAM, DCB).build();
+        EventStoreConfig config = new EventStoreConfig.Builder().timeRepresentation(TimeRepresentation.RFC_3339_STRING).eventStoreCapabilities(STREAM, DCB).markerVersionsCommitTimeout(Duration.ofMillis(COMMIT_TIMEOUT_MILLIS)).build();
         store = new MongoEventStore(mongoClient, connectionString.getDatabase(), COLLECTION, config);
     }
 
@@ -91,7 +93,7 @@ class MongoEventStoreReservationWriteConcernTest {
     }
 
     @Test
-    void an_append_reserves_its_position_with_write_concern_majority_and_the_timeout_of_the_client() {
+    void an_append_reserves_its_position_with_write_concern_majority_bounded_by_the_marker_versions_commit_timeout() {
         // Given
         commands.clear();
 
@@ -102,7 +104,7 @@ class MongoEventStoreReservationWriteConcernTest {
         BsonDocument writeConcern = onlyReservation().document().getDocument("writeConcern", new BsonDocument());
         assertAll(
                 () -> assertThat(writeConcern.get("w")).as("%s", writeConcern).isEqualTo(new BsonString("majority")),
-                () -> assertThat(writeConcern.get("wtimeout")).as("%s", writeConcern).isIn(new BsonInt32((int) WTIMEOUT_MILLIS), new BsonInt64(WTIMEOUT_MILLIS))
+                () -> assertThat(writeConcern.get("wtimeout")).as("%s", writeConcern).isIn(new BsonInt32((int) COMMIT_TIMEOUT_MILLIS), new BsonInt64(COMMIT_TIMEOUT_MILLIS))
         );
     }
 
