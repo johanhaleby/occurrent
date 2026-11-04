@@ -22,6 +22,7 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -103,10 +104,12 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
     private final AtomicInteger decisions = new AtomicInteger();
     private final List<String> decidedEventIds = new CopyOnWriteArrayList<>();
 
+    private MongoClient mongoClient;
+
     @BeforeEach
     void initialize() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcbfailureafterwrite");
-        MongoClient mongoClient = MongoClients.create(connectionString);
+        mongoClient = MongoClients.create(connectionString);
         ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         ReactiveMongoTransactionManager transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig config = new EventStoreConfig.Builder()
@@ -119,6 +122,11 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
         eventStore = new InterferingEventStore(mongoEventStore);
         DomainEventConverter domainEventConverter = new DomainEventConverter(new ObjectMapper());
         cloudEventConverter = new GenericCloudEventConverter<>(domainEventConverter::convertToDomainEvent, domainEventConverter::convertToCloudEvent);
+    }
+
+    @AfterEach
+    void closeMongoClient() {
+        mongoClient.close();
     }
 
     @Test
@@ -453,6 +461,56 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
     }
 
     @Test
+    void a_failure_after_the_append_reaches_the_caller_once_from_an_executor_that_retries_until_the_action_returns() {
+        RuntimeException failure = new RuntimeException("handler failed");
+        RetriesUntilTheActionReturns executor = new RetriesUntilTheActionReturns(false);
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(executor)
+                .build();
+
+        Throwable thrown = failureOf(applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(executor.runs.get()).as("[runs of the action]").isEqualTo(2);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+    }
+
+    @Test
+    void a_failure_after_the_append_reaches_the_caller_without_a_second_decision_when_the_executor_reads_in_the_transaction_and_retries_until_the_action_returns() {
+        RuntimeException failure = new RuntimeException("handler failed");
+        RetriesUntilTheActionReturns executor = new RetriesUntilTheActionReturns(true);
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(executor)
+                .build();
+
+        Throwable thrown = failureOf(applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(executor.runs.get()).as("[runs of the action]").isEqualTo(2);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+    }
+
+    @Test
+    void a_failure_after_the_append_carries_what_the_executor_suppressed_on_a_wrapper_when_it_reaches_the_caller() {
+        RuntimeException failure = new RuntimeException("handler failed");
+        WrapsAndSuppressesCleanupFailure executor = new WrapsAndSuppressesCleanupFailure();
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(executor)
+                .build();
+
+        Throwable thrown = failureOf(applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(requireNonNull(thrown).getSuppressed()).as("[exceptions suppressed by the failure]").containsExactly(executor.cleanupFailure);
+    }
+
+    @Test
     void a_failure_after_the_append_carries_the_exception_that_replaced_it_in_the_executor_when_it_reaches_the_caller() {
         RuntimeException failure = new RuntimeException("handler failed");
         ReplacesWhatPassesThrough executor = new ReplacesWhatPassesThrough();
@@ -676,6 +734,43 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
         @Override
         public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
             return Mono.defer(action).retry(2);
+        }
+    }
+
+    // Stand-in for an executor that opens no transaction and subscribes to the action again on every failure. When it answers true to isTransactional, the service reads and decides inside it. It gives up after 100 runs, so the test can't hang.
+    private static final class RetriesUntilTheActionReturns implements ReactiveTransactionExecutor {
+        private final boolean transactional;
+        final AtomicInteger runs = new AtomicInteger();
+
+        RetriesUntilTheActionReturns(boolean transactional) {
+            this.transactional = transactional;
+        }
+
+        @Override
+        public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
+            return Mono.defer(() -> {
+                runs.incrementAndGet();
+                return action.get();
+            }).retry(99);
+        }
+
+        @Override
+        public Mono<Boolean> isTransactional() {
+            return Mono.just(transactional);
+        }
+    }
+
+    // Stand-in for an executor that wraps what passes through it, attaches its failed cleanup to the wrapper, and opens no transaction
+    private static final class WrapsAndSuppressesCleanupFailure implements ReactiveTransactionExecutor {
+        final RuntimeException cleanupFailure = new IllegalStateException("cleanup failed");
+
+        @Override
+        public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
+            return Mono.defer(action).onErrorMap(RuntimeException.class, e -> {
+                IllegalStateException wrapper = new IllegalStateException(e);
+                wrapper.addSuppressed(cleanupFailure);
+                return wrapper;
+            });
         }
     }
 

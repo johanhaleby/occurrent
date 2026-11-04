@@ -49,10 +49,12 @@ Otherwise the failure reaches the caller without the retry strategy seeing it.
   retries is up to the strategy's predicate.
 - **How the failure stays away from the retry.** One object per `execute`, or per subscription on the reactive stack, holds
   the failure, and a private stand-in exception passes through the executor so a transaction the attempt opened still rolls back. Once a
-  failure is held, whatever comes out of the executor means an empty attempt, the action refuses to write again, and the
-  original failure is thrown after the retry returns. So a predicate that matches every exception, an executor that
-  translates what passes through it and an executor with its own retry can't run the command again. An exception that
-  replaces the stand-in on the way out, a failed rollback say, stays with the failure as a suppressed exception.
+  failure is held, whatever comes out of the executor means an empty attempt, a later run of the action returns an empty
+  attempt before it reads or writes, and the original failure is thrown after the retry returns. So a predicate that
+  matches every exception, an executor that translates what passes through it and an executor with its own retry can't run
+  the command again, and a retry that runs until the action returns stops at its second run. An exception that replaces the
+  stand-in on the way out, a failed rollback say, stays with the failure as a suppressed exception, and so does an
+  exception an executor attached to a wrapper of the stand-in.
 - **`NativeMongoTransactionExecutor`.** `isTransactional()` now answers whether the session bound to the thread has a
   transaction in force instead of always `true`, so the service can tell a transaction it would open from one it would join.
 - **The side effect.** It doesn't run, the same as for a handler failure that was never retried. It's for a command that

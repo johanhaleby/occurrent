@@ -138,7 +138,10 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             Long fromStreamVersion = executeOptions.fromStreamVersion();
             int skip = fromStreamVersion == null ? 0 : Math.toIntExact(fromStreamVersion);
             Function<Boolean, Attempt<@Nullable WriteResult, List<E>>> readDecideWrite = openedTransaction -> {
-                failureAfterWrite.refuseIfHeld();
+                if (failureAfterWrite.isHeld()) {
+                    // An executor that runs this again after the stand-in must not write a second time, and an empty attempt ends its retry
+                    return new Attempt<>(null, List.of());
+                }
                 // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
                 boolean transactional = dispatchSynchronously && transactionExecutor.isTransactional();
                 EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId, skip, Integer.MAX_VALUE) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter, skip, Integer.MAX_VALUE);

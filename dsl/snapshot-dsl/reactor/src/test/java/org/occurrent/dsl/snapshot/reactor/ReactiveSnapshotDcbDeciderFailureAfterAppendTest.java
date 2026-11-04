@@ -23,6 +23,7 @@ import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -93,10 +94,12 @@ class ReactiveSnapshotDcbDeciderFailureAfterAppendTest {
     private CloudEventConverter<DomainEvent> converter;
     private final AtomicInteger decides = new AtomicInteger();
 
+    private MongoClient mongoClient;
+
     @BeforeEach
     void initialize() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".snapshotfailureafterappend");
-        MongoClient mongoClient = MongoClients.create(connectionString);
+        mongoClient = MongoClients.create(connectionString);
         ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         ReactiveMongoTransactionManager transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig config = new EventStoreConfig.Builder()
@@ -107,6 +110,11 @@ class ReactiveSnapshotDcbDeciderFailureAfterAppendTest {
                 .build();
         eventStore = new ReactorMongoEventStore(mongoTemplate, config);
         converter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
+    }
+
+    @AfterEach
+    void closeMongoClient() {
+        mongoClient.close();
     }
 
     @Test

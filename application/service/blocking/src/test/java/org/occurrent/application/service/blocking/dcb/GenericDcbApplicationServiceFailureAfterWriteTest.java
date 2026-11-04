@@ -279,6 +279,58 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
     }
 
     @Test
+    void a_failure_after_the_append_reaches_the_caller_once_from_an_executor_that_retries_until_the_action_returns() {
+        RuntimeException failure = new RuntimeException("handler failed");
+        RetriesUntilTheActionReturns executor = new RetriesUntilTheActionReturns(false);
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(executor)
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(executor.runs).as("[runs of the action]").isEqualTo(2);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+        assertThat(eventStore.appendCalls).as("[appends attempted]").isEqualTo(1);
+    }
+
+    @Test
+    void a_failure_after_the_append_reaches_the_caller_without_a_second_decision_when_the_executor_reads_in_the_transaction_and_retries_until_the_action_returns() {
+        RuntimeException failure = new RuntimeException("handler failed");
+        RetriesUntilTheActionReturns executor = new RetriesUntilTheActionReturns(true);
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(executor)
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(executor.runs).as("[runs of the action]").isEqualTo(2);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+        assertThat(eventStore.appendCalls).as("[appends attempted]").isEqualTo(1);
+    }
+
+    @Test
+    void a_failure_after_the_append_carries_what_the_executor_suppressed_on_a_wrapper_when_it_reaches_the_caller() {
+        RuntimeException failure = new RuntimeException("handler failed");
+        WrapsAndSuppressesCleanupFailure executor = new WrapsAndSuppressesCleanupFailure();
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(executor)
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(thrown.getSuppressed()).as("[exceptions suppressed by the failure]").containsExactly(executor.cleanupFailure);
+    }
+
+    @Test
     void a_retried_conflict_thrown_by_a_handler_after_the_append_reaches_the_caller_without_running_the_command_again_when_the_transaction_is_joined() {
         DcbAppendConditionNotFulfilledException conflict = new DcbAppendConditionNotFulfilledException(DcbAppendCondition.failIfEventsMatch(CRITERIA), 1);
         var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
@@ -546,6 +598,51 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
                         throw e;
                     }
                 }
+            }
+        }
+    }
+
+    // Stand-in for an executor that opens no transaction and runs the action again on every failure. When it answers true to isTransactional, the service reads and decides inside it. It gives up after 100 runs, so the test can't hang.
+    private static final class RetriesUntilTheActionReturns implements TransactionExecutor {
+        private final boolean transactional;
+        int runs;
+
+        RetriesUntilTheActionReturns(boolean transactional) {
+            this.transactional = transactional;
+        }
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            while (true) {
+                runs++;
+                try {
+                    return action.get();
+                } catch (RuntimeException e) {
+                    if (runs == 100) {
+                        throw e;
+                    }
+                }
+            }
+        }
+
+        @Override
+        public boolean isTransactional() {
+            return transactional;
+        }
+    }
+
+    // Stand-in for an executor that wraps what passes through it, attaches its failed cleanup to the wrapper, and opens no transaction
+    private static final class WrapsAndSuppressesCleanupFailure implements TransactionExecutor {
+        final RuntimeException cleanupFailure = new IllegalStateException("cleanup failed");
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            try {
+                return action.get();
+            } catch (RuntimeException e) {
+                IllegalStateException wrapper = new IllegalStateException(e);
+                wrapper.addSuppressed(cleanupFailure);
+                throw wrapper;
             }
         }
     }

@@ -315,6 +315,37 @@ class GenericApplicationServiceFailureAfterWriteTest {
     }
 
     @Test
+    void a_failure_after_the_write_carries_what_the_executor_suppressed_on_a_wrapper_when_it_reaches_the_caller() {
+        RuntimeException failure = new RuntimeException("handler failed");
+        WrapsAndSuppressesCleanupFailure executor = new WrapsAndSuppressesCleanupFailure();
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(executor)
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(streamId, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(thrown.getSuppressed()).as("[exceptions suppressed by the failure]").containsExactly(executor.cleanupFailure);
+    }
+
+    @Test
+    void a_failure_after_the_write_reaches_the_caller_once_from_an_executor_that_retries_until_the_action_returns() {
+        RuntimeException failure = new RuntimeException("handler failed");
+        RetriesUntilTheActionReturns executor = new RetriesUntilTheActionReturns();
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(executor)
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(streamId, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(executor.runs).as("[runs of the action]").isEqualTo(2);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+    }
+
+    @Test
     void a_failure_after_the_write_carries_the_exception_that_replaced_it_in_the_executor_when_it_reaches_the_caller() {
         RuntimeException failure = new RuntimeException("handler failed");
         ReplacesWhatPassesThrough executor = new ReplacesWhatPassesThrough();
@@ -531,6 +562,41 @@ class GenericApplicationServiceFailureAfterWriteTest {
             } catch (RuntimeException e) {
                 e.addSuppressed(cleanupFailure);
                 throw e;
+            }
+        }
+    }
+
+    // Stand-in for an executor that wraps what passes through it, attaches its failed cleanup to the wrapper, and opens no transaction
+    private static final class WrapsAndSuppressesCleanupFailure implements TransactionExecutor {
+        final RuntimeException cleanupFailure = new IllegalStateException("cleanup failed");
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            try {
+                return action.get();
+            } catch (RuntimeException e) {
+                IllegalStateException wrapper = new IllegalStateException(e);
+                wrapper.addSuppressed(cleanupFailure);
+                throw wrapper;
+            }
+        }
+    }
+
+    // Stand-in for an executor that opens no transaction and runs the action again on every failure, as a conflict retry of RetryStrategy.retry() does. It gives up after 100 runs, so the test can't hang.
+    private static final class RetriesUntilTheActionReturns implements TransactionExecutor {
+        int runs;
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            while (true) {
+                runs++;
+                try {
+                    return action.get();
+                } catch (RuntimeException e) {
+                    if (runs == 100) {
+                        throw e;
+                    }
+                }
             }
         }
     }

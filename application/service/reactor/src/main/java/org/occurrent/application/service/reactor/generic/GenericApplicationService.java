@@ -128,7 +128,10 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
             // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
             Function<Boolean, Mono<Result<E>>> readDecideWriteUnit = openedTransaction -> Mono.defer(() -> {
-                failureAfterWrite.refuseIfHeld();
+                if (failureAfterWrite.isHeld()) {
+                    // An executor that runs this again after the stand-in must not write a second time, and an empty attempt ends its retry
+                    return Mono.empty();
+                }
                 return reportsTransaction(dispatchSynchronously).flatMap(transactional -> read(streamId, filter, skip).flatMap(eventStream ->
                         eventStream.events().collectList().flatMap(currentCloudEvents -> {
                             List<E> domainEvents = cloudEventConverter.toDomainEvents(currentCloudEvents.stream()).toList();

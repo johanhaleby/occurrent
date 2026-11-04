@@ -169,7 +169,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             return Optional.of(new Decision<>(eventStream, newDomainEvents, addTags(options.tagGenerator(), newDomainEvents, cloudEvents)));
         };
         BiFunction<Decision<E>, Boolean, Attempt<Optional<DcbAppendResult>, List<E>>> appendAndDispatch = (decision, openedTransaction) -> {
-            failureAfterWrite.refuseIfHeld();
+            if (failureAfterWrite.isHeld()) {
+                // An executor that runs this again after the stand-in must not write a second time, and an empty attempt ends its retry
+                return new Attempt<>(Optional.empty(), List.of());
+            }
             // Asked inside the transaction, since the answer depends on what's open, and before the append, so a failure here undoes nothing
             boolean transactional = dispatchSynchronously && transactionExecutor.isTransactional();
             DcbAppendResult appendResult = eventStore.append(decision.dcbEvents(), DcbAppendCondition.failIfEventsMatch(decision.eventStream().consistencyToken()));
@@ -198,6 +201,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     // Their failure goes around the executor, so it can't mark that transaction rollback-only.
                     AtomicReference<@Nullable Throwable> failedBeforeAppend = new AtomicReference<>();
                     Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> {
+                        if (failureAfterWrite.isHeld()) {
+                            // Before the read, so a run after the stand-in doesn't run the domain function again
+                            return new Attempt<>(Optional.empty(), List.of());
+                        }
                         // An executor can run this action again, so a failure kept from an earlier run must not be thrown after a later run appends
                         failedBeforeAppend.set(null);
                         final Optional<Decision<E>> decision;

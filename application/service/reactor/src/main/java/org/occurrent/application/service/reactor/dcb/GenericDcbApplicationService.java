@@ -153,7 +153,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                         return Mono.just(new Decision<>(eventStream, newDomainEvents, addTags(options.tagGenerator(), newDomainEvents, cloudEvents)));
                     });
             BiFunction<Decision<E>, Boolean, Mono<Result<E>>> appendAndDispatch = (decision, openedTransaction) -> Mono.defer(() -> {
-                failureAfterWrite.refuseIfHeld();
+                if (failureAfterWrite.isHeld()) {
+                    // An executor that runs this again after the stand-in must not write a second time, and an empty attempt ends its retry
+                    return Mono.empty();
+                }
                 DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(decision.eventStream().consistencyToken());
                 // Asked inside the transaction, since the answer depends on what's open, and before the append, so a failure here undoes nothing
                 Mono<DcbAppendResult> appended = !dispatchSynchronously ? eventStore.append(decision.dcbEvents(), appendCondition) : reportsTransaction(dispatchSynchronously).flatMap(transactional ->
@@ -172,7 +175,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     // The executor can leave the transaction that's open here for the append, so a read here could miss what the
                     // append's condition sees and fail on every attempt. The read and the decision go in the executor too, and
                     // that costs nothing, since a store already reports no marker versions in the open transaction.
-                    return transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> readAndDecide.flatMap(decision -> appendAndDispatch.apply(decision, openedTransaction)));
+                    return transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> Mono.defer(() -> failureAfterWrite.isHeld()
+                            // Before the read, so a run after the stand-in doesn't run the domain function again
+                            ? Mono.<Result<E>>empty()
+                            : readAndDecide.flatMap(decision -> appendAndDispatch.apply(decision, openedTransaction))));
                 }
                 // The read and the decision run outside the transaction, since a store reports no marker versions inside one. The
                 // append's condition holds this read's token, and a failed condition goes to the retry around this, which can read

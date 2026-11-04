@@ -18,6 +18,9 @@ package org.occurrent.application.service.internal;
 
 import org.jspecify.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Keeps a failure after a write away from the application service's retry when the attempt didn't open a transaction.
  * <p>
@@ -51,46 +54,44 @@ public final class FailureAfterWrite {
         return standIn;
     }
 
+    /**
+     * Whether a failure is held. The action of a transaction executor asks this first and returns an empty attempt when it
+     * is, so an executor that runs the action again after the stand-in can't write a second time, and a retry of its own
+     * that runs until the action returns stops there.
+     */
     public boolean isHeld() {
         return held != null;
     }
 
     /**
      * Whether a failure is held once the executor let {@code thrown} out. When {@code thrown} isn't the stand-in or a wrapper
-     * of it, for example a failed rollback, it stays with the failure as a suppressed exception.
+     * of it, for example a failed rollback, it stays with the failure as a suppressed exception. When it's a wrapper, what
+     * the executor attached to the wrapper stays with the failure the same way.
      */
     public boolean isHeldAfter(Throwable thrown) {
         StandIn standIn = held;
         if (standIn == null) {
             return false;
         }
-        if (!isCausedBy(thrown, standIn)) {
-            standIn.addSuppressed(thrown);
-        }
-        return true;
-    }
-
-    private static boolean isCausedBy(Throwable thrown, StandIn standIn) {
-        // Bounded, since a chain of causes can be a cycle
+        List<Throwable> wrappers = new ArrayList<>();
         Throwable cause = thrown;
-        for (int depth = 0; cause != null && depth < 32; depth++) {
-            if (cause == standIn) {
-                return true;
-            }
+        // At most 32 causes, since a chain of causes can be a cycle
+        for (int depth = 0; cause != null && cause != standIn && depth < 32; depth++) {
+            wrappers.add(cause);
             cause = cause.getCause();
         }
-        return false;
-    }
-
-    /**
-     * Throws the stand-in if a failure is held. The action of a transaction executor calls this first, so an executor that
-     * retries what passes through it can't write a second time.
-     */
-    public void refuseIfHeld() {
-        StandIn standIn = held;
-        if (standIn != null) {
-            throw standIn;
+        if (cause != standIn) {
+            standIn.addSuppressed(thrown);
+            return true;
         }
+        for (Throwable wrapper : wrappers) {
+            for (Throwable suppressed : wrapper.getSuppressed()) {
+                if (suppressed != standIn) {
+                    standIn.addSuppressed(suppressed);
+                }
+            }
+        }
+        return true;
     }
 
     /**

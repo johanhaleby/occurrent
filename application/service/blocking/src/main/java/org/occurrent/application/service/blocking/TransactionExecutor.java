@@ -82,12 +82,13 @@ public interface TransactionExecutor {
      * handler is offered the event and the failures are reported together. The default of
      * {@link #inTransactionTellingIfOpened(Function)} reads it to tell whether this call opened the transaction.
      * <p>
-     * <strong>Answer for the moment of the call, not for the executor as a whole.</strong> The application service asks
-     * before entering {@link #inTransaction(Supplier)}, and again inside it before the write, so an implementation whose
-     * transaction depends on how it was configured or on what the caller already opened should read the live state rather
-     * than return a fixed value. {@code SpringTransactionExecutor} answers from
-     * {@code TransactionSynchronizationManager.isActualTransactionActive()} for exactly that reason. This must not throw
-     * when no transaction is open, or an execute with synchronous subscriptions fails before the write.
+     * <strong>Answer for the moment of the call, not for the executor as a whole.</strong> It can be asked before
+     * {@link #inTransaction(Supplier)}, by the DCB application service and by the default of
+     * {@link #inTransactionTellingIfOpened(Function)}, and the application service asks again inside it before the
+     * write, so an implementation whose transaction depends on how it was configured or on what the caller already
+     * opened should read the live state rather than return a fixed value. {@code SpringTransactionExecutor} answers
+     * from {@code TransactionSynchronizationManager.isActualTransactionActive()} for exactly that reason. This must not
+     * throw when no transaction is open, or an execute with synchronous subscriptions fails before the write.
      * <p>
      * The default is {@code false}, so an implementation that does not override it gets the isolating behaviour, which
      * cannot lose a reaction. See the 2026-08-04 amendment to ADR 57.
