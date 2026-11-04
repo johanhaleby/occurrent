@@ -43,6 +43,10 @@ import java.util.function.Supplier;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Objects;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.List;
@@ -189,7 +193,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // The full delivery metadata (stream id and version, position, and any CloudEvent extensions) rides on the
             // input so reactions can read it. The separate EventMeta drives redelivery dedup and is derived
             // independently above, so its null-tolerant watermark behaviour is unchanged.
-            process(sagaId, SagaInput.event(event, EventMetadata.from(cloudEvent)), meta, null);
+            process(sagaId, SagaInput.event(event, EventMetadata.from(cloudEvent)), meta, null, cloudEvent);
             refusalAnnounced.remove(sagaId);
         } catch (Throwable failure) {
             if (!letTheSubscriptionPast(sagaId, cloudEvent, meta, failure)) {
@@ -481,7 +485,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         .toList();
                 for (String timerName : dueTimerNames) {
                     try {
-                        process(envelope.sagaId(), SagaInput.timeout(envelope.sagaId(), TimerName.parse(timerName)), EventMeta.NONE, timerName);
+                        process(envelope.sagaId(), SagaInput.timeout(envelope.sagaId(), TimerName.parse(timerName)), EventMeta.NONE, timerName, null);
                     } catch (Throwable t) {
                         // Throwable rather than RuntimeException, because a StackOverflowError out of a recursive
                         // evolve or a NoClassDefFoundError out of a reaction used to unwind the loop into the catch
@@ -500,7 +504,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
     }
 
-    private void process(String sagaId, SagaInput<E> input, EventMeta meta, @Nullable String requireTimerName) {
+    private void process(String sagaId, SagaInput<E> input, EventMeta meta, @Nullable String requireTimerName, @Nullable CloudEvent cloudEvent) {
         // A lost compare-and-set is a retryable concurrency conflict: signal it with CasConflict so casRetry retries the
         // whole body, and map an exhausted retry to the public SagaConcurrencyException. Any other failure (a throwing
         // dispatcher or store) is not a CasConflict, so retryIf leaves it alone and it propagates on the first attempt.
@@ -528,14 +532,27 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     }
                     Outcome<S, C> outcome = SagaExecutionSupport.process(saga, sagaId, current, input, meta, now, config.reorderWindow());
                     if (!outcome.processed()) {
+                        if (cloudEvent != null && SagaExecutionSupport.arrivedBeforeTheStart(saga, current, input)) {
+                            // Kept in the instance's own document, so the write that keeps it and the start that applies
+                            // it are ordered by the same compare-and-set
+                            SagaEnvelope<S> kept = keptBeforeTheStart(sagaId, current, cloudEvent, now);
+                            if (kept == null || stateStore.compareAndSave(sagaId, kept, current == null ? 0 : current.version())) {
+                                return null;
+                            }
+                            throw new CasConflict();
+                        }
                         warnIfBehindTheReorderWindow(sagaId, current, meta);
                         return null;
                     }
                     // Dispatch before saving so a command is never lost. A lost compare-and-set retries this whole body,
                     // re-dispatching the entire command list (at-least-once, up to maxCasAttempts times), so receivers
                     // must be idempotent and tolerate that multiplicity.
-                    dispatcher.dispatchAll(outcome.commands());
+                    List<C> commands = new ArrayList<>(outcome.commands());
                     SagaEnvelope<S> envelope = outcome.envelope();
+                    if (current != null && !current.started() && envelope != null && envelope.started()) {
+                        envelope = applyTheKeptEvents(sagaId, envelope, current.early(), commands, now);
+                    }
+                    dispatcher.dispatchAll(commands);
                     if (envelope != null && stateStore.compareAndSave(sagaId, envelope, outcome.expectedVersion())) {
                         return null;
                     }
@@ -546,6 +563,94 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     // Lost compare-and-set: retry the whole body. Processed outcomes always carry an envelope.
                     throw new CasConflict();
                 });
+    }
+
+    private static final int MAX_EARLY = 10_000;
+
+    // Null when the instance keeps this event already, so a redelivery writes nothing
+    private @Nullable SagaEnvelope<S> keptBeforeTheStart(String sagaId, @Nullable SagaEnvelope<S> current, CloudEvent cloudEvent, Instant now) {
+        List<CloudEvent> early = new ArrayList<>(current == null ? List.of() : current.early());
+        if (early.stream().anyMatch(kept -> kept.getId().equals(cloudEvent.getId()) && Objects.equals(kept.getSource(), cloudEvent.getSource()))) {
+            return null;
+        }
+        if (early.size() >= MAX_EARLY) {
+            throw new IllegalStateException("Saga '" + subscriptionId + "' instance '" + sagaId + "' keeps " + MAX_EARLY
+                    + " events that arrived before it started, so it refuses the event '" + cloudEvent.getId() + "' rather than keep more");
+        }
+        early.add(cloudEvent);
+        if (current == null) {
+            return new SagaEnvelope<>(sagaId, saga.initialState(), SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, now, now,
+                    null, null, false, null, Map.of(), early);
+        }
+        return new SagaEnvelope<>(sagaId, current.state(), current.status(), current.version() + 1, current.timers(),
+                current.streamWatermarks(), null, current.createdAt(), now, current.completedAt(), current.currentStep(),
+                false, current.failure(), current.streamMarks(), early);
+    }
+
+    // Each kept event goes through the same rules as a delivery would. One that completes the instance is held back, with
+    // the later versions of its own stream, and applied after every other one, because each of them arrived while the
+    // instance could not yet complete
+    private SagaEnvelope<S> applyTheKeptEvents(String sagaId, SagaEnvelope<S> started, List<CloudEvent> early, List<C> commands, Instant now) {
+        SagaEnvelope<S> envelope = started;
+        List<CloudEvent> last = new ArrayList<>();
+        Set<String> streamsHeldBack = new HashSet<>();
+        for (CloudEvent kept : inStreamOrder(early)) {
+            String streamId = extractMeta(kept).meta().streamId();
+            if (streamId != null && streamsHeldBack.contains(streamId)) {
+                last.add(kept);
+                continue;
+            }
+            Outcome<S, C> applied = applyKept(sagaId, envelope, kept, now);
+            SagaEnvelope<S> next = applied.envelope();
+            if (applied.processed() && next != null && next.isCompleted()) {
+                last.add(kept);
+                if (streamId != null) {
+                    streamsHeldBack.add(streamId);
+                }
+            } else if (applied.processed() && next != null) {
+                envelope = next;
+                commands.addAll(applied.commands());
+            }
+        }
+        for (CloudEvent kept : last) {
+            Outcome<S, C> applied = applyKept(sagaId, envelope, kept, now);
+            SagaEnvelope<S> next = applied.envelope();
+            if (applied.processed() && next != null) {
+                envelope = next;
+                commands.addAll(applied.commands());
+            }
+        }
+        return envelope;
+    }
+
+    private Outcome<S, C> applyKept(String sagaId, SagaEnvelope<S> envelope, CloudEvent kept, Instant now) {
+        EventMeta meta = extractMeta(kept).meta();
+        SagaInput<E> input = SagaInput.event(converter.toDomainEvent(kept), EventMetadata.from(kept));
+        Outcome<S, C> applied = SagaExecutionSupport.process(saga, sagaId, envelope, input, meta, now, config.reorderWindow());
+        if (!applied.processed()) {
+            warnIfBehindTheReorderWindow(sagaId, envelope, meta);
+        }
+        return applied;
+    }
+
+    // Arrival order across streams and version order within one, so the events of a stream take that stream's arrival
+    // slots in version order. An event without a stream version keeps its own slot
+    private List<CloudEvent> inStreamOrder(List<CloudEvent> early) {
+        Map<String, List<CloudEvent>> byStream = new HashMap<>();
+        for (CloudEvent kept : early) {
+            EventMeta meta = extractMeta(kept).meta();
+            if (meta.streamId() != null && meta.streamVersion() != null) {
+                byStream.computeIfAbsent(meta.streamId(), streamId -> new ArrayList<>()).add(kept);
+            }
+        }
+        byStream.values().forEach(events -> events.sort(Comparator.comparingLong(kept -> Objects.requireNonNull(extractMeta(kept).meta().streamVersion()))));
+        List<CloudEvent> ordered = new ArrayList<>();
+        for (CloudEvent kept : early) {
+            EventMeta meta = extractMeta(kept).meta();
+            boolean versioned = meta.streamId() != null && meta.streamVersion() != null;
+            ordered.add(versioned ? byStream.get(meta.streamId()).remove(0) : kept);
+        }
+        return ordered;
     }
 
     // Whether this input would have been skipped even with the state loaded, asked only when loading it failed. A

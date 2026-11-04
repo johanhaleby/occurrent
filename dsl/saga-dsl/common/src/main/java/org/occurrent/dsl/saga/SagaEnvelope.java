@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.flow.FlowState;
 
@@ -65,6 +66,10 @@ import static java.util.Objects.requireNonNull;
  *                          of the same type, which a feed that reorders can deliver, be told from a redelivery. Empty
  *                          for an instance stored before 0.35.0, which reads as every type of a stream being applied up to
  *                          that stream's watermark
+ * @param early             the events that arrived before the instance started, in the order they arrived. The executor
+ *                          applies them in the save that applies the start, so an instance that has started keeps
+ *                          none. Each one has already been acknowledged to the subscription, so a store that drops
+ *                          them loses them. Empty for an instance stored before 0.35.0
  * @param <S>               the user state type
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
@@ -80,7 +85,8 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        @Nullable String currentStep,
                                                        boolean started,
                                                        @Nullable SagaFailure failure,
-                                                       Map<String, StreamMarks> streamMarks) implements SagaInstance {
+                                                       Map<String, StreamMarks> streamMarks,
+                                                       List<CloudEvent> early) implements SagaInstance {
 
     public SagaEnvelope {
         requireNonNull(sagaId, "sagaId cannot be null");
@@ -88,12 +94,24 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         timers = List.copyOf(timers);
         streamWatermarks = Map.copyOf(streamWatermarks);
         streamMarks = Map.copyOf(streamMarks);
+        early = List.copyOf(early);
         if (state != null) {
             // currentStep duplicates something state already knows, which is the kind of field that drifts. Re-derive it
             // here rather than trusting callers to keep the two aligned: a passed value is honoured only when there is no
             // state to derive from, which is exactly the projected-read case a store needs it for.
             currentStep = state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
         }
+    }
+
+    /**
+     * An envelope that keeps no event that arrived before its instance started.
+     */
+    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
+                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
+                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep,
+                        boolean started, @Nullable SagaFailure failure, Map<String, StreamMarks> streamMarks) {
+        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
+                completedAt, currentStep, started, failure, streamMarks, List.of());
     }
 
     /**

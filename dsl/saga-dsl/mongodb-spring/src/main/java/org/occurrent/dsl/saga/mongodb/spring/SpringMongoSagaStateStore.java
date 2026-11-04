@@ -114,6 +114,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String UPDATED_AT = "updatedAt";
     private static final String COMPLETED_AT = "completedAt";
     private static final String STARTED = "started";
+    // The events that arrived before the instance started, each as CloudEvents JSON, in the order they arrived.
+    private static final String EARLY = "early";
     // The failure record is flattened into top-level fields rather than a sub-document, for the same reason currentStep
     // is one, because both enumeration queries project the SagaInstance members and neither may decode the state, and a
     // quarantined instance whose state no longer decodes is exactly the instance somebody is looking for.
@@ -130,7 +132,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // read would report a step the stored state was never in.
     private static final List<String> EVERY_FIELD_EXCEPT_THE_STATE = List.of(STATUS, VERSION, TIMERS,
             NEXT_TIMER_FIRES_AT, STREAM_WATERMARKS, POSITION_WATERMARK, STREAM_MARKS, CREATED_AT, UPDATED_AT,
-            COMPLETED_AT, STARTED, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE,
+            COMPLETED_AT, STARTED, EARLY, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE,
             FAILURE_MESSAGE);
 
     // Field names inside a persisted FlowState document.
@@ -329,7 +331,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // compares the failing input against them to recognise an input the instance has already handled, and the
         // record it writes carries them over untouched, so projecting them away would quarantine the instance and
         // drop them at the same time.
-        query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK).include(STREAM_MARKS);
+        query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK).include(STREAM_MARKS).include(EARLY);
         Supplier<@Nullable Document> read = () -> mongoOperations.findOne(query, Document.class, collectionName);
         return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
@@ -456,6 +458,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // them is.
         if (!envelope.started()) {
             document.append(STARTED, false);
+        }
+        // Written only when the instance keeps an event, so an instance that started first carries no such field.
+        if (!envelope.early().isEmpty()) {
+            document.append(EARLY, envelope.early().stream().map(SpringMongoSagaStateStore::toCloudEventJson).toList());
         }
         SagaFailure failure = envelope.failure();
         if (failure != null) {
@@ -590,7 +596,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // currentStep is only honoured when the state was projected away; with a state present the envelope re-derives it.
         return new SagaEnvelope<>(sagaId, state, status, version, timers, streamWatermarks, positionWatermark,
                 readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT),
-                document.getString(CURRENT_STEP), started, toFailure(document), toStreamMarks(document));
+                document.getString(CURRENT_STEP), started, toFailure(document), toStreamMarks(document),
+                document.getList(EARLY, String.class, List.of()).stream().map(SpringMongoSagaStateStore::fromCloudEventJson).toList());
     }
 
     private static List<Document> toMarksDocuments(Map<String, StreamMarks> streamMarks) {

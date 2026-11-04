@@ -274,6 +274,15 @@ public final class SagaExecutionSupport {
     }
 
     /**
+     * Whether {@code input} is an event that arrived before its instance started, which the executor keeps on the
+     * instance and applies right after the start instead of skipping.
+     */
+    public static <E, S extends @Nullable Object, C> boolean arrivedBeforeTheStart(Saga<E, S, C> saga, @Nullable SagaEnvelope<S> current, SagaInput<E> input) {
+        boolean hasStarted = current != null && current.started();
+        return input instanceof SagaInput.Event<E> && !hasStarted && (current == null || !current.isQuarantined()) && startEventOrNull(saga, false, input) == null;
+    }
+
+    /**
      * What to write when an input has failed. {@link #envelope()} holds the failure record to save with
      * {@code compareAndSaveWithoutState(..., expectedVersion())}, and {@link #quarantined()} says whether the budget has
      * now elapsed, meaning the record quarantines the instance if the executor goes on to write it. What the executor
@@ -471,7 +480,7 @@ public final class SagaExecutionSupport {
                 current.streamWatermarks(), null, current.createdAt(), now, current.completedAt(),
                 current.currentStep(), current.started(), record,
                 withPending(withReplacedFailure(current.streamMarks(), current.streamWatermarks(), replaced, meta, reorderWindow),
-                        current.streamWatermarks(), meta, reorderWindow, failingSince(current, meta, now)));
+                        current.streamWatermarks(), meta, reorderWindow, failingSince(current, meta, now)), current.early());
     }
 
     // The stream marks after the version meta describes has failed. It is listed as pending among the versions of its
