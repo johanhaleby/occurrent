@@ -386,7 +386,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 // Another input advanced the instance while the failing one was being retried, most likely a timer that
                 // fired successfully. The failing event now meets different state and may well succeed, so discard this
                 // write rather than retry one whose premise has gone. The pending version has no such premise, it is true
-                // whatever the instance looks like now, and listing it keeps the instant the event first failed.
+                // whatever the instance looks like now.
                 recordPending(sagaId, meta, failure);
                 return false;
             }

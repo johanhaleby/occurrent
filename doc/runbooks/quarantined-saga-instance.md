@@ -311,8 +311,8 @@ which is the race in step 5.
 
 ## Preventing the next one
 
-`SagaRunnerConfig.quarantineAfter` is how long an instance has to keep failing before it can be quarantined. It is
-empty by default, which means never, and five minutes is a reasonable budget when you turn it on. On the annotation
+`SagaRunnerConfig.quarantineAfter` is how long one event has to keep failing before its instance can be quarantined
+on it. It is empty by default, which means never, and five minutes is a reasonable budget when you turn it on. On the annotation
 path it is `occurrent.saga.quarantine-after` instead.
 
 Lower it when you would rather find out sooner and are willing to quarantine an instance whose downstream service was

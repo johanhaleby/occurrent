@@ -75,9 +75,7 @@ public enum SagaStatus {
      *   <li>What was thrown is not an {@link OutOfMemoryError}.</li>
      *   <li>The instance is {@link #ACTIVE} and does not already count the event as handled.</li>
      *   <li>The event has been failing for at least {@code quarantineAfter}, measured from when it first failed. The
-     *       first failure of an event the instance has no instant for is never considered. An event that already has
-     *       one, because it failed while quarantine was off, was parked and offered again, or was named by a replaced
-     *       record, can be quarantined on the failure that first writes a record for it.</li>
+     *       first failure of an event the instance holds no instant for is never considered.</li>
      * </ul>
      * An event that meets all of them is quarantined only when all of these hold as well, and any one of them can refuse
      * on its own.
