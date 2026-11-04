@@ -470,7 +470,7 @@ public final class SagaExecutionSupport {
         return new SagaEnvelope<>(current.sagaId(), current.state(), status, current.version() + 1, current.timers(),
                 current.streamWatermarks(), null, current.createdAt(), now, current.completedAt(),
                 current.currentStep(), current.started(), record,
-                withPending(withReplacedFailure(current.streamMarks(), current.streamWatermarks(), replaced, meta, reorderWindow),
+                withPending(withReplacedFailure(current.streamMarks(), current.streamWatermarks(), replaced, meta),
                         current.streamWatermarks(), meta, reorderWindow, failingSince(current, meta, now)));
     }
 
@@ -506,7 +506,7 @@ public final class SagaExecutionSupport {
     // failure recorded now is pending in the same write, so this holds at most the record an instance carried over from
     // before.
     private static Map<String, StreamMarks> withReplacedFailure(Map<String, StreamMarks> streamMarks, Map<String, Long> streamWatermarks,
-                                                               @Nullable SagaFailure replaced, EventMeta meta, int reorderWindow) {
+                                                               @Nullable SagaFailure replaced, EventMeta meta) {
         if (replaced == null || replaced.input().equals(meta.redeliveryKey())) {
             return streamMarks;
         }
