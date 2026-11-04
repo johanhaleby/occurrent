@@ -12,6 +12,8 @@ other sections compile fine and behave differently, so read them first.
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   `SagaEnvelope` gains a 14th record component and `SagaRunnerConfig` a 6th. **Breaks the build** if you use a record
   pattern over either.
+- [A saga keeps an event that arrives before its instance starts](#a-saga-keeps-an-event-that-arrives-before-its-instance-starts).
+  `SagaEnvelope` gains a 15th record component. **Breaks the build** if you use a record pattern over it.
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). `DomainEventFeed` and
   `CatchupProjectionFeed` lose both `accept(..)` overloads, on the blocking and the reactor stack. **Breaks the build**
   if you still call one of them.
@@ -39,6 +41,11 @@ other sections compile fine and behave differently, so read them first.
   A saga keeps the highest applied version per stream and event type, and applies a late version instead of skipping
   it. Saga instances store a new `streamMarks` field. Breaks the build only for a record pattern over `SagaEnvelope` or
   `SagaRunnerConfig`.
+- [A saga keeps an event that arrives before its instance starts](#a-saga-keeps-an-event-that-arrives-before-its-instance-starts).
+  The event is stored on the instance and applied with the start. A `SagaStateStore` of your own has to persist it.
+  Breaks the build only for a record pattern over `SagaEnvelope`.
+- [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
+  event keeps its own clock. Compiles unchanged.
 
 ### DCB
 
@@ -187,7 +194,9 @@ is gone from that instance's document after its next save. A document without th
 `SagaEnvelope.positionWatermark()` is deprecated.
 
 A 0.34.0 node reads a document that 0.35.0 saved, and the other way round. A rolling upgrade works, and so does going
-back to 0.34.0.
+back to 0.34.0, except for the events an instance stores before its start, which a 0.34.0 node drops, as
+[A saga keeps an event that arrives before its instance starts](#a-saga-keeps-an-event-that-arrives-before-its-instance-starts)
+says.
 
 A failure record whose input is `position:N` was written for a position-only event. On an `ACTIVE` instance 0.35.0
 treats it as no record, so the next failure starts a fresh budget and the next successful delivery clears it.
@@ -366,8 +375,8 @@ A reaction that ran for a late event runs once. A redelivery of that event is sk
 An event is pending when it was handed to the saga and failed. The instance records its stream version before the
 exception reaches the subscription, whether or not quarantine is on, so a broker that parks the event afterwards does
 not lose it. An operator who replays the parked event after the instance has applied more than a window of later
-versions still gets it applied, once. An instance keeps at most as many pending versions per stream and event type as the
-window, and when one more fails it drops the smallest and logs an error naming the stream.
+versions still gets it applied, once. An instance keeps every pending version until it applies, and logs a warning
+naming the stream and the type once one stream's pending versions of one type outnumber the window.
 
 An instance that failed on an event under 0.34.0 or earlier holds that failure in its failure record, which names the
 event but not its type. If another event fails before the first is offered again, the failure record is replaced, and the
@@ -438,6 +447,94 @@ Constructor calls are not affected. The 13-argument `SagaEnvelope` constructor a
 `UpgradeToOccurrent_0_35` does not rewrite these patterns. A record pattern's arity is a compiler-enforced fact, so
 the way `UpgradeToOccurrent_0_34` appends `var appendId` to a `WriteResult` pattern could be extended to these two
 records, but the 0.34.0 change to the same two records got a guide entry and no recipe, and this follows that.
+
+## A saga keeps an event that arrives before its instance starts
+
+Up to 0.34.0 a saga skipped an event that wasn't a start event when its instance hadn't started, and acknowledged it.
+A feed that delivers the events of one instance out of order can hand the saga `PaymentReceived` before the
+`OrderPlaced` that starts the instance, and the payment's reaction then never ran. 0.35.0 keeps such an event on the
+instance and applies it with the start. The reason is in
+[ADR 158](../architecture/decisions/0158-a-saga-keeps-an-event-that-arrives-before-its-instance-starts.md), and the
+report is [#1317](https://github.com/johanhaleby/occurrent/issues/1317).
+
+### Who is affected
+
+A saga whose feed can deliver an event before the start event of its instance. A Kafka topic per event type, a RabbitMQ
+consumer with more than one message in flight and a listener with several threads all can.
+
+A saga fed in commit order is affected too when an event for an instance was committed before that instance's start
+event. 0.34.0 ignored that event, and 0.35.0 applies it once the start arrives, so its reaction runs.
+
+### What changes
+
+- An event that isn't a start event, for an instance that hasn't started and isn't quarantined, is stored on the
+  instance. When the start arrives, each stored event is applied the way a delivery would be, in the same save as the
+  start, and its commands are dispatched together with the start's.
+- The stored events are applied in the order they arrived across streams, and in version order within one stream. An
+  event that would complete the instance is applied after the others, together with the later versions of its stream.
+- A redelivery of a stored event, with the same CloudEvent id and source, is stored once.
+- A start that fails keeps the stored events, and the redelivered start applies them.
+- An instance that waits for its start is `ACTIVE`, with `started` set to false, and `SagaInstances` lists it. One
+  whose start never arrives stays until you delete it.
+- Past 10 000 stored events on one instance, the delivery fails with an `IllegalStateException`. On MongoDB the 16 MiB
+  document limit can come first, since each event is stored whole.
+
+### What to do
+
+A saga on `SagaStateStore.inMemory()` or `SpringMongoSagaStateStore` needs no code change.
+
+A `SagaStateStore` implemented outside this repository has to save and load `SagaEnvelope.early()`. A store that
+ignores it keeps compiling, and then loses every event it was handed this way, since the subscription acknowledges the
+event once the save returns.
+
+A 0.34.0 node ignores the stored events, replaces the document without them on its next save, and drops them when it
+applies the start. So during a rolling upgrade, and after going back to 0.34.0, the events an instance stored can be
+lost. If that matters for a saga, stop its consumers on every node and start them on 0.35.0 together.
+
+The [runbook](../runbooks/quarantined-saga-instance.md#instances-that-wait-for-their-start) shows how to list the
+instances that wait for their start on MongoDB.
+
+### Stored saga state for kept events
+
+A saga instance document gains an `early` field, a list of the stored events as CloudEvents JSON strings in the order
+they arrived. It is written only when the list is not empty, and a document without it reads as nothing stored.
+
+`SagaEnvelope` gains `early` as its 15th record component, so a record pattern over it needs a `var early` after its
+`streamMarks` binding, as [the record pattern section above](#a-record-pattern-over-sagaenvelope-or-sagarunnerconfig-stops-compiling)
+shows for `streamMarks`. The 14-argument constructor stays and fills in an empty list.
+
+## A saga's quarantine budget runs per failing event
+
+Up to 0.34.0 the quarantine budget belonged to the instance. The first failure wrote a `firstFailedAt`, and a later
+failure of a different event kept it. Under a broker's PARK action a failure parked and forgotten days ago then made the
+first failure of an unrelated event quarantine the instance. 0.35.0 gives each failing event its own clock. The reason
+is in [ADR 157](../architecture/decisions/0157-a-sagas-quarantine-budget-runs-per-input.md), and the report is
+[#1318](https://github.com/johanhaleby/occurrent/issues/1318).
+
+### Who is affected
+
+A saga with quarantine turned on through `SagaRunnerConfig.withQuarantineAfter(Duration)`.
+
+### What changes
+
+The saga measures how long an event has been failing from the instant on its pending entry, or from the failure record's
+`firstFailedAt` when the record names that event, or from now. So `SagaFailure.firstFailedAt()` is when the event the
+record names first failed.
+
+| Sequence | 0.34.0 | 0.35.0 |
+| --- | --- | --- |
+| Versions 7, 8, 7, 8 fail in turn | measured from the first failure | each measured from its own first failure, so 7 still reaches the budget |
+| Version 7 fails and is parked, version 8 fails once a week later | 8 quarantines the instance on its first failure | 8 starts its own clock |
+| Version 7 is parked, replayed after `quarantineAfter`, and fails again | measured from the first failure | quarantines the instance on that first replay failure |
+
+The last row is intended, since the parked event has been failing for longer than the budget. Fix the cause before
+replaying a parked event on an instance with quarantine on.
+
+### Stored saga state for the clock
+
+Each pending version records when it first failed, in a `pendingSince` list beside `pending` in `streamMarks`. A
+document without it falls back to the failure record's `firstFailedAt` for the event the record names, and any other
+event starts its clock on its next failure.
 
 ## The deprecated `accept(..)` on the projection feeds is removed
 
