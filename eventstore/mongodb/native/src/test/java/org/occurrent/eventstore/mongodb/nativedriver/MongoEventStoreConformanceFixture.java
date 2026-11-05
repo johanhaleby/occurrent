@@ -107,12 +107,13 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
     }
 
     /**
-     * The store answers a token-qualified condition from per-boundary tag markers rather than by rescanning events
-     * (ADR 21).
+     * The store compares the per-boundary markers, and queries the events above the versions the read saw when the
+     * markers can't settle a criteria item (ADR 149). The conformance suites run against a replica set, where it may
+     * query.
      */
     @Override
     public DcbAppendConditionModel appendConditionModel() {
-        return DcbAppendConditionModel.TAG_MARKER;
+        return DcbAppendConditionModel.MARKERS_THEN_EVENTS;
     }
 
     /**

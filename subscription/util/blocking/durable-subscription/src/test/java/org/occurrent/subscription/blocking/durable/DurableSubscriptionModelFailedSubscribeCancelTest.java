@@ -463,6 +463,37 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
         Reference.reachabilityFence(held);
     }
 
+    /**
+     * The function is asked before the subscribe takes the lock, so a subscribe whose function throws never reaches the
+     * wrapped model. It still stops what an earlier subscribe of the id left untracked, as it did when the function
+     * was asked under the lock.
+     */
+    @Test
+    void a_subscribe_whose_start_position_function_throws_stops_the_checkpoint_writes_of_a_registration_an_earlier_subscribe_left_untracked() {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("0");
+        wrapped.outcomes.add(Outcome.HOLDS_THE_ACTION_AND_REFUSES_AS_A_DUPLICATE);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        assertThat(catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }))).as("the subscribe that left a registration untracked").isInstanceOf(DuplicateSubscriptionIdException.class);
+        Consumer<CloudEvent> held = wrapped.heldByRefusedSubscribes.getFirst();
+        held.accept(new CheckpointAwareCloudEvent(cloudEvent("event-1"), new StringBasedCheckpoint("5")));
+        assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored before the failing subscribe").isNotNull()
+                .extracting(Checkpoint::asString).isEqualTo("5");
+
+        Throwable failure = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(context -> {
+            throw new IllegalStateException("the function fails");
+        }), __ -> {
+        }));
+        held.accept(new CheckpointAwareCloudEvent(cloudEvent("event-2"), new StringBasedCheckpoint("6")));
+
+        assertThat(failure).as("the subscribe whose function throws").isInstanceOf(IllegalStateException.class).hasMessage("the function fails");
+        assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored after the subscribe whose function throws").isNotNull()
+                .extracting(Checkpoint::asString).isEqualTo("5");
+        Reference.reachabilityFence(held);
+    }
+
     private static void releaseAndJoinTheRuns(BlockingAction action, RetainsTheRunOfAFailedSubscribe wrapped) throws InterruptedException {
         action.mayReturn.countDown();
         for (Thread run : wrapped.runs) {

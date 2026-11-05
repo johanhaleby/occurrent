@@ -39,6 +39,7 @@ import org.springframework.dao.TransientDataAccessException;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
@@ -615,21 +616,18 @@ class SpringMongoEventStoreDcbConcurrencyTest {
 
         List<Throwable> failures = runAppendsInOuterTransaction(store, txManager, threadCount, "ownedbycaller", 1);
 
-        // The store must not retry, so it can never run its transaction body more times than there were appends.
-        // Without the ownership check each losing append would run it up to 15 more times. Some appends never reach
-        // the body at all: inside a caller-owned transaction the position-counter reservation joins that transaction
-        // too, so a conflict often aborts there first, which is why this is an upper bound rather than an equality.
+        // The store must not retry, so it runs its transaction body exactly once per append. Without the ownership
+        // check each losing append would run it up to 15 more times. The position reservation runs outside the
+        // caller's transaction and can't conflict, so every append reaches the body.
         assertThat(transactionBodyRuns.get())
                 .as("The store must not retry its transaction body when it does not own the transaction")
-                .isPositive()
-                .isLessThanOrEqualTo(threadCount);
-        // Whatever does lose the race must surface as something the caller can recognise as worth retrying. Note that
-        // MongoDB's WriteConflict carries the TransientTransactionError label yet Spring translates it to
-        // DataIntegrityViolationException, a non-transient type, so both count here.
+                .isEqualTo(threadCount);
+        // Whatever does lose the race must surface as an exception the Spring transaction executors retry. Spring
+        // translates a WriteConflict to DataIntegrityViolationException, a non-transient type, so both count here.
         //
-        // Deliberately not asserting that at least one append fails. A conflict is near-certain with six transactions
-        // incrementing one counter document, but it is not guaranteed, and making the test depend on losing a race
-        // would be the same kind of flake this whole change came out of. The attempt count above is the real proof and
+        // Deliberately not asserting that at least one append fails. A conflict is near-certain with six concurrent
+        // appends here, but it is not guaranteed, and making the test depend on losing a race would be the same kind of
+        // flake this whole change came out of. The attempt count above is the real proof and
         // holds either way.
         assertThat(failures)
                 .as("A losing append inside a caller-owned transaction must surface a retryable conflict")
@@ -649,6 +647,40 @@ class SpringMongoEventStoreDcbConcurrencyTest {
         assertThat(failures)
                 .as("Retrying at the caller's own transaction boundary must let every append commit")
                 .isEmpty();
+    }
+
+    @Test
+    void a_read_in_a_transaction_whose_manager_does_not_synchronize_returns_no_event_above_the_head_it_reports() {
+        SimpleMongoClientDatabaseFactory factory = new SimpleMongoClientDatabaseFactory(mongoClient, databaseName);
+        AtomicReference<Runnable> beforeEventsQuery = new AtomicReference<>();
+        SpringMongoEventStore store = new SpringMongoEventStore(new MongoTemplate(factory), new EventStoreConfig.Builder()
+                .eventStoreCollectionName(COLLECTION)
+                .transactionConfig(new MongoTransactionManager(factory))
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM, DCB)
+                .queryOptions(query -> {
+                    Runnable action = query.getSortObject().containsKey("position") ? beforeEventsQuery.getAndSet(null) : null;
+                    if (action != null) {
+                        action.run();
+                    }
+                    return query;
+                })
+                .build());
+        DcbCriteria boundary = tags(Tag.parse("unsynchronized:1"));
+        store.append(List.of(taggedEvent("Before", "unsynchronized:1")));
+        MongoTransactionManager callersManager = new MongoTransactionManager(factory);
+        callersManager.setTransactionSynchronization(AbstractPlatformTransactionManager.SYNCHRONIZATION_NEVER);
+
+        DcbEventStream read = new TransactionTemplate(callersManager).execute(status -> {
+            // Commits between the read of the head and the events query
+            beforeEventsQuery.set(() -> CompletableFuture.runAsync(() -> eventStore.append(List.of(taggedEvent("Concurrent", "unsynchronized:1")))).join());
+            return store.read(boundary);
+        });
+
+        assertThat(requireNonNull(read).events()).extracting(CloudEvent::getType).containsExactly("Before");
+        assertThat(store.read(boundary).events()).extracting(CloudEvent::getType)
+                .as("the concurrent append committed, or the read above proves nothing")
+                .containsExactly("Before", "Concurrent");
     }
 
     private List<Throwable> runAppendsInOuterTransaction(SpringMongoEventStore store, MongoTransactionManager txManager, int threadCount, String tagPrefix, int maxAttempts) throws Exception {
@@ -682,12 +714,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     }
 
     private static boolean hasRetryableConflictCause(Throwable throwable) {
-        for (Throwable cause = throwable; cause != null; cause = cause.getCause()) {
-            if (cause instanceof TransientDataAccessException || cause instanceof DataIntegrityViolationException) {
-                return true;
-            }
-        }
-        return false;
+        return throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException;
     }
 
     private MongoTransactionManager buildTransactionManager() {
