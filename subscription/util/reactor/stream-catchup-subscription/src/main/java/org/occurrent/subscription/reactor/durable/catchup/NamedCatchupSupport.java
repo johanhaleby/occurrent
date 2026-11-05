@@ -780,7 +780,7 @@ final class NamedCatchupSupport {
             return HistoryLossHandling.leaveToSubscriptionModel();
         }
         HandedOver made = handedOver.get(subscriptionId);
-        if (made != null && made.replay().owned() == record && !shutdown) {
+        if (made != null && !shutdown) {
             if (PositionCatchupPipeline.samePosition(lostFrom, made.lostLiveStart())) {
                 return HistoryLossHandling.takeOver(() -> {
                 });
@@ -830,7 +830,9 @@ final class NamedCatchupSupport {
         }
         // Read again after the put, since cancelSubscription and shutdown drop the handover before they read the ids
         // in flight. Either this sees it dropped, or that read finds this state and cancels it. A subscribe of the id
-        // that replaced the record since made a subscription of its own, which this replay must not resume.
+        // that replaced the record since made a subscription of its own, which this replay must not resume. A replaced
+        // record never comes back, so this check also stops a takeover that a loss report or a resume started from the
+        // handover of a replaced record, which own(..) forgets only after the replace.
         if (shutdown || handedOver.get(subscriptionId) != made || owned.get(subscriptionId) != made.replay().owned()) {
             catchingUp.remove(subscriptionId, state);
             return null;
@@ -1044,7 +1046,7 @@ final class NamedCatchupSupport {
     // the subscription where it lost the history, so the takeover replay runs now instead.
     private @Nullable Subscription takeOverOnResume(String subscriptionId) {
         HandedOver made = handedOver.get(subscriptionId);
-        if (made == null || made.replay().owned() != owned.get(subscriptionId) || !made.takeOverAsked().get() || !named.isPaused(subscriptionId)
+        if (made == null || !made.takeOverAsked().get() || !named.isPaused(subscriptionId)
                 || !made.takingOver().compareAndSet(false, true)) {
             return null;
         }
