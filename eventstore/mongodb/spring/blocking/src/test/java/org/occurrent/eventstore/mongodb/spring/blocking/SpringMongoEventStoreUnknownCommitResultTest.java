@@ -21,6 +21,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoException;
+import com.mongodb.MongoExecutionTimeoutException;
 import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.ClientSession;
@@ -34,6 +35,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
@@ -162,10 +164,18 @@ class SpringMongoEventStoreUnknownCommitResultTest {
         // The caller's manager commits, and it does not retry. The store's own manager is not involved.
         TransactionTemplate callersTransaction = new TransactionTemplate(new MongoTransactionManager(databaseFactory));
         assertThatThrownBy(() -> callersTransaction.executeWithoutResult(status -> eventStore.write(STREAM_ID, List.of(event("NameDefined")))))
-                .isInstanceOf(TransactionSystemException.class);
+                .isInstanceOf(TransactionSystemException.class)
+                .cause()
+                .isInstanceOf(MongoException.class)
+                .satisfies(cause -> assertThat(((MongoException) cause).hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)).isTrue());
+        // The fail point runs the commit before it answers, so the caller is told it failed although the event was saved.
+        assertThat(eventStore.count(Filter.streamId(STREAM_ID))).isEqualTo(1L);
     }
 
+    // A separate thread, since a limit that is never applied resends the commit for ever and the test would hang
+    // instead of failing. switch_off_fail_point_and_close_client ends that loop.
     @Test
+    @Timeout(value = 30, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     void a_commit_that_keeps_having_an_unknown_result_fails_with_that_error_when_the_time_is_up() {
         SpringMongoEventStore eventStore = storeOn(new CommitRetryingMongoTransactionManager(databaseFactory, null, Duration.ofMillis(300)));
         configureFailPoint(new Document("mode", "alwaysOn")
@@ -179,7 +189,7 @@ class SpringMongoEventStoreUnknownCommitResultTest {
                 .isInstanceOf(MongoException.class)
                 .satisfies(cause -> assertThat(((MongoException) cause).hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)).isTrue());
         // The commit is sent again until the limit, and neither given up on after the first retry nor sent again past the limit.
-        assertThat(Duration.ofNanos(System.nanoTime() - start)).isBetween(Duration.ofMillis(250), Duration.ofSeconds(10));
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isBetween(Duration.ofMillis(250), Duration.ofSeconds(5));
     }
 
     @Test
@@ -204,6 +214,26 @@ class SpringMongoEventStoreUnknownCommitResultTest {
         assertThatThrownBy(() -> eventStore.write(STREAM_ID, List.of(event("NameDefined"))))
                 .isInstanceOf(TransactionSystemException.class);
         assertThat(eventStore.count(Filter.streamId(STREAM_ID))).isZero();
+    }
+
+    /**
+     * The driver raises a write concern error with the MaxTimeMSExpired code as a MongoExecutionTimeoutException, so it
+     * is no retryable write concern error. The fail point runs the commit first, so the event is saved and the caller
+     * is told the commit failed.
+     */
+    @Test
+    @Timeout(value = 60, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    void a_write_concern_error_with_the_max_time_ms_expired_code_is_not_sent_again() {
+        SpringMongoEventStore eventStore = storeOn(new CommitRetryingMongoTransactionManager(databaseFactory));
+        configureFailPoint(new Document("mode", new Document("times", 1))
+                .append("data", new Document("failCommands", List.of("commitTransaction"))
+                        .append("writeConcernError", new Document("code", MAX_TIME_MS_EXPIRED).append("errmsg", "operation exceeded time limit"))));
+
+        assertThatThrownBy(() -> eventStore.write(STREAM_ID, List.of(event("NameDefined"))))
+                .isInstanceOf(TransactionSystemException.class)
+                .cause()
+                .isInstanceOf(MongoExecutionTimeoutException.class);
+        assertThat(eventStore.count(Filter.streamId(STREAM_ID))).isEqualTo(1L);
     }
 
     @Test

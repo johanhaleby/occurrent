@@ -32,8 +32,10 @@ The retry follows the driver's `withTransaction`:
 - It retries a commit that fails with the `UnknownTransactionCommitResult` label, found on the first `MongoException`
   in the cause chain of the failure.
 - It does not retry a top-level `MaxTimeMSExpired` error (`MongoExecutionTimeoutException`) or
-  `MongoOperationTimeoutException`, which the driver does not retry either. It does retry a `MongoWriteConcernException`
-  with the `MaxTimeMSExpired` code (50) when it has the label, as the driver does.
+  `MongoOperationTimeoutException`, which the driver does not retry either. A write concern error with the
+  `MaxTimeMSExpired` code (50) reaches the manager as the same `MongoExecutionTimeoutException`, because the driver
+  raises it that way, so it is not retried either. Against a MongoDB replica set with a fail point, both stacks sent one
+  commit and the event was stored.
 - It stops retrying 120 seconds after the first commit was sent, and throws or emits the last error. The number is the
   driver's `MAX_RETRY_TIME_LIMIT_MS`, but the driver counts it from the start of its `withTransaction` call, before the
   transaction body runs, so the driver's window can be shorter than ours by the time the body takes. The caller sees the same failure it sees today, and the append may or may not be saved.
@@ -71,6 +73,6 @@ Running the transaction through `ClientSession.withTransaction` was considered a
   tells it so, and the migration guide to 0.35.0 shows the change. The examples in this repository were switched.
 - When the store joins a transaction the caller started, the commit belongs to the caller's manager, so the retry
   happens only if that manager is one of these two. The tests cover both a retrying and a plain manager for that case.
-- The two classes are public API in `eventstore-mongodb-spring-blocking` and `eventstore-mongodb-spring-reactor`. The
-  decision of what counts as retryable lives in an internal class in `eventstore-mongodb-common`, so the two stacks
-  cannot drift apart.
+- The two classes are public API in `occurrent-eventstore-mongodb-spring-blocking` and
+  `occurrent-eventstore-mongodb-spring-reactor`. The decision of what counts as retryable lives in an internal class in
+  `occurrent-eventstore-mongodb-common`, so the two stacks cannot drift apart.

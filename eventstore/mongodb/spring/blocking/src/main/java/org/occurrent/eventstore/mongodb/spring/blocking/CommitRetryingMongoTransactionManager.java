@@ -39,8 +39,8 @@ import static java.util.Objects.requireNonNull;
  * the commit while the error carries the {@code UnknownTransactionCommitResult} label, for up to two minutes from the
  * first commit, the limit that {@code ClientSession.withTransaction} gives the native event store. The driver counts its
  * two minutes from the start of the {@code withTransaction} call instead. A top-level {@code MaxTimeMSExpired}
- * error ({@code MongoExecutionTimeoutException}) is not retried, and a write concern error with that code is, which is
- * also what the driver does. The time is checked between attempts, so a commit that has started is not interrupted and
+ * error ({@code MongoExecutionTimeoutException}) is not retried, which is what the driver does. A write concern error
+ * with that code reaches the manager as the same exception, so it is not retried either. The time is checked between attempts, so a commit that has started is not interrupted and
  * ends on the driver's own timeouts. When the time is up, the last error is thrown from the commit as usual.
  * <p>
  * Use it for the {@link EventStoreConfig.Builder#transactionConfig(MongoTransactionManager) event store's}

@@ -1278,8 +1278,8 @@ saved was reported as a failure. A caller that sent it again could write its eve
 0.35.0 adds `CommitRetryingMongoTransactionManager` in `org.occurrent.eventstore.mongodb.spring.blocking` and
 `CommitRetryingReactiveMongoTransactionManager` in `org.occurrent.eventstore.mongodb.spring.reactor`. Each extends
 Spring's manager and sends the commit again for up to two minutes from the first attempt. It does not retry a
-top-level `MaxTimeMSExpired` error, as the driver doesn't, but it does retry a write concern error with that code, as the
-driver does.
+top-level `MaxTimeMSExpired` error, as the driver doesn't, and neither does it retry a write concern error with that
+code, which the driver raises as the same exception.
 
 ### Who is affected
 

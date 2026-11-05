@@ -76,15 +76,6 @@ class UnknownCommitResultTest {
     }
 
     @Test
-    void a_write_concern_error_with_the_max_time_ms_expired_code_is_retryable_when_it_has_the_label() {
-        MongoWriteConcernException failure = new MongoWriteConcernException(
-                new WriteConcernError(MAX_TIME_MS_EXPIRED, "MaxTimeMSExpired", "max time", new BsonDocument()), WriteConcernResult.unacknowledged(), new ServerAddress());
-        failure.addLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL);
-
-        assertThat(UnknownCommitResult.isRetryable(failure)).isTrue();
-    }
-
-    @Test
     void a_write_concern_error_with_another_code_is_retryable_when_it_has_the_label() {
         MongoWriteConcernException failure = new MongoWriteConcernException(
                 new WriteConcernError(WRITE_CONCERN_FAILED, "WriteConcernFailed", "unknown", new BsonDocument()), WriteConcernResult.unacknowledged(), new ServerAddress());
