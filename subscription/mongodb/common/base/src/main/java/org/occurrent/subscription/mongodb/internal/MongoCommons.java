@@ -50,6 +50,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
+import java.util.function.BiPredicate;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -548,14 +549,15 @@ public class MongoCommons {
      * model stores, as {@link #refuseCatchupPosition(StartAt)} refuses a fixed one. What counts as opened is up to the
      * subscription model. A blocking one counts a run that reported its cursor open, so an answer whose opening a pause
      * or a failure stopped doesn't end the check. The reactor one counts a driver cursor that opened for a subscription
-     * that reads through one. Where it has no such cursor to wait for it counts a {@code Flux} that was subscribed to, so
-     * a pause after that, or an answer the server rejects, ends it. The {@link UnsupportedStartAtException} is thrown
-     * where the subscription model resolves the position, as the change stream opens.
+     * that reads through one. Where it has no such cursor to wait for it counts the first document the change stream
+     * reads, since a subscribe doesn't say the server accepted the position, so an answer the server rejects doesn't end
+     * it. The {@link UnsupportedStartAtException} is thrown where the subscription model resolves the position, as the
+     * change stream opens.
      * <p>
-     * An answer after that isn't checked. When the earlier answer was a position of its own rather than the present, the
-     * subscription model asks again as a change stream opens again before the first event, and such an answer opens at
-     * another position than the earlier one. It can skip what the earlier one would have delivered, or deliver what it
-     * wouldn't have.
+     * An answer after that isn't checked. Once a change stream has opened, the subscription model records the position it opened
+     * at with {@link #recordWhereItOpened(OpenedAt, BiPredicate)} and doesn't ask the function again. It asks again only after a
+     * stream opened at the present without an operation time to record, and a catch-up answer then opens at the present
+     * as well.
      *
      * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
      * @param opened         Whether a change stream of the subscription has opened, as the subscription model counts it
@@ -789,6 +791,21 @@ public class MongoCommons {
      * position it lost is the one the stream opened at.
      */
     public record OpenedAt(StartAt openingPosition, StartAt tracked) {
+    }
+
+    /**
+     * Records the position a change stream opened at in place of the dynamic position the subscription tracked, once
+     * the stream has opened. Opening again then starts at that position and doesn't call the dynamic position's
+     * function again, which could answer another position. Nothing is recorded when the tracked position isn't dynamic,
+     * when the stream opened at the present without an operation time, or when the tracked position has changed since
+     * {@code openedAt} was read, so a checkpoint written from another thread is kept.
+     *
+     * @param compareAndSet Sets the tracked position to its second argument when it still holds its first
+     */
+    public static void recordWhereItOpened(OpenedAt openedAt, BiPredicate<StartAt, StartAt> compareAndSet) {
+        if (openedAt.tracked().isDynamic() && !opensAtThePresent(openedAt.openingPosition())) {
+            compareAndSet.test(openedAt.tracked(), openedAt.openingPosition());
+        }
     }
 
     /**

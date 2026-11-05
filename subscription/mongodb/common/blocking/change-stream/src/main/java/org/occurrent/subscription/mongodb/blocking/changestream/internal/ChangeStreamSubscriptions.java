@@ -405,8 +405,9 @@ public final class ChangeStreamSubscriptions {
 
     // currentStartAt tracks the last change-stream document read (updated below, even without a delivered
     // CloudEvent), shared by every attempt of runUntilStopped and by a resume, so each continues gap-free from there
-    // instead of the original StartAt. Before the first one it holds the operation time the stream opened at, when
-    // MongoDB's reply had one, so an original StartAt of the present is not resolved again. A read that returns no
+    // instead of the original StartAt. From the opening until the first one it holds the position the stream opened
+    // at, which for a StartAt of the present is MongoDB's operation time when the reply had one, so neither a dynamic
+    // StartAt nor the present is asked again. A read that returns no
     // document moves it to the resume token MongoDB sent with that empty batch, so a subscription that matches nothing
     // doesn't keep a position the oplog drops.
     // The try block spans opening the cursor too, since a change-stream error (history lost, failover) can surface
@@ -432,7 +433,7 @@ public final class ChangeStreamSubscriptions {
             openedAt = new OpenedAt(openingPosition, currentStartAt.get());
             ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, openingPosition, subscriptionModelContext);
             cursor = changeStreamDocumentsAtPosition.cursor();
-            if (!internalSubscription.opened(cursor)) {
+            if (!internalSubscription.opened(cursor, openedAt)) {
                 // Closed while the change stream was opening, and the finally block closes the cursor
                 return;
             }
@@ -1236,14 +1237,16 @@ public final class ChangeStreamSubscriptions {
             }
         }
 
-        // False when this was closed while the change stream opened, and the caller then closes the cursor itself
-        boolean opened(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor) {
+        // False when this was closed while the change stream opened, and the caller then closes the cursor itself. Records
+        // where it opened under the same lock as a pause, so a resume that repositions comes after it
+        boolean opened(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor, OpenedAt openedAt) {
             lock.lock();
             try {
                 if (intentionallyClosed) {
                     return false;
                 }
                 this.cursor = cursor;
+                MongoCommons.recordWhereItOpened(openedAt, currentStartAt::compareAndSet);
                 return true;
             } finally {
                 lock.unlock();

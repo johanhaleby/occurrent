@@ -1743,27 +1743,27 @@ public class SpringMongoSubscriptionModelTest {
 
         @Test
         void an_answer_that_throws_the_refusal_type_after_a_cursor_opened_restarts() {
-            // Given a dynamic position that answers a live checkpoint, then throws the refusal type, then answers a live checkpoint
+            // Given a subscription whose cursor has opened at a live checkpoint
             String subscriptionId = UUID.randomUUID().toString();
             Checkpoint live = liveStart();
-            AtomicInteger answers = new AtomicInteger();
             CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
-            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
-                if (answers.incrementAndGet() == 2) {
+            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.checkpoint(live), delivered::add);
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+
+            // When it is paused and resumed at a dynamic position that throws the refusal type, then answers a live checkpoint
+            AtomicInteger answers = new AtomicInteger();
+            subscriptionModel.pauseSubscription(subscriptionId);
+            subscriptionModel.resumeSubscription(subscriptionId, StartAt.dynamic(ctx -> {
+                if (answers.incrementAndGet() == 1) {
                     throw new UnsupportedStartAtException(StartAt.now(), "thrown by the answer");
                 }
                 return StartAt.checkpoint(live);
-            }), delivered::add);
-            assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
-
-            // When it is paused and resumed, so the position is asked again after a cursor has opened
-            subscriptionModel.pauseSubscription(subscriptionId);
-            subscriptionModel.resumeSubscription(subscriptionId);
+            }));
 
             // Then the throw restarts the subscription like any other failure, and it delivers an event written afterwards
             NameDefined written = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
-                assertThat(answers).hasValueGreaterThanOrEqualTo(3);
+                assertThat(answers).hasValueGreaterThanOrEqualTo(2);
                 assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
             });
             mongoEventStore.write("1", 0, serialize(written));
@@ -1772,29 +1772,51 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
-        void a_refusal_arriving_after_a_stream_opened_still_stops_the_subscription() {
-            // Given a dynamic position that answers a live checkpoint, then throws the refusal of a catch-up's position, as the
-            // check does, which stands in for a replaced run's late start landing between the check and the catch
+        void a_resume_after_a_cursor_opened_opens_where_it_opened_without_asking_the_position_again() {
+            // Given a dynamic position that answers a live checkpoint first and a global checkpoint after, whose cursor has opened
             String subscriptionId = UUID.randomUUID().toString();
             Checkpoint live = liveStart();
             AtomicInteger answers = new AtomicInteger();
-            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
-                if (answers.incrementAndGet() == 2) {
-                    throw new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown as the check does");
-                }
-                return StartAt.checkpoint(live);
-            }), __ -> {
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx ->
+                    answers.incrementAndGet() == 1 ? StartAt.checkpoint(live) : StartAt.checkpoint(GlobalCheckpoint.of(0))), delivered::add);
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+
+            // When it is paused, an event is written, and it is resumed
+            subscriptionModel.pauseSubscription(subscriptionId);
+            NameDefined written = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(written));
+            Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+
+            // Then the resume opens at the live checkpoint without asking the position again, and delivers the event
+            assertThat(resumed.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(delivered).extracting(CloudEvent::getId).contains(written.eventId()));
+            assertThat(answers).hasValue(1);
+            assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+        }
+
+        @Test
+        void a_refusal_arriving_after_a_stream_opened_still_stops_the_subscription() {
+            // Given a subscription whose cursor has opened at a live checkpoint
+            String subscriptionId = UUID.randomUUID().toString();
+            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.checkpoint(liveStart()), __ -> {
             });
             assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
 
-            // When it is paused and resumed, so the position is asked again
+            // When it is paused and resumed at a dynamic position that throws the refusal of a catch-up's position, as the
+            // check does, which stands in for a replaced run's late start landing between the check and the catch
+            AtomicInteger answers = new AtomicInteger();
             subscriptionModel.pauseSubscription(subscriptionId);
-            subscriptionModel.resumeSubscription(subscriptionId);
+            subscriptionModel.resumeSubscription(subscriptionId, StartAt.dynamic(ctx -> {
+                answers.incrementAndGet();
+                throw new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown as the check does");
+            }));
 
-            // Then the run is gone, and the position isn't asked a third time
+            // Then the run is gone, and the position isn't asked a second time
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                     assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
-            assertThat(answers).hasValue(2);
+            assertThat(answers).hasValue(1);
         }
 
         @Test

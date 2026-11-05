@@ -325,29 +325,29 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
-    void a_first_answer_the_server_rejects_ends_the_check_of_a_subscription_when_the_model_reads_through_the_change_stream_of_spring() throws InterruptedException {
+    void a_catchup_position_answered_after_a_first_answer_the_server_rejects_is_refused_when_the_model_reads_through_the_change_stream_of_spring() throws InterruptedException {
         // Given a model that has fallen back to the change stream of Spring, and a dynamic position whose first answer is a resume token the server rejects
         useTheChangeStreamOfSpring();
         AtomicInteger answers = new AtomicInteger();
         CountDownLatch askedAgain = new CountDownLatch(1);
         CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        GlobalCheckpoint catchup = GlobalCheckpoint.of(0);
         StartAt startAt = StartAt.dynamic(ctx -> {
             if (answers.incrementAndGet() == 1) {
                 return StartAt.checkpoint(new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("not-a-token"))));
             }
             askedAgain.countDown();
-            return StartAt.checkpoint(GlobalCheckpoint.of(0));
+            return StartAt.checkpoint(catchup);
         });
 
         // When it subscribes, so the retry asks the position again, and the answer is a catch-up's
-        subscriptionModel.subscribe("not-refused", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
+        subscriptionModel.subscribe("not-accepted", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
         assertThat(askedAgain.await(10, SECONDS)).as("the position was asked again").isTrue();
 
-        // Then the subscribe of the first answer ended the check, so the second isn't refused and the subscription opens at the present
-        NameDefined written = nameDefined();
-        write(written);
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(written.eventId()));
-        assertThat(subscriptionModel.isRunning("not-refused")).isTrue();
+        // Then the server never accepted the first answer, so the second is refused instead of opening at the present, and nothing is replayed
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning("not-accepted")).isFalse());
+        write(nameDefined());
+        assertThat(delivered).isEmpty();
     }
 
     @Test
