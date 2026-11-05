@@ -29,11 +29,12 @@ import org.bson.types.ObjectId;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken.MarkerObservation;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
 import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
-import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport.ObservedMarker;
 
 import java.time.Duration;
 import java.util.*;
@@ -111,32 +112,31 @@ public final class DcbMarkerVersionsDocuments {
     }
 
     /**
-     * What a point-in-time read observed for each marker. A missing {@code s} counts as 0, which is what a marker no 0.35
-     * writer incremented has.
+     * What a point-in-time read observed of each of {@code keys}, with {@link MarkerObservation#absent()} for a key that
+     * has no marker. A missing {@code s} counts as 0, which is what a marker no 0.35 writer incremented has.
      */
-    public static Map<String, ObservedMarker> observe(Map<String, Document> markersByKey) {
-        Map<String, ObservedMarker> observed = new HashMap<>();
-        markersByKey.forEach((key, marker) -> {
-            long version = longOf(marker, CHECKPOINT_VERSION);
-            long stamped = longOf(marker, CHECKPOINT_STAMPED);
-            observed.put(key, new ObservedMarker(epochOf(marker), version, version - stamped));
-        });
+    public static Map<String, MarkerObservation> observe(Set<String> keys, Map<String, Document> markersByKey) {
+        Map<String, MarkerObservation> observed = new HashMap<>();
+        for (String key : keys) {
+            Document marker = markersByKey.get(key);
+            if (marker == null) {
+                observed.put(key, MarkerObservation.absent());
+            } else {
+                long version = longOf(marker, CHECKPOINT_VERSION);
+                long stamped = longOf(marker, CHECKPOINT_STAMPED);
+                observed.put(key, new MarkerObservation(epochOf(marker), version, version - stamped));
+            }
+        }
         return observed;
     }
 
     /**
-     * The consistency token over {@code keys}, the sum of their marker versions, as the stores compute it for an append
-     * condition (ADR 21).
+     * The consistency token of a read with {@code criteria} over the marker documents it loaded. It holds what the read
+     * observed of each marker key of {@code criteria}, and the sum of their versions as its version (ADR 149).
      */
-    public static long consistencyToken(Set<String> keys, Map<String, Document> markersByKey) {
-        long sum = 0;
-        for (String key : keys) {
-            Document marker = markersByKey.get(key);
-            if (marker != null) {
-                sum += longOf(marker, CHECKPOINT_VERSION);
-            }
-        }
-        return sum;
+    public static DcbConsistencyToken consistencyToken(DcbCriteria criteria, Map<String, Document> markersByKey) {
+        Map<String, MarkerObservation> observed = observe(DcbMarkerVersionsSupport.queryMarkerKeys(criteria), markersByKey);
+        return DcbConsistencyToken.of(criteria, observed.values().stream().mapToLong(MarkerObservation::version).sum(), observed);
     }
 
     /**
@@ -264,7 +264,8 @@ public final class DcbMarkerVersionsDocuments {
         if (condition == null || condition.consistencyToken().isEmpty() || condition.criteria() instanceof DcbCriteria.MatchAll) {
             return Optional.empty();
         }
-        return DcbMarkerVersionsSupport.versionsOf(DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria()), observe(markersByKey));
+        Set<String> keys = DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria());
+        return DcbMarkerVersionsSupport.versionsOf(keys, observe(keys, markersByKey));
     }
 
 

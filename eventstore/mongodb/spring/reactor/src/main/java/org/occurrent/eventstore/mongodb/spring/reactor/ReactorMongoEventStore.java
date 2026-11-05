@@ -55,6 +55,7 @@ import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.api.reactor.*;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReadScope;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
@@ -305,15 +306,15 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     // The token, the head, the template and the query options are passed in so a catch-up read scope can read all of them
     // through its own session at its own read concern
-    private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Mono<Long> consistencyToken, Mono<Long> currentPosition, ReactiveMongoOperations template, Function<Query, Query> readQueryOptions) {
+    private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Mono<DcbConsistencyToken> consistencyToken, Mono<Long> currentPosition, ReactiveMongoOperations template, Function<Query, Query> readQueryOptions) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads,
         // the events may include it while the token does not, which only makes a later conditional append
-        // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The token read
-        // and the position read are independent, so zip them concurrently rather than sequencing them, while
-        // keeping both strictly before the event read below.
-        return Mono.zip(consistencyToken, currentPosition)
+        // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The position comes
+        // after the token. An append between a position read first and a token read second would be in the token and
+        // above the position the events are capped at, so a later conditional append would miss it.
+        return consistencyToken.zipWhen(token -> currentPosition)
                 .flatMap(tokenAndHighWatermark -> {
-                    long token = tokenAndHighWatermark.getT1();
+                    DcbConsistencyToken token = tokenAndHighWatermark.getT1();
                     long highWatermark = tokenAndHighWatermark.getT2();
                     long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
                     Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
@@ -329,7 +330,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                 return list;
                             })
                             : cloudEvents.collectList();
-                    return events.map(list -> new DcbEventStream(list, highWatermark, DcbConsistencyToken.of(criteria, token)));
+                    return events.map(list -> new DcbEventStream(list, highWatermark, token));
                 });
     }
 
@@ -382,9 +383,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return template.find(markersQuery(markerKeys), Document.class, dcbCheckpointCollectionName).collectList()
                 .map(DcbMarkerVersionsDocuments::markersByKey)
                 .flatMap(markers -> {
-                    Map<String, DcbMarkerVersionsSupport.ObservedMarker> observed = DcbMarkerVersionsDocuments.observe(markers);
+                    Map<String, DcbConsistencyToken.MarkerObservation> observed = DcbMarkerVersionsDocuments.observe(markerKeys, markers);
                     afterVersions.ifPresent(saved -> DcbMarkerVersionsSupport.requireResumable(criteria, saved, observed));
-                    long token = DcbMarkerVersionsDocuments.consistencyToken(markerKeys, markers);
+                    DcbConsistencyToken token = DcbMarkerVersionsDocuments.consistencyToken(criteria, markers);
                     return template.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)
                             .map(counter -> ((Number) counter.get(DcbMarkerModel.COUNTER_POSITION)).longValue())
                             .defaultIfEmpty(0L)
@@ -405,7 +406,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                             if (backward) {
                                                 Collections.reverse(list);
                                             }
-                                            return new DcbEventStream(list, highWatermark, DcbConsistencyToken.of(criteria, token), markerVersions);
+                                            return new DcbEventStream(list, highWatermark, token, markerVersions);
                                         });
                             });
                 });
@@ -576,12 +577,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
         final Mono<Boolean> conflictMono;
         if (expectedToken.isPresent()) {
-            // The condition carries the consistency token the command observed when it read the query. If the
-            // query's markers have advanced since, an append that shares one of them committed after the read, so
-            // the condition fails, also when that append's events don't match the query. Immune to read-watermark
-            // overshoot because marker versions bump inside the append
-            // transaction (ADR 0021).
-            conflictMono = consistencyToken(condition.criteria(), mongoTemplate).map(actual -> actual != expectedToken.get().version());
+            // The condition carries the consistency token the command observed when it read the query. The check
+            // compares each of the query's markers with what the read saw of it (ADR 0149). Immune to read-watermark
+            // overshoot because marker versions bump inside the append transaction. The check can't yet ask the events,
+            // so an item the markers don't settle refuses the append.
+            conflictMono = queryMarkers(condition.criteria(), mongoTemplate)
+                    .map(markers -> DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers))
+                    .map(current -> !(DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current) instanceof DcbAppendConditionCheck.Pass));
         } else {
             // No token: an absolute "fail if any matching event exists" guard. The marker increments below still
             // serialize concurrent unconditional guards on the same boundary so two of them cannot both pass.
@@ -628,20 +630,19 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 .map(DcbMarkerVersionsDocuments::markersByKey);
     }
 
-    // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. Read the markers
-    // in one query so their versions come from a single consistent snapshot.
-    private Mono<Long> consistencyToken(DcbCriteria criteria, ReactiveMongoOperations template) {
+    // The optimistic-concurrency token for a query: what the read saw of each of its conflict markers
+    private Mono<DcbConsistencyToken> consistencyToken(DcbCriteria criteria, ReactiveMongoOperations template) {
+        return queryMarkers(criteria, template).map(markers -> DcbMarkerVersionsDocuments.consistencyToken(criteria, markers));
+    }
+
+    // Read the markers in one query, which narrows the window a concurrent append can tear across and doesn't close
+    // it. A find can yield between documents, and through a mongos it reads each shard on its own (ADR 0149).
+    private Mono<Map<String, Document>> queryMarkers(DcbCriteria criteria, ReactiveMongoOperations template) {
         Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
         if (markerKeys.isEmpty()) {
-            return Mono.just(0L);
+            return Mono.just(Map.of());
         }
-        List<String> markerIds = markerKeys.stream().map(DcbMarkerModel::markerId).toList();
-        return template.find(new Query(where(ID).in(markerIds)), Document.class, dcbCheckpointCollectionName)
-                .map(marker -> {
-                    Number version = (Number) marker.get(DcbMarkerModel.CHECKPOINT_VERSION);
-                    return version == null ? 0L : version.longValue();
-                })
-                .reduce(0L, Long::sum);
+        return template.find(markersQuery(markerKeys), Document.class, dcbCheckpointCollectionName).collectList().map(DcbMarkerVersionsDocuments::markersByKey);
     }
 
     private Mono<Long> reservePositions(int eventCount) {

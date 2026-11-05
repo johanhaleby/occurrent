@@ -559,8 +559,8 @@ The consumers, on both stacks:
 - The snapshot deciders store a `DcbMarkerVersions` as their version and read with `fromVersions(base)`, or with
   `withVersions()` when they have no snapshot. Before saving at the append result's versions, a decider checks two
   things. The read has to have reported every key of the append's versions, each with the same epoch as the append's,
-  because a prune between the read and the append can leave an equal sum
-  ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)). A key the read reported without an epoch counts as a
+  because a marker recreated between the read and the append has a new epoch, and versions under that epoch don't
+  describe what the read returned. A key the read reported without an epoch counts as a
   mismatch. And the append has to be majority-committed, which the next section covers. If either check fails, or the
   result has no versions, it skips the save. On `DcbSnapshotInvalid` it reads the boundary in full with
   `withVersions()`, so it can save a fresh map.
@@ -804,8 +804,8 @@ versions only grow, and a prune changes the epoch. A majority-committed write is
   saw the events read go to a lagging secondary while a primary was up.
 - **The token a decider read and the token inside its append.** The token it read comes from snapshot P, which is
   majority-committed once the read transaction has committed, if that commit waits for majority, which is unverified.
-  The append transaction's snapshot S is later, on the primary, so it contains everything in P. Equal sums then mean no
-  key in `keys(C)` moved, since each key only grows, and an append after S write-conflicts with the decider's append.
+  The append transaction's snapshot S is later, on the primary, so it contains everything in P. Equal versions on every
+  key then mean no key in `keys(C)` moved, and an append after S write-conflicts with the decider's append.
   The unsafe case is a token newer than the events, which is the seventh review's second blocker, and reading both from
   one snapshot removes it.
 - **The versions an append reports and the decider's state.** The versions are each read version plus one, and the state
@@ -820,7 +820,7 @@ versions only grow, and a prune changes the epoch. A majority-committed write is
   outside any session. Found means the append is majority-committed, so no later primary loses it. Not found, or an
   error, means no save.
 - **The epochs the decider read and the epochs in its append's versions.** They come from different transactions. The
-  decider compares them before it saves, so a prune in between, which can leave an equal sum, leads to a skipped save.
+  decider compares them before it saves, so a prune in between leads to a skipped save.
 - **The token over every writer and the events after versions over the writers that write `mv`.** The token sums every
   increment, including one from a writer that writes no `mv`, and the read after versions selects only events with `mv`.
   That's the gap the rolling upgrade showed, and `s` closes it. Any increment without `mv` moves u, and the read
@@ -960,9 +960,10 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
   need a marker that every append increments, which ADR 21 already calls a whole-store lock.
 - Pruning markers (ADR 21) now costs more than resetting counters. Every DCB snapshot on a pruned boundary is refused
   with `DcbSnapshotInvalid` and rebuilt from a full read on its next use.
-- [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is a related open problem. A consistency token read
-  before a prune can let a conflicting append through after it. The marker epoch is one of the fixes it lists. The
-  decider compares epochs before it saves, and whether the token uses the epoch too is decided in #1300.
+- A consistency token read before a prune could let a conflicting append through after it
+  ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)).
+  [ADR 149](0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md) makes the check
+  compare each marker's epoch too.
 - `updateEvent` keeps `mv`. An event whose tags or type change through `updateEvent`, or that `delete(Filter)` removes,
   can still move between boundaries without a marker increment. The consistency token has the same blind spot today, and
   this ADR doesn't change it.
