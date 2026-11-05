@@ -1364,6 +1364,7 @@ public class ReactorMongoSubscriptionModelTest {
             CountDownLatch cancelSet = new CountDownLatch(1);
             AtomicBoolean sawTheCancelComplete = new AtomicBoolean();
             CountDownLatch asked = new CountDownLatch(1);
+            CountDownLatch answered = new CountDownLatch(1);
             StartAt secondStartAt = StartAt.dynamic(ctx -> {
                 asked.countDown();
                 awaitQuietly(cancelSet, 10);
@@ -1371,6 +1372,7 @@ public class ReactorMongoSubscriptionModelTest {
                 if (cancel != null) {
                     sawTheCancelComplete.set(catchThrowable(() -> cancel.get(5, SECONDS)) == null);
                 }
+                answered.countDown();
                 return StartAt.now();
             });
             try {
@@ -1381,7 +1383,7 @@ public class ReactorMongoSubscriptionModelTest {
                 assertThat(cancelStarted.await(10, SECONDS)).isTrue();
 
                 // And the id is subscribed to again while the cancelled run has not ended
-                CompletableFuture.runAsync(() -> subscription.subscribe(subscriptionId, secondStartAt, cloudEvent -> Mono.empty()), executor);
+                CompletableFuture.supplyAsync(() -> subscription.subscribe(subscriptionId, secondStartAt, cloudEvent -> Mono.empty()), executor).get(10, SECONDS);
                 await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                         assertThat(subscription.isRunning(subscriptionId)).isTrue());
 
@@ -1392,7 +1394,10 @@ public class ReactorMongoSubscriptionModelTest {
                 // Then the cancel returns and the position sees it complete, so the two did not wait for each other
                 assertAll(
                         () -> assertThat(catchThrowable(() -> cancel.get(3, SECONDS))).as("the cancel completes").isNull(),
-                        () -> assertThat(sawTheCancelComplete.get()).as("the position saw the cancel complete").isTrue()
+                        () -> {
+                            assertThat(answered.await(10, SECONDS)).as("the position answers").isTrue();
+                            assertThat(sawTheCancelComplete.get()).as("the position saw the cancel complete").isTrue();
+                        }
                 );
             } finally {
                 mayFinishCancel.countDown();

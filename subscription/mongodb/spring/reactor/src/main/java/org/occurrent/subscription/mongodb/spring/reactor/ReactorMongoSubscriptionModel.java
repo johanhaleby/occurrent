@@ -368,7 +368,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return new RunStart(internalSubscription, run, earlierRunsEnded == null ? Mono.empty() : earlierRunsEnded.publishOn(Schedulers.boundedElastic()));
     }
 
-    // Runs without the monitor, since subscribing resolves the start position, which can call the caller's function
+    // Runs without the monitor, since subscribing a first run resolves the start position, which can call the caller's function
     private Subscription launch(RunStart runStart) {
         InternalSubscription internalSubscription = runStart.internalSubscription();
         Run run = runStart.run();
