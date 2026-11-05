@@ -239,11 +239,14 @@ update, where appends used to complete in 6 to 18 ms. In a probe on all three st
 came back. `wtimeoutMS=2000` and `timeoutMS=2000` on the connection string failed it after 2 seconds, and
 `socketTimeoutMS=2000` after 4. The store now sets the update's `wtimeout` to `markerVersionsCommitTimeout`, 5 seconds
 by default, in place of any `wtimeout` on the client, the database or a Spring database factory. On a client with
-`timeoutMS` the driver sends no `wtimeout`, and the client's `timeoutMS` bounds the update instead. The store doesn't
-shorten it to `markerVersionsCommitTimeout`, because the same timeout also bounds how long the driver waits to select a
-primary, which an election can need. A test on each store asserts the `wtimeout` the update sends, and on a client with
-`timeoutMS` that it sends no `wtimeout` and a `maxTimeMS` above `markerVersionsCommitTimeout`, and no probe on such a
-set has run since. An append that fails this way writes
+`timeoutMS` the driver sends no `wtimeout`. A `timeoutMS` above 0 then bounds the update instead, and the store
+doesn't shorten it to `markerVersionsCommitTimeout`, because the same timeout also bounds how long the driver waits to
+select a primary, which an election can need. The marker-versions read does shorten it, because a read that runs out
+only reports no versions, while an append that runs out throws. A `timeoutMS` of 0 waits forever, so there the store
+gives the update `markerVersionsCommitTimeout` as its timeout. A test on each store asserts the `wtimeout` the update
+sends. On a client with `timeoutMS` it asserts that the update sends no `wtimeout`, and a `maxTimeMS` above
+`markerVersionsCommitTimeout` for a `timeoutMS` of 60 seconds and at most `markerVersionsCommitTimeout` for 0. No probe
+on such a set has run since. An append that fails this way writes
 no event, and the positions it reserved can stay unused.
 
 ### An append in a caller's transaction
@@ -271,20 +274,34 @@ in one snapshot. Once the template is in such a transaction, which `MongoDatabas
 bound and reports the snapshot's counter as its head. It returns the transaction's own appends, and the ones that
 reserved their positions after the snapshot was taken are above that head, so a read after that head once the
 transaction has committed returns them again. An append that is the transaction's first operation on the store's
-factory reserves before the snapshot, so its events are at or below the head. Before the template's first operation in
-the caller's transaction, the counter bounds the read. This comes from reading Spring Data MongoDB 5.1.0, and no probe
-ran under a JDBC transaction.
+factory reserves before the snapshot, so its events are at or below the head. The counter bounds a read before the
+template's first operation in the caller's transaction. On the reactor store it also bounds that first read, because
+the store checks before the template has opened its session, and the transaction has no appends of its own yet then.
+This comes from reading Spring Data MongoDB 5.1.0. The probes below ran a no-op outer transaction manager in place of
+a JDBC one.
 
-An append runs in the store's own transaction manager, and it joins the caller's transaction only when a MongoDB
-transaction is already open on the store's factory instance, one the caller's `MongoTransactionManager` opened there or
-one the template opened for an earlier read in the caller's transaction. A manager on another instance never finds
-one, and with the manager on the store's factory, an append that comes before any read in a JDBC transaction finds none
-either. Such a manager suspends the caller's synchronizations and commits the append in a MongoDB transaction of its
-own, so it doesn't roll back with the caller's. A read in the caller's transaction before that append keeps its
-snapshot, so a read after the append in the same transaction doesn't return it. A probe on both stores showed that
-with the manager on a separate factory, under a no-op outer transaction manager and under a MongoDB one, and showed the
-append returned with the manager on the template's factory. The JDBC case where the append comes first comes from
-reading `AbstractPlatformTransactionManager.getTransaction` in spring-tx 7.0.9, and no probe ran it.
+An append runs in the store's own transaction manager. It joins the caller's transaction when that manager finds a
+MongoDB transaction open on its own factory instance, or when the caller's `MongoTransactionManager` opened one on the
+template's factory instance. `MongoTransactionManager` binds its session to the factory itself, and suspending the
+caller's synchronizations doesn't unbind it, so the template keeps using that session. In every other case
+the store's manager suspends the caller's synchronizations, which unbinds the session the template opened for an
+earlier read, and commits the append in a MongoDB transaction of its own, so it doesn't roll back with the caller's. A
+read in the caller's transaction before that append keeps its snapshot, so a read after the append in the same
+transaction doesn't return it. With the manager and the template on one factory instance, as the Spring Boot starters
+build them, the append joins a transaction the caller's `MongoTransactionManager` or an earlier read opened there, and
+an append that comes first in a JDBC transaction commits on its own. A probe on the blocking store ran each layout
+below with the append first and with a read first, and rolled the caller's transaction back.
+
+- The caller's manager and the store's on one factory, the template on another. The append rolled back.
+- The caller's manager on the template's factory, the store's on another. The append rolled back.
+- A no-op outer manager, the store's manager on another factory than the template's. The append stayed.
+- A no-op outer manager, the store's manager on the template's factory. With the append first it stayed, and with a
+  read first it rolled back.
+
+A read after the append inside the caller's transaction returned it in every case except the third with a read first.
+An earlier probe on both stores showed the third layout committing the append on its own. This reasoning comes from
+reading `AbstractPlatformTransactionManager.getTransaction` in spring-tx 7.0.9 and `MongoTransactionManager` in Spring
+Data MongoDB 5.1.0, and the reactor store's join cases weren't probed.
 
 Whether a caller owns the transaction is a different question, since the store's own transaction manager may join a
 caller's transaction on another factory. Both stores answer it by any active Spring transaction, the blocking store
