@@ -397,6 +397,30 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
+    void a_first_answer_the_server_cannot_find_is_asked_again_after_a_pause_opened_the_change_stream_of_spring_at_it_again() {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position whose first answer is a
+        // token of another collection, which the server accepts as the stream opens and can't find once it reads an event
+        useTheChangeStreamOfSpring();
+        Checkpoint live = liveCheckpoint();
+        Checkpoint ofAnotherCollection = tokenOfAnotherCollection();
+        AtomicInteger answers = new AtomicInteger();
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.checkpoint(ofAnotherCollection) : StartAt.checkpoint(live));
+        waitUntilStarted(subscriptionModel.subscribe("not-found-after-a-pause", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId()))));
+
+        // When it is paused and resumed before it reads a document, so the stream opens at the token of the other collection again, and an event is written
+        subscriptionModel.pauseSubscription("not-found-after-a-pause");
+        waitUntilStarted(subscriptionModel.resumeSubscription("not-found-after-a-pause"));
+        NameDefined written = nameDefined();
+        write(written);
+
+        // Then the position is asked again, the second answer opens the stream and the event is delivered
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(written.eventId()));
+        assertThat(answers).hasValue(2);
+        assertThat(subscriptionModel.isRunning("not-found-after-a-pause")).isTrue();
+    }
+
+    @Test
     void the_flux_opened_again_before_it_read_a_document_opens_where_its_dynamic_position_first_answered() {
         // Given a dynamic position that answers a live checkpoint first and a global checkpoint after, and a first read of the change stream that fails
         Checkpoint live = liveCheckpoint();
