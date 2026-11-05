@@ -166,10 +166,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.dcbCheckpointCollectionName = DcbMarkerModel.checkpointCollectionName(eventStoreCollectionName);
         this.transactionTemplate = config.transactionTemplate;
         PlatformTransactionManager transactionManager = transactionTemplate.getTransactionManager();
-        if (!(transactionManager instanceof CommitRetryingMongoTransactionManager)) {
+        // A template without a manager fails on its first transaction anyway
+        if (transactionManager != null && !(transactionManager instanceof CommitRetryingMongoTransactionManager)) {
             log.warn("The transaction manager of this SpringMongoEventStore is a {}, which does not send a commit again when MongoDB cannot say whether it succeeded. " +
                             "An append that may have been saved is then reported as a failure, and retrying it can write its events twice. " +
-                            "Use a {} instead.", transactionManager == null ? null : transactionManager.getClass().getName(), CommitRetryingMongoTransactionManager.class.getSimpleName());
+                            "Use a {} instead.", transactionManager.getClass().getName(), CommitRetryingMongoTransactionManager.class.getSimpleName());
         }
         this.timeRepresentation = config.timeRepresentation;
         this.queryOptions = config.queryOptions;

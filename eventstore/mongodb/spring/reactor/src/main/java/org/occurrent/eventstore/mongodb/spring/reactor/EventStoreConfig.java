@@ -197,13 +197,15 @@ public class EventStoreConfig {
          * @return A same {@code Builder instance}
          */
         public Builder transactionConfig(ReactiveTransactionManager reactiveTransactionManager) {
+            // Spring refuses a null manager here
+            TransactionalOperator operator = TransactionalOperator.create(reactiveTransactionManager);
             // Only this overload sees the manager. A TransactionalOperator does not expose the manager it was created from.
-            if (reactiveTransactionManager != null && !(reactiveTransactionManager instanceof CommitRetryingReactiveMongoTransactionManager)) {
+            if (!(reactiveTransactionManager instanceof CommitRetryingReactiveMongoTransactionManager)) {
                 LOGGER.warn("The reactive transaction manager of this EventStoreConfig is a {}, which does not send a commit again when MongoDB cannot say whether it succeeded. " +
                                 "An append that may have been saved is then reported as a failure, and retrying it can write its events twice. " +
                                 "Use a {} instead.", reactiveTransactionManager.getClass().getName(), CommitRetryingReactiveMongoTransactionManager.class.getSimpleName());
             }
-            this.transactionalOperator = TransactionalOperator.create(reactiveTransactionManager);
+            this.transactionalOperator = operator;
             return this;
         }
 

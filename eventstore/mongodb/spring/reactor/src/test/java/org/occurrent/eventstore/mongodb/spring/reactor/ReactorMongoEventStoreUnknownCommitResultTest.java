@@ -281,6 +281,13 @@ class ReactorMongoEventStoreUnknownCommitResultTest {
         assertThat(warnings()).isEmpty();
     }
 
+    @Test
+    void a_null_transaction_manager_is_refused_by_spring_and_makes_no_warning() {
+        assertThatThrownBy(() -> configFor(null)).isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(warnings()).isEmpty();
+    }
+
     private List<String> warnings() {
         return logAppender.list.stream()
                 .filter(event -> event.getLevel().equals(Level.WARN))

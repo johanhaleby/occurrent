@@ -23,7 +23,7 @@ import com.mongodb.MongoOperationTimeoutException;
 import java.time.Duration;
 
 /**
- * When a transaction commit may be retried, decided the way the MongoDB driver's own {@code ClientSession.withTransaction}
+ * Decides when a transaction commit may be retried, the way the MongoDB driver's own {@code ClientSession.withTransaction}
  * decides it. Don't depend on this class since it's supposed to be internal!
  */
 public final class UnknownCommitResult {

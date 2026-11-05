@@ -273,6 +273,13 @@ class SpringMongoEventStoreUnknownCommitResultTest {
         assertThat(warnings()).isEmpty();
     }
 
+    @Test
+    void a_transaction_template_without_a_manager_makes_no_warning() {
+        new SpringMongoEventStore(mongoTemplate, new EventStoreConfig("events", new TransactionTemplate(), TimeRepresentation.RFC_3339_STRING));
+
+        assertThat(warnings()).isEmpty();
+    }
+
     private List<String> warnings() {
         return logAppender.list.stream()
                 .filter(event -> event.getLevel().equals(ch.qos.logback.classic.Level.WARN))
