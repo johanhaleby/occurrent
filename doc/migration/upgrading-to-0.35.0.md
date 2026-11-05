@@ -1300,11 +1300,23 @@ subscribe of the id throws `DuplicateSubscriptionIdException` until the id is ca
 that thread or another, goes to the wrapped model at once, and the action gets no event after it.
 
 When that cancel reaches `ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel` before the cancelled
-`subscribe(..)` registered the id there, the model registers nothing for it, and `waitUntilStarted()` on the
+`subscribe(..)` took the id there, the model registers nothing for it, and `waitUntilStarted()` on the
 `Subscription` that `subscribe(..)` returned fails with `SubscriptionNotRunningException`. In 0.34.0 that subscription
 ran and `waitUntilStarted()` completed. Both models take the id before they call the function, so only a cancel from
-another thread can get there first. If another thread can cancel a subscribe whose start you wait for, treat
-`SubscriptionNotRunningException` from `waitUntilStarted()` as that cancel.
+another thread can get there first.
+
+If another thread can cancel a subscribe whose start you wait for, `waitUntilStarted()` can fail with one of these
+because of that cancel:
+
+- `SubscriptionNotRunningException`, when the cancel reached `ReactorMongoSubscriptionModel` or
+  `ReactorDurableSubscriptionModel` before it took the id
+- `CancellationException`, when the cancel reached `ReactorDurableSubscriptionModel` after it took the id and before it
+  started the subscription or handed it to the model it wraps
+- `IllegalStateException`, when the subscribe replays history first and the cancel came before the replay handed over
+  to the wrapped model
+
+`IllegalStateException` also comes from failures that have nothing to do with a cancel, so treat it as the cancel only
+when your application cancelled the id.
 
 Another wrapped model can still register the cancelled `subscribe(..)` after the cancel. When the wrapped
 `subscribe(..)` returns holding the id, the catch-up cancels the id there again, unless a subscribe of the id made after
