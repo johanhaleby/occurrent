@@ -312,6 +312,22 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                         : Mono.error(throwable));
     }
 
+    /**
+     * {@code false} whenever the subscriber context holds a transaction context, also one with no transaction, such as a
+     * caller's {@code PROPAGATION_SUPPORTS} or {@code PROPAGATION_NOT_SUPPORTED}. A read through Spring's reactive MongoDB
+     * template there binds a session to that context, and a {@code PROPAGATION_NEVER} {@link TransactionalOperator} then
+     * takes the session for an existing transaction.
+     */
+    @Override
+    public Mono<Boolean> allowsReadBeforeTransaction() {
+        return TransactionSynchronizationManager.forCurrentTransaction()
+                .map(transactionContext -> false)
+                // Matched by simple name for the same reason as in isTransactional
+                .onErrorResume(throwable -> "NoTransactionInContextException".equals(throwable.getClass().getSimpleName())
+                        ? Mono.just(true)
+                        : Mono.error(throwable));
+    }
+
     @Override
     public String toString() {
         return "SpringReactiveTransactionExecutor{transactionalOperator=" + transactionalOperator + ", conflictRetry=" + conflictRetry + "}";

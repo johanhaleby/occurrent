@@ -314,6 +314,18 @@ public class SpringTransactionExecutor implements TransactionExecutor {
                 && manager.isGlobalRollbackOnParticipationFailure();
     }
 
+    /**
+     * {@code false} while transaction synchronization is active, also in a scope with no transaction, such as a
+     * caller's {@code PROPAGATION_SUPPORTS} or {@code PROPAGATION_NOT_SUPPORTED}. A read through Spring's MongoDB
+     * template there binds a session to the synchronization, and a {@code PROPAGATION_NOT_SUPPORTED} or
+     * {@code PROPAGATION_NEVER} {@link TransactionTemplate} then fails on that session when it suspends or checks the
+     * scope.
+     */
+    @Override
+    public boolean allowsReadBeforeTransaction() {
+        return !TransactionSynchronizationManager.isSynchronizationActive();
+    }
+
     @Override
     public String toString() {
         return "SpringTransactionExecutor{transactionTemplate=" + transactionTemplate + ", conflictRetry=" + conflictRetry + "}";

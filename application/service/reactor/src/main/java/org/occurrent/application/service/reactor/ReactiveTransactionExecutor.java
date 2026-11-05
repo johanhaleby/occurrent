@@ -118,6 +118,29 @@ public interface ReactiveTransactionExecutor {
     }
 
     /**
+     * Whether the application service may read and decide before it subscribes to {@link #inTransaction(Supplier)}, and
+     * run only the append and the synchronous dispatch in it. A DCB application service with synchronous subscriptions
+     * asks this before every attempt, since a store reports marker versions only for a read outside a transaction, and a
+     * snapshot decider saves its snapshot only at those versions.
+     * <p>
+     * Emit {@code false} when a read in this subscriber context can bind a resource that {@link #inTransaction(Supplier)}
+     * then fails on. Spring's reactive MongoDB template, for example, binds a session to a transaction context in the
+     * subscriber context when it reads, and a {@code PROPAGATION_NEVER} executor then takes that session for an existing
+     * transaction. Answer for the moment of subscription, like {@link #isTransactional()}.
+     * <p>
+     * The default emits {@code false}, so an implementation that doesn't override it reads inside
+     * {@link #inTransaction(Supplier)}, as every executor did before 0.35.0. A snapshot decider on a service with
+     * synchronous subscriptions then saves no snapshot when the executor opens a transaction, and reads its whole
+     * boundary on every command.
+     *
+     * @return A {@link Mono} emitting {@code true} if {@link #inTransaction(Supplier)} still works after a read that ran
+     * before it in the same subscriber context.
+     */
+    default Mono<Boolean> allowsReadBeforeTransaction() {
+        return Mono.just(false);
+    }
+
+    /**
      * A pass-through executor that runs the action with no transaction, deferring the supplier so it re-runs on
      * each subscription (and therefore on each retry).
      *
@@ -128,6 +151,12 @@ public interface ReactiveTransactionExecutor {
             @Override
             public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
                 return Mono.defer(action);
+            }
+
+            // Opens nothing, so nothing a read binds before it can make it fail
+            @Override
+            public Mono<Boolean> allowsReadBeforeTransaction() {
+                return Mono.just(true);
             }
 
             @Override

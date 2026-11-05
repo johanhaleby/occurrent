@@ -31,6 +31,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -91,7 +92,8 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
  * A reactive snapshot decider with a synchronous subscription, run inside a transaction the caller owns. The store
- * refuses to read after the saved marker versions there, so the decider reads the whole boundary instead.
+ * refuses to read after the saved marker versions there, so the decider reads the whole boundary instead. It also runs in
+ * a caller's scope that has transaction synchronization but no transaction.
  */
 @Testcontainers
 @DisplayName("ReactiveSnapshotDcbDeciderApplicationService in a caller's transaction over ReactorMongoEventStore")
@@ -262,6 +264,54 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
         ).single().block(TIMEOUT);
 
         assertThat(state).as("the state after the second command").containsExactly("first", "second");
+    }
+
+    @ParameterizedTest(name = "caller {0}, executor {1}")
+    @MethodSource("callerScopesWithoutATransactionAndExecutorPropagations")
+    void a_snapshot_deciders_command_in_a_callers_scope_without_a_transaction_stores_its_event_whatever_the_executor_does_with_that_scope(String callerScope, String executorPropagation) {
+        appendSeed();
+        TransactionalOperator caller = TransactionalOperator.create(transactionManager, new DefaultTransactionDefinition(propagation(callerScope)));
+        ReactiveSnapshotDcbDeciderApplicationService<DomainEvent> service = new ReactiveSnapshotDcbDeciderApplicationService<>(applicationServiceOnPropagation(propagation(executorPropagation)));
+
+        Throwable thrown = catchThrowable(() -> caller.execute(status -> service.execute(new Add("first"), decider)).collectList().block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what execute threw").isNull(),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored").hasSize(2),
+                () -> assertThat(seenBySubscription).as("events the subscription saw").hasSize(1)
+        );
+    }
+
+    // A plain execute reads with no versions through the caller's synchronization, unlike the decider above, so its read
+    // can bind a session the executor then fails on
+    @ParameterizedTest(name = "caller {0}, executor {1}")
+    @MethodSource("callerScopesWithoutATransactionAndExecutorPropagations")
+    void an_execute_with_no_snapshot_in_a_callers_scope_without_a_transaction_stores_its_event_whatever_the_executor_does_with_that_scope(String callerScope, String executorPropagation) {
+        appendSeed();
+        TransactionalOperator caller = TransactionalOperator.create(transactionManager, new DefaultTransactionDefinition(propagation(callerScope)));
+        GenericDcbApplicationService<DomainEvent> service = applicationServiceOnPropagation(propagation(executorPropagation));
+
+        Throwable thrown = catchThrowable(() -> caller.execute(status -> service.execute(criteria(), events -> List.of(nameWasChanged("first")))).collectList().block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what execute threw").isNull(),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored").hasSize(2),
+                () -> assertThat(seenBySubscription).as("events the subscription saw").hasSize(1)
+        );
+    }
+
+    private static Stream<Arguments> callerScopesWithoutATransactionAndExecutorPropagations() {
+        return Stream.of("PROPAGATION_NOT_SUPPORTED", "PROPAGATION_SUPPORTS").flatMap(callerScope ->
+                Stream.of("PROPAGATION_NOT_SUPPORTED", "PROPAGATION_SUPPORTS", "PROPAGATION_NEVER").map(executorPropagation -> Arguments.of(callerScope, executorPropagation)));
+    }
+
+    private static int propagation(String name) {
+        return switch (name) {
+            case "PROPAGATION_NOT_SUPPORTED" -> TransactionDefinition.PROPAGATION_NOT_SUPPORTED;
+            case "PROPAGATION_SUPPORTS" -> TransactionDefinition.PROPAGATION_SUPPORTS;
+            case "PROPAGATION_NEVER" -> TransactionDefinition.PROPAGATION_NEVER;
+            default -> throw new IllegalArgumentException(name);
+        };
     }
 
     @ParameterizedTest(name = "{0}")

@@ -332,6 +332,15 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Test
+        void an_executor_that_does_not_allow_a_read_before_it_gets_the_read_and_the_domain_function_inside_its_transaction() {
+            var store = new TracingStore(trace);
+
+            transactionalService(store, new TracingExecutor(trace).notAllowingAReadBeforeIt(), dispatcher).execute(CRITERIA, events -> decide());
+
+            assertThat(trace).containsExactly("begin", "read", "decide", "append", "read", "dispatch", "commit");
+        }
+
+        @Test
         void a_no_op_decision_never_enters_the_executor() {
             var store = new TracingStore(trace);
             var executor = new TracingExecutor(trace);
@@ -569,6 +578,12 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         int returned;
         int threw;
 
+        // Opens nothing around the caller, like a Spring executor with no caller scope
+        @Override
+        public boolean allowsReadBeforeTransaction() {
+            return true;
+        }
+
         @Override
         public <T> T inTransaction(Supplier<T> action) {
             entered++;
@@ -669,6 +684,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         int entered;
         private final List<String> trace;
         private boolean runAgainAfterAConflict;
+        private boolean allowsReadBeforeIt = true;
 
         TracingExecutor(List<String> trace) {
             this.trace = trace;
@@ -677,6 +693,17 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         TracingExecutor runningTheActionAgainAfterAConflict() {
             this.runAgainAfterAConflict = true;
             return this;
+        }
+
+        TracingExecutor notAllowingAReadBeforeIt() {
+            this.allowsReadBeforeIt = false;
+            return this;
+        }
+
+        // Opens nothing around the caller unless told otherwise, like a Spring executor with no caller scope
+        @Override
+        public boolean allowsReadBeforeTransaction() {
+            return allowsReadBeforeIt;
         }
 
         @Override
