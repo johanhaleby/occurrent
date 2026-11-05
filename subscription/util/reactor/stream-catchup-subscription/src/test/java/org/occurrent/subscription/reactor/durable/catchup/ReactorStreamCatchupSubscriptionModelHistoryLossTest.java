@@ -850,6 +850,10 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     static final class LosingLiveStartModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
         private enum State {RUNNING, PAUSED}
 
+        // ON_ANOTHER_THREAD_WHILE_SUBSCRIBE_WAITS has subscribe wait for the thread that runs the takeover, while the
+        // handover holds the state monitor. It may wait only because no cancel runs in the tests that use it. The
+        // NamedCatchupSupport javadoc forbids this for a production wrapped model, since a cancel holding the id lock and
+        // waiting for that monitor would deadlock with the takeover waiting for the id lock.
         enum Loses {WHEN_THE_TEST_SAYS, ON_THE_THREAD_OF_SUBSCRIBE, ON_ANOTHER_THREAD_WHILE_SUBSCRIBE_WAITS}
 
         private record Held(Function<CloudEvent, Mono<Void>> action, Checkpoint position, State state) {

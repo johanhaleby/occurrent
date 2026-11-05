@@ -214,10 +214,11 @@ final class NamedCatchupSupport {
         return named;
     }
 
-    // A call that finds this model shut down is refused here and never reaches the wrapped model. A pause or a resume
-    // that reads a catch-up in flight for the id checks again once it holds the monitor of that catch-up, so it is
-    // refused when the flag was set by then. One that reads no catch-up for the id goes to the wrapped model and gets
-    // what that model throws.
+    // A call refused by its first check never reaches the wrapped model. A pause or a resume that reads a catch-up in
+    // flight for the id checks again once it holds the monitor of that catch-up, and a resume whose takeover runs
+    // nothing checks again after it, so either is refused when the flag was set by then. A resume refused there may
+    // already have started the wrapped model, when this model was stopped. A pause or a resume that reaches the wrapped
+    // model after the flag is set gets what that model throws.
     private void requireNotShutdown(Supplier<SubscriptionModelShutdownException> refusal) {
         if (shutdown) {
             throw refusal.get();
@@ -631,8 +632,11 @@ final class NamedCatchupSupport {
     }
 
     // Runs work holding the lock of subscriptionId, which is never held across anything asynchronous. Locks are taken in
-    // the order startLock, the lock of an id, the monitor of a state, and no code holding one of them takes one before
-    // it. A takeover the wrapped start runs on the calling thread takes the lock of an id under startLock.
+    // the order startLock, the lock of an id, the monitor of a state, the wrapped model's own locks, and no code holding
+    // one of them takes one before it. The wrapped model's locks are taken under the lock of an id by holds(..), under
+    // the monitor of a state by the handover's subscribe, resumeAt, isRunning and pause, and under startLock by the
+    // wrapped start. A wrapped start that ran a takeover on the calling thread would take the lock of an id under
+    // startLock, which this order allows only while that start holds none of its own locks.
     private <T> T underIdLock(String subscriptionId, Supplier<T> work) {
         IdLock idLock = idLocks.compute(subscriptionId, (id, current) -> {
             IdLock used = current == null ? new IdLock() : current;
@@ -817,7 +821,7 @@ final class NamedCatchupSupport {
                 made.replaysAgain() + 1, made);
         boolean registered = underIdLock(subscriptionId, () -> {
             // own(..) replaces the record and forgets its handover under this lock, and a cancel drops the handover
-            // under it, so a takeover of a subscription that a subscribe replaced or a cancel ended stops here
+            // under it, so a takeover stops here once a subscribe replaced the subscription or a cancel of it began
             if (shutdown || handedOver.get(subscriptionId) != made || owned.get(subscriptionId) != replay.owned()) {
                 return false;
             }
@@ -1135,7 +1139,9 @@ final class NamedCatchupSupport {
     }
 
     private Cancelled cancelHoldingIdLock(String subscriptionId) {
-        // Before the replay in flight is read below, which takeOver depends on
+        // A loss reported or a resume asked for after this removal finds no handover of this subscription to take over,
+        // unless a handover in flight puts its record before the removal below. takeOver checks the handover again under
+        // this lock either way.
         handedOver.remove(subscriptionId);
         // Forgotten only once the wrapped model has cancelled, so a loss it reports meanwhile still pauses the
         // subscription rather than letting the wrapped model restart it from now
