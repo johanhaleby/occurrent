@@ -319,11 +319,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The position comes
         // after the token. An append between a position read first and a token read second would be in the token and
         // above the position the events are capped at, so a later conditional append would miss it.
-        return consistencyToken.zipWhen(token -> currentPosition)
-                .flatMap(tokenAndHighWatermark -> {
-                    DcbConsistencyToken token = tokenAndHighWatermark.getT1();
-                    long highWatermark = tokenAndHighWatermark.getT2();
-                    long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+        return consistencyToken.zipWhen(token -> currentPosition).zipWith(readsUnbounded(template))
+                .flatMap(tokenHighWatermarkAndUnbounded -> {
+                    DcbConsistencyToken token = tokenHighWatermarkAndUnbounded.getT1().getT1();
+                    long highWatermark = tokenHighWatermarkAndUnbounded.getT1().getT2();
+                    long readUpTo = tokenHighWatermarkAndUnbounded.getT2() ? Long.MAX_VALUE : highWatermark;
+                    long upperBound = Math.min(readUpTo, options.upToPosition().orElse(readUpTo));
                     Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
                     boolean backward = options.direction() == DcbReadOptions.Direction.BACKWARD;
                     mongoQuery.with(Sort.by(backward ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
@@ -492,7 +493,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return currentPosition().flatMap(highWatermark -> {
+        return readUpTo(currentPosition(), mongoTemplate).flatMap(highWatermark -> {
             long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
             return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound)), eventStoreCollectionName);
         });
@@ -505,7 +506,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return currentPosition().flatMap(highWatermark -> {
+        return readUpTo(currentPosition(), mongoTemplate).flatMap(highWatermark -> {
             long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
             return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound)), eventStoreCollectionName);
         });
@@ -695,6 +696,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // TransactionSynchronizationManager.isActualTransactionActive(). ReactiveMongoDatabaseUtils.isTransactionActive looks
     // only on this template's factory, so it misses a transaction opened on another until a write through this template
     // joins it.
+    // A read inside a transaction the caller owns sees its snapshot and the transaction's own appends. A reservation
+    // commits before its events are inserted, so every event in the snapshot is at or below the snapshot's counter, and
+    // anything above it is this transaction's own. The reported head stays the snapshot's counter.
+    private Mono<Boolean> readsUnbounded(ReactiveMongoOperations template) {
+        return template == mongoTemplate ? callerTransactionActive() : Mono.just(false);
+    }
+
+    private Mono<Long> readUpTo(Mono<Long> highWatermark, ReactiveMongoOperations template) {
+        return highWatermark.zipWith(readsUnbounded(template), (head, unbounded) -> unbounded ? Long.MAX_VALUE : head);
+    }
+
     private static Mono<Boolean> callerTransactionActive() {
         return TransactionSynchronizationManager.forCurrentTransaction()
                 .map(TransactionSynchronizationManager::isActualTransactionActive)
@@ -795,7 +807,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // The head, the template and the query options are passed in so a catch-up read scope can read through its own
     // session at its own read concern
     private Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range, Mono<Long> currentPosition, ReactiveMongoOperations template, Function<Query, Query> readQueryOptions) {
-        return currentPosition.flatMapMany(highWatermark -> {
+        return readUpTo(currentPosition, template).flatMapMany(highWatermark -> {
             long upperBound = Math.min(highWatermark, range.upToPosition().orElse(highWatermark));
             long lowerBound = range.afterPosition().orElse(0L);
             Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(lowerBound).lte(upperBound);

@@ -55,9 +55,9 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * joins that transaction and so cannot retry one itself, and only its owner can start a fresh one. See ADR 0074.
      * <p>
      * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
-     * stands in for exactly that retry once the store has to give it up. Every append increments one global position
-     * counter, so under concurrency the last writer can need to wait out all the others, and a smaller budget is not
-     * enough. Five attempts, borrowed from the unrelated append-condition retry, failed a six-way contention test.
+     * stands in for exactly that retry once the store has to give it up. Appends of the same type increment the same
+     * conflict marker, so under concurrency the last writer can need to wait out all the others, and a smaller budget
+     * is not enough. Five attempts, borrowed from the unrelated append-condition retry, failed a six-way contention test.
      * <p>
      * {@link DataIntegrityViolationException} is matched as well as {@link TransientDataAccessException} because
      * MongoDB labels a WriteConflict transient while Spring translates it to the non-transient type, so the obvious

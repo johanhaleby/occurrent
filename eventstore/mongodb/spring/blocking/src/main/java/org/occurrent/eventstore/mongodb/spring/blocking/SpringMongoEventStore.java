@@ -297,7 +297,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // false conflict that retries) rather than miss the conflict.
         DcbConsistencyToken readToken = consistencyToken.get();
         long highWatermark = currentPosition.getAsLong();
-        long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+        long readUpTo = readUpTo(highWatermark, template);
+        long upperBound = Math.min(readUpTo, options.upToPosition().orElse(readUpTo));
         Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
         boolean backward = options.direction() == DcbReadOptions.Direction.BACKWARD;
         mongoQuery.with(Sort.by(backward ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
@@ -494,8 +495,15 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private long upperBound(DcbReadOptions options) {
-        long highWatermark = currentPosition();
-        return Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+        long readUpTo = readUpTo(currentPosition(), mongoTemplate);
+        return Math.min(readUpTo, options.upToPosition().orElse(readUpTo));
+    }
+
+    // A read inside a transaction the caller owns sees its snapshot and the transaction's own appends. A reservation
+    // commits before its events are inserted, so every event in the snapshot is at or below the snapshot's counter, and
+    // anything above it is this transaction's own. The reported head stays the snapshot's counter.
+    private long readUpTo(long highWatermark, MongoTemplate template) {
+        return template == mongoTemplate && TransactionSynchronizationManager.isActualTransactionActive() ? Long.MAX_VALUE : highWatermark;
     }
 
     @Override
@@ -975,7 +983,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireNonNull(filter, "Filter cannot be null");
         requireNonNull(range, "Position range cannot be null");
 
-        long highWatermark = currentPosition.getAsLong();
+        long highWatermark = readUpTo(currentPosition.getAsLong(), template);
         long upperBound = Math.min(highWatermark, range.upToPosition().orElse(highWatermark));
         long lowerBound = range.afterPosition().orElse(0);
 

@@ -52,8 +52,9 @@ other sections compile fine and behave differently, so read them first.
 - [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, sharing a type
   with a criteria item that has tags is no longer a reason for a condition to refuse.
 - [An append on MongoDB waits for majority on its position reservation](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation).
-  This overrides a w:1 on that one write. On a set of a primary, a secondary and an arbiter with the secondary down, an
-  append blocks until the secondary returns unless a timeout applies.
+  This overrides a w:1 on that one write, which on the Spring and reactor stores now runs outside a transaction of yours
+  too. On a set of a primary, a secondary and an arbiter with the secondary down, an append throws after
+  `markerVersionsCommitTimeout`.
 
 ### Subscriptions and catch-up
 
@@ -725,22 +726,16 @@ sharded cluster, this doesn't apply, and any event that moves a marker of the cr
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
 Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
 `withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction.
-An append reserves its positions in an update outside the transaction, except on the Spring and reactor stores in a
-transaction already open when the append starts, where the update joins it and commits with the event. If the store's
-own transaction manager uses the same database factory as the open transaction's and its transaction is set to
-`REQUIRES_NEW` or `NOT_SUPPORTED`, the update still joins the open transaction and the event commits apart from it, so
-rolling that transaction back leaves the event above the last reserved position with no failover. A read stops at that
-position until the counter reaches the event, a full read and a read after versions too, and once a read's versions hold
-the event's markers, a read after them doesn't return it. An append that reserves the event's position can fail with
-`DuplicateCloudEventException`, and a conditional append on such a read's token can pass. [ADR
-149](../architecture/decisions/0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md)
-has the cases under its fifth assumption. On any deployment, a read whose events are behind its token can do this, for
+On any deployment, a read whose events are behind its token can do this, for
 example when a read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A
 token also doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a
 matching event the read left out. 0.34.0 has the gap this paragraph describes too, except that it refused the append
 when the read caught only some of the event's markers, or when a later event moved a marker of the criteria, even one
-that didn't match. On 0.34.0 a failover can cause it as well, when it loses a position reservation made below majority,
-which [the next section](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation) closes.
+that didn't match. On 0.34.0 a failover can cause it as well, when it loses a position reservation made below majority.
+So can a rollback of your transaction on the Spring and reactor stores, when the store's own transaction manager uses
+the same database factory as yours and its transaction is set to `REQUIRES_NEW` or `NOT_SUPPORTED`. The event then
+commits above the last reserved position. 0.35.0 reserves positions outside every transaction and waits for majority on
+the reservation, as [the next section](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation) says.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
@@ -752,33 +747,50 @@ A MongoDB store throws `IllegalArgumentException` for a token built that way.
 
 ## An append on MongoDB waits for majority on its position reservation
 
-An append on a MongoDB event store reserves its positions with an update of a counter. When that update runs outside a
-transaction, it now waits for write concern majority, whatever write concern you configured. A failover could lose an
-update made below majority while the append's event committed above the counter, and reads then missed the event.
+An append on a MongoDB event store reserves its positions with an update of a counter. That update now runs outside
+every transaction, one of yours included, and waits for write concern majority, whatever write concern you configured.
+A failover could lose an update made below majority while the append's event committed above the counter, and reads
+then missed the event.
 
 ### What changes
 
-A w:1 on the client, on the database or as the server's default no longer applies to this update. The rest of the
-append keeps the write concern it had. A `wtimeout` on the client's or the database's write concern still applies to the
-update. On the Spring and reactor stores, an update that joins a transaction already open commits with that transaction,
-as before, since an operation inside a transaction can't set a write concern of its own. The native store runs the
-update outside your transaction, so it waits there too.
+A w:1 on the client, on the database or as the server's default no longer applies to this update, and neither does a
+`wtimeout` you configured. The update waits for majority for at most `markerVersionsCommitTimeout`, 5 seconds by
+default, the setting that also bounds the commit of a read that asks for versions. When a majority doesn't acknowledge
+the update in that time, the append throws and writes no event, and the positions it reserved stay unused. The rest of
+the append keeps the write concern it had.
 
-Every append that reserves outside a transaction waits for as long as a majority takes to replicate the update. On a
-set with three data-bearing members and no write concern configured, the update already waited for majority, so nothing
-changes there. On a local three-member set at w:1, a single writer's latency stayed within the noise between runs. With 8 writers, throughput
+Every append waits for as long as a majority takes to replicate the update. On a set with three data-bearing members
+and no write concern configured, the update already waited for majority, so nothing changes there. On a local
+three-member set at w:1, a single writer's latency stayed within the noise between runs. With 8 writers, throughput
 went from about 990 to 1030 appends a second on the native store, 1050 to 875 on the Spring store and 990 to 670 on the
-reactor store. All members ran on one host, so these numbers show no network. Across a network, expect each of these
-appends to wait about one more round trip to a secondary.
+reactor store. These appends ran outside a transaction, and all members ran on one host, so the numbers show no network.
+Across a network, expect each append to wait about one more round trip to a secondary.
+
+### Inside a transaction of yours
+
+On the Spring and reactor stores, the update used to join a transaction already open when the append started, and
+committed with it. It now commits on its own, before the append writes its event.
+
+- After a rollback of your transaction, the reserved positions stay unused. Positions already have gaps, so nothing that
+  reads them has to change.
+- Two appends in transactions of yours no longer conflict on the counter, only on a marker or a partition stream they
+  share. An append that loses throws a `DataIntegrityViolationException` or a `TransientDataAccessException`, and your
+  transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it when
+  they opened it.
+- A read in your transaction reports, in `lastSequencePosition()`, the head as of your transaction's first operation.
+  It also returns the events your transaction appended after that, at positions above that head. If you keep that
+  position and read after it later, you get those events again.
+- When your Spring transaction isn't a MongoDB transaction, a JDBC one for example, a read doesn't see one point in
+  time. It can return events that other appends committed above the position it reports, and a later read after that
+  position returns them again.
 
 ### What to do
 
 On a replica set of a primary, a secondary and an arbiter with the secondary down, a majority can't acknowledge the
-update. In a probe on all three stores, appends there used to complete in 6 to 18 ms. An append with no timeout is now
-still waiting after 25 seconds, and completed when the secondary came back. To make such an append fail instead, set
-`wtimeoutMS` or `timeoutMS` on the connection string, or on the Spring and reactor stores a write concern with a
-`wtimeout` on the database factory. A write concern on `MongoTemplate` or `ReactiveMongoTemplate` doesn't reach this
-update. An append that times out throws and writes no event, and the positions it reserved can stay unused.
+update. In a probe on all three stores, appends there used to complete in 6 to 18 ms. The store now sets the update's
+`wtimeout` to `markerVersionsCommitTimeout`, so such an append throws after 5 seconds by default. To wait longer or
+shorter, set `markerVersionsCommitTimeout` in the store's `EventStoreConfig`.
 
 ## Criteria with tags conflict on their tags
 
