@@ -1106,9 +1106,9 @@ stops with the `UnsupportedStartAtException` instead of delivering events. `wait
 blocking models, which also log it at `ERROR`, and `waitUntilStarted()` fails with it on the reactor model, except on
 the handle `subscribe(..)` returns while the model is stopped, which never completes. A reactor handle that has answered
 that it started keeps that answer. It answers once the change stream is subscribed to, so a refusal on a retry after a
-failed opening stops the subscription and is only logged at `ERROR`. A
-resume straight after it answered can be refused too, when the function returns one of these checkpoints, since the
-cursor may not have opened. The handle that resume returns fails with it. See
+failed opening stops the subscription and is only logged at `ERROR`. On a subscription that reads through the
+driver's cursor, a resume straight after the handle answered can be refused too, when the function returns one of these
+checkpoints, since the cursor may not have opened. The handle that resume returns fails with it. See
 [#1371](https://github.com/johanhaleby/occurrent/issues/1371).
 
 The function is checked until a change stream of the subscription has opened. On the blocking models that means a run

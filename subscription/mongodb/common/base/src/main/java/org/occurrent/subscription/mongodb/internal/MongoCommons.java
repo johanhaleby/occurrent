@@ -737,8 +737,9 @@ public class MongoCommons {
     /**
      * The position a subscription records in place of {@code tracked} once a change stream opened from it at the
      * present, at {@code operationTime}. Opening the stream again then starts at {@code operationTime} and not at a
-     * later present. A dynamic {@code tracked} stays dynamic, so it is still evaluated on every opening, and only
-     * the answers that would have opened at the present are replaced by {@code operationTime}.
+     * later present. A dynamic {@code tracked} stays dynamic until {@link #recordWhereItOpened(OpenedAt, BiPredicate)}
+     * replaces it, so an opening before that still evaluates it, and only the answers that would have opened at the
+     * present are replaced by {@code operationTime}.
      */
     public static StartAt pinnedTo(StartAt tracked, BsonTimestamp operationTime) {
         StartAt pinned = StartAt.checkpoint(new MongoOperationTimeCheckpoint(operationTime));
@@ -786,8 +787,9 @@ public class MongoCommons {
     }
 
     /**
-     * Where a change stream opened, as {@code openingPosition}, and the position the subscription recorded right after
-     * the opening, as {@code tracked}. A model keeps one for each opening, so a loss of history can tell whether the
+     * Where a change stream opened, as {@code openingPosition}, and the position the subscription tracked as it
+     * opened, as {@code tracked}, before {@link MongoCommons#recordWhereItOpened(OpenedAt, BiPredicate)} replaced a
+     * dynamic one. A model keeps one for each opening, so a loss of history can tell whether the
      * position it lost is the one the stream opened at.
      */
     public record OpenedAt(StartAt openingPosition, StartAt tracked) {
@@ -802,7 +804,7 @@ public class MongoCommons {
      * {@code openedAt} was read, so a checkpoint written from another thread is kept.
      *
      * @param compareAndSet Sets the tracked position to its second argument when it still holds its first
-     * @return Whether the position the stream opened at was recorded
+     * @return What {@code compareAndSet} answered, or {@code false} when it wasn't asked
      */
     public static boolean recordWhereItOpened(OpenedAt openedAt, BiPredicate<StartAt, StartAt> compareAndSet) {
         return openedAt.tracked().isDynamic() && !opensAtThePresent(openedAt.openingPosition()) && compareAndSet.test(openedAt.tracked(), openedAt.openingPosition());

@@ -523,7 +523,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     // Reads through ReactiveMongoOperations.changeStream. recordOpeningPosition compares and sets the position, opened is
     // told where the change stream opens, and onSubscribe runs when the change stream is subscribed to.
     // A subscribe here doesn't say whether the server accepted the position, so where a dynamic position opens is
-    // recorded as the stream opens and given back when the server can't open there before a document is read
+    // recorded as the stream opens and given back on an error cannotOpenAt matches before a document is read
     private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt,
                                           BiPredicate<StartAt, StartAt> recordOpeningPosition, Consumer<OpenedAt> opened,
                                           Consumer<StartAt> onDocumentRead, Runnable onSubscribe) {
@@ -739,14 +739,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     // What the server answers when it can't open a change stream at the position asked for. FailedToParse (9) for a
     // token it can't read, ChangeStreamFatalError (280) for a token it can't find, such as one of another collection,
-    // and ChangeStreamHistoryLost (286) for a position its oplog no longer reaches
+    // and ChangeStreamHistoryLost (286) for a position its oplog no longer reaches. A 286 can also come after the stream
+    // opened, and Spring's changeStream can't tell the two apart
     private static boolean cannotOpenAt(Throwable throwable) {
-        Throwable cause = throwable instanceof UncategorizedMongoDbException ? throwable.getCause() : throwable;
-        if (!(cause instanceof MongoCommandException mongoCommandException)) {
-            return false;
-        }
-        int code = mongoCommandException.getErrorCode();
-        return code == 9 || code == 280 || code == MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE;
+        return hasMongoErrorCode(throwable, 9) || hasMongoErrorCode(throwable, 280) || hasMongoErrorCode(throwable, MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE);
     }
 
     private static boolean hasMongoErrorCode(Throwable throwable, int errorCode) {
