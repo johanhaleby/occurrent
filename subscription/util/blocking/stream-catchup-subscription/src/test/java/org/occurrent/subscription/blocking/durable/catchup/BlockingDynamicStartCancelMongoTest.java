@@ -427,6 +427,55 @@ class BlockingDynamicStartCancelMongoTest {
         }
     }
 
+    @Nested
+    @DisplayName("when a resume of the id is made on another thread while the start-position function of a paused subscribe runs")
+    class When_a_resume_is_made_while_the_function_of_a_paused_subscribe_runs {
+
+        @Test
+        @DisplayName("the resume waits for the subscribe and then returns, and the subscription runs and is delivered an event")
+        void the_resume_waits_for_the_subscribe_and_then_returns_and_the_subscription_runs_and_is_delivered_an_event() {
+            // Given
+            model = build(Stack.DURABLE_OVER_MONGO);
+            List<CloudEvent> received = new CopyOnWriteArrayList<>();
+            AtomicBoolean asked = new AtomicBoolean();
+            AtomicBoolean resumeReturnedBeforeTheFunctionDid = new AtomicBoolean();
+            AtomicReference<Thread> resuming = new AtomicReference<>();
+            CompletableFuture<Subscription> resume = new CompletableFuture<>();
+            StartAt function = StartAt.dynamic(context -> {
+                if (asked.compareAndSet(false, true)) {
+                    CompletableFuture.supplyAsync(() -> {
+                        resuming.set(Thread.currentThread());
+                        return model.resumeSubscription(subscriptionId);
+                    }, otherThreads).whenComplete((resumed, error) -> {
+                        if (error == null) {
+                            resume.complete(resumed);
+                        } else {
+                            resume.completeExceptionally(error);
+                        }
+                    });
+                    await().atMost(EVENT_DELIVERY).until(() -> resume.isDone() || waitsOnAFuture(resuming.get()));
+                    resumeReturnedBeforeTheFunctionDid.set(resume.isDone());
+                }
+                return StartAt.now();
+            });
+
+            // When
+            model.subscribePaused(subscriptionId, null, function, received::add);
+
+            // Then
+            assertThat(resume).as("the resume made while the function ran").succeedsWithin(EVENT_DELIVERY);
+            Subscription resumed = resume.join();
+            assertAll(
+                    () -> assertThat(resumeReturnedBeforeTheFunctionDid).as("the resume returned before the function did").isFalse(),
+                    () -> assertThat(resumed.waitUntilStarted(EVENT_DELIVERY)).as("the resumed subscription started").isTrue(),
+                    () -> assertThat(model.isRunning(subscriptionId)).as("the id is running").isTrue(),
+                    () -> assertThat(model.isPaused(subscriptionId)).as("the id is paused").isFalse()
+            );
+            append();
+            await().atMost(EVENT_DELIVERY).until(() -> received.size() == 1);
+        }
+    }
+
     private SubscriptionModel build(Stack stack) {
         SpringMongoSubscriptionModel mongo = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
         return switch (stack) {
@@ -462,6 +511,11 @@ class BlockingDynamicStartCancelMongoTest {
     }
 
     private record PauseOutcome(Throwable thrown, Duration waited) {
+    }
+
+    // Parked in a timed CompletableFuture.get, which is how a resume waits for a subscribe whose function runs
+    private static boolean waitsOnAFuture(Thread thread) {
+        return thread != null && thread.getState() == Thread.State.TIMED_WAITING;
     }
 
     // Parked on a ReentrantLock, which the claim of a catch-up model and the lock of a durable model are. A thread
