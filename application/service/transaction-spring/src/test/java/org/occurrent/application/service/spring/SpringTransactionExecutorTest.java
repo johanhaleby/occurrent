@@ -19,7 +19,9 @@ package org.occurrent.application.service.spring;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -79,6 +81,60 @@ class SpringTransactionExecutorTest {
 
         // Then
         assertThat(transactional).isFalse();
+    }
+
+    @Test
+    void rollsBackAJoinedTransactionOnFailure_is_true_by_default() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+
+        // When
+        boolean rollsBack = executor.rollsBackAJoinedTransactionOnFailure();
+
+        // Then
+        assertThat(rollsBack).isTrue();
+    }
+
+    @Test
+    void rollsBackAJoinedTransactionOnFailure_is_false_when_the_manager_does_not_mark_a_joined_transaction_rollback_only() {
+        // Given
+        StubTransactionManager transactionManager = new StubTransactionManager();
+        transactionManager.setGlobalRollbackOnParticipationFailure(false);
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new TransactionTemplate(transactionManager));
+
+        // When
+        boolean rollsBack = executor.rollsBackAJoinedTransactionOnFailure();
+
+        // Then
+        assertThat(rollsBack).isFalse();
+    }
+
+    @Test
+    void rollsBackAJoinedTransactionOnFailure_is_true_when_the_manager_is_not_an_AbstractPlatformTransactionManager() {
+        // Given
+        PlatformTransactionManager transactionManager = new PlatformTransactionManager() {
+            @Override
+            public TransactionStatus getTransaction(TransactionDefinition definition) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public void commit(TransactionStatus status) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public void rollback(TransactionStatus status) {
+                throw new UnsupportedOperationException();
+            }
+        };
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new TransactionTemplate(transactionManager));
+
+        // When
+        boolean rollsBack = executor.rollsBackAJoinedTransactionOnFailure();
+
+        // Then
+        assertThat(rollsBack).isTrue();
     }
 
     // A transaction manager with no real resource to manage: doBegin/doCommit/doRollback are no-ops, and

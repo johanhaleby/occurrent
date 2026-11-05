@@ -75,6 +75,7 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
     private CloudEventConverter<DomainEvent> cloudEventConverter;
     private final AtomicInteger decisions = new AtomicInteger();
     private final List<String> decidedEventIds = new ArrayList<>();
+    private final List<Throwable> errorsHeard = new ArrayList<>();
 
     @BeforeEach
     void initialize() {
@@ -452,6 +453,66 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
         assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
     }
 
+    @Test
+    void a_handler_failure_after_the_append_is_mapped_by_the_retry_strategy_and_heard_once_when_the_retry_does_not_match_it() {
+        RuntimeException failure = new IllegalStateException("handler failed");
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(TransactionExecutor.noTransaction())
+                .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(1)).maxAttempts(5)
+                        .retryIf(DcbAppendConditionNotFulfilledException.class::isInstance)
+                        .mapError(MappedFailure::new)
+                        .onError((info, error) -> errorsHeard.add(error)))
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isInstanceOf(MappedFailure.class).hasCause(failure);
+        assertThat(errorsHeard).as("[errors heard by onError]").containsExactly(failure);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+    }
+
+    @Test
+    void a_domain_failure_in_a_joined_transaction_is_mapped_by_the_retry_strategy_and_heard_once() {
+        RuntimeException domainFailure = new IllegalStateException("domain failed");
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new RecordingDispatcher())
+                .transactionExecutor(new JoinsTransaction())
+                .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(1)).maxAttempts(5)
+                        .retryIf(DcbAppendConditionNotFulfilledException.class::isInstance)
+                        .mapError(MappedFailure::new)
+                        .onError((info, error) -> errorsHeard.add(error)))
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(CRITERIA, events -> {
+            throw domainFailure;
+        }));
+
+        assertThat(thrown).as("[exception reaching the caller]").isInstanceOf(MappedFailure.class).hasCause(domainFailure);
+        assertThat(errorsHeard).as("[errors heard by onError]").containsExactly(domainFailure);
+    }
+
+    @Test
+    void a_domain_failure_before_the_append_reaches_the_caller_with_the_failure_the_executor_throws_on_exit_suppressed() {
+        RuntimeException domainFailure = new IllegalStateException("domain failed");
+        ThrowsOnExit executor = new ThrowsOnExit();
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new RecordingDispatcher())
+                .transactionExecutor(executor)
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(CRITERIA, events -> {
+            throw domainFailure;
+        }));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(domainFailure);
+        assertThat(thrown.getSuppressed()).as("[exceptions suppressed by the failure]").containsExactly(executor.exitFailure);
+        assertThat(eventsInBoundary()).as("[events in the boundary]").isEmpty();
+    }
+
     private List<DomainEvent> decide(List<DomainEvent> events) {
         decisions.incrementAndGet();
         DomainEvent decided = nameWasChanged();
@@ -474,6 +535,12 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
         throw (T) throwable;
+    }
+
+    private static final class MappedFailure extends RuntimeException {
+        MappedFailure(Throwable cause) {
+            super("mapped", cause);
+        }
     }
 
     private static final class FailingOnceDispatcher implements SynchronousEventDispatcher {
@@ -692,6 +759,22 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
                 throw failure;
             }
             return false;
+        }
+    }
+
+    // Stand-in for an executor that runs in a transaction the caller opened and fails on its own way out after the action returned
+    private static final class ThrowsOnExit implements TransactionExecutor {
+        final RuntimeException exitFailure = new IllegalStateException("exit failed");
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            action.get();
+            throw exitFailure;
+        }
+
+        @Override
+        public boolean isTransactional() {
+            return true;
         }
     }
 

@@ -67,6 +67,8 @@ class GenericApplicationServiceFailureAfterWriteTest {
     private String streamId;
     private final AtomicInteger decisions = new AtomicInteger();
     private final List<String> decidedEventIds = new ArrayList<>();
+    private final List<Throwable> errorsHeard = new ArrayList<>();
+    private final List<String> afterRetry = new ArrayList<>();
 
     @BeforeEach
     void initialize() {
@@ -405,6 +407,67 @@ class GenericApplicationServiceFailureAfterWriteTest {
         assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
     }
 
+    @Test
+    void a_handler_failure_after_the_write_is_mapped_by_the_retry_strategy_and_heard_once_when_the_retry_does_not_match_it() {
+        RuntimeException failure = new IllegalStateException("handler failed");
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(TransactionExecutor.noTransaction())
+                .retryStrategy(conflictRetryThatMapsAndRecords())
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(streamId, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isInstanceOf(MappedFailure.class).hasCause(failure);
+        assertThat(errorsHeard).as("[errors heard by onError]").containsExactly(failure);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+    }
+
+    @Test
+    void a_handler_failure_after_the_write_is_mapped_by_the_retry_strategy_without_running_the_command_again_when_the_retry_matches_every_exception() {
+        RuntimeException failure = new IllegalStateException("handler failed");
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(TransactionExecutor.noTransaction())
+                .retryStrategy(RETRY_EVERYTHING.mapError(MappedFailure::new))
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(streamId, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isInstanceOf(MappedFailure.class).hasCause(failure);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+        assertThat(eventsInStream()).as("[events in the stream]").isEqualTo(decidedEventIds);
+    }
+
+    @Test
+    void a_handler_failure_after_the_write_of_a_retried_conflict_is_reported_as_a_failed_retry_attempt() {
+        RuntimeException failure = new IllegalStateException("handler failed");
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(TransactionExecutor.noTransaction())
+                .retryStrategy(conflictRetryThatMapsAndRecords())
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(streamId, events -> {
+            if (decisions.get() == 0) {
+                inMemoryEventStore.write(streamId, cloudEventConverter.toCloudEvent(nameWasChanged()));
+            }
+            return decide(events);
+        }));
+
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(2);
+        assertThat(afterRetry).as("[outcomes heard by onAfterRetry]").containsExactly("Failed");
+        assertThat(thrown).as("[exception reaching the caller]").isInstanceOf(MappedFailure.class).hasCause(failure);
+    }
+
+    private RetryStrategy.Retry conflictRetryThatMapsAndRecords() {
+        return RetryStrategy.fixed(Duration.ofMillis(1)).maxAttempts(5)
+                .retryIf(WriteConditionNotFulfilledException.class::isInstance)
+                .mapError(MappedFailure::new)
+                .onError((info, error) -> errorsHeard.add(error))
+                .onAfterRetry((info, error) -> afterRetry.add(info.wasFailedRetryAttempt() ? "Failed" : "Success"));
+    }
+
     private List<DomainEvent> decide(List<DomainEvent> events) {
         decisions.incrementAndGet();
         DomainEvent decided = nameWasChanged();
@@ -423,6 +486,12 @@ class GenericApplicationServiceFailureAfterWriteTest {
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
         throw (T) throwable;
+    }
+
+    private static final class MappedFailure extends RuntimeException {
+        MappedFailure(Throwable cause) {
+            super("mapped", cause);
+        }
     }
 
     private static final class FailingOnceDispatcher implements SynchronousEventDispatcher {

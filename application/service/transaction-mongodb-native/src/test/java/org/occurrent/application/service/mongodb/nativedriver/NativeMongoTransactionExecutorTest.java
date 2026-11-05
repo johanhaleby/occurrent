@@ -62,9 +62,11 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -519,6 +521,37 @@ class NativeMongoTransactionExecutorTest {
         public boolean hasSubscriptions() {
             return true;
         }
+    }
+
+    @Test
+    void the_handler_behind_a_failing_one_gets_the_event_when_the_caller_catches_the_failure_and_commits_its_transaction() {
+        List<String> ran = new CopyOnWriteArrayList<>();
+        SynchronousSubscriptionModel subscriptions = new SynchronousSubscriptionModel();
+        subscriptions.subscribe("a-fails", null, StartAt.now(), cloudEvent -> {
+            ran.add("a-fails");
+            throw new IllegalStateException("handler boom");
+        });
+        subscriptions.subscribe("b-reacts", null, StartAt.now(), cloudEvent -> ran.add("b-reacts"));
+
+        ApplicationService<NameDefined> applicationService = GenericApplicationService.<NameDefined>builder(eventStore, converter)
+                .transactionExecutor(transactionExecutor)
+                .synchronousSubscriptions(subscriptions)
+                .build();
+
+        String streamId = UUID.randomUUID().toString();
+        AtomicReference<Throwable> caught = new AtomicReference<>();
+        new NativeMongoTransactionExecutor(mongoClient).inTransaction(() -> {
+            try {
+                applicationService.execute(streamId, __ -> List.of(new NameDefined(UUID.randomUUID().toString(), "caller-catches")));
+            } catch (Throwable t) {
+                caught.set(t);
+            }
+            return null;
+        });
+
+        assertThat(caught.get()).as("what the caller caught").hasMessageContaining("handler boom");
+        assertThat(ran).as("handlers that ran").contains("b-reacts");
+        assertThat(eventStore.read(streamId).eventList()).as("events stored").hasSize(1);
     }
 
     // ------------------------------------------------------------------------------------------------------------
