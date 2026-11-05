@@ -62,11 +62,12 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 /**
- * ADR 132 decision 9's third case: a {@code @Projection(recordAppliedAppends = true)} that nothing can ever replay
- * records but never clears its own memberships on a rebuild. This class covers those cases, NOW with
- * {@code SAME_AS_START_AT} and a composition with no catch-up layer, where the registrar must warn once at startup
- * naming the projection. A default start position does not warn, since it can resume from a stored catch-up
- * checkpoint and replay, and neither does {@link StartPosition#BEGINNING}, whose rebuild actually replays and clears.
+ * ADR 132 decision 9's third case and its durable-only case: a {@code @Projection(recordAppliedAppends = true)} that
+ * nothing can ever replay records but never clears its own memberships on a rebuild. This class covers those cases,
+ * NOW with {@code SAME_AS_START_AT} and a composition with no catch-up layer, where the registrar must warn once at
+ * startup naming the projection. On a composition with a catch-up layer a default start position does not warn, since
+ * it can resume from a stored catch-up checkpoint and replay, and neither does {@link StartPosition#BEGINNING}, whose
+ * rebuild actually replays and clears.
  * Container-free: a mocked {@code Subscribable} stands in for the asynchronous model, mirroring the blocking stack's
  * {@code ProjectionAnnotationRecordAppliedAppendsWarningTest}.
  */

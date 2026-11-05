@@ -491,8 +491,8 @@ class ProjectionAnnotationRegistrar {
     }
 
     // ADR 132 decision 9's third case, a composition that can replay and can report its phase but is wired so it is
-    // never asked to, or its durable-only case, a composition with no catch-up layer at all. Recording still proceeds,
-    // since decision 9 allows it, but nothing ever clears it automatically.
+    // never asked to, its durable-only case, a composition with no catch-up layer at all, or a push projection with
+    // catchup = NONE. Recording still proceeds, since decision 9 allows it, but nothing ever clears it automatically.
     // verifiedNeverReplays must already be a fact this registrar can stand behind (see verifiedNeverReplays(...)
     // below), never an inference from an unobservable composition's assumed behavior, so a false positive here
     // never happens.
