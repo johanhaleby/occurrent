@@ -43,6 +43,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.AppliedAppendRecordingRegistry;
 import org.occurrent.springboot.common.PolledCatchupSignals;
 import org.occurrent.springboot.common.PushCatchupStatusImpl;
+import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
@@ -439,10 +440,11 @@ class ProjectionAnnotationRegistrar {
     // The two sound cases the recordAppliedAppends-never-resets warning may fire on for a DCB/agnostic/stream
     // projection, per the epic's doctrine that a fact about a composition comes from the owner that composed it,
     // never from a probe or an annotation-only predicate:
-    //   1. NOW with resumeBehavior SAME_AS_START_AT, whose start keeps no position on any composition. A
-    //      SubscriptionResumePoints answer can still make it replay, and this check does not ask for one. Under the
-    //      default resumeBehavior a restart continues from the stored checkpoint, which replays when a catch-up stored
-    //      it, and this registrar cannot see which kind is stored.
+    //   1. NOW with resumeBehavior SAME_AS_START_AT, whose start keeps no position on Occurrent's durable and
+    //      competing consumer models. An application-supplied model of another type that keeps a position is not told
+    //      to opt out, and this check cannot see one. Under the default resumeBehavior a restart on the shipped
+    //      composition continues from the stored checkpoint, which replays when a catch-up stored it, and this
+    //      registrar cannot know which kind a later boot finds.
     //   2. DEFAULT, where the auto-configuration that composed this stack's default model registered, through
     //      ComposedDefaultStartPosition, that its own DEFAULT bypasses catch-up, and capability is that exact
     //      composition. True for Occurrent's shipped Mongo composition (issue 865), never assumed for an
@@ -453,8 +455,12 @@ class ProjectionAnnotationRegistrar {
     // decision 8), so there is no separate "structurally no catch-up layer" fact distinct from "unknown composition"
     // to draw on for this path, both collapse to the same empty capability lookup. DEFAULT on a composition with no
     // registered fact, and BEGINNING/a global position on a composition whose capability cannot be read, both stay
-    // silent. This registrar cannot verify either one.
+    // silent. This registrar cannot verify either one. A SubscriptionResumePoints bean can replace any of these
+    // starts with a checkpoint, so neither case holds when one is declared.
     private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable SubscriptionModelCapability capability) {
+        if (applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable() != null) {
+            return false;
+        }
         if (annotation.startAt() == org.occurrent.annotation.StartPosition.NOW) {
             return annotation.resumeBehavior() == ResumeBehavior.SAME_AS_START_AT;
         }
