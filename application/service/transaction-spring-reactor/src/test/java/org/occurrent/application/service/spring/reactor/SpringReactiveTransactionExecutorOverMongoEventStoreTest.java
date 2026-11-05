@@ -47,6 +47,8 @@ import org.occurrent.eventstore.api.reactor.EventStream;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -67,6 +69,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -314,8 +317,61 @@ class SpringReactiveTransactionExecutorOverMongoEventStoreTest {
         assertThat(executor.<Boolean>inTransactionTellingIfOpened(Mono::just).block(TIMEOUT)).isFalse();
     }
 
+    @Test
+    void a_failing_handler_does_not_stop_the_handlers_behind_it_and_the_caller_commits_the_write_after_catching_the_failure_in_a_transaction_the_caller_opened_on_a_stream() {
+        RuntimeException failure = new IllegalStateException("handler a failed");
+        List<String> receivedByB = new CopyOnWriteArrayList<>();
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(subscriptionsWhereAFailsAndBRecords(failure, receivedByB))
+                .transactionExecutor(new SpringReactiveTransactionExecutor(transactionManager))
+                .build();
+        AtomicReference<Throwable> caught = new AtomicReference<>();
+
+        Throwable commitFailure = failureOf(TransactionalOperator.create(transactionManager).transactional(
+                applicationService.execute(streamId, this::decide).onErrorResume(error -> {
+                    caught.set(error);
+                    return Mono.empty();
+                })));
+
+        assertThat(caught.get()).as("[exception caught by the caller]").isSameAs(failure);
+        assertThat(receivedByB).as("[events received by b]").containsExactlyElementsOf(decidedEventIds);
+        assertThat(commitFailure).as("[exception from the commit]").isNull();
+        assertThat(eventsInStream()).as("[events in the stream]").containsExactlyElementsOf(decidedEventIds);
+    }
+
+    @Test
+    void a_failing_handler_does_not_stop_the_handlers_behind_it_and_the_caller_commits_the_append_after_catching_the_failure_in_a_transaction_the_caller_opened_on_a_dcb_boundary() {
+        RuntimeException failure = new IllegalStateException("handler a failed");
+        List<String> receivedByB = new CopyOnWriteArrayList<>();
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(subscriptionsWhereAFailsAndBRecords(failure, receivedByB))
+                .transactionExecutor(new SpringReactiveTransactionExecutor(transactionManager))
+                .build();
+        AtomicReference<Throwable> caught = new AtomicReference<>();
+
+        Throwable commitFailure = failureOf(TransactionalOperator.create(transactionManager).transactional(
+                applicationService.execute(CRITERIA, this::decide).onErrorResume(error -> {
+                    caught.set(error);
+                    return Mono.empty();
+                })));
+
+        assertThat(caught.get()).as("[exception caught by the caller]").isSameAs(failure);
+        assertThat(receivedByB).as("[events received by b]").containsExactlyElementsOf(decidedEventIds);
+        assertThat(commitFailure).as("[exception from the commit]").isNull();
+        assertThat(eventsInBoundary()).as("[events in the boundary]").containsExactlyElementsOf(decidedEventIds);
+    }
+
     private TransactionalOperator anotherTransactionalOperator() {
         return TransactionalOperator.create(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, "another")));
+    }
+
+    // Subscription a errors and b records the ids it receives
+    private static SynchronousSubscriptionModel subscriptionsWhereAFailsAndBRecords(RuntimeException failureOfA, List<String> receivedByB) {
+        SynchronousSubscriptionModel subscriptions = new SynchronousSubscriptionModel();
+        subscriptions.subscribe("a", null, StartAt.now(), event -> Mono.error(failureOfA));
+        subscriptions.subscribe("b", null, StartAt.now(), event -> Mono.fromRunnable(() -> receivedByB.add(event.getId())));
+        return subscriptions;
     }
 
     private TransactionalOperator operatorWith(int propagationBehavior) {

@@ -63,6 +63,12 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-synchronous-reactor</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-testing-mongodb</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
