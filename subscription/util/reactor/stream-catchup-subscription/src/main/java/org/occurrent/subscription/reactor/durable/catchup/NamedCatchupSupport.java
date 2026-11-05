@@ -828,7 +828,8 @@ final class NamedCatchupSupport {
                 made.replaysAgain() + 1, made);
         boolean registered = underIdLock(subscriptionId, () -> {
             // own(..) replaces the record and forgets its handover under this lock, and a cancel drops the handover
-            // under it, so a takeover stops here once a subscribe replaced the subscription or a cancel of it began
+            // under it, so a takeover stops here when a subscribe that replaced the subscription, or a cancel of it,
+            // took this lock first. A cancel that takes it later removes the state registered below.
             if (shutdown || handedOver.get(subscriptionId) != made || owned.get(subscriptionId) != replay.owned()) {
                 return false;
             }
@@ -1028,7 +1029,7 @@ final class NamedCatchupSupport {
             throw new UnknownSubscriptionException(subscriptionId);
         }
         requireNotShutdown(() -> shutDownRefusal("resume", subscriptionId));
-        // Before anything starts, so a refused resume changes nothing
+        // Before anything starts, so a resume refused here changes nothing
         Owned record = owned.get(subscriptionId);
         if (record != null && record.cancelled) {
             throw new UnknownSubscriptionException(subscriptionId);
