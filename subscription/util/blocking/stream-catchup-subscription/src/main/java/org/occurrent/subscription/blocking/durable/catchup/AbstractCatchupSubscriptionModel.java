@@ -2472,6 +2472,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     @Override
     public void cancelSubscription(String subscriptionId) {
         try (Claim ignored = claimWithoutWaitingForAsks(subscriptionId)) {
+            Runnable cancelAskedSubscribes = askedSubscribesToCancel(subscriptionId);
             boolean nothingKept = cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
                 cancelRunningCatchup(subscriptionId);
                 subscriptionModel.cancelSubscription(subscriptionId);
@@ -2479,16 +2480,19 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (nothingKept) {
                 deletePositionFromStorage(subscriptionId);
             }
-            cancelAskedSubscribes(subscriptionId);
+            cancelAskedSubscribes.run();
         }
     }
 
-    // Called by a cancel that holds the claim, once it has run without throwing, so a subscribe whose function is asked
-    // still goes ahead when the cancel throws. A cancel the function makes on the subscribing thread doesn't stop that
-    // subscribe, as before the function was asked ahead of the claim
-    void cancelAskedSubscribes(String subscriptionId) {
+    // Called by a cancel once it holds the claim, for the subscribes of the id whose function another thread asks
+    // then. A subscribe made later waits for the cancel and then goes ahead. The cancel runs what this returns only
+    // once it has run without throwing, so a subscribe whose function is asked still goes ahead when the cancel
+    // throws. A cancel the function makes on the subscribing thread doesn't stop that subscribe, as before the
+    // function was asked ahead of the claim
+    Runnable askedSubscribesToCancel(String subscriptionId) {
         Thread cancelling = Thread.currentThread();
-        askedFirst.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != cancelling).forEach(asked -> asked.cancelled = true);
+        List<AskedFirst> pending = askedFirst.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != cancelling).toList();
+        return () -> pending.forEach(asked -> asked.cancelled = true);
     }
 
     /**

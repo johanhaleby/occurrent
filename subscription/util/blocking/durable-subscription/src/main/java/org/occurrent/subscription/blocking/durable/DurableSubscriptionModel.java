@@ -477,7 +477,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             while (answered != null && !answered.isDefault() && answered.isDynamic()) {
                 answered = answered.get(new SubscriptionModelContext(DurableSubscriptionModel.class));
             }
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
+            // Throwable, since a Kotlin function can throw a checked exception, and an entry left in asking makes every
+            // later resume of the id on another thread throw after 10 seconds
             settle(asked);
             throw e;
         }
@@ -1023,6 +1025,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     @Override
     public void cancelSubscription(String subscriptionId) {
         runUnderLockFor(subscriptionId, () -> {
+            // The subscribes whose function another thread asks once this holds the lock. A subscribe made later waits
+            // for this cancel and then goes ahead. A cancel the function makes on the subscribing thread doesn't stop
+            // that subscribe, as before the function was asked ahead of the lock
+            Thread current = Thread.currentThread();
+            List<Asked> pending = asking.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current).toList();
             subscriptionModel.cancelSubscription(subscriptionId);
             // The wrapped model doesn't wait for an action that is running, so its checkpoint is written before the
             // registrations are cancelled below or not at all. The untracked ones stop before anything is deleted
@@ -1036,10 +1043,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             notCheckpointedSubscriptions.remove(subscriptionId);
             checkpointedSubscriptions.remove(subscriptionId);
             // Only once the cancel has run without throwing, and still under the lock the subscribe needs, so a
-            // subscribe whose function is asked still goes ahead when the cancel throws. A cancel the function makes on
-            // the subscribing thread doesn't stop that subscribe, as before the function was asked ahead of the lock
-            Thread current = Thread.currentThread();
-            asking.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current).forEach(asked -> asked.cancelled = true);
+            // subscribe whose function is asked still goes ahead when the cancel throws
+            pending.forEach(asked -> asked.cancelled = true);
         });
     }
 

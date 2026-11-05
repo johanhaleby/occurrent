@@ -33,6 +33,7 @@ import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
@@ -236,6 +237,43 @@ class DurableSubscriptionModelDynamicStartAskedTest {
                     () -> assertThat(durable.isRunning(SUBSCRIPTION_ID)).as("the id is running").isTrue()
             );
         }
+    }
+
+    @Nested
+    @DisplayName("when the function of a subscribe on another thread throws a checked exception")
+    class When_the_function_of_a_subscribe_on_another_thread_throws_a_checked_exception {
+
+        @Test
+        @DisplayName("a later resume of the id doesn't wait for that subscribe")
+        void a_later_resume_of_the_id_does_not_wait_for_that_subscribe() {
+            // Given
+            InMemoryWrappedModel wrapped = new InMemoryWrappedModel();
+            DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+            CompletableFuture<Subscription> throwing = CompletableFuture.supplyAsync(() -> durable.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(context -> sneakyThrow(new IOException("the function failed"))), event -> {
+            }), otherThreads);
+            assertThat(throwing).as("the subscribe whose function throws").failsWithin(BOUND)
+                    .withThrowableOfType(ExecutionException.class)
+                    .withCauseInstanceOf(IOException.class);
+            durable.subscribePaused(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("a-position")), event -> {
+            });
+
+            // When, on a new thread, since the pool can run it on the thread whose function threw, and a resume there
+            // never waits
+            CompletableFuture<Subscription> resume = CompletableFuture.supplyAsync(() -> durable.resumeSubscription(SUBSCRIPTION_ID), runnable -> {
+                Thread thread = new Thread(runnable);
+                thread.setDaemon(true);
+                thread.start();
+            });
+
+            // Then
+            assertThat(resume).as("the resume").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(wrapped.resumed).as("the ids the wrapped model resumed").containsExactly(SUBSCRIPTION_ID);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable, R> R sneakyThrow(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     private static boolean waits(@Nullable Thread thread) {
