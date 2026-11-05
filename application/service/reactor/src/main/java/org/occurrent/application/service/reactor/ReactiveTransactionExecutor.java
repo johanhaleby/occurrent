@@ -99,6 +99,20 @@ public interface ReactiveTransactionExecutor {
     }
 
     /**
+     * Whether a failure that leaves this executor while it runs in a transaction someone else opened makes that transaction
+     * roll back, so the caller can't commit the write after handling the failure. Synchronous dispatch stops at the first
+     * failing handler only when the write can't commit after the failure: when this call opened the transaction, or when it
+     * joined one and this answers {@code true}. Otherwise every handler gets the event, since a synchronous subscription has
+     * no replay and a handler skipped while the caller commits the write would never see it.
+     * <p>
+     * The default is {@code false}, so an implementation that doesn't override it gets the isolating behaviour, which can't
+     * lose a reaction. An implementation whose participant marks the caller's transaction rollback-only answers {@code true}.
+     */
+    default boolean rollsBackAJoinedTransactionOnFailure() {
+        return false;
+    }
+
+    /**
      * A pass-through executor that runs the action with no transaction, deferring the supplier so it re-runs on
      * each subscription (and therefore on each retry).
      *

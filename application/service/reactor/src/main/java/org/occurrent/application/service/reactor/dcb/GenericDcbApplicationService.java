@@ -164,7 +164,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                                 // A successful append is assigned a contiguous global-position block, so re-read exactly that block to
                                 // get the events enriched with their positions, then dispatch inside the transaction.
                                 Mono.defer(() -> eventStore.read(DcbCriteria.all(), DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())))
-                                        .flatMap(enrichedStream -> synchronousEventDispatcher.dispatch(enrichedStream.events(), transactional))
+                                        .flatMap(enrichedStream -> synchronousEventDispatcher.dispatch(enrichedStream.events(), openedTransaction || (transactional && transactionExecutor.rollsBackAJoinedTransactionOnFailure())))
                                         .onErrorMap(failure -> !openedTransaction, failureAfterWrite::hold)
                                         .thenReturn(appendResult)));
                 return appended.map(appendResult -> new Result<>(withCheckedVersions(appendResult, versionsRequested, decision.eventStream()), decision.newDomainEvents()));

@@ -147,7 +147,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                     return new Attempt<>(null, List.of());
                 }
                 // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
-                boolean transactional = dispatchSynchronously && transactionExecutor.isTransactional();
+                boolean transactional = dispatchSynchronously && (openedTransaction || (transactionExecutor.isTransactional() && transactionExecutor.rollsBackAJoinedTransactionOnFailure()));
                 EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId, skip, Integer.MAX_VALUE) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter, skip, Integer.MAX_VALUE);
                 List<E> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events()).toList();
 

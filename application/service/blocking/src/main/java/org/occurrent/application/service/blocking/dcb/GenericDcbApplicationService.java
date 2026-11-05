@@ -173,7 +173,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 return new Attempt<>(Optional.empty(), List.of());
             }
             // Asked inside the transaction, since the answer depends on what's open, and before the append, so a failure here undoes nothing
-            boolean transactional = dispatchSynchronously && transactionExecutor.isTransactional();
+            boolean transactional = dispatchSynchronously && (openedTransaction || (transactionExecutor.isTransactional() && transactionExecutor.rollsBackAJoinedTransactionOnFailure()));
             DcbAppendResult appendResult = eventStore.append(decision.dcbEvents(), DcbAppendCondition.failIfEventsMatch(decision.eventStream().consistencyToken()));
 
             if (dispatchSynchronously) {

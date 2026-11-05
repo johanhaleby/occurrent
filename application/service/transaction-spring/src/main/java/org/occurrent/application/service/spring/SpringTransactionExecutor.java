@@ -22,6 +22,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -162,6 +163,14 @@ public class SpringTransactionExecutor implements TransactionExecutor {
     @Override
     public boolean isTransactional() {
         return TransactionSynchronizationManager.isActualTransactionActive();
+    }
+
+    /**
+     * {@code true} unless the transaction manager is told not to mark a transaction rollback-only when a participant fails.
+     */
+    @Override
+    public boolean rollsBackAJoinedTransactionOnFailure() {
+        return !(transactionTemplate.getTransactionManager() instanceof AbstractPlatformTransactionManager manager) || manager.isGlobalRollbackOnParticipationFailure();
     }
 
     @Override
