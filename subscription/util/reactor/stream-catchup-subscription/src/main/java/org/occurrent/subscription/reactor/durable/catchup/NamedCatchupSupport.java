@@ -105,7 +105,9 @@ import static java.util.Objects.requireNonNull;
  * <ul>
  * <li>The handover runs the wrapped {@code subscribe(..)}, or {@code resumeSubscription(id, startAt)} for a takeover,
  * and {@code isRunning(id)} and {@code pauseSubscription(id)} under the monitor of the subscription's state. So the
- * wrapped model must run no action and report no history loss on the calling thread before those calls return.</li>
+ * wrapped model must run no action and report no history loss on the calling thread before those calls return, and
+ * those calls must not wait for a thread that runs the takeover of a lost live start, since a cancel holding the lock of
+ * the id can be waiting for that monitor.</li>
  * <li>A {@link CatchupListener} is told that a catch-up started inside an operation on a {@link ConcurrentHashMap},
  * which holds a lock of that map. A listener that calls this model can deadlock with another thread.</li>
  * <li>Whether the wrapped model holds an id is asked, through {@code subscriptionIds()} or {@code isRunning(id)} and
@@ -628,8 +630,9 @@ final class NamedCatchupSupport {
         return delegate.isRunning(subscriptionId) || delegate.isPaused(subscriptionId);
     }
 
-    // Runs work holding the lock of subscriptionId, which is never held across anything asynchronous, and always taken
-    // before the state monitor
+    // Runs work holding the lock of subscriptionId, which is never held across anything asynchronous. Locks are taken in
+    // the order startLock, the lock of an id, the monitor of a state, and no code holding one of them takes one before
+    // it. A takeover the wrapped start runs on the calling thread takes the lock of an id under startLock.
     private <T> T underIdLock(String subscriptionId, Supplier<T> work) {
         IdLock idLock = idLocks.compute(subscriptionId, (id, current) -> {
             IdLock used = current == null ? new IdLock() : current;
