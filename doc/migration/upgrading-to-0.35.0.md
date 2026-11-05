@@ -786,8 +786,8 @@ committed with it. It now commits on its own, before the append writes its event
   `lastSequencePosition()`, the head as of the first operation in your transaction's MongoDB session on the store's
   database factory. It also returns your transaction's own appends, and those it started after that operation are at
   positions above that head. If you keep that position and read after it later, you get those events again. On a sharded
-  cluster, unless your transaction reads at read concern snapshot, the shards don't read from one snapshot, so the head
-  and the events can come from different points in time.
+  cluster, unless your transaction reads at read concern snapshot, the shards aren't guaranteed to be read from one
+  snapshot, so the head and the events can come from different points in time.
 - An append joins your transaction when that's a Spring-managed MongoDB transaction on the template's database
   factory, and the `TransactionTemplate` or `TransactionalOperator` you give the store, if any, keeps the default
   propagation, `REQUIRED`.

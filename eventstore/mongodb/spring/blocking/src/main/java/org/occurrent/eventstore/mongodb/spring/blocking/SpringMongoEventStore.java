@@ -505,10 +505,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // snapshot and its own appends, but only with synchronization active, without which a template on a plain factory
     // runs no session.
     // A reservation commits before its events are inserted, so every event in the snapshot is at or below the
-    // snapshot's counter, and anything above it is this transaction's own. On a sharded cluster below read concern
-    // snapshot the shards aren't read from one snapshot, so the counter and the events can come from different points
-    // in time. The reported head stays the snapshot's counter. Otherwise the counter bounds the read, which is always
-    // safe.
+    // snapshot's counter, and anything above it is this transaction's own. The reported head stays the snapshot's
+    // counter. On a sharded cluster below read concern snapshot the shards aren't guaranteed to be read from one
+    // snapshot, so the counter and the events can come from different points in time. When the template isn't in a
+    // transaction, the counter bounds the read, which is always safe.
     private long readUpTo(long highWatermark, MongoTemplate template) {
         return template == mongoTemplate && TransactionSynchronizationManager.isSynchronizationActive()
                 && MongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()) ? Long.MAX_VALUE : highWatermark;
@@ -987,8 +987,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * Sorts by position and clamps the upper bound to the store's highest written position at read time, so a
      * concurrent append is never partially visible. Inside a MongoDB transaction on this store's database factory, with
      * transaction synchronization active, the bound is the transaction's snapshot instead, which also holds the
-     * transaction's own appends. On a sharded cluster below read concern snapshot the shards aren't read from one
-     * snapshot, so such a read can return events from different points in time.
+     * transaction's own appends. On a sharded cluster below read concern snapshot the shards aren't guaranteed to be
+     * read from one snapshot, so such a read can return events from different points in time.
      * <p>
      * The returned stream is backed by a live server cursor and is read one batch at a time, so a replay from the
      * beginning never holds the whole matched history in memory and the first event is available before the read has
