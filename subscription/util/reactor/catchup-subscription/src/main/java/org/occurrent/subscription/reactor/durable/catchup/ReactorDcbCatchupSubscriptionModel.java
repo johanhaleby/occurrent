@@ -271,9 +271,8 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
      * the wrapped model the cancel at once, without waiting for that subscribe, and the action of that subscribe gets no
      * event after that. When the wrapped {@code subscribe(..)} returns holding the id, the id is cancelled there again,
      * unless a subscribe of the id made after this cancel took it there. That cancel waits until no other subscribe of the
-     * id is under way. A subscribe of the id is refused while the
-     * wrapped model holds the id for that subscribe, also once the returned {@code Mono} has completed, and while that
-     * second cancel runs.
+     * id is under way. A subscribe of the id is refused while the wrapped model holds the id for that subscribe, also once
+     * the returned {@code Mono} has completed, and while that second cancel runs.
      * <p>
      * When this cancel comes before the wrapped model has taken the id for that subscribe, a subscribe of the id made
      * after this cancel can be refused by the wrapped model with {@link DuplicateSubscriptionIdException}, since the

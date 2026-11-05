@@ -781,6 +781,38 @@ class ReactorCatchupSubscribeUnderWayTest {
     }
 
     @Test
+    void a_cancel_of_a_replaying_catch_up_that_throws_after_a_cancelled_subscribe_took_the_id_cancels_what_that_subscribe_left() {
+        WrappedModel wrapped = new WrappedModel();
+        HeldReplay reader = new HeldReplay();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        HeldStart h1 = new HeldStart();
+        CompletableFuture<Void> s1 = new CompletableFuture<>();
+        daemon("s1", s1, () -> catchup.subscribe("x", FILTER, h1.startAt(), cloudEvent -> Mono.empty())).start();
+        h1.awaitInside();
+        await(returnedWithin("c1", () -> catchup.cancelSubscription("x").toFuture()), "c1");
+        Subscription k2 = catchup.subscribe("x", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        reader.awaitReading();
+        h1.release();
+        await(s1, "s1");
+        // Only the cancel of c2 throws
+        wrapped.failCancelsFromNowOn();
+        wrapped.beforeNextCancel.set(() -> wrapped.beforeNextCancel.set(wrapped::succeedCancels));
+
+        Throwable c2 = failureOf(() -> catchup.cancelSubscription("x"));
+        Set<String> heldOnceC2Threw = wrapped.subscriptionIds();
+        boolean catchupRunsX = catchup.isRunning("x");
+        Throwable later = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()));
+
+        assertAll(
+                () -> assertThat(c2).as("what c2 threw").isInstanceOf(IllegalStateException.class),
+                () -> assertThat(k2.waitUntilStarted().toFuture()).as("the start of k2").failsWithin(DEADLINE),
+                () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "subscribed:x", "cancelled:x", "subscribed:x"),
+                () -> assertThat(heldOnceC2Threw).as("ids the wrapped model holds once c2 threw, with no live subscription of x").isEmpty(),
+                () -> assertThat(catchupRunsX).as("whether the catch-up reports x running").isFalse(),
+                () -> assertThat(later).as("what a subscribe of x after that throws").isNull());
+    }
+
+    @Test
     void the_catch_up_reports_x_not_running_while_the_wrapped_model_cancels_what_a_cancelled_subscribe_left_after_it_refused_a_later_subscribe() {
         WrappedModel wrapped = new WrappedModel();
         wrapped.refusesDuplicates = true;
