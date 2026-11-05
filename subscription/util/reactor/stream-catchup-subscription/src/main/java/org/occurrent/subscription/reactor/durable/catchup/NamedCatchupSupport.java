@@ -872,14 +872,14 @@ final class NamedCatchupSupport {
     }
 
     void start(boolean resumeSubscriptionsAutomatically) {
-        startUnlessShutdown(resumeSubscriptionsAutomatically);
+        if (managesNamedSubscriptions()) {
+            startUnlessShutdown(resumeSubscriptionsAutomatically);
+        }
     }
 
     // False when this model was shut down, which starts nothing
     private boolean startUnlessShutdown(boolean resumeSubscriptionsAutomatically) {
-        if (!managesNamedSubscriptions()) {
-            return !shutdown;
-        }
+        SubscriptionModel delegate = requireNamed();
         if (resumeSubscriptionsAutomatically) {
             // Before the wrapped model starts, since a replay can hand over while it starts and would apply the pause
             catchingUp.values().forEach(state -> {
@@ -894,7 +894,7 @@ final class NamedCatchupSupport {
             if (shutdown) {
                 return false;
             }
-            named.start(resumeSubscriptionsAutomatically);
+            delegate.start(resumeSubscriptionsAutomatically);
             stopped = false;
         }
         if (!resumeSubscriptionsAutomatically) {
@@ -914,10 +914,6 @@ final class NamedCatchupSupport {
 
     boolean isStopped() {
         return stopped;
-    }
-
-    boolean isShutdown() {
-        return shutdown;
     }
 
     // Whether launched is the replay that owns the subscription right now. A stop() parks the subscription and a
