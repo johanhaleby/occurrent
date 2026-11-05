@@ -32,6 +32,7 @@ import java.util.List;
 public final class FailureAfterWrite {
 
     private volatile @Nullable StandIn held;
+    private volatile @Nullable Throwable keptBeforeWrite;
 
     /**
      * Throws {@code failure} as it is when the service takes this attempt to have opened a transaction, so the retry may run the command again. Otherwise holds it and returns the stand-in for the caller to throw through the executor.
@@ -95,6 +96,34 @@ public final class FailureAfterWrite {
     }
 
     /**
+     * Keeps a failure of the read or the decision, which goes around the executor so it can't mark a transaction the caller
+     * owns rollback-only. {@code null} clears it, since an executor can run the action again.
+     */
+    public void keepBeforeWrite(@Nullable Throwable failure) {
+        keptBeforeWrite = failure;
+    }
+
+    /**
+     * What the attempt throws once the executor returned or let {@code thrown} out. A held failure comes first, then a kept
+     * one, which takes {@code thrown} as a suppressed exception, the way a try-with-resources keeps the body's failure over
+     * the close's. Without either it's {@code thrown}, or nothing when the executor returned.
+     */
+    public @Nullable Throwable failureOfAttempt(@Nullable Throwable thrown) {
+        Throwable kept = keptBeforeWrite;
+        keptBeforeWrite = null;
+        if (thrown != null && isHeldAfter(thrown)) {
+            return failure();
+        }
+        if (kept == null) {
+            return thrown;
+        }
+        if (thrown != null && thrown != kept) {
+            kept.addSuppressed(thrown);
+        }
+        return kept;
+    }
+
+    /**
      * Throws the held failure, checked or not, if there is one.
      */
     public void rethrowIfHeld() {
@@ -122,8 +151,11 @@ public final class FailureAfterWrite {
         return failure;
     }
 
+    /**
+     * Throws {@code failure} as it is, checked or not.
+     */
     @SuppressWarnings("unchecked")
-    private static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
+    public static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
         throw (T) failure;
     }
 

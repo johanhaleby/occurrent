@@ -135,6 +135,10 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
 
         Attempt<@Nullable WriteResult, List<E>> result = retryStrategy.execute(() -> {
+            if (failureAfterWrite.isHeld()) {
+                // Only a strategy that can't take the shutdown predicate gets here, and the failure is thrown after it returns
+                return new Attempt<>(null, List.of());
+            }
             Long fromStreamVersion = executeOptions.fromStreamVersion();
             int skip = fromStreamVersion == null ? 0 : Math.toIntExact(fromStreamVersion);
             Function<Boolean, Attempt<@Nullable WriteResult, List<E>>> readDecideWrite = openedTransaction -> {
@@ -174,14 +178,12 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             // semantics it had before this feature and applications that do not use it pay no transaction overhead.
             try {
                 return dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(readDecideWrite) : readDecideWrite.apply(false);
-            } catch (Throwable failure) {
-                if (!failureAfterWrite.isHeldAfter(failure)) {
-                    throw failure;
-                }
-                // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
-                return new Attempt<>(null, List.of());
+            } catch (Throwable thrown) {
+                // The retry gets the failure itself, so its listeners and error mapper see it. When it's held, nothing says a
+                // transaction of this attempt undid the write, and the shutdown predicate stops the retry on it.
+                throw FailureAfterWrite.<RuntimeException>sneakyThrow(Objects.requireNonNull(failureAfterWrite.failureOfAttempt(thrown)));
             }
-        });
+        }, __ -> !failureAfterWrite.isHeld());
 
         failureAfterWrite.rethrowIfHeld();
 
