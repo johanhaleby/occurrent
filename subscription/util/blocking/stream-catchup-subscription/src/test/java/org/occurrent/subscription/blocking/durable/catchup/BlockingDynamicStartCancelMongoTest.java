@@ -23,10 +23,12 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -66,6 +68,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -78,8 +81,7 @@ import static org.occurrent.subscription.blocking.durable.catchup.AbstractCatchu
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
 /**
- * A dynamic start-position function can wait for a call for the same subscription id made on another thread, as in
- * issue #1367. The blocking subscription models ask the function before they take the claim or the lock for the id, so a
+ * A dynamic start-position function can wait for a call for the same subscription id made on another thread. The blocking subscription models ask the function before they take the claim or the lock for the id, so a
  * cancel made meanwhile returns at once and wins over the subscribe, and a pause waits for the subscribe, up to
  * {@code LIFECYCLE_WAIT}, and then throws. Each case runs on a plain MongoDB model, which never held anything while it
  * asked, and on the three wrappers that did.
@@ -259,6 +261,27 @@ class BlockingDynamicStartCancelMongoTest {
     }
 
     @Nested
+    @DisplayName("when the start-position function is asked during the handover and waits for a cancel of its own subscription made on another thread")
+    class When_the_function_is_asked_during_the_handover {
+
+        @Disabled("A cancel waits for the handover lock of the id, which the replay thread holds while the function, asked there during the handover, waits for the cancel. Red on main too.")
+        @Test
+        void the_cancel_returns_while_the_function_waits_for_it() {
+            // Given
+            model = build(Stack.CATCHUP_OVER_DURABLE_OVER_MONGO);
+            append();
+            WaitsForCancel function = new WaitsForCancel();
+
+            // When
+            model.subscribe(subscriptionId, function.startAtWhenTheHandoverAsks(Thread.currentThread().getName()), event -> {
+            });
+
+            // Then
+            function.assertTheCancelReturnedWhileTheFunctionWaited();
+        }
+    }
+
+    @Nested
     @DisplayName("when the start-position function waits for a pause of its own subscription made on another thread")
     class When_the_function_waits_for_a_pause {
 
@@ -352,24 +375,44 @@ class BlockingDynamicStartCancelMongoTest {
         StartAt startAt() {
             return StartAt.dynamic(context -> {
                 if (asked.compareAndSet(false, true)) {
-                    CompletableFuture.runAsync(() -> model.cancelSubscription(subscriptionId), otherThreads).whenComplete((__, error) -> {
-                        if (error == null) {
-                            cancelCompleted.complete(null);
-                        } else {
-                            cancelCompleted.completeExceptionally(error);
-                        }
-                    });
-                    try {
-                        cancelCompleted.get(FUNCTION_WAITS.toMillis(), TimeUnit.MILLISECONDS);
-                        cancelReturnedWhileWaiting.set(true);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    } catch (ExecutionException | TimeoutException e) {
-                        // Whether the cancel returned is judged by assertTheCancelReturnedWhileTheFunctionWaited(), the function only stops waiting for it
-                    }
+                    cancelOnAnotherThreadAndWaitForIt();
                 }
                 return StartAt.now();
             });
+        }
+
+        // Answers beginning of time to the catch-up, to have it replay and hand over, and waits for the cancel the second
+        // time the live delegate asks on the replay thread. The first of its asks answers null, since the durable model
+        // stores no position, and the handover asks again.
+        StartAt startAtWhenTheHandoverAsks(String subscribingThread) {
+            AtomicInteger asksOnTheReplayThread = new AtomicInteger();
+            return StartAt.dynamic(context -> {
+                if (context.subscriptionModelType() == StreamCatchupSubscriptionModel.class) {
+                    return StartAtTime.beginningOfTime();
+                }
+                if (!Thread.currentThread().getName().equals(subscribingThread) && asksOnTheReplayThread.incrementAndGet() == 2) {
+                    cancelOnAnotherThreadAndWaitForIt();
+                }
+                return null;
+            });
+        }
+
+        private void cancelOnAnotherThreadAndWaitForIt() {
+            CompletableFuture.runAsync(() -> model.cancelSubscription(subscriptionId), otherThreads).whenComplete((__, error) -> {
+                if (error == null) {
+                    cancelCompleted.complete(null);
+                } else {
+                    cancelCompleted.completeExceptionally(error);
+                }
+            });
+            try {
+                cancelCompleted.get(FUNCTION_WAITS.toMillis(), TimeUnit.MILLISECONDS);
+                cancelReturnedWhileWaiting.set(true);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (ExecutionException | TimeoutException e) {
+                // assertTheCancelReturnedWhileTheFunctionWaited() decides whether the cancel returned, so the function only stops waiting
+            }
         }
 
         // The cancel has to return before the function stops waiting for it. A cancel that returns only once the

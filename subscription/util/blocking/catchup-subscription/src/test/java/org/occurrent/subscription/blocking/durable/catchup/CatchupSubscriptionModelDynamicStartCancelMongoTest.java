@@ -63,8 +63,8 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * The {@link CatchupSubscriptionModel} dispatcher cancels an id on behalf of its inner catch-up models, and a dynamic
- * start-position function can wait for such a cancel on another thread, as in issue #1367. The function is asked
- * before the dispatcher claims the id, so the cancel returns at once, wins over the subscribe, and the subscribe
+ * start-position function can wait for such a cancel on another thread. The function is asked before the dispatcher
+ * claims the id, so the cancel returns at once, wins over the subscribe, and the subscribe
  * subscribes nothing.
  */
 @Testcontainers
@@ -73,8 +73,8 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupSubscriptionModelDynamicStartCancelMongoTest {
 
-    // Longer than the 10 s a claim waits for another call, so a claim that gives up while the function waits shows
-    private static final Duration FUNCTION_WAITS = Duration.ofSeconds(12);
+    // Longer than LIFECYCLE_WAIT, so a claim that gives up while the function still waits shows as a failed cancel
+    private static final Duration FUNCTION_WAITS = AbstractCatchupSubscriptionModel.LIFECYCLE_WAIT.plusSeconds(2);
     private static final Duration EVENT_DELIVERY = Duration.ofSeconds(10);
     private static final URI SOURCE = URI.create("urn:test");
     private static final String DATABASE = "catchupdynamicstartcancel";
@@ -192,7 +192,7 @@ class CatchupSubscriptionModelDynamicStartCancelMongoTest {
 
     /**
      * A start-position function that, the first time it is asked, cancels its own subscription id on another thread and
-     * waits for that cancel to return, longer than the 10 s a claim waits. Any later ask answers {@code now} at once.
+     * waits for that cancel to return, longer than {@code LIFECYCLE_WAIT}. Any later ask answers {@code now} at once.
      */
     private final class WaitsForCancel {
         private final AtomicBoolean asked = new AtomicBoolean();
@@ -215,7 +215,7 @@ class CatchupSubscriptionModelDynamicStartCancelMongoTest {
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     } catch (ExecutionException | TimeoutException e) {
-                        // Whether the cancel returned is judged by assertTheCancelReturnedWhileTheFunctionWaited(), the function only stops waiting for it
+                        // assertTheCancelReturnedWhileTheFunctionWaited() decides whether the cancel returned, so the function only stops waiting
                     }
                 }
                 return StartAt.now();
