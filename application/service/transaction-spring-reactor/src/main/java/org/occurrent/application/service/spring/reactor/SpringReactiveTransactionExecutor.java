@@ -65,7 +65,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
 
     /**
      * Retries a conflict between concurrent appends, such as two contending on the same partition stream or on the
-     * global position counter, but only when this executor opened the transaction. The event store joins this
+     * same conflict marker, but only when this executor opened the transaction. The event store joins this
      * transaction rather than opening its own, so it cannot retry a conflict itself: an aborted transaction can only
      * be started again by whoever owns it. Attempt count and backoff match the event store's own transient-conflict
      * retry, which this stands in for. The waiting matches the blocking {@code SpringTransactionExecutor} (ADR 0053),

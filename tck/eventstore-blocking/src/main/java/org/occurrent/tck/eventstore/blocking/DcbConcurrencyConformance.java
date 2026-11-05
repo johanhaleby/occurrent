@@ -33,6 +33,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.tck.ConcurrentRendezvous;
 import org.occurrent.tck.ConcurrentRendezvous.Outcome;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -56,11 +57,13 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
  * two overlapping type sets or two overlapping tag sets. This suite runs each of those as concurrent appends instead of
  * reasoning about it.
  * <p>
- * Nothing here is fixture-declared, {@link EventStoreFixture#appendConditionModel()} included. Both models exist to
- * be sound, and soundness is exactly what safety under a race means, so a store failing anything below has a real
- * defect rather than a missing declaration. The one thing the two models disagree about, whether a boundary conflicts
- * that arguably should not have, only ever produces extra losers, and every assertion here that could be weakened by
- * an extra loser instead demands a winner.
+ * Almost nothing here is fixture-declared. Every model exists to be sound, and soundness is exactly what safety under a
+ * race means, so a store failing anything below has a defect rather than a missing declaration. What the models
+ * disagree about, whether a boundary conflicts that arguably should not have, only ever produces extra losers, and
+ * every assertion here that could be weakened by an extra loser instead demands a winner. The exceptions ask the
+ * declared {@link EventStoreFixture#appendConditionModel()} whether an extra loser is allowed, and hold a model that
+ * allows none to it. They are the tests that use {@code assertWinnersOfTwoAfterAMarkerMoved} and
+ * {@code a_conditional_append_is_not_refused_by_appends_of_another_type_that_share_its_tag_and_race_it_unless_the_model_compares_only_markers}.
  * <p>
  * These scenarios put every append into one storage stream on a store that derives placement from tags, so two
  * concurrent appends collide on the next stream version as well as on the DCB condition. That collision is the
@@ -74,6 +77,9 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
 
     private static final String RESERVED = "SeatReserved";
     private static final String RELEASED = "SeatReleased";
+    private static final String OTHER = "SeatMoved";
+    private static final String TICKET_SOLD = "TicketSold";
+    private static final String CONCERT_RENAMED = "ConcertRenamed";
 
     /** Repetitions per test method. A single race proves little, so this is how many independent races each test runs. */
     private static final int ITERATIONS = 5;
@@ -328,6 +334,111 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
 
     @Test
     @Timeout(120)
+    void a_conditional_append_is_not_refused_by_appends_of_another_type_that_share_its_tag_and_race_it_unless_the_model_compares_only_markers() {
+        int iterations = 50;
+        List<Throwable> refusals = new ArrayList<>();
+
+        for (int iteration = 0; iteration < iterations; iteration++) {
+            String concert = "concert:" + iteration;
+            DcbCriteria criteria = DcbCriteria.type(TICKET_SOLD).tags(tag(concert));
+            // One conditional append per fresh tag against two appends that share only the tag. A hot tag shared by
+            // many writers is a different test, since a store may give up under that much contention.
+            DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+            int currentIteration = iteration;
+
+            List<Outcome<String>> outcomes = ConcurrentRendezvous.collide(3, index -> {
+                String eventId = "ticket-race-" + currentIteration + "-" + index;
+                return index == 0
+                        ? () -> {
+                            dcbEventStore().append(List.of(taggedEventWithId(eventId, TICKET_SOLD, concert)), failIfEventsMatch(token));
+                            return eventId;
+                        }
+                        : () -> {
+                            dcbEventStore().append(List.of(taggedEventWithId(eventId, CONCERT_RENAMED, concert)));
+                            return eventId;
+                        };
+            });
+
+            assertThat(failuresOf(outcomes.subList(1, outcomes.size())))
+                    .as("Iteration %d: an append with no condition has nothing to fail on, so failing it is the store giving "
+                            + "up on its own collision", iteration)
+                    .isEmpty();
+            Outcome<String> conditional = outcomes.get(0);
+            if (!conditional.succeeded()) {
+                refusals.add(conditional.failure());
+            }
+        }
+
+        if (expectedToSettleAMovedMarkerByItsEvents()) {
+            assertThat(refusals)
+                    .as("Every one of the %d conditional appends must succeed. The events racing it have the tag of its "
+                            + "criteria but not its type, so none of them matches, and refusing one is the store failing "
+                            + "to tell a match from a shared tag", iterations)
+                    .isEmpty();
+        } else {
+            assertThat(refusals)
+                    .as("A store that compares only markers may refuse these appends, and then the refusal must be the "
+                            + "append condition's and not a storage error leaking through")
+                    .allSatisfy(failure -> assertThat(failure).isInstanceOf(DcbAppendConditionNotFulfilledException.class));
+        }
+    }
+
+    @Test
+    @Timeout(120)
+    void two_type_and_tag_scoped_conditions_that_each_match_the_other_writers_event_cannot_both_win_after_non_matching_appends_moved_their_tags() {
+        for (int iteration = 0; iteration < ITERATIONS; iteration++) {
+            String typeT = RESERVED + iteration;
+            String typeU = RELEASED + iteration;
+            String tagK = "show:" + iteration;
+            String tagM = "row:" + iteration;
+
+            // Each writer reads its criteria, and then a non-matching event of another type moves the tag it read. The
+            // check can't settle either condition by its markers, so it asks the events, finds no match above what the
+            // read saw and passes the condition. The two writers then race, and each one's event falls inside the
+            // other's criteria. Only the markers each writer writes can serialise them, and the writers must write
+            // the markers of their criteria even when the check passed by looking at the events.
+            DcbCriteria readByFirst = DcbCriteria.type(typeT).tags(tag(tagK));
+            DcbCriteria readBySecond = DcbCriteria.type(typeU).tags(tag(tagM));
+            DcbAppendCondition onFirst = failIfEventsMatch(dcbEventStore().read(readByFirst).consistencyToken());
+            DcbAppendCondition onSecond = failIfEventsMatch(dcbEventStore().read(readBySecond).consistencyToken());
+            dcbEventStore().append(List.of(taggedEventWithId("moves-k-" + iteration, OTHER + iteration, tagK)));
+            dcbEventStore().append(List.of(taggedEventWithId("moves-m-" + iteration, OTHER + iteration, tagM)));
+
+            assertWinnersOfTwoAfterAMarkerMoved(iteration, "two type-and-tag-scoped conditions whose tags a non-matching event moved",
+                    DcbCriteria.anyOf(readByFirst, readBySecond),
+                    taggedEventWithId("writes-u-m-" + iteration, typeU, tagM), onFirst,
+                    taggedEventWithId("writes-t-k-" + iteration, typeT, tagK), onSecond);
+        }
+    }
+
+    @Test
+    @Timeout(120)
+    void two_tag_scoped_conditions_that_each_match_the_other_writers_event_cannot_both_win_after_non_matching_appends_moved_one_tag_of_each() {
+        for (int iteration = 0; iteration < ITERATIONS; iteration++) {
+            String tagK1 = "show:" + iteration;
+            String tagK2 = "seat:" + iteration;
+            String tagM1 = "row:" + iteration;
+            String tagM2 = "hall:" + iteration;
+
+            // As above, except that the check passes each condition at the step before the query. Each criteria has two
+            // tags and a non-matching event moved only one of them, so no event with both tags can have been committed
+            // since the read, and the check doesn't look at the events at all.
+            DcbCriteria readByFirst = DcbCriteria.tags(tag(tagK1), tag(tagK2));
+            DcbCriteria readBySecond = DcbCriteria.tags(tag(tagM1), tag(tagM2));
+            DcbAppendCondition onFirst = failIfEventsMatch(dcbEventStore().read(readByFirst).consistencyToken());
+            DcbAppendCondition onSecond = failIfEventsMatch(dcbEventStore().read(readBySecond).consistencyToken());
+            dcbEventStore().append(List.of(taggedEventWithId("moves-k1-" + iteration, OTHER + iteration, tagK1)));
+            dcbEventStore().append(List.of(taggedEventWithId("moves-m1-" + iteration, OTHER + iteration, tagM1)));
+
+            assertWinnersOfTwoAfterAMarkerMoved(iteration, "two two-tag conditions of which a non-matching event moved one tag each",
+                    DcbCriteria.anyOf(readByFirst, readBySecond),
+                    taggedEventWithId("writes-m-" + iteration, RESERVED + iteration, tagM1, tagM2), onFirst,
+                    taggedEventWithId("writes-k-" + iteration, RELEASED + iteration, tagK1, tagK2), onSecond);
+        }
+    }
+
+    @Test
+    @Timeout(120)
     void an_untokenized_guard_admits_exactly_one_of_several_racing_creates() {
         int threadCount = 8;
 
@@ -435,6 +546,22 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
     private void assertExactlyOneWinnerOfTwo(int iteration, String what, DcbCriteria committed,
                                              CloudEvent firstEvent, DcbAppendCondition firstCondition,
                                              CloudEvent secondEvent, DcbAppendCondition secondCondition) {
+        assertWinnersOfTwo(iteration, what, committed, firstEvent, firstCondition, secondEvent, secondCondition, true);
+    }
+
+    // For two conditions that a non-matching event moved a marker of. A store that settles a moved marker by its events
+    // owes one winner. A store that compares markers only may refuse both, and then it still owes the append condition's
+    // exception, and it never owes two winners.
+    private void assertWinnersOfTwoAfterAMarkerMoved(int iteration, String what, DcbCriteria committed,
+                                                     CloudEvent firstEvent, DcbAppendCondition firstCondition,
+                                                     CloudEvent secondEvent, DcbAppendCondition secondCondition) {
+        assertWinnersOfTwo(iteration, what, committed, firstEvent, firstCondition, secondEvent, secondCondition,
+                expectedToSettleAMovedMarkerByItsEvents());
+    }
+
+    private void assertWinnersOfTwo(int iteration, String what, DcbCriteria committed,
+                                    CloudEvent firstEvent, DcbAppendCondition firstCondition,
+                                    CloudEvent secondEvent, DcbAppendCondition secondCondition, boolean exactlyOneWinner) {
         List<Outcome<String>> outcomes = ConcurrentRendezvous.collide(2, index -> {
             CloudEvent event = index == 0 ? firstEvent : secondEvent;
             DcbAppendCondition condition = index == 0 ? firstCondition : secondCondition;
@@ -444,14 +571,29 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             };
         });
 
-        String winner = assertExactlyOneWinner(iteration, outcomes, what);
-        assertThat(winner)
+        List<String> winners = exactlyOneWinner
+                ? List.of(assertExactlyOneWinner(iteration, outcomes, what))
+                : assertAtMostOneWinner(iteration, outcomes, what);
+        assertThat(winners)
                 .as("Iteration %d: the winner must be one of the two events raced", iteration)
-                .isIn(firstEvent.getId(), secondEvent.getId());
+                .isSubsetOf(firstEvent.getId(), secondEvent.getId());
         assertThat(idsOf(dcbEventStore().read(committed).events()))
                 .as("Iteration %d: only the winner's event may be committed, since both writers checked a boundary "
                         + "the other's event falls inside", iteration)
-                .containsExactly(winner);
+                .containsExactlyElementsOf(winners);
+    }
+
+    /**
+     * Whether the declared append-condition model settles a condition whose marker a non-matching event moved by looking
+     * at the events, and so owes one winner of two writers that each match the other's event, and owes a success to a
+     * conditional append that races appends of another type sharing its tag, since none of them matches. A model that
+     * compares markers only may refuse both.
+     */
+    private boolean expectedToSettleAMovedMarkerByItsEvents() {
+        return switch (appendConditionModel()) {
+            case EXACT_CRITERIA, MARKERS_THEN_EVENTS -> true;
+            case TAG_MARKER -> false;
+        };
     }
 
     private String assertExactlyOneWinner(int iteration, List<Outcome<String>> outcomes, String what) {
@@ -468,6 +610,22 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
                 .allSatisfy(failure -> assertThat(failure).isInstanceOf(DcbAppendConditionNotFulfilledException.class));
 
         return outcomes.stream().filter(Outcome::succeeded).map(Outcome::value).findFirst().orElseThrow();
+    }
+
+    private List<String> assertAtMostOneWinner(int iteration, List<Outcome<String>> outcomes, String what) {
+        List<Throwable> failures = failuresOf(outcomes);
+
+        assertThat(outcomes.size() - failures.size())
+                .as("Iteration %d: %s must leave at most one winner. Two winners means the store let a write-skew "
+                        + "through", iteration, what)
+                .isLessThanOrEqualTo(1);
+        assertThat(failures)
+                .as("Iteration %d: every loser of %s must be rejected by the append condition. A duplicate-key or "
+                        + "write-conflict error reaching the caller is the store failing to retry its own storage "
+                        + "collision", iteration, what)
+                .allSatisfy(failure -> assertThat(failure).isInstanceOf(DcbAppendConditionNotFulfilledException.class));
+
+        return outcomes.stream().filter(Outcome::succeeded).map(Outcome::value).toList();
     }
 
     private static List<Throwable> failuresOf(List<Outcome<String>> outcomes) {

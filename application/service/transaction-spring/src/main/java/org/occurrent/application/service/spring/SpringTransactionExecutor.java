@@ -65,14 +65,14 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * joins that transaction and so cannot retry one itself, and only its owner can start a fresh one. See ADR 0074.
      * <p>
      * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
-     * stands in for exactly that retry once the store has to give it up. Every append increments one global position
-     * counter, and appends that share a marker document commit one at a time, so under concurrency the last writer can
-     * need to wait out all the others, and a smaller budget is not enough. 240 attempts is about two minutes of
-     * waiting, like the 120 seconds a native {@code withTransaction} call gives the native store. Five attempts,
-     * borrowed from the unrelated append-condition retry, failed a six-way contention test. An executor that uses this
-     * default also schedules no retry once 120 seconds have passed since the call started, so attempts that are slow themselves, for
-     * example while MongoDB has no primary, don't stretch the budget to hours. A retry passed to a constructor is
-     * used as given, this default included.
+     * stands in for exactly that retry once the store has to give it up. Appends of the same type increment the same
+     * conflict marker, so under concurrency the last writer can need to wait out all the others, and a smaller budget
+     * is not enough. 240 attempts is about two minutes of waiting, like the 120 seconds a native
+     * {@code withTransaction} call gives the native store. Five attempts, borrowed from the unrelated append-condition
+     * retry, failed a six-way contention test. An executor that uses this default also schedules no retry once 120
+     * seconds have passed since the call started, so attempts that are slow themselves, for example while MongoDB has
+     * no primary, don't stretch the budget to hours. A retry passed to a constructor is used as given, this default
+     * included.
      * <p>
      * A conflict is a {@link TransientDataAccessException}, or any exception with the {@code TransientTransactionError}
      * label that MongoDB puts on an error a fresh transaction can get past, found anywhere in its cause chain. That
