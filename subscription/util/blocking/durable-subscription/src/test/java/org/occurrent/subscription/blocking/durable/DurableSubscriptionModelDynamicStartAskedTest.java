@@ -130,7 +130,9 @@ class DurableSubscriptionModelDynamicStartAskedTest {
                     () -> assertThat(cancel).as("the cancel").succeedsWithin(BOUND),
                     () -> assertThat(subscribe).as("the subscribe").succeedsWithin(BOUND),
                     () -> assertThat(resume).as("the resume").succeedsWithin(BOUND),
-                    () -> assertThat(wrapped.resumed).as("the ids the wrapped model resumed").containsExactly(SUBSCRIPTION_ID)
+                    () -> assertThat(wrapped.resumed).as("the ids the wrapped model resumed").containsExactly(SUBSCRIPTION_ID),
+                    () -> assertThat(wrapped.subscriptions).as("the ids the wrapped model holds").containsExactly(SUBSCRIPTION_ID),
+                    () -> assertThat(subscribe.join().waitUntilStarted(Duration.ofSeconds(1))).as("the subscription of the subscribe made after the cancel took the lock started").isTrue()
             );
         }
     }
