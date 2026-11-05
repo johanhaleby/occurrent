@@ -124,6 +124,10 @@ import static java.util.Objects.requireNonNull;
 final class NamedCatchupSupport {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(NamedCatchupSupport.class);
+    // How often one resume claims the takeover of a lost live start. A resume claims it again when its takeover ran
+    // nothing with no shutdown or cancel to refuse it, as when a takeover that failed in between put back a record of its
+    // own.
+    private static final int TAKEOVER_CLAIMS_PER_RESUME = 3;
 
     private final CheckpointAwareSubscriptionModel wrapped;
     private final @Nullable SubscriptionModel named;
@@ -1071,24 +1075,34 @@ final class NamedCatchupSupport {
 
     // The wrapped model lost the live start, holds the subscription paused and no takeover replay runs, because the
     // wrapped model hasn't run the takeover yet or the takeover replay failed. Resuming the wrapped model would open
-    // the subscription where it lost the history, so the takeover replay runs now instead. A resume whose takeover runs
-    // nothing once the shutdown flag is set is refused, rather than resuming the wrapped model there. A takeover of the
-    // same loss already under way resumes the subscription itself, so a resume meanwhile is refused as one of a running
-    // replay is.
+    // the subscription where it lost the history, so the takeover replay runs now instead. A resume that claims the
+    // takeover of that loss runs it, or throws, and never resumes the wrapped model there. A takeover of
+    // the same loss already under way resumes the subscription itself, so a resume meanwhile is refused as one of a
+    // running replay is. When the takeover this resume claimed runs nothing, a shutdown or a cancel refuses the resume.
+    // Otherwise the resume claims the record it reads next, as after a failed takeover put back a record of its own.
+    // Null only for a record with no takeover asked for, or one the wrapped model doesn't hold paused.
     private @Nullable Subscription takeOverOnResume(String subscriptionId) {
-        HandedOver made = handedOver.get(subscriptionId);
-        if (made == null || !made.takeOverAsked().get() || !named.isPaused(subscriptionId)) {
-            return null;
+        for (int claims = 1; ; claims++) {
+            HandedOver made = handedOver.get(subscriptionId);
+            if (made == null || !made.takeOverAsked().get() || !named.isPaused(subscriptionId)) {
+                return null;
+            }
+            if (!made.takingOver().compareAndSet(false, true)) {
+                throw new SubscriptionAlreadyRunningException(subscriptionId);
+            }
+            CatchupState taking = takeOver(subscriptionId, made);
+            if (taking != null) {
+                return new NamedCatchupSubscription(subscriptionId, taking.started.asMono());
+            }
+            refuseIfShutDownOrCancelled(subscriptionId);
+            if (claims == TAKEOVER_CLAIMS_PER_RESUME) {
+                if (catchingUp.containsKey(subscriptionId)) {
+                    throw new SubscriptionAlreadyRunningException(subscriptionId);
+                }
+                throw new IllegalStateException("Cannot resume subscription " + subscriptionId + " because the replay that takes over the live start the subscription model lost could not start, "
+                        + "and resuming the subscription model would skip the events from that live start.");
+            }
         }
-        if (!made.takingOver().compareAndSet(false, true)) {
-            throw new SubscriptionAlreadyRunningException(subscriptionId);
-        }
-        CatchupState taking = takeOver(subscriptionId, made);
-        if (taking == null) {
-            requireNotShutdown(() -> shutDownRefusal("resume", subscriptionId));
-            return null;
-        }
-        return new NamedCatchupSubscription(subscriptionId, taking.started.asMono());
     }
 
     Mono<Void> cancelSubscription(String subscriptionId) {

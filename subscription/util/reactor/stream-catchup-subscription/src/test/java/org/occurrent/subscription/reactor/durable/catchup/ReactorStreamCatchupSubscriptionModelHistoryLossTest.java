@@ -571,6 +571,48 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     @Test
+    void a_resume_whose_handover_a_failed_takeover_replaced_after_the_resume_read_it_runs_the_takeover_and_does_not_resume_the_wrapped_model_where_it_lost_the_history() throws InterruptedException {
+        // Given a subscription whose live start the wrapped model lost, and which it paused for a takeover whose replay fails
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            HistoryLossHandling.TakeOver lossOfTheLiveStart = (HistoryLossHandling.TakeOver) wrapped.asksTheListeners(ID, wrapped.positionOf(ID));
+            wrapped.pauseSubscription(ID);
+            reader.head = 4;
+            reader.failReads(new IllegalStateException("the event store is down"));
+
+            // When the takeover the wrapped model runs fails and puts back a record of its own after a resume read the
+            // handover, and the event store reads again before the resume goes on
+            AtomicBoolean takeoverEnded = new AtomicBoolean();
+            NamedCatchupMapHook.installIn(catchup, "handedOver").afterTheReadIn("takeOverOnResume", () -> {
+                Thread takeover = new Thread(lossOfTheLiveStart.afterPause(), "takeover");
+                takeover.start();
+                try {
+                    takeover.join(10_000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                takeoverEnded.set(!takeover.isAlive());
+                reader.readsAgain();
+            });
+            Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+            awaitNoReplayInFlight(catchup);
+
+            // Then the resume runs the takeover, which delivers the event written in the gap, and the wrapped model is not
+            // resumed where it lost the history
+            assertAll(
+                    () -> assertThat(takeoverEnded).as("whether the failing takeover ended within 10 seconds").isTrue(),
+                    () -> assertThat(thrown).as("what the resume throws").isNull(),
+                    () -> assertThat(received).as("the history again, now with the event written in the gap").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4"),
+                    () -> assertThat(wrapped.resumedWhereItWasHeld).as("resumed where it lost the history").hasValue(0)
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_resume_while_a_cancel_of_a_subscription_paused_for_a_takeover_is_under_way_throws_UnknownSubscriptionException_and_does_not_resume_the_wrapped_model_where_it_lost_the_history() {
         // Given a subscription whose live start the wrapped model lost, and which it paused for a takeover it hasn't run yet
         LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
