@@ -302,7 +302,7 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
 
     private static Stream<Arguments> callerScopesWithoutATransactionAndExecutorPropagations() {
         return Stream.of("PROPAGATION_NOT_SUPPORTED", "PROPAGATION_SUPPORTS").flatMap(callerScope ->
-                Stream.of("PROPAGATION_NOT_SUPPORTED", "PROPAGATION_SUPPORTS", "PROPAGATION_NEVER").map(executorPropagation -> Arguments.of(callerScope, executorPropagation)));
+                Stream.of("PROPAGATION_NOT_SUPPORTED", "PROPAGATION_SUPPORTS", "PROPAGATION_NEVER", "PROPAGATION_REQUIRES_NEW").map(executorPropagation -> Arguments.of(callerScope, executorPropagation)));
     }
 
     private static int propagation(String name) {
@@ -310,6 +310,7 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
             case "PROPAGATION_NOT_SUPPORTED" -> TransactionDefinition.PROPAGATION_NOT_SUPPORTED;
             case "PROPAGATION_SUPPORTS" -> TransactionDefinition.PROPAGATION_SUPPORTS;
             case "PROPAGATION_NEVER" -> TransactionDefinition.PROPAGATION_NEVER;
+            case "PROPAGATION_REQUIRES_NEW" -> TransactionDefinition.PROPAGATION_REQUIRES_NEW;
             default -> throw new IllegalArgumentException(name);
         };
     }

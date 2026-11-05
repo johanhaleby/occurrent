@@ -1069,8 +1069,8 @@ subscriptions behaves as before.
   MongoDB stores a write to a stream often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or
   `PROPAGATION_NEVER`, and there a retry that used to work is gone. When `execute` runs outside every Spring transaction
   scope of yours, a DCB append on those three propagations stays. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or
-  `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, it rolls back as a write to a stream does when you don't
-  catch the failure inside that scope. I ran that on the blocking stack only.
+  `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, the append of a plain `execute` rolls back as a write to a
+  stream does when you don't catch the failure inside that scope, and the append of a snapshot decider stays.
   [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
   so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open
