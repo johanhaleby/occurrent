@@ -762,12 +762,13 @@ with a `timeoutMS` above 0, where the driver sends no `wtimeout`, your `timeoutM
 `timeoutMS` of 0 waits forever, so there `markerVersionsCommitTimeout` bounds the whole update, the wait to select a
 primary included. The rest of the append keeps the write concern it had.
 
-Every append waits for as long as a majority takes to replicate the update. On MongoDB 5.0 or later, on a set with three
-data-bearing members and no write concern configured, the update already waited for majority, so nothing changes there.
-On a local three-member set at w:1, a single writer's latency stayed within the noise between runs. With 8 writers,
-throughput went from about 990 to 1030 appends a second on the native store, 1050 to 875 on the Spring store and 990 to
-670 on the reactor store. These appends ran outside a transaction, and all members ran on one host, so the numbers show
-no network. Across a network, expect each append to wait about one more round trip to a secondary.
+Every append waits for as long as a majority takes to replicate the update. On MongoDB 5.0 or later, on a set without an
+arbiter and with no write concern configured, the update already waited for majority. What changes there is that a wait
+that used to have no limit now fails the append after `markerVersionsCommitTimeout`. On a local three-member set at w:1,
+a single writer's latency stayed within the noise between runs. With 8 writers, throughput went from about 990 to 1030
+appends a second on the native store, 1050 to 875 on the Spring store and 990 to 670 on the reactor store. These appends
+ran outside a transaction, and all members ran on one host, so the numbers show no network. Across a network, expect
+each append to wait about one more round trip to a secondary.
 
 ### Inside a transaction of yours
 
@@ -783,9 +784,10 @@ committed with it. It now commits on its own, before the append writes its event
 - With transaction synchronization active, as it is by default, a read in your transaction reports, in
   `lastSequencePosition()`, the head as of the first operation in your transaction's MongoDB session on the store's
   database factory. It also returns your transaction's own appends, and those it started after that operation are at
-  positions above that head. If you keep that position and read after it later, you get those events again. On a
-  sharded cluster, unless your transaction reads at read concern snapshot, the read can also return another writer's
-  event above that head, and you get that event again too.
+  positions above that head. If you keep that position and read after it later, you get those events again. On a sharded
+  cluster, unless your transaction reads at read concern snapshot, each shard has its own snapshot, set by the
+  transaction's first operation on that shard. The head is then the counter as of the first operation on the counter's
+  shard, and the read can also return another writer's event above that head, which you get again too.
 - An append joins your transaction when that's a Spring-managed MongoDB transaction on the template's database
   factory, and the `TransactionTemplate` or `TransactionalOperator` you give the store, if any, keeps the default
   propagation, `REQUIRED`.

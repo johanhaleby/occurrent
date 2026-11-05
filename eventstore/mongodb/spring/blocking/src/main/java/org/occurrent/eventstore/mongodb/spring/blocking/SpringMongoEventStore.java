@@ -988,7 +988,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * concurrent append is never partially visible. Inside a MongoDB transaction on this store's database factory, with
      * transaction synchronization active, the bound is the transaction's snapshot instead, which also holds the
      * transaction's own appends. On a sharded cluster below read concern snapshot each shard has a snapshot of its own,
-     * so such a read can also return another writer's event above the head.
+     * so such a read can also return another writer's event that committed after the transaction's first operation.
      * <p>
      * The returned stream is backed by a live server cursor and is read one batch at a time, so a replay from the
      * beginning never holds the whole matched history in memory and the first event is available before the read has

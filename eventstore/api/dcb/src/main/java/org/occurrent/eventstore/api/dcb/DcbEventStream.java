@@ -41,9 +41,11 @@ import static java.util.Objects.requireNonNull;
  *                             Inside a caller's transaction with transaction synchronization active, as it is by
  *                             default, {@code SpringMongoEventStore} and {@code ReactorMongoEventStore} report the head
  *                             as of the first operation in the transaction's MongoDB session on the store's database
- *                             factory, and {@code events} also holds the transaction's own appends. Those it started after that operation are at
- *                             positions above the head, so a read after this position, once the transaction has
- *                             committed, returns them again. An append joins the caller's transaction when that is a
+ *                             factory, and {@code events} also holds the transaction's own appends. Those it started
+ *                             after that operation are at positions above the head, so a read after this position, once
+ *                             the transaction has committed, returns them again. On a sharded cluster below read
+ *                             concern snapshot each shard has its own snapshot, so the head and the events can come
+ *                             from different points in time. An append joins the caller's transaction when that is a
  *                             Spring-managed MongoDB transaction on the template's database factory and the store's
  *                             transaction settings keep the default propagation, {@code REQUIRED}. ADR 149 lists what
  *                             happens in other setups.
