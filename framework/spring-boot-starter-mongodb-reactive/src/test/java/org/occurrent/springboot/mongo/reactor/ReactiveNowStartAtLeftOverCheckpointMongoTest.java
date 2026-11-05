@@ -77,8 +77,6 @@ class ReactiveNowStartAtLeftOverCheckpointMongoTest {
     @Container
     static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
-    private static final ApplicationRestart APPLICATION = new ApplicationRestart(mongoDBContainer, RestartApplication.class, "stream");
-
     private static final String LEFT_OVER_ID = "reactive-now-left-over";
 
     @Test
@@ -93,6 +91,15 @@ class ReactiveNowStartAtLeftOverCheckpointMongoTest {
         List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("reactive-now-left-over-default", "default");
 
         assertReplayedFromTheCheckpoint(handledBySecondBoot);
+    }
+
+    // With SAME_AS_START_AT the second boot gets only the event written after it started, although the same catch-up
+    // checkpoint is in storage.
+    @Test
+    void now_with_same_as_start_at_starts_at_the_present_on_a_restart_although_a_catch_up_checkpoint_is_in_storage() {
+        List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("reactive-now-left-over-same", "now-same-as-start-at");
+
+        assertThat(handledBySecondBoot).containsExactly("live-2");
     }
 
     // Pausing and resuming is not a restart. The subscription is NOW with SAME_AS_START_AT and a catch-up checkpoint is
@@ -145,7 +152,11 @@ class ReactiveNowStartAtLeftOverCheckpointMongoTest {
         }
         try (ConfigurableApplicationContext secondBoot = SpringApplication.run(RestartApplication.class,
                 bootArgs(databaseName, secondBootStartsAt, "while-down-1", "live-2"))) {
-            Class<? extends RecordingSubscriber> handlerType = secondBootStartsAt.equals("now") ? LeftOverNow.class : LeftOverDefault.class;
+            Class<? extends RecordingSubscriber> handlerType = switch (secondBootStartsAt) {
+                case "now" -> LeftOverNow.class;
+                case "now-same-as-start-at" -> LeftOverNowSameAsStartAt.class;
+                default -> LeftOverDefault.class;
+            };
             RecordingSubscriber handler = secondBoot.getBean(handlerType);
             awaitDelivered(handler, "live-2");
             return handler.names();
