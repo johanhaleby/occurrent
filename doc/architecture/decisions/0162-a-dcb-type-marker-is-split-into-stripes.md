@@ -164,8 +164,9 @@ absent too. A stripe created after the save, pruned and created again has a new
 epoch, and its prune removed every event of the earlier one, so the current epoch selects them all.
 
 This removes the wait for versions on such a boundary. A type nobody has appended yet gets versions too, all of them
-absent. A decider whose read saw a stripe as absent and whose append then created it skips that one save, since ADR
-148's decider check counts a key the read reported without an epoch as a mismatch. Its next read sees the stripe.
+absent. A decider whose read saw a stripe as absent and whose append then created it skips that one save, since
+`GenericDcbApplicationService` returns the append's versions only when the read reported every key of them with the
+append's epoch (ADR 148), and the read saw no epoch for that stripe. Its next read sees the stripe.
 
 ### Changing K later
 
