@@ -980,9 +980,7 @@ final class NamedCatchupSupport {
             boolean again = record != null && record.cancelledAgain;
             cancelled = requireNonNull(named).cancelSubscription(subscriptionId).doOnTerminate(cancelUnderWayEnds).doFinally(__ -> {
                 cancelUnderWayEnds.run();
-                if (record == null || record.cancelledAgain == again) {
-                    forget(subscriptionId, record);
-                }
+                forget(subscriptionId, record, again);
             }).cache();
         } catch (RuntimeException | Error e) {
             cancelUnderWayEnds.run();
@@ -1040,13 +1038,21 @@ final class NamedCatchupSupport {
 
     // Removes only the record the cancel read, so a subscribe of the id after the cancel keeps its own. One whose
     // subscribe is under way stays, marked, until that subscribe has returned, and is then forgotten by the cancel it
-    // sends again, if any. Under the per-id lock, since the subscribe clears subscribing under it.
+    // sends again, if any. Under the per-id lock, since the subscribe clears subscribing and sets cancelledAgain under it.
     private void forget(String subscriptionId, @Nullable Owned record) {
+        if (record != null) {
+            forget(subscriptionId, record, record.cancelledAgain);
+        }
+    }
+
+    // As above, for the cancel whose cancelledAgain was cancelledAgainAtCancel when it was sent. A first cancel that
+    // completes after the subscribe sent it again skips the record, which that second cancel removes once it completes.
+    private void forget(String subscriptionId, @Nullable Owned record, boolean cancelledAgainAtCancel) {
         if (record == null) {
             return;
         }
         underIdLock(subscriptionId, () -> {
-            if (!record.subscribing) {
+            if (!record.subscribing && record.cancelledAgain == cancelledAgainAtCancel) {
                 owned.remove(subscriptionId, record);
             }
             return null;
