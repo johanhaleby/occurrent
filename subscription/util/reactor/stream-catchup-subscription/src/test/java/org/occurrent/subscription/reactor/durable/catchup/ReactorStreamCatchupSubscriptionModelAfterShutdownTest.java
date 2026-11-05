@@ -41,15 +41,20 @@ import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.LongStream;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -124,6 +129,60 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         );
     }
 
+    @Test
+    void a_pause_of_a_replaying_subscription_that_a_shutdown_overtakes_after_its_check_throws_SubscriptionModelShutdownException() {
+        ShutDownLikeMongo overtaken = new ShutDownLikeMongo();
+        ReactorStreamCatchupSubscriptionModel model = new ReactorStreamCatchupSubscriptionModel(overtaken, new NeverEndingReplay());
+        CatchingUpHook hook = CatchingUpHook.installIn(model);
+        model.subscribe("replaying", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+
+        hook.afterGet(1, model::shutdown);
+        Throwable thrown = catchThrowable(() -> model.pauseSubscription("replaying"));
+
+        assertAll(
+                () -> assertThat(thrown).as("what the pause throws")
+                        .isInstanceOf(SubscriptionModelShutdownException.class).hasMessage("Cannot pause subscription replaying because the subscription model is shutdown."),
+                () -> assertThat(overtaken.callsAfterShutdown).as("calls the wrapped model got after its shutdown").isEmpty()
+        );
+    }
+
+    @Test
+    void a_resume_of_a_parked_subscription_that_a_shutdown_overtakes_after_its_check_throws_SubscriptionModelShutdownException() {
+        ShutDownLikeMongo overtaken = new ShutDownLikeMongo();
+        ReactorStreamCatchupSubscriptionModel model = new ReactorStreamCatchupSubscriptionModel(overtaken, new NeverEndingReplay());
+        CatchingUpHook hook = CatchingUpHook.installIn(model);
+        model.stop();
+        model.subscribe("parked", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+
+        // The first read is the one that tells the resume to start the stopped model, the second the one it acts on
+        hook.afterGet(2, model::shutdown);
+        Throwable thrown = catchThrowable(() -> model.resumeSubscription("parked"));
+
+        assertAll(
+                () -> assertThat(thrown).as("what the resume throws")
+                        .isInstanceOf(SubscriptionModelShutdownException.class).hasMessage("Cannot resume subscription parked because the subscription model is shutdown."),
+                () -> assertThat(overtaken.callsAfterShutdown).as("calls the wrapped model got after its shutdown").isEmpty()
+        );
+    }
+
+    // The shutdown sets its flag once the start has released the lock it starts the wrapped model under, and reaches
+    // the parked subscription only after the start has gone through the parked subscriptions
+    @Test
+    void a_start_that_resumes_subscriptions_and_that_a_shutdown_overtakes_after_its_check_starts_no_replay() {
+        NeverEndingReplay reader = new NeverEndingReplay();
+        ReactorStreamCatchupSubscriptionModel model = new ReactorStreamCatchupSubscriptionModel(new ShutDownLikeMongo(), reader);
+        CatchingUpHook hook = CatchingUpHook.installIn(model);
+        model.stop();
+        model.subscribe("parked", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+
+        // The first read clears the pauses asked for during a replay, the second unparks the parked subscriptions
+        hook.afterValues(2, model.namedSubscriptions::beginShutdown);
+        model.start(true);
+        model.shutdown();
+
+        assertThat(reader.reads).as("history reads the start began").hasValue(0);
+    }
+
     // Events e1 to e3 at positions 1 to 3
     private static final class ThreeEvents implements UnscopedPositionOrderedReader {
         @Override
@@ -142,6 +201,79 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         @Override
         public boolean writesPosition() {
             return true;
+        }
+    }
+
+    // A replay that never finishes reading its history, so it never hands over, counting each read it begins
+    private static final class NeverEndingReplay implements UnscopedPositionOrderedReader {
+        final AtomicInteger reads = new AtomicInteger();
+
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            reads.incrementAndGet();
+            return Flux.never();
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return Mono.just(3L);
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
+        }
+    }
+
+    // Takes the place of the map of catch-ups in flight and runs a hook right after the nth read of it. That puts the
+    // hook between a call reading a catch-up and acting on it, which no thread schedule reaches every time.
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static final class CatchingUpHook extends ConcurrentHashMap {
+        private final AtomicInteger getsLeft = new AtomicInteger();
+        private final AtomicInteger valuesLeft = new AtomicInteger();
+        private final AtomicReference<@Nullable Runnable> afterGet = new AtomicReference<>();
+        private final AtomicReference<@Nullable Runnable> afterValues = new AtomicReference<>();
+
+        static CatchingUpHook installIn(ReactorStreamCatchupSubscriptionModel model) {
+            CatchingUpHook hook = new CatchingUpHook();
+            try {
+                Field catchingUp = NamedCatchupSupport.class.getDeclaredField("catchingUp");
+                catchingUp.setAccessible(true);
+                catchingUp.set(model.namedSubscriptions, hook);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+            return hook;
+        }
+
+        void afterGet(int nth, Runnable hook) {
+            getsLeft.set(nth);
+            afterGet.set(hook);
+        }
+
+        void afterValues(int nth, Runnable hook) {
+            valuesLeft.set(nth);
+            afterValues.set(hook);
+        }
+
+        @Override
+        public Object get(Object key) {
+            Object value = super.get(key);
+            runOnNth(getsLeft, afterGet);
+            return value;
+        }
+
+        @Override
+        public Collection values() {
+            Collection values = super.values();
+            runOnNth(valuesLeft, afterValues);
+            return values;
+        }
+
+        private static void runOnNth(AtomicInteger left, AtomicReference<@Nullable Runnable> hook) {
+            if (hook.get() != null && left.decrementAndGet() == 0) {
+                requireNonNull(hook.getAndSet(null)).run();
+            }
         }
     }
 

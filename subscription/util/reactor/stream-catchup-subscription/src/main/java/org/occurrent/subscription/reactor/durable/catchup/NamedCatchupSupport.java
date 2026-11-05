@@ -212,10 +212,18 @@ final class NamedCatchupSupport {
     }
 
     // A call that finds this model shut down is refused here and never reaches the wrapped model. A pause or a resume
-    // that a shutdown() overtakes after this check can still reach it, and gets what the wrapped model throws.
+    // that a shutdown() overtakes after this check is refused the same way when that shutdown cancelled the catch-up
+    // it read for the id. One that reads no catch-up for the id goes to the wrapped model and gets what that model throws.
     private void requireNotShutdown(Supplier<SubscriptionModelShutdownException> refusal) {
         if (shutdown) {
             throw refusal.get();
+        }
+    }
+
+    // Called with the state monitor held, which shutdown() takes to cancel the state after it set the flag
+    private void requireNotCancelledByShutdown(CatchupState state, String call, String subscriptionId) {
+        if (state.cancelled.get() && shutdown) {
+            throw shutDownRefusal(call, subscriptionId);
         }
     }
 
@@ -920,9 +928,10 @@ final class NamedCatchupSupport {
 
     // Called with the state monitor held. The launch that runs the replay of a subscription that stop() interrupted, or
     // that was made while the model was stopped, again from its original start position, or null when it stays parked.
-    // The caller runs it once the monitor is released.
+    // The caller runs it once the monitor is released. A shutdown() that set its flag before this check keeps the
+    // state parked, even before that shutdown cancels it.
     private @Nullable Object unpark(CatchupState state) {
-        if (!stopped && !state.handedOver.get() && !state.cancelled.get() && state.parked.getAndSet(false)) {
+        if (!stopped && !shutdown && !state.handedOver.get() && !state.cancelled.get() && state.parked.getAndSet(false)) {
             return nextLaunch(state);
         }
         return null;
@@ -975,6 +984,7 @@ final class NamedCatchupSupport {
         CatchupState state = catchingUp.get(subscriptionId);
         if (state != null) {
             synchronized (state) {
+                requireNotCancelledByShutdown(state, "pause", subscriptionId);
                 if (!state.handedOver.get()) {
                     if (state.parked.get() || state.pendingPause.getAndSet(true)) {
                         throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
@@ -1011,6 +1021,7 @@ final class NamedCatchupSupport {
             boolean replaying = false;
             Object launched = null;
             synchronized (state) {
+                requireNotCancelledByShutdown(state, "resume", subscriptionId);
                 if (!state.handedOver.get()) {
                     boolean pausedDuringReplay = state.pendingPause.getAndSet(false);
                     if (!state.parked.get() && !pausedDuringReplay) {
