@@ -763,12 +763,13 @@ with a `timeoutMS` above 0, where the driver sends no `wtimeout`, your `timeoutM
 primary included. The rest of the append keeps the write concern it had.
 
 Every append waits for as long as a majority takes to replicate the update. On MongoDB 5.0 or later, on a set without an
-arbiter and with no write concern configured, the update already waited for majority. What changes there is that a wait
-that used to have no limit now fails the append after `markerVersionsCommitTimeout`. On a local three-member set at w:1,
-a single writer's latency stayed within the noise between runs. With 8 writers, throughput went from about 990 to 1030
-appends a second on the native store, 1050 to 875 on the Spring store and 990 to 670 on the reactor store. These appends
-ran outside a transaction, and all members ran on one host, so the numbers show no network. Across a network, expect
-each append to wait about one more round trip to a secondary.
+arbiter and with no write concern configured, the update already waited for majority. What changes there, unless your
+client sets a `timeoutMS` above 0, is that a wait that used to have no limit now fails the append after
+`markerVersionsCommitTimeout`. On a local three-member set at w:1, a single writer's latency stayed within the noise
+between runs. With 8 writers, throughput went from about 990 to 1030 appends a second on the native store, 1050 to 875
+on the Spring store and 990 to 670 on the reactor store. These appends ran outside a transaction, and all members ran on
+one host, so the numbers show no network. Across a network, expect each append to wait about one more round trip to a
+secondary.
 
 ### Inside a transaction of yours
 
