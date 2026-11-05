@@ -38,6 +38,7 @@ import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.time.Duration;
 import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -210,12 +211,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // The subscribes that ask their function before they take the lock for their id, kept until they hold it
     private final Set<Asked> asking = ConcurrentHashMap.newKeySet();
 
-    // How long a resume of an id on another thread waits for a subscribe of the id whose function is asked
+    // How long a resume of an id on another thread waits for the function of a subscribe of the id to return
     private static final Duration ASKED_WAIT = Duration.ofSeconds(10);
 
     private static final class Asked {
         private final String subscriptionId;
         private final Thread asker = Thread.currentThread();
+        // Completes once the function has returned or thrown
+        private final CompletableFuture<Void> returned = new CompletableFuture<>();
         // Completes once the subscribe holds the lock for the id or its function has thrown
         private final CompletableFuture<Void> settled = new CompletableFuture<>();
         // Set by a cancel on another thread before the subscribe holds the lock for the id
@@ -257,33 +260,31 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     private void settle(Asked asked) {
         asking.remove(asked);
+        asked.returned.complete(null);
         asked.settled.complete(null);
     }
 
-    // A resume waits for the subscribes of the id whose function another thread asks, as it waited for the lock they
-    // held while the function was asked under it. The asking thread itself goes ahead. An interrupt doesn't end the
-    // wait, and is set again once the wait is over
+    // A resume waits for the subscribes of the id whose function another thread asks, so it still comes after them. It
+    // waits up to ASKED_WAIT for the functions to return, and then for those subscribes to take the lock with no limit,
+    // as a resume always waited for the lock. The asking thread itself goes ahead. An interrupt doesn't end the wait,
+    // and is set again once the wait is over
     private void waitForAsksOnOtherThreads(String subscriptionId) {
         Thread current = Thread.currentThread();
-        CompletableFuture<?>[] asks = asking.stream()
-                .filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current)
-                .map(asked -> asked.settled)
-                .toArray(CompletableFuture[]::new);
-        if (asks.length == 0) {
+        List<Asked> asks = asking.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current).toList();
+        if (asks.isEmpty()) {
             return;
         }
-        CompletableFuture<Void> settled = CompletableFuture.allOf(asks);
+        CompletableFuture<Void> returned = CompletableFuture.allOf(asks.stream().map(asked -> asked.returned).toArray(CompletableFuture[]::new));
         long deadline = System.nanoTime() + ASKED_WAIT.toNanos();
         boolean interrupted = false;
         try {
-            while (true) {
+            while (!returned.isDone()) {
                 try {
-                    settled.get(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
-                    return;
+                    returned.get(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
                 } catch (InterruptedException e) {
                     interrupted = true;
                 } catch (ExecutionException e) {
-                    return;
+                    break;
                 } catch (TimeoutException e) {
                     throw new IllegalStateException("Cannot resume subscription " + subscriptionId + ", because the StartAt.dynamic function of a subscribe of it on another thread didn't return within "
                             + ASKED_WAIT.toMillis() + " ms. Nothing was changed.");
@@ -294,6 +295,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 Thread.currentThread().interrupt();
             }
         }
+        // join doesn't end on an interrupt and keeps the flag set
+        CompletableFuture.allOf(asks.stream().map(asked -> asked.settled).toArray(CompletableFuture[]::new)).join();
     }
 
     /**
@@ -478,6 +481,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             settle(asked);
             throw e;
         }
+        asked.returned.complete(null);
         StartAt askedOnce = answered;
         // Held for the rest of the method, not just the opt-out branch, so subscribe, resumeSubscription and
         // cancelSubscription for the same id stay serialized against notCheckpointedSubscriptions (see the field
@@ -858,8 +862,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * reason a MongoDB model resumes from its own tracked position when the stored checkpoint is one it cannot open
      * its change stream at, such as the position a catch-up stores while it replays.
      * <p>
-     * A subscribe of the id on another thread whose {@code StartAt.dynamic} function is still being asked is waited for
-     * up to 10 seconds, and then this throws {@link IllegalStateException} and changes nothing.
+     * A subscribe of the id on another thread whose {@code StartAt.dynamic} function is still being asked is waited for.
+     * If that function doesn't return within 10 seconds, this throws {@link IllegalStateException} and changes nothing.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
