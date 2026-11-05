@@ -164,7 +164,7 @@ class ReactorMongoEventStoreReservationWriteConcernTest {
     }
 
     @Test
-    void an_append_on_a_client_with_an_operation_timeout_reserves_its_position_within_the_marker_versions_commit_timeout() {
+    void an_append_on_a_client_with_an_operation_timeout_reserves_its_position_at_majority_within_the_clients_timeout() {
         // Given
         mongoClient.close();
         openStore(settings -> settings.timeout(60, TimeUnit.SECONDS));
@@ -175,9 +175,12 @@ class ReactorMongoEventStoreReservationWriteConcernTest {
 
         // Then
         BsonDocument reservation = onlyReservation().document();
+        BsonDocument writeConcern = reservation.getDocument("writeConcern", new BsonDocument());
         assertAll(
+                () -> assertThat(writeConcern.get("w")).as("%s", reservation).isEqualTo(new BsonString("majority")),
+                () -> assertThat(writeConcern.containsKey("wtimeout")).as("%s", reservation).isFalse(),
                 () -> assertThat(reservation.containsKey("maxTimeMS")).as("%s", reservation).isTrue(),
-                () -> assertThat(reservation.getNumber("maxTimeMS").longValue()).as("%s", reservation).isBetween(1L, COMMIT_TIMEOUT_MILLIS)
+                () -> assertThat(reservation.getNumber("maxTimeMS").longValue()).as("%s", reservation).isBetween(COMMIT_TIMEOUT_MILLIS + 1, 60_000L)
         );
     }
 

@@ -39,10 +39,13 @@ import static java.util.Objects.requireNonNull;
  *                             assigns positions before the events commit can report a head that is ahead of the data a
  *                             reader can actually see. Use {@code consistencyToken} for optimistic concurrency.
  *                             Inside a caller's transaction, {@code SpringMongoEventStore} and
- *                             {@code ReactorMongoEventStore} report the head as of the transaction's first MongoDB
- *                             operation, and {@code events} also holds the events the transaction appended after that,
- *                             at positions above the head. A read after this position, once the transaction has
- *                             committed, returns those events again.
+ *                             {@code ReactorMongoEventStore} report the head as of the transaction's first operation
+ *                             on the store's database factory, and {@code events} also holds the events the
+ *                             transaction appended after that, at positions above the head. A read after this
+ *                             position, once the transaction has committed, returns those events again. With the
+ *                             store's transaction manager on another database factory instance than its template, an
+ *                             append commits in a transaction of its own, and when the caller's transaction read
+ *                             before that append, its later reads don't return it.
  * @param consistencyToken     the token a conditional append is checked against. It holds the criteria the read was
  *                             given, so pass it unchanged to
  *                             {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)} and the append is

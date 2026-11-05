@@ -373,7 +373,8 @@ public class EventStoreConfig {
          * {@link Builder#transactionConfig(TransactionalOperator) transactional operator} configured for writes.
          * <p>
          * It also bounds how long an append waits for a majority to acknowledge its position reservation. An append
-         * that isn't acknowledged within it throws and writes no event.
+         * that isn't acknowledged within it throws and writes no event. On a client with {@code timeoutMS}, where the
+         * driver sends no {@code wtimeout}, the client's timeout bounds that wait instead.
          *
          * @param markerVersionsCommitTimeout at least 1 millisecond
          * @return The same {@code Builder} instance.

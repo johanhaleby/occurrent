@@ -91,7 +91,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -943,12 +942,15 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 () -> {
                     // Not through mongoTemplate, which would bind the update to a transaction open on this thread. Its
                     // failures are translated the way mongoTemplate would, which the duplicate check of the retry needs.
+                    var collection = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase().getCollection(dcbPositionCollectionName);
                     Document updated;
                     try {
-                        updated = reservationCollection().findOneAndUpdate(
-                                Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
-                                Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
-                                new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
+                        updated = collection
+                                .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout))
+                                .findOneAndUpdate(
+                                        Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
+                                        Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
+                                        new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
                     } catch (RuntimeException e) {
                         DataAccessException translated = mongoTemplate.getExceptionTranslator().translateExceptionIfPossible(e);
                         throw translated == null ? e : translated;
@@ -958,12 +960,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 });
     }
 
-    private MongoCollection<Document> reservationCollection() {
-        MongoCollection<Document> collection = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase().getCollection(dcbPositionCollectionName);
-        collection = collection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout));
-        Long clientTimeout = collection.getTimeout(TimeUnit.MILLISECONDS);
-        return clientTimeout == null ? collection : collection.withTimeout(DcbMarkerModel.reservationTimeoutMillis(clientTimeout, markerVersionsCommitTimeout), TimeUnit.MILLISECONDS);
-    }
 
     /**
      * {@inheritDoc}
