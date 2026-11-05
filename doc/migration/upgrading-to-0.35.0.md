@@ -92,6 +92,9 @@ other sections compile fine and behave differently, so read them first.
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   Every subscription a catch-up subscription runs on MongoDB, which in Spring Boot is every subscription by default.
   Compiles unchanged.
+- [A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs](#a-blocking-cancel-doesnt-wait-for-a-subscribe-whose-startatdynamic-function-runs).
+  A cancel made while the function runs returns first, and that subscribe subscribes nothing. A subscribe of an id a
+  catch-up model already runs asks its function before it throws. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 
@@ -1354,6 +1357,40 @@ On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription 
 checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
 written while the application was down, and runs on every instance. Delete the old checkpoint of a subscription you
 later switch to `DEFAULT`, or it resumes from that position.
+
+## A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs
+
+In 0.34.0 the blocking `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel`, `CatchupSubscriptionModel` and
+`DurableSubscriptionModel` asked a `StartAt.dynamic(..)` function while they held the lock for the subscription id, and
+`cancelSubscription` for that id waited for the lock. A function that waited for a cancel of its own id on another
+thread made both calls wait for each other forever. These models now ask the function before they take the lock.
+
+### Who is affected
+
+Code that subscribes through one of these models with a `StartAt.dynamic(..)` function and cancels the same id from
+another thread while the function can still be running. Code that subscribes an id a catch-up model already runs, with
+such a function, is affected too.
+
+### What changes
+
+* A `cancelSubscription(id)` made while the function of a subscribe of `id` runs returns without waiting for that
+  subscribe. The subscribe returns once the function has, subscribes nothing, and the `Subscription` it returns answers
+  `false` from `waitUntilStarted(..)`.
+* A subscribe of an id that `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or
+  `CatchupSubscriptionModel` already runs asks its function before it throws `DuplicateSubscriptionIdException`. In
+  0.34.0 it threw before the function was asked. `DurableSubscriptionModel` asked the function first in 0.34.0 too.
+
+### What to do
+
+* Don't read a returned `cancelSubscription(id)` as a sign that a subscribe of `id` on another thread has returned. Call
+  `waitUntilStarted(..)` on the `Subscription` that subscribe returns when you need to know whether it started.
+* Keep effects that must happen only for a subscribe that goes ahead out of the function, since a subscribe that then
+  throws `DuplicateSubscriptionIdException` asks it too.
+* Don't wait in the function for a `pauseSubscription` or `resumeSubscription` of the same id on a catch-up model on
+  another thread. That call waits up to 10 seconds for the subscribe and then throws `IllegalStateException`, as it did
+  in 0.34.0.
+
+The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
