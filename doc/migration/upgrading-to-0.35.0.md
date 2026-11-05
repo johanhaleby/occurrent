@@ -101,8 +101,8 @@ other sections compile fine and behave differently, so read them first.
 - [A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs](#a-blocking-cancel-doesnt-wait-for-a-subscribe-whose-startatdynamic-function-runs).
   A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
-  `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Compiles
-  unchanged.
+  `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached.
+  `ReactorMongoSubscriptionModel` isn't affected. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 
@@ -1637,16 +1637,22 @@ The code compiles unchanged, and there is no OpenRewrite recipe, because no sign
 
 `ReactorDurableSubscriptionModel` starts a subscription whose `StartAt.dynamic(..)` function answers `StartAt.now()`
 from where the feed was when `subscribe(..)` was called, as `globalCheckpointAsOfNow()` of the wrapped model answers
-it. When that read answers nothing, the subscription doesn't start. `waitUntilStarted()` of the subscription
-`subscribe(..)` returned fails with an `IllegalStateException`, and an `ERROR` is logged. In 0.34.0 the subscription
-started from wherever the feed had reached when the wrapped model got it, and skipped what was written before that.
+it. A read that fails is read again after a delay that about doubles, with a `WARN` for each failure, until it answers
+or a cancel of the id or a `shutdown()` ends the wait. When the read answers nothing, the subscription doesn't start.
+`waitUntilStarted()` of the subscription `subscribe(..)` returned fails with an `IllegalStateException`, and an `ERROR`
+is logged. In 0.34.0 the subscription started from wherever the feed had reached when the wrapped model got it, and
+skipped what was written before that.
 
 ### Who is affected
 
-A `ReactorDurableSubscriptionModel` over a model that manages named subscriptions, such as
-`ReactorMongoSubscriptionModel`, with a subscription whose `StartAt.dynamic(..)` function answers `StartAt.now()`, when
-the wrapped model's `globalCheckpointAsOfNow()` answers empty. A wrapped model that always answers a position isn't
-affected.
+A `ReactorDurableSubscriptionModel` over a model that manages named subscriptions and whose `globalCheckpointAsOfNow()`
+can answer empty, with a subscription whose `StartAt.dynamic(..)` function answers `StartAt.now()`. That includes a
+subscribe that waits for a checkpoint that a cancel of the id deleted to be written back.
+
+`ReactorMongoSubscriptionModel` isn't affected. It fails the read when MongoDB gives no position and never answers
+empty, so the subscription reads again until MongoDB answers. Neither is the Spring Boot starter, whose
+`ReactorDurableSubscriptionModel` asks `ReactorMongoSubscriptionModel`, directly or through a
+`ReactorCatchupSubscriptionModel`.
 
 ### What to do
 
@@ -1658,9 +1664,8 @@ new ReactorDurableSubscriptionModel(wrappedModel, checkpointStorage,
         new ReactorDurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
 ```
 
-With the Spring Boot starter, set `occurrent.subscription.start-when-no-start-position-can-be-recorded=true`. The same
-setting lets a subscription from the subscription-model default start when no checkpoint is stored and the read
-answers nothing.
+The same setting lets a subscription from the subscription-model default start when no checkpoint is stored and the
+read answers nothing.
 
 Otherwise, let the subscribe fail and subscribe the id again once the wrapped model can answer. The id is free once
 `waitUntilStarted()` has failed, so you don't need to call `cancelSubscription(..)` first.

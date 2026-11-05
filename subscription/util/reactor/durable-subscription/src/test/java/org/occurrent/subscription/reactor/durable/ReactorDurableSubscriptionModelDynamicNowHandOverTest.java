@@ -24,14 +24,19 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -49,8 +54,11 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
@@ -75,6 +83,7 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
     private final NamedFeed feed = new NamedFeed();
     private final ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
     private final CompletableFuture<Void> release = new CompletableFuture<>();
+    private final CompletableFuture<Void> readCancelled = new CompletableFuture<>();
     private final ExecutorService caller = Executors.newSingleThreadExecutor();
     private final LoggedByTheModel logged = new LoggedByTheModel();
 
@@ -133,12 +142,13 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
         List<Long> delivered = new CopyOnWriteArrayList<>();
 
         // When
-        model.subscribe(SUBSCRIPTION_ID, null, dynamicNow(), action(delivered)).waitUntilStarted().block(TIMEOUT);
+        Throwable subscribedAgain = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, dynamicNow(), action(delivered)).waitUntilStarted().block(TIMEOUT));
         long writtenAfter = feed.write();
 
         // Then
         assertThat(notStarted).as("why the first subscribe did not start").isInstanceOf(IllegalStateException.class);
-        await().atMost(TIMEOUT).until(() -> delivered.contains(writtenAfter));
+        assertThat(subscribedAgain).as("how the second subscribe of the id ended").isNull();
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered to the second subscribe").contains(writtenAfter));
         assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").containsExactly(SUBSCRIPTION_ID);
         assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("running in the wrapped model").isTrue();
     }
@@ -157,13 +167,14 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
 
         try {
             // When
-            startsAnyway.subscribe(SUBSCRIPTION_ID, null, startAt, action(delivered)).waitUntilStarted().block(TIMEOUT);
+            Throwable notStarted = catchThrowable(() -> startsAnyway.subscribe(SUBSCRIPTION_ID, null, startAt, action(delivered)).waitUntilStarted().block(TIMEOUT));
             long writtenAfter = feed.write();
 
             // Then
+            assertThat(notStarted).as("how waiting for the start ended").isNull();
             // startWhenNoStartPositionCanBeRecorded accepts losing what is written before the wrapped model opens its
             // feed, so the event written while the function ran is skipped
-            await().atMost(TIMEOUT).until(() -> delivered.contains(writtenAfter));
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered once the subscription started").contains(writtenAfter));
             assertThat(delivered).as("events delivered").containsExactly(writtenAfter);
             assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("running in the wrapped model").isTrue();
         } finally {
@@ -172,20 +183,29 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
     }
 
     @Test
-    void a_read_that_fails_fails_the_start_and_is_logged_as_an_error() {
+    void a_read_that_fails_is_read_again_and_the_subscription_starts_from_the_call() {
         // Given
-        feed.presentRead = atTheCall -> Mono.error(new IllegalStateException(READ_FAILED));
+        AtomicInteger reads = new AtomicInteger();
+        // The first two reads fail, so the read that answers comes after a delay
+        feed.presentRead = atTheCall -> Mono.defer(() -> reads.getAndIncrement() < 2 ? Mono.error(new IllegalStateException(READ_FAILED)) : Mono.just(atTheCall));
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        AtomicLong writtenWhileTheFunctionRan = new AtomicLong();
+        StartAt startAt = StartAt.dynamic(() -> {
+            writtenWhileTheFunctionRan.set(feed.write());
+            return StartAt.now();
+        });
 
         // When
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, dynamicNow(), cloudEvent -> Mono.empty());
+        Throwable notStarted = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, startAt, action(delivered)).waitUntilStarted().block(TIMEOUT));
+        long writtenAfter = feed.write();
 
         // Then
-        Throwable notStarted = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
-        assertThat(notStarted).as("why the subscription did not start").isInstanceOf(IllegalStateException.class).hasMessage(READ_FAILED);
-        assertThat(logged.at(Level.ERROR)).as("errors logged").anySatisfy(message -> assertThat(message).startsWith("Subscription " + SUBSCRIPTION_ID + " could not be started"));
-        assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").isEmpty();
-        assertThat(model.isRunning(SUBSCRIPTION_ID)).as("running after the failed start").isFalse();
-        assertThat(model.subscriptionIds()).as("subscription ids after the failed start").doesNotContain(SUBSCRIPTION_ID);
+        assertThat(notStarted).as("how waiting for the start ended").isNull();
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered once the subscription started").contains(writtenAfter));
+        assertThat(delivered).as("events delivered").containsExactly(writtenWhileTheFunctionRan.get(), writtenAfter);
+        assertThat(logged.at(Level.WARN)).as("warnings logged").anySatisfy(message -> assertThat(message)
+                .startsWith("Could not read where the feed was when subscription " + SUBSCRIPTION_ID + " asked to start from the present"));
+        assertThat(logged.at(Level.ERROR)).as("errors logged").isEmpty();
     }
 
     @Test
@@ -244,6 +264,102 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
         assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("running in the wrapped model once subscribed again").isTrue();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_cancel_while_the_read_is_held_fails_the_start_at_once_and_cancels_the_read(boolean readAgainAfterFailures) {
+        // Given
+        Subscription subscription = readAgainAfterFailures ? subscribedWhileTheReadAgainAfterFailuresIsHeld() : subscribedWhileTheReadIsHeld();
+
+        // When
+        model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
+
+        // Then
+        assertThat(subscription.waitUntilStarted().toFuture()).as("waiting for the start of the cancelled subscription")
+                .failsWithin(RETURNS_AT_ONCE).withThrowableThat().isInstanceOf(CancellationException.class);
+        assertThat(readCancelled).as("the read held when the cancel came, cancelled").succeedsWithin(RETURNS_AT_ONCE);
+        assertThat(release).as("the release of the held read").isNotDone();
+        assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").isEmpty();
+    }
+
+    @Test
+    void a_shutdown_while_the_read_again_after_failures_is_held_cancels_the_read() {
+        // Given
+        Subscription subscription = subscribedWhileTheReadAgainAfterFailuresIsHeld();
+
+        // When
+        model.shutdown();
+
+        // Then
+        assertThat(subscription.waitUntilStarted().toFuture()).as("waiting for the start of the subscription once shut down")
+                .failsWithin(RETURNS_AT_ONCE).withThrowableOfType(ExecutionException.class).withCauseInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(readCancelled).as("the read held when the shutdown came, cancelled").succeedsWithin(RETURNS_AT_ONCE);
+        assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").isEmpty();
+    }
+
+    @Test
+    void a_read_that_answers_nothing_fails_the_start_of_a_subscribe_that_waits_for_the_checkpoint_a_cancel_deleted_to_be_written_back() {
+        // Given
+        HeldDeleteStorage storage = new HeldDeleteStorage();
+        ReactorDurableSubscriptionModel waits = new ReactorDurableSubscriptionModel(feed, storage);
+        AtomicBoolean asked = new AtomicBoolean();
+        feed.presentRead = atTheCall -> Mono.empty();
+
+        try {
+            Subscription subscription = subscribedWhileACancelDeletes(waits, storage, StartAt.dynamic(() -> {
+                asked.set(true);
+                return StartAt.now();
+            }), cloudEvent -> Mono.empty());
+            boolean askedBeforeTheDeleteEnded = asked.get();
+
+            // When
+            storage.releaseDelete.complete(null);
+            Throwable notStarted = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
+
+            // Then
+            assertThat(askedBeforeTheDeleteEnded).as("the function asked before the delete ended").isFalse();
+            assertThat(notStarted).as("why the subscription did not start").isInstanceOf(IllegalStateException.class)
+                    .hasMessageStartingWith("The StartAt.dynamic(..) function of subscription " + SUBSCRIPTION_ID + " answered StartAt.now(), and the wrapped subscription model "
+                                            + NamedFeed.class.getName() + " answered nothing when asked where its feed was when subscribe(..) was called.");
+            assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").isEmpty();
+        } finally {
+            storage.releaseDelete.complete(null);
+            waits.shutdown();
+        }
+    }
+
+    @Test
+    void a_function_that_answers_another_dynamic_start_position_that_answers_now_starts_from_the_call_when_the_subscribe_waits_for_the_checkpoint_a_cancel_deleted() {
+        // Given
+        HeldDeleteStorage storage = new HeldDeleteStorage();
+        ReactorDurableSubscriptionModel waits = new ReactorDurableSubscriptionModel(feed, storage);
+        AtomicBoolean asked = new AtomicBoolean();
+        AtomicLong writtenWhileTheFunctionRan = new AtomicLong();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+
+        try {
+            Subscription subscription = subscribedWhileACancelDeletes(waits, storage, StartAt.dynamic(() -> {
+                asked.set(true);
+                writtenWhileTheFunctionRan.set(feed.write());
+                return dynamicNow();
+            }), action(delivered));
+            boolean askedBeforeTheDeleteEnded = asked.get();
+
+            // When
+            storage.releaseDelete.complete(null);
+            Throwable notStarted = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
+            long writtenAfter = feed.write();
+
+            // Then
+            assertThat(askedBeforeTheDeleteEnded).as("the function asked before the delete ended").isFalse();
+            assertThat(notStarted).as("how waiting for the start ended").isNull();
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered once the subscription started").contains(writtenAfter));
+            assertThat(delivered).as("events delivered").containsExactly(writtenWhileTheFunctionRan.get(), writtenAfter);
+        } finally {
+            storage.releaseDelete.complete(null);
+            waits.shutdown();
+        }
+    }
+
     private static StartAt dynamicNow() {
         return StartAt.dynamic(StartAt::now);
     }
@@ -258,12 +374,76 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
 
     // Holds the read of where the feed was until release completes. Only the read made after this is held.
     private Subscription subscribedWhileTheReadIsHeld() {
-        feed.presentRead = atTheCall -> Mono.fromFuture(release, true).thenReturn(atTheCall);
+        feed.presentRead = this::heldUntilReleased;
         CompletableFuture<Subscription> subscribed = subscribeFromADynamicNow();
         assertThat(subscribed).as("the subscribe while the read is held").succeedsWithin(RETURNS_AT_ONCE);
         assertThat(feed.subscribedIds).as("subscriptions the wrapped model took while the read is held").isEmpty();
         assertThat(model.isRunning(SUBSCRIPTION_ID)).as("running while the read is held").isTrue();
         return subscribed.join();
+    }
+
+    // As subscribedWhileTheReadIsHeld, with the first two reads failing and the read made after a delay held
+    private Subscription subscribedWhileTheReadAgainAfterFailuresIsHeld() {
+        AtomicInteger reads = new AtomicInteger();
+        CompletableFuture<Void> heldAfterTheFailures = new CompletableFuture<>();
+        feed.presentRead = atTheCall -> Mono.defer(() -> reads.getAndIncrement() < 2
+                ? Mono.error(new IllegalStateException(READ_FAILED))
+                : heldUntilReleased(atTheCall).doOnSubscribe(__ -> heldAfterTheFailures.complete(null)));
+        CompletableFuture<Subscription> subscribed = subscribeFromADynamicNow();
+        assertThat(subscribed).as("the subscribe while the read is held").succeedsWithin(RETURNS_AT_ONCE);
+        assertThat(heldAfterTheFailures).as("the read made after the failed ones, held").succeedsWithin(TIMEOUT);
+        assertThat(feed.subscribedIds).as("subscriptions the wrapped model took while the read is held").isEmpty();
+        return subscribed.join();
+    }
+
+    // Answers atTheCall once release completes, and completes readCancelled when cancelled before that
+    private Mono<Checkpoint> heldUntilReleased(Checkpoint atTheCall) {
+        return Mono.fromFuture(release, true).thenReturn(atTheCall).doOnCancel(() -> readCancelled.complete(null));
+    }
+
+    // Subscribes while a cancel of the id deletes a stored checkpoint, so the subscribe waits for that checkpoint to be
+    // written back before it asks startAt
+    private static Subscription subscribedWhileACancelDeletes(ReactorDurableSubscriptionModel model, HeldDeleteStorage storage, StartAt startAt,
+                                                              Function<CloudEvent, Mono<Void>> action) {
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("0")).block(TIMEOUT);
+        model.cancelSubscription(SUBSCRIPTION_ID).subscribe();
+        assertThat(storage.deleteEntered).as("the delete of the cancel").succeedsWithin(TIMEOUT);
+        return model.subscribe(SUBSCRIPTION_ID, null, startAt, action);
+    }
+
+    // Holds each delete until releaseDelete completes, and evaluates no delete condition
+    private static final class HeldDeleteStorage implements CheckpointStorage {
+        private final InMemoryCheckpointStorage stored = new InMemoryCheckpointStorage();
+        private final CompletableFuture<Void> deleteEntered = new CompletableFuture<>();
+        private final CompletableFuture<Void> releaseDelete = new CompletableFuture<>();
+
+        @Override
+        public Mono<Checkpoint> read(String subscriptionId) {
+            return stored.read(subscriptionId);
+        }
+
+        @Override
+        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            return stored.save(subscriptionId, checkpoint, condition);
+        }
+
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return stored.evaluatesWriteConditions();
+        }
+
+        @Override
+        public Mono<Long> writeVersion(String subscriptionId) {
+            return stored.writeVersion(subscriptionId);
+        }
+
+        @Override
+        public Mono<Void> delete(String subscriptionId) {
+            return Mono.defer(() -> {
+                deleteEntered.complete(null);
+                return Mono.fromFuture(releaseDelete, true);
+            }).then(stored.delete(subscriptionId));
+        }
     }
 
     // Manages named subscriptions by id and refuses a duplicate id. Each reads the events written after

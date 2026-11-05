@@ -82,7 +82,8 @@ public class ReactorDurableSubscriptionModelConfig {
      * redelivered. The same setting applies to a dynamic start position that answers {@code StartAt.now()} over a
      * wrapped model that manages named subscriptions, when {@code globalCheckpointAsOfNow()} answers empty. Started
      * anyway, that subscription begins from {@code StartAt.now()} when the wrapped model gets it, after the subscribe
-     * call returned, and skips what was written in between. The default is {@code false}, which refuses such a
+     * call returned, and skips what was written in between. Such a subscription records no start position until its
+     * first checkpoint is saved, with or without this setting. The default is {@code false}, which refuses such a
      * registration the way {@code ReactorDurableSubscriptionModel}'s javadoc describes.
      *
      * @param startWhenNoStartPositionCanBeRecorded {@code true} to start anyway, accepting that loss window

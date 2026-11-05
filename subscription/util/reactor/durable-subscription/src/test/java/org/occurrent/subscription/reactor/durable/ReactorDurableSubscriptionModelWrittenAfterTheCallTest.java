@@ -243,16 +243,16 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     /**
      * The subscribe comes while the delete of an earlier cancel of the same id runs, with a dynamic start position that
-     * answers StartAt.now(), and the read of where the feed is fails or answers nothing. Where this model drives the
-     * feed itself, a read that failed is read again until it answers, and one that answers nothing has the subscription
-     * open its feed at StartAt.now(). Either way the subscription starts, as it does without the delete, and what is
-     * written after the subscribe returned is delivered. Handed to the wrapped model, either read fails the start, as it
-     * does for the model default, since starting from StartAt.now() at the hand-over would skip what was written after
-     * the subscribe returned.
+     * answers StartAt.now(), and the read of where the feed is fails or answers nothing. A read that failed is read
+     * again until it answers, and the subscription starts, as it does without the delete, and delivers what is written
+     * after the subscribe returned. A read that answers nothing has the subscription open its feed at StartAt.now()
+     * where this model drives the feed. Handed to the wrapped model, it fails the start instead, as it does for the
+     * model default, since starting from StartAt.now() at the hand-over would skip what was written after the
+     * subscribe returned.
      */
     @ParameterizedTest
     @CsvSource({"false, fails", "false, empty", "true, fails", "true, empty"})
-    void a_dynamic_start_position_answering_now_while_a_delete_runs_starts_only_where_this_model_drives_the_feed_when_the_read_of_where_the_feed_is_fails_or_answers_nothing(boolean handsOver, String read) {
+    void a_dynamic_start_position_answering_now_starts_while_a_delete_runs_after_a_failed_read_and_after_an_empty_one_only_where_this_model_drives_the_feed(boolean handsOver, String read) {
         // Given
         HeldDeleteStorage storage = new HeldDeleteStorage();
         Feed feed = handsOver ? new NamedFeed(true) : new Feed();
@@ -273,9 +273,9 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             written.add(feed.write());
 
             // Then
-            if (handsOver) {
+            if (handsOver && read.equals("empty")) {
                 assertThat(thrown).as("how waiting for the start of the subscription ended").isInstanceOf(IllegalStateException.class)
-                        .hasMessageContaining(read.equals("fails") ? POSITION_READ_FAILED : DYNAMIC_NOW_READ_ANSWERED_NOTHING);
+                        .hasMessageContaining(DYNAMIC_NOW_READ_ANSWERED_NOTHING);
                 assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
                 return;
             }
@@ -1410,11 +1410,12 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     /**
      * The wrapped model is stopped at the subscribe, the read of where its feed is fails or answers nothing, and the
      * delete of an earlier cancel of the same id runs. A dynamic start position answering StartAt.now() starts from
-     * that read, so either read fails the start, as it does for the model default.
+     * that read. A read that failed is read again, and the subscription starts when the wrapped model is started, as it
+     * does without the delete. A read that answers nothing fails the start, as it does for the model default.
      */
     @ParameterizedTest
     @ValueSource(strings = {"fails", "empty"})
-    void a_dynamic_start_position_answering_now_with_a_stopped_wrapped_model_while_a_delete_runs_fails_the_start_when_the_read_of_where_the_feed_is_fails_or_answers_nothing(String read) {
+    void a_dynamic_start_position_answering_now_with_a_stopped_wrapped_model_while_a_delete_runs_starts_after_a_failed_read_and_fails_after_an_empty_one(String read) {
         // Given
         HeldDeleteStorage storage = new HeldDeleteStorage();
         NamedFeed feed = new NamedFeed(false);
@@ -1434,9 +1435,14 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
             // Then
             assertThat(startEnded).as("how the start ended").isNull();
-            assertThat(thrown).as("how waiting for the start of the subscription ended").isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining(read.equals("fails") ? POSITION_READ_FAILED : DYNAMIC_NOW_READ_ANSWERED_NOTHING);
-            assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
+            if (read.equals("empty")) {
+                assertThat(thrown).as("how waiting for the start of the subscription ended").isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining(DYNAMIC_NOW_READ_ANSWERED_NOTHING);
+                assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
+                return;
+            }
+            assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
+            assertThat(feed.started()).as("subscriptions that began reading from the feed").isEqualTo(1);
         } finally {
             storage.releaseDelete.countDown();
             model.shutdown();
