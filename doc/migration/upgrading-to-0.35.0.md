@@ -93,8 +93,7 @@ other sections compile fine and behave differently, so read them first.
   Every subscription a catch-up subscription runs on MongoDB, which in Spring Boot is every subscription by default.
   Compiles unchanged.
 - [A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs](#a-blocking-cancel-doesnt-wait-for-a-subscribe-whose-startatdynamic-function-runs).
-  A cancel made while the function runs returns first, and that subscribe subscribes nothing. A subscribe of an id a
-  catch-up model already runs asks its function before it throws. Compiles unchanged.
+  A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 
@@ -1365,13 +1364,13 @@ In 0.34.0 the blocking `StreamCatchupSubscriptionModel`, `DcbCatchupSubscription
 `cancelSubscription` for that id waited for the lock. When the function waited for a cancel of its own id on another
 thread, that cancel threw `IllegalStateException` after 10 seconds on the catch-up models, and on
 `DurableSubscriptionModel` it waited for as long as the function did. These models now ask the function for their own
-model before they take the lock.
+model with no lock for the id held.
 
 ### Who is affected
 
 Code that subscribes through one of these models with a `StartAt.dynamic(..)` function and cancels the same id from
-another thread while the function can still be running. Code that subscribes an id a catch-up model already runs, with
-such a function, is affected too, and so is code that resumes the id on `DurableSubscriptionModel` from another thread
+another thread while the function can still be running. Code that subscribes the same id from two threads at once with
+such a function is affected too, and so is code that resumes the id on `DurableSubscriptionModel` from another thread
 while the function runs.
 
 ### What changes
@@ -1380,10 +1379,17 @@ while the function runs.
   waiting for that subscribe. The subscribe returns once the function has, subscribes nothing, and the `Subscription` it
   returns answers `false` from `waitUntilStarted(..)`. A cancel the function makes on the subscribing thread doesn't
   stop the subscribe, as in 0.34.0, and neither does a cancel that throws.
-* A subscribe of an id that `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or
-  `CatchupSubscriptionModel` already runs asks its function before it throws `DuplicateSubscriptionIdException`. In
-  0.34.0 the stream or DCB catch-up threw before it asked the function. `DurableSubscriptionModel` asked the function
-  first in 0.34.0 too.
+* Two subscribes of the same id made at once on `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or
+  `CatchupSubscriptionModel` can both ask their function before either has registered. The one that is refused throws
+  `DuplicateSubscriptionIdException` once its function has returned. Until then a `pauseSubscription(id)` or
+  `resumeSubscription(id)` on another thread waits for it for up to 10 seconds, and then throws
+  `IllegalStateException`. A subscribe of an id these models already run throws before it asks the function, as in 0.34.0.
+  A `CatchupSubscriptionModel` with both catch-ups still asks the function first to pick the catch-up model, as in
+  0.34.0.
+* A subscribe on one of these catch-up models waits for the lock for the id before it asks the function, as in 0.34.0,
+  and throws `IllegalStateException` when another call for the id holds that lock for longer than 10 seconds.
+  `DurableSubscriptionModel` asks the function before the model it wraps throws `DuplicateSubscriptionIdException`, as
+  in 0.34.0.
 * A `resumeSubscription(id)` or the new `resumeSubscription(id, startAt)` on `DurableSubscriptionModel` made on another
   thread while the function of a subscribe of `id` runs still waits for that subscribe, but throws
   `IllegalStateException` when the function doesn't return within 10 seconds. In 0.34.0 `resumeSubscription(id)` waited
