@@ -263,22 +263,28 @@ a caller's transaction. No transaction holds the update, so the retry repeats no
 whose append lost there failed instead of being retried. It now rethrows the translated
 `DataIntegrityViolationException`, as `ReactorMongoEventStore` already did.
 
-Both stores set their template's session synchronization to `ALWAYS`. Inside any Spring transaction, a JDBC one or a
-MongoDB one on another database factory too, the template then runs its operations in a MongoDB transaction on the
-store's factory that commits with the caller's, so a read through it reads in one snapshot. That snapshot holds a
-counter below the transaction's own appends, so once the template is in a MongoDB transaction on the store's factory,
-which `MongoDatabaseUtils.isTransactionActive` and `ReactiveMongoDatabaseUtils.isTransactionActive` answer, the read has
-no upper bound and reports the snapshot's counter as its head. It returns the transaction's own appends above that head,
-and a read after that head once the transaction has committed returns them again. Before the template's first
-operation in the caller's transaction, the counter bounds the read. This comes from reading Spring Data MongoDB 5.1.0,
-and no probe ran under a JDBC transaction.
+Both stores set their template's session synchronization to `ALWAYS`. Inside any Spring transaction with
+synchronization active, a JDBC one or a MongoDB one on another database factory too, the template then runs its
+operations in a MongoDB transaction on the store's factory that commits with the caller's, so a read through it reads
+in one snapshot. Once the template is in such a transaction, which `MongoDatabaseUtils.isTransactionActive` and
+`ReactiveMongoDatabaseUtils.isTransactionActive` answer together with an active synchronization, the read has no upper
+bound and reports the snapshot's counter as its head. It returns the transaction's own appends, and the ones that
+reserved their positions after the snapshot was taken are above that head, so a read after that head once the
+transaction has committed returns them again. An append that is the transaction's first operation on the store's
+factory reserves before the snapshot, so its events are at or below the head. Before the template's first operation in
+the caller's transaction, the counter bounds the read. This comes from reading Spring Data MongoDB 5.1.0, and no probe
+ran under a JDBC transaction.
 
-An append runs in the store's own transaction manager, and it joins that MongoDB transaction only when the manager is
-on the template's database factory instance, as the Spring Boot starters set it up. A manager on another instance finds
-no transaction on its factory, suspends the caller's synchronizations, and commits the append in a MongoDB transaction
-of its own. A read in the caller's transaction before that append keeps its snapshot, so a read after the append in
-the same transaction doesn't return it. A probe on both stores showed that with a no-op outer transaction manager and
-with a MongoDB one on a separate factory, and showed the append returned with the manager on the template's factory.
+An append runs in the store's own transaction manager, and it joins the caller's transaction only when a MongoDB
+transaction is already open on the store's factory instance, one the caller's `MongoTransactionManager` opened there or
+one the template opened for an earlier read in the caller's transaction. A manager on another instance never finds
+one, and with the manager on the store's factory, an append that comes before any read in a JDBC transaction finds none
+either. Such a manager suspends the caller's synchronizations and commits the append in a MongoDB transaction of its
+own, so it doesn't roll back with the caller's. A read in the caller's transaction before that append keeps its
+snapshot, so a read after the append in the same transaction doesn't return it. A probe on both stores showed that
+with the manager on a separate factory, under a no-op outer transaction manager and under a MongoDB one, and showed the
+append returned with the manager on the template's factory. The JDBC case where the append comes first comes from
+reading `AbstractPlatformTransactionManager.getTransaction` in spring-tx 7.0.9, and no probe ran it.
 
 Whether a caller owns the transaction is a different question, since the store's own transaction manager may join a
 caller's transaction on another factory. Both stores answer it by any active Spring transaction, the blocking store
