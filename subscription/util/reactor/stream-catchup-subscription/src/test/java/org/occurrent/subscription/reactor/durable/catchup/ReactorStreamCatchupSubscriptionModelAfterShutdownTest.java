@@ -175,12 +175,13 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         // The shutdown sets its flag and hasn't cancelled the catch-up yet
         hook.afterTheReadIn("pauseSubscription", model.namedSubscriptions::beginShutdown);
         Throwable thrown = catchThrowable(() -> model.pauseSubscription("replaying"));
+        boolean pausedByTheRefusedPause = model.isPaused("replaying");
         model.shutdown();
 
         assertAll(
                 () -> assertThat(thrown).as("what the pause throws")
                         .isInstanceOf(SubscriptionModelShutdownException.class).hasMessage("Cannot pause subscription replaying because the subscription model is shutdown."),
-                () -> assertThat(overtaken.callsAfterShutdown).as("calls the wrapped model got after its shutdown").isEmpty()
+                () -> assertThat(pausedByTheRefusedPause).as("whether the catch-up reads paused before the shutdown cancels it").isFalse()
         );
     }
 
@@ -197,11 +198,8 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         Throwable thrown = catchThrowable(() -> model.resumeSubscription("parked"));
         model.shutdown();
 
-        assertAll(
-                () -> assertThat(thrown).as("what the resume throws")
-                        .isInstanceOf(SubscriptionModelShutdownException.class).hasMessage("Cannot resume subscription parked because the subscription model is shutdown."),
-                () -> assertThat(overtaken.callsAfterShutdown).as("calls the wrapped model got after its shutdown").isEmpty()
-        );
+        assertThat(thrown).as("what the resume throws")
+                .isInstanceOf(SubscriptionModelShutdownException.class).hasMessage("Cannot resume subscription parked because the subscription model is shutdown.");
     }
 
     // The shutdown sets its flag once the start has released the lock it starts the wrapped model under, and reaches

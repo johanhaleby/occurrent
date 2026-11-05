@@ -591,8 +591,11 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
         assertPausedForGoodFrom(liveStartOfTheEndedCatchup);
     }
 
+    // No wrapped model can run the takeover between own(..) replacing the record and forgetting the handover, since
+    // own(..) calls no code of the wrapped model between the two. The hook runs it there, while the handover of the
+    // ended catch-up is still in place, so only the check of the record refuses the takeover.
     @Test
-    void a_takeover_replay_of_a_catch_up_whose_subscription_ended_that_starts_while_a_subscribe_replaces_its_record_replays_nothing_through_the_old_action() {
+    void a_takeover_run_on_the_subscribing_thread_between_a_subscribe_replacing_the_record_of_a_catch_up_whose_subscription_ended_and_forgetting_its_handover_is_refused_by_the_record_check_and_replays_nothing_through_the_old_action() {
         // Given a catch-up that handed over, a loss of its live start whose takeover the wrapped model hasn't run yet,
         // and a subscription the wrapped model then ended on its own
         ReplacingOwnedHook ownedHook = ReplacingOwnedHook.installIn(catchup);
@@ -602,7 +605,8 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
         wrapped.endsTheSubscriptionOnItsOwn(ID);
         received.clear();
 
-        // When the takeover starts right after a straight to live subscribe of the id replaced the record of the catch-up
+        // When the takeover runs on the subscribing thread right after a straight to live subscribe of the id replaced
+        // the record of the catch-up
         ownedHook.afterTheNextReplace(lossOfTheLiveStart.afterPause());
         catchup.subscribe(ID, FILTER, StartAt.checkpoint(liveStartOfTheEndedCatchup), event -> Mono.empty());
 
@@ -635,6 +639,7 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
         });
         catchup.subscribe(ID, FILTER, StartAt.checkpoint(OTHER_LIVE_TOKEN), event -> Mono.empty());
         takeover.join(10_000);
+        assertThat(takeover.isAlive()).as("whether the takeover still runs 10 seconds after the subscribe returned").isFalse();
         replayBlocked.tryEmitEmpty();
         awaitNoReplayInFlight();
 
