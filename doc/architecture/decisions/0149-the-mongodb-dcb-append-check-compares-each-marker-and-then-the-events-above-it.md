@@ -133,13 +133,12 @@ the `all` marker moved.
 
 ### On a sharded cluster the check refuses when a marker moved
 
-Two things stop working through a mongos. A transaction at read concern local or majority opens a snapshot on each shard
-when it first touches it, and MongoDB doesn't promise that these come from the same point in time, so the query could
-read the events from before the markers the check just read. And a plain read isn't one snapshot either, so a token can
-hold one marker from after a matching event E and another from before it, while the read misses E. Step 3 would pass
-that token, because the marker from after E didn't move, and the sum check would refuse it. A probe on two shards with
-`_dcb_checkpoints` range-sharded on `_id` showed this, with a fail point holding E's commit on one shard. Natural timing
-didn't reproduce it in 1600 iterations.
+Two things stop working through a mongos. A transaction at read concern local or majority isn't guaranteed to read every
+shard from one snapshot, so the query could read the events from before the markers the check just read. And a plain
+read isn't one snapshot either, so a token can hold one marker from after a matching event E and another from before it,
+while the read misses E. Step 3 would pass that token, because the marker from after E didn't move, and the sum check
+would refuse it. A probe on two shards with `_dcb_checkpoints` range-sharded on `_id` showed this, with a fail point
+holding E's commit on one shard. Natural timing didn't reproduce it in 1600 iterations.
 
 So on anything but a replica set, steps 1 and 2 still apply, and any marker that moved refuses the append. That refuses
 everything the sum check refused. It doesn't refuse everything 0.34 refused, because a token no longer holds the type
@@ -276,9 +275,10 @@ replica set. Once the template is in such a transaction, which `MongoDatabaseUti
 `ReactiveMongoDatabaseUtils.isTransactionActive` answer together with an active synchronization, the read has no upper
 bound and reports the snapshot's counter as its head. It returns the transaction's own appends, and the ones that
 reserved their positions after the snapshot was taken are above that head, so a read after that head once the
-transaction has committed returns them again. On a sharded cluster, a transaction below read concern snapshot doesn't
-read every shard from one snapshot, so the head and the events can come from different points in time. MongoDB's
-documentation says the first part, and none of it was probed. An append that is the transaction's first operation on the
+transaction has committed returns them again. On a sharded cluster, a transaction below read concern snapshot isn't
+guaranteed to read every shard from one snapshot, so the head and the events can come from different points in time.
+MongoDB's transactions documentation says that read concern local and majority can't guarantee one snapshot across the
+shards, and none of this was probed. On a replica set, an append that is the transaction's first operation on the
 store's factory reserves before the snapshot, so its events are at or below the head. The blocking store reads the
 counter through the template first, so even the first read in the caller's transaction has no upper bound. On the
 reactor store the counter can bound that first read, depending on whether the template has bound its session when the
