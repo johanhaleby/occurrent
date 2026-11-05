@@ -267,7 +267,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             AtomicReference<StartAt> currentStartAt = new AtomicReference<>(MongoCommons.refusingCatchupPositionUntilOpened(startAt, null, opened::get));
             AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
             AtomicReference<@Nullable OpenedAt> openedAt = new AtomicReference<>();
-            return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, openedAt::set, readPosition -> {
+            return changeStream(filter, currentStartAt, presentAt, new AtomicReference<>(), currentStartAt::compareAndSet, openedAt::set, readPosition -> {
                 opened.set(true);
                 currentStartAt.set(readPosition);
             }, () -> {
@@ -296,7 +296,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
             // Only while the Flux hasn't moved off startAt, so a loss after it has read on is handled as subscribe handles it
             Predicate<Throwable> startLost = throwable -> start != null && isChangeStreamHistoryLost(throwable) && currentStartAt.get() == subscribedAt;
-            return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, __ -> {
+            return changeStream(filter, currentStartAt, presentAt, new AtomicReference<>(), currentStartAt::compareAndSet, __ -> {
             }, readPosition -> {
                 opened.set(true);
                 currentStartAt.set(readPosition);
@@ -408,7 +408,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
         // concatMap can buffer several documents ahead of a slow action, so the position moves only once the action's
         // Mono has completed, and a pause, a cancel or a restart delivers again at most the event in hand
-        return changeStream(internalSubscription.filter, currentStartAt, internalSubscription.presentAt, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned), run::openedAt, __ -> internalSubscription.changeStreamOpened(run), run::opened)
+        return changeStream(internalSubscription.filter, currentStartAt, internalSubscription.presentAt, internalSubscription.recordedUntilRead, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned), run::openedAt, __ -> internalSubscription.changeStreamOpened(run), run::opened)
                 .concatMap(cloudEvent -> run.step(() -> deliver(internalSubscription, run, cloudEvent)));
     }
 
@@ -523,54 +523,53 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     // Reads through ReactiveMongoOperations.changeStream. recordOpeningPosition compares and sets the position, opened is
     // told where the change stream opens, and onSubscribe runs when the change stream is subscribed to.
     // A subscribe here doesn't say whether the server accepted the position, so where a dynamic position opens is
-    // recorded as the stream opens and given back on an error cannotOpenAt matches before a document is read
+    // recorded as the stream opens and given back on an error cannotOpenAt matches before a document is read.
+    // recordedUntilRead holds that opening across the subscription's runs and retries, since the rejection can come
+    // after a pause or another failure has opened the stream again at the recorded position
     private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt,
-                                          BiPredicate<StartAt, StartAt> recordOpeningPosition, Consumer<OpenedAt> opened,
-                                          Consumer<StartAt> onDocumentRead, Runnable onSubscribe) {
+                                          AtomicReference<@Nullable OpenedAt> recordedUntilRead, BiPredicate<StartAt, StartAt> recordOpeningPosition,
+                                          Consumer<OpenedAt> opened, Consumer<StartAt> onDocumentRead, Runnable onSubscribe) {
         SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
-        return Flux.defer(() -> {
-            AtomicReference<@Nullable OpenedAt> recordedUntilRead = new AtomicReference<>();
-            return openingPosition(currentStartAt, presentAt, recordOpeningPosition, openedAt -> {
-                opened.accept(openedAt);
-                if (MongoCommons.recordWhereItOpened(openedAt, recordOpeningPosition)) {
-                    recordedUntilRead.set(openedAt);
-                }
-            }).<CloudEvent>flatMapMany(openingPosition -> {
-                // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
-                // and that includes an operation stamped at exactly the given time.
-                ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, openingPosition, subscriptionModelContext);
-                final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
-                Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
-                // "Started" only means the change stream Flux was subscribed to, not that the server acknowledged
-                // the command and the cursor is positioned. Weaker than NativeMongoSubscriptionModel's latch,
-                // which only fires after that round trip completes.
-                return changeStream
-                        .doOnSubscribe(subscription -> onSubscribe.run())
-                        .flatMap(changeEvent -> {
-                            ChangeStreamDocument<Document> raw = changeEvent.getRaw();
-                            if (raw == null) {
-                                // Mirrors SpringMongoSubscriptionModel's defensive check. Not expected, but skipping
-                                // this event beats an NPE that retries the whole subscription.
-                                log.error("Internal error: ChangeStreamEvent for collection {} had a null raw document", eventCollection);
-                                return Mono.empty();
-                            }
-                            MongoResumeTokenCheckpoint checkpoint = new MongoResumeTokenCheckpoint(requireNonNull(raw.getResumeToken()));
-                            // Advances the tracked position for every document received, even ones that don't
-                            // deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel, so
-                            // a resubscribe resumes gap-free.
-                            onDocumentRead.accept(StartAt.checkpoint(checkpoint));
-                            recordedUntilRead.set(null);
-                            return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
-                                    .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, checkpoint))
-                                    .map(Mono::just)
-                                    .orElse(Mono.empty());
-                        });
-            }).doOnError(throwable -> {
-                OpenedAt recorded = recordedUntilRead.getAndSet(null);
-                if (recorded != null && cannotOpenAt(throwable)) {
-                    recordOpeningPosition.test(recorded.openingPosition(), recorded.tracked());
-                }
-            });
+        return openingPosition(currentStartAt, presentAt, recordOpeningPosition, openedAt -> {
+            opened.accept(openedAt);
+            if (MongoCommons.recordWhereItOpened(openedAt, recordOpeningPosition)) {
+                recordedUntilRead.set(openedAt);
+            }
+        }).<CloudEvent>flatMapMany(openingPosition -> {
+            // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
+            // and that includes an operation stamped at exactly the given time.
+            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, openingPosition, subscriptionModelContext);
+            final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
+            Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
+            // "Started" only means the change stream Flux was subscribed to, not that the server acknowledged
+            // the command and the cursor is positioned. Weaker than NativeMongoSubscriptionModel's latch,
+            // which only fires after that round trip completes.
+            return changeStream
+                    .doOnSubscribe(subscription -> onSubscribe.run())
+                    .flatMap(changeEvent -> {
+                        ChangeStreamDocument<Document> raw = changeEvent.getRaw();
+                        if (raw == null) {
+                            // Mirrors SpringMongoSubscriptionModel's defensive check. Not expected, but skipping
+                            // this event beats an NPE that retries the whole subscription.
+                            log.error("Internal error: ChangeStreamEvent for collection {} had a null raw document", eventCollection);
+                            return Mono.empty();
+                        }
+                        MongoResumeTokenCheckpoint checkpoint = new MongoResumeTokenCheckpoint(requireNonNull(raw.getResumeToken()));
+                        // Advances the tracked position for every document received, even ones that don't
+                        // deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel, so
+                        // a resubscribe resumes gap-free.
+                        onDocumentRead.accept(StartAt.checkpoint(checkpoint));
+                        recordedUntilRead.set(null);
+                        return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
+                                .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, checkpoint))
+                                .map(Mono::just)
+                                .orElse(Mono.empty());
+                    });
+        }).doOnError(throwable -> {
+            OpenedAt recorded = cannotOpenAt(throwable) ? recordedUntilRead.getAndSet(null) : null;
+            if (recorded != null) {
+                recordOpeningPosition.test(recorded.openingPosition(), recorded.tracked());
+            }
         });
     }
 
@@ -1091,6 +1090,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         // cursor that's the cursor answering, on Spring's changeStream the first document it reads, since the subscribe
         // says nothing about whether the server accepted the position
         final AtomicBoolean opened;
+        // Where a run on Spring's changeStream recorded the dynamic position it opened at, until a document is read
+        final AtomicReference<@Nullable OpenedAt> recordedUntilRead = new AtomicReference<>();
         final Function<CloudEvent, Mono<Void>> action;
         // The run that reads for the subscription while it's running. Written only while holding the model's monitor.
         // A run that ends compares itself to it without the monitor.

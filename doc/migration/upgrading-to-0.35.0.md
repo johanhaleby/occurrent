@@ -1114,13 +1114,14 @@ checkpoints, since the cursor may not have opened. The handle that resume return
 The function is checked until a change stream of the subscription has opened. On the blocking models that means a run
 has reported its cursor open, so an answer from an opening that a pause or a failure stopped doesn't end the check. The
 reactor model counts a driver cursor that opened for a subscription with an id. A reactor `subscribe(..)` without an id,
-and a subscription with an id when the model can't read through the driver's cursor, count the first event the change
-stream reads instead.
+and a subscription with an id when the model can't read through the driver's cursor, count the first document the
+change stream reads instead.
 
 Once a change stream has opened, the model opens it again at the same position and doesn't call the function again.
 That covers a pause and a resume, an action that throws, and a failure reading the change stream before the first
-event. A reactor subscription that counts the first event takes the position the function answered when its `Flux` was
-subscribed to, and calls the function again only when the server rejects that position before an event is read. In
+event. A reactor subscription that counts the first document takes the position the function answered when its `Flux`
+was subscribed to. It calls the function again only when the server rejects that position before a document is read,
+also when a pause or another failure opened the change stream again at that position first. In
 0.34.0 the models called the function again at each opening before the first event, and a catch-up's checkpoint from
 that later call opened at the present and skipped the events written in between.
 
@@ -1133,8 +1134,8 @@ Three cases still lose events, as they did in 0.34.0:
 - An operation time ahead of the server's clock as the function's answer. The server opens the change stream at it, and
   the events written before that time aren't delivered.
 - A position the server rejects only after an event is written, such as a resume token of another collection, on a
-  reactor subscription that counts the first event. The model calls the function again, and an answer that comes after
-  that event skips it.
+  reactor subscription that counts the first document. The model calls the function again, and an answer that comes
+  after that event skips it.
 
 ### Who is affected
 
