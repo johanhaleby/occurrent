@@ -774,7 +774,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // call let through.
     //
     // With nowFromThePresent, a resolveFrom that answers StartAt.now() is handed over from present. A present that
-    // answers nothing fails the hand-over as positionOfTheWrappedModel does, and one that fails fails it too.
+    // answers nothing fails the hand-over with dynamicNowAnsweredNothing, and one that fails fails it too.
     // startWhenNoStartPositionCanBeRecorded hands over StartAt.now() instead of an empty present. Without
     // nowFromThePresent, now() is handed over as it is, since startDelegatedOnceRestored has resolved it already.
     //
@@ -800,7 +800,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                         if (answered != null && answered.isDefault()) {
                             return readStartPosition(subscriptionId, answered, writer, present).map(Optional::of);
                         } else if (answered != null && answered.isNow() && nowFromThePresent) {
-                            Mono<StartAt> fromThePresent = positionOfTheWrappedModel(subscriptionId, present).map(StartAt::checkpoint).defaultIfEmpty(answered);
+                            Mono<StartAt> fromThePresent = positionOfTheWrappedModel(present, () -> dynamicNowAnsweredNothing(subscriptionId))
+                                    .map(StartAt::checkpoint).defaultIfEmpty(answered);
                             return readBeforeTheHandOver(subscriptionId, writer, fromThePresent).map(Optional::of);
                         }
                         return Mono.just(Optional.ofNullable(answered));
@@ -1661,12 +1662,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Where the wrapped model was when present was taken, for a subscription from the model default that storage holds
-    // nothing for, and for a dynamic StartAt that answered StartAt.now() and is handed to the wrapped model. An empty
-    // answer is refused unless startWhenNoStartPositionCanBeRecorded lets the subscription start without it.
+    // nothing for. An empty answer is refused unless startWhenNoStartPositionCanBeRecorded lets the subscription start
+    // without it.
     private Mono<Checkpoint> positionOfTheWrappedModel(String subscriptionId, Mono<Checkpoint> present) {
+        return positionOfTheWrappedModel(present, () -> positionSourceAnsweredNothing(subscriptionId));
+    }
+
+    // positionOfTheWrappedModel, refusing an empty answer with answeredNothing
+    private Mono<Checkpoint> positionOfTheWrappedModel(Mono<Checkpoint> present, Supplier<IllegalStateException> answeredNothing) {
         return config.startWhenNoStartPositionCanBeRecorded
                 ? present
-                : present.switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)));
+                : present.switchIfEmpty(Mono.error(answeredNothing));
     }
 
     // Where the wrapped model's feed is at this call, as globalCheckpointAsOfNow() answers it. Taken here and read only
@@ -1804,6 +1810,23 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                          "cancelSubscription(String), once the model can answer. Subscribing with a " +
                                          "StartAt of your own records no position and carries no such guarantee. To " +
                                          "start anyway, accepting that loss window, configure " +
+                                         "ReactorDurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true), " +
+                                         "or set occurrent.subscription.start-when-no-start-position-can-be-recorded=true " +
+                                         "when using the Spring Boot starter.");
+    }
+
+    // Refuses a dynamic StartAt that answered StartAt.now() and is handed to the wrapped model, when the read of where
+    // the feed was at the call answers nothing. The failed hand-over releases the id, see startedLater.
+    private IllegalStateException dynamicNowAnsweredNothing(String subscriptionId) {
+        return new IllegalStateException("The StartAt.dynamic(..) function of subscription " + subscriptionId +
+                                         " answered StartAt.now(), and the wrapped subscription model " +
+                                         subscription.getClass().getName() + " answered nothing when asked where its " +
+                                         "feed was when subscribe(..) was called. So the subscription doesn't start, " +
+                                         "since starting it from wherever the feed has reached when it is handed to the " +
+                                         "wrapped model would skip what was written since subscribe(..) was called. " +
+                                         "Nothing holds the id after this failure, so subscribe it again once the " +
+                                         "wrapped model can answer, without calling cancelSubscription(String) first. " +
+                                         "To start anyway from StartAt.now(), accepting that gap, configure " +
                                          "ReactorDurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true), " +
                                          "or set occurrent.subscription.start-when-no-start-position-can-be-recorded=true " +
                                          "when using the Spring Boot starter.");

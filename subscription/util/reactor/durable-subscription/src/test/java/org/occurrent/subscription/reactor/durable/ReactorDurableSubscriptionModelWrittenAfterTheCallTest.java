@@ -85,6 +85,8 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final String SUBSCRIPTION_ID = "sub";
     private static final String POSITION_READ_FAILED = "The position of the feed cannot be read right now";
+    private static final String DYNAMIC_NOW_READ_ANSWERED_NOTHING = "answered StartAt.now(), and the wrapped subscription model "
+                                                                    + NamedFeed.class.getName() + " answered nothing when asked where its feed was when subscribe(..) was called.";
     private static final String DELETE_FAILED = "The storage cannot delete right now";
     private static final String SAVE_FAILED = "The storage cannot save right now";
 
@@ -273,7 +275,7 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             // Then
             if (handsOver) {
                 assertThat(thrown).as("how waiting for the start of the subscription ended").isInstanceOf(IllegalStateException.class)
-                        .hasMessageContaining(read.equals("fails") ? POSITION_READ_FAILED : "answered nothing");
+                        .hasMessageContaining(read.equals("fails") ? POSITION_READ_FAILED : DYNAMIC_NOW_READ_ANSWERED_NOTHING);
                 assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
                 return;
             }
@@ -1433,7 +1435,7 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             // Then
             assertThat(startEnded).as("how the start ended").isNull();
             assertThat(thrown).as("how waiting for the start of the subscription ended").isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining(read.equals("fails") ? POSITION_READ_FAILED : "answered nothing");
+                    .hasMessageContaining(read.equals("fails") ? POSITION_READ_FAILED : DYNAMIC_NOW_READ_ANSWERED_NOTHING);
             assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
         } finally {
             storage.releaseDelete.countDown();

@@ -92,6 +92,9 @@ other sections compile fine and behave differently, so read them first.
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   Every subscription a catch-up subscription runs on MongoDB, which in Spring Boot is every subscription by default.
   Compiles unchanged.
+- [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
+  `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Compiles
+  unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 
@@ -1369,6 +1372,44 @@ On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription 
 checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
 written while the application was down, and runs on every instance. Delete the old checkpoint of a subscription you
 later switch to `DEFAULT`, or it resumes from that position.
+
+## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
+
+`ReactorDurableSubscriptionModel` starts a subscription whose `StartAt.dynamic(..)` function answers `StartAt.now()`
+from where the feed was when `subscribe(..)` was called, as `globalCheckpointAsOfNow()` of the wrapped model answers
+it. When that read answers nothing, the subscription doesn't start. `waitUntilStarted()` of the subscription
+`subscribe(..)` returned fails with an `IllegalStateException`, and an `ERROR` is logged. In 0.34.0 the subscription
+started from wherever the feed had reached when the wrapped model got it, and skipped what was written before that.
+
+### Who is affected
+
+A `ReactorDurableSubscriptionModel` over a model that manages named subscriptions, such as
+`ReactorMongoSubscriptionModel`, with a subscription whose `StartAt.dynamic(..)` function answers `StartAt.now()`, when
+the wrapped model's `globalCheckpointAsOfNow()` answers empty. A wrapped model that always answers a position isn't
+affected.
+
+### What to do
+
+To keep the 0.34.0 behaviour, and accept that the subscription skips what was written between `subscribe(..)` and the
+moment the wrapped model gets it, set `startWhenNoStartPositionCanBeRecorded(true)` on the config you pass:
+
+```java
+new ReactorDurableSubscriptionModel(wrappedModel, checkpointStorage,
+        new ReactorDurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
+```
+
+With the Spring Boot starter, set `occurrent.subscription.start-when-no-start-position-can-be-recorded=true`. The same
+setting lets a subscription from the subscription-model default start when no checkpoint is stored and the read
+answers nothing.
+
+Otherwise, let the subscribe fail and subscribe the id again once the wrapped model can answer. The id is free once
+`waitUntilStarted()` has failed, so you don't need to call `cancelSubscription(..)` first.
+
+### Why there is no recipe
+
+The change is in what happens at runtime, and the code compiles unchanged. A recipe that turned on
+`startWhenNoStartPositionCanBeRecorded` would accept the skipped events for you, for the subscription-model default
+too, on every subscription.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 

@@ -116,10 +116,31 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
         // Then
         Throwable notStarted = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
         assertThat(notStarted).as("why the subscription did not start").isInstanceOf(IllegalStateException.class)
-                .hasMessageStartingWith("The wrapped subscription model " + NamedFeed.class.getName() + " answered nothing when asked for the current position for subscription " + SUBSCRIPTION_ID + ",");
+                .hasMessageStartingWith("The StartAt.dynamic(..) function of subscription " + SUBSCRIPTION_ID + " answered StartAt.now(), and the wrapped subscription model "
+                                        + NamedFeed.class.getName() + " answered nothing when asked where its feed was when subscribe(..) was called.");
         assertThat(logged.at(Level.ERROR)).as("errors logged").anySatisfy(message -> assertThat(message).startsWith("Subscription " + SUBSCRIPTION_ID + " could not be started"));
         assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").isEmpty();
         assertThat(model.isRunning(SUBSCRIPTION_ID)).as("running after the failed start").isFalse();
+    }
+
+    @Test
+    void the_id_can_be_subscribed_again_without_a_cancel_after_a_read_that_answers_nothing() {
+        // Given
+        feed.presentRead = atTheCall -> Mono.empty();
+        Subscription failed = model.subscribe(SUBSCRIPTION_ID, null, dynamicNow(), cloudEvent -> Mono.empty());
+        Throwable notStarted = catchThrowable(() -> failed.waitUntilStarted().block(TIMEOUT));
+        feed.presentRead = Mono::just;
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+
+        // When
+        model.subscribe(SUBSCRIPTION_ID, null, dynamicNow(), action(delivered)).waitUntilStarted().block(TIMEOUT);
+        long writtenAfter = feed.write();
+
+        // Then
+        assertThat(notStarted).as("why the first subscribe did not start").isInstanceOf(IllegalStateException.class);
+        await().atMost(TIMEOUT).until(() -> delivered.contains(writtenAfter));
+        assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").containsExactly(SUBSCRIPTION_ID);
+        assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("running in the wrapped model").isTrue();
     }
 
     @Test
