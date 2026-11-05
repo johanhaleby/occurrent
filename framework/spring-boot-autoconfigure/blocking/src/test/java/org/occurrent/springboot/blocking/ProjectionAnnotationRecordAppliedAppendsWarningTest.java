@@ -247,8 +247,8 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     @Test
     void a_dcb_projection_at_the_default_start_does_not_warn_even_on_the_model_the_starter_registered() {
-        // A DCB DEFAULT reaches the catch-up layer as the model default and a restart resumes from a stored DCB catch-up
-        // position, so it can replay and the registered fact does not apply to it. The stream test above is the contrast,
+        // A DCB DEFAULT reaches the catch-up layer as the model default, and a restart that finds a DCB catch-up position
+        // in storage resumes from it, so it can replay and the registered fact does not apply to it. The stream test above is the contrast,
         // the same registered model and the same isCatchingUp answer there still warn.
         SubscriptionModel model = mock(SubscriptionModel.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
