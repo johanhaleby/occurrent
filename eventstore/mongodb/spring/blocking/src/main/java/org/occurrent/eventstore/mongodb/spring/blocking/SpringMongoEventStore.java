@@ -25,9 +25,12 @@ import com.mongodb.client.ClientSession;
 import com.mongodb.MongoException;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.Projections;
+import com.mongodb.client.model.ReturnDocument;
+import com.mongodb.client.model.Updates;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.v1.CloudEventV1;
 import org.bson.BsonTimestamp;
@@ -75,8 +78,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.MongoDatabaseUtils;
 import org.springframework.data.mongodb.core.BulkOperations;
-import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -88,6 +91,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -148,7 +152,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
     private final boolean streamPositionEnabled;
     private final boolean resumeFromMarkerVersions;
+    private final boolean runsOnReplicaSet;
     private final TransactionOptions markerVersionsTransactionOptions;
+    private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
     /**
@@ -173,10 +179,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventStoreCollectionName, mongoTemplate);
         this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
         this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
+        this.markerVersionsCommitTimeout = config.markerVersionsCommitTimeout;
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
+        this.runsOnReplicaSet = dcbEnabled && DcbAppendConditionCheck.runsOnReplicaSet(mongoTemplate::executeCommand);
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, streamPositionEnabled, mongoTemplate);
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -284,14 +292,15 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // The token, the head, the template and the query options are passed in so a catch-up read scope can read all of them
-    // through its own session at its own read concern
+    // through its own session
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Supplier<DcbConsistencyToken> consistencyToken, LongSupplier currentPosition, MongoTemplate template, Function<Query, Query> readQueryOptions) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
         // false conflict that retries) rather than miss the conflict.
         DcbConsistencyToken readToken = consistencyToken.get();
         long highWatermark = currentPosition.getAsLong();
-        long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+        long readUpTo = readUpTo(highWatermark, template);
+        long upperBound = Math.min(readUpTo, options.upToPosition().orElse(readUpTo));
         Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
         boolean backward = options.direction() == DcbReadOptions.Direction.BACKWARD;
         mongoQuery.with(Sort.by(backward ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
@@ -310,13 +319,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return new DcbEventStream(events, highWatermark, readToken);
     }
 
-    // Markers, counter and events come from one point in time, so the reported versions cover exactly the events read
-    // and a read after them misses none. This runs in a read-only snapshot transaction on a session of the store's own,
-    // never through the configured TransactionTemplate, and commits it once by hand. The majority commit makes sure the
-    // snapshot was majority-committed. Inside a Spring-managed transaction it reports no versions, since the
-    // transaction's own increments may still abort and a later append would reuse them. A failure reports no versions
-    // instead of failing the read. A read after versions can't fall back to a full read without double-applying
-    // events, so it is refused in both cases.
+    // Markers, counter and events come from one point in time, so an event that commits after it is above the reported
+    // versions. ADR 148 and ADR 149 say what a read after them can still miss. This runs in a read-only snapshot
+    // transaction on a session of the store's own, never through the configured TransactionTemplate, and commits it
+    // once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a Spring-managed
+    // transaction it reports no versions, since the transaction's own increments may still abort and a later append
+    // would reuse them. A failure reports no versions instead of failing the read. A read after versions can't fall
+    // back to a full read without double-applying events, so it is refused in both cases.
     private DcbEventStream readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -441,7 +450,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private static Criteria afterVersionsCriteria(DcbCriterion item, Map<String, Document> markers, DcbMarkerVersions saved) {
-        List<Criteria> elements = DcbMarkerVersionsDocuments.selections(item, markers, saved).stream()
+        return markerVersionsCriteria(DcbMarkerVersionsDocuments.selections(item, markers, saved));
+    }
+
+    private static Criteria markerVersionsCriteria(List<DcbMarkerVersionsDocuments.Selection> selections) {
+        List<Criteria> elements = selections.stream()
                 .map(selection -> where(DcbMarkerModel.EVENT_MARKER_VERSIONS).elemMatch(
                         where(DcbMarkerModel.EVENT_MARKER_VERSIONS_KEY).is(selection.key())
                                 .and(DcbMarkerModel.EVENT_MARKER_VERSIONS_EPOCH).is(selection.epoch())
@@ -484,8 +497,21 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private long upperBound(DcbReadOptions options) {
-        long highWatermark = currentPosition();
-        return Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+        long readUpTo = readUpTo(currentPosition(), mongoTemplate);
+        return Math.min(readUpTo, options.upToPosition().orElse(readUpTo));
+    }
+
+    // A read through this store's template inside a MongoDB transaction on its database factory sees that transaction's
+    // snapshot and its own appends, but only with synchronization active, without which a template on a plain factory
+    // runs no session.
+    // A reservation commits before its events are inserted, so every event in the snapshot is at or below the
+    // snapshot's counter, and anything above it is this transaction's own. The reported head stays the snapshot's
+    // counter. On a sharded cluster below read concern snapshot the shards aren't guaranteed to be read from one
+    // snapshot, so the counter and the events can come from different points in time. When the template isn't in a
+    // transaction, the counter bounds the read, which is always safe.
+    private long readUpTo(long highWatermark, MongoTemplate template) {
+        return template == mongoTemplate && TransactionSynchronizationManager.isSynchronizationActive()
+                && MongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()) ? Long.MAX_VALUE : highWatermark;
     }
 
     @Override
@@ -703,13 +729,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
-        // Reserve the position block once, before the transaction body. When this store owns the transaction the
-        // counter findAndModify runs outside it, as a single atomic document update MongoDB serializes without raising
-        // a transaction conflict, and the reserved block is reused across transient-transaction-error retries. When an
-        // outer transaction is already active the template joins it, so the counter update joins it too and the
-        // counter document becomes a conflict point shared by every concurrent append in that transaction. Either way
-        // a doomed or condition-failed append abandons its block, so position may have gaps (DCB permits this, see
-        // ADR 0021).
+        // Reserve the position block once, before the transaction body, outside the append's transaction and any
+        // caller's. MongoDB serializes the counter findAndModify as one atomic document update without a transaction
+        // conflict, and the block is reused across transient-transaction-error retries. A doomed or condition-failed
+        // append abandons its block, so position may have gaps (DCB permits this, see ADR 0021).
         long firstPosition = reservePositions(eventsToAppend.size());
         long lastPosition = firstPosition + eventsToAppend.size() - 1;
         // A DCB append always persists at least one event (validateDcbEvents above refuses an empty list), so this
@@ -723,9 +746,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     /**
      * Runs the action, applying the retry strategy only when this store owns the transaction. When one is already
      * active the template joins it, a conflict aborts it, and every further attempt fails on its first read with
-     * {@code NoSuchTransaction}, so retrying could never commit. Every retry on the write path goes through here, the
-     * DCB append, the position counter's cold start, and the stream {@code write} condition retry, so none of them can
-     * be written without the check. See ADR 0074.
+     * {@code NoSuchTransaction}, so retrying could never commit. Every retry of a transaction on the write path goes
+     * through here, the DCB append and the stream {@code write} condition retry, so neither can be written without the
+     * check. The position counter's cold-start retry runs outside any transaction and doesn't need it. See ADR 0074.
      */
     private static <T> T retryOnlyWhenThisStoreOwnsTheTransaction(RetryStrategy retry, Supplier<T> action) {
         return TransactionSynchronizationManager.isActualTransactionActive() ? action.get() : retry.execute(action);
@@ -822,11 +845,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (expectedToken.isPresent()) {
             // The condition carries the consistency token the command observed when it read the query
             // (DcbEventStream.consistencyToken()). The check compares each of the query's markers with what the read
-            // saw of it (ADR 0149). This is immune to read-watermark overshoot, unlike a position-based check, because
-            // marker versions bump inside the append transaction at commit, not when positions are reserved. The check
-            // can't yet ask the events, so an item the markers don't settle refuses the append.
-            Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), queryMarkers(condition.criteria(), mongoTemplate));
-            conflict = !(DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current) instanceof DcbAppendConditionCheck.Pass);
+            // saw of it, and then queries the events above those versions for an item that needs it (ADR 0149). This is
+            // immune to read-watermark overshoot, unlike a position-based check, because marker versions bump inside the
+            // append transaction at commit, not when positions are reserved.
+            Map<String, Document> markers = queryMarkers(condition.criteria(), mongoTemplate);
+            Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
+            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, runsOnReplicaSet)) {
+                case DcbAppendConditionCheck.Pass ignored -> false;
+                case DcbAppendConditionCheck.Refuse ignored -> true;
+                case DcbAppendConditionCheck.QueryEvents query -> mongoTemplate.exists(new Query(new Criteria().orOperator(query.items().stream()
+                        .map(item -> new Criteria().andOperator(toCriteria(item.item()), markerVersionsCriteria(DcbMarkerVersionsDocuments.selections(item, markers))))
+                        .toList())), eventStoreCollectionName);
+            };
         } else {
             // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than
             // marker versions, so it means "currently exists" (surviving deletes and marker pruning) rather than
@@ -885,8 +915,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // The optimistic-concurrency token for a query: what the read saw of each of its conflict markers. Because versions
-    // bump inside the append transaction, not when positions are reserved, this token reflects only committed appends
-    // and is immune to the read-watermark overshoot a position-based check suffers (ADR 0021).
+    // bump inside the append transaction, not when positions are reserved, this token is immune to the read-watermark
+    // overshoot a position-based check suffers (ADR 0021). Outside a caller's transaction it reflects only committed
+    // appends.
     private DcbConsistencyToken consistencyToken(DcbCriteria criteria, MongoTemplate template) {
         return DcbMarkerVersionsDocuments.consistencyToken(criteria, queryMarkers(criteria, template));
     }
@@ -904,23 +935,40 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     /**
      * Reserves a contiguous block of {@code eventCount} DCB positions by incrementing one global counter document. Every
      * DCB append passes through this single document, so it is a serialization point and an inherent throughput ceiling
-     * for the store as a whole under very high append rates. It is kept outside the append transaction (ADR 0021) so it
-     * does not turn into transaction conflicts, but the global monotonic sequence cannot be sharded away.
+     * for the store as a whole under very high append rates. It runs on the database factory's own database, outside
+     * the append transaction and outside any transaction of the caller (ADR 0021), so it does not turn into transaction
+     * conflicts, and so it waits for {@link DcbMarkerModel#reservationWriteConcern majority} for at most
+     * {@code markerVersionsCommitTimeout}, or the client's {@code timeoutMS} when that is set and not 0. The global
+     * monotonic sequence cannot be sharded away.
      */
     private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
-        // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update. Like
-        // the append retry this only runs when the store owns the transaction, because a duplicate inside a joined
-        // transaction aborts it and no further attempt could commit.
-        return retryOnlyWhenThisStoreOwnsTheTransaction(COLD_START_COUNTER_RETRY,
+        // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update. No
+        // transaction holds the upsert, so the retry needs no ownership check.
+        return COLD_START_COUNTER_RETRY.execute(
                 () -> {
-                    Query query = new Query(where(ID).is(DcbMarkerModel.POSITION_DOCUMENT_ID));
-                    Update update = new Update().inc(DcbMarkerModel.COUNTER_POSITION, eventCount);
-                    FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
-                    Document updated = mongoTemplate.findAndModify(query, update, options, Document.class, dcbPositionCollectionName);
+                    // Not through mongoTemplate, which would bind the update to a transaction open on this thread. Its
+                    // failures are translated the way mongoTemplate would, which the duplicate check of the retry needs.
+                    Document updated;
+                    try {
+                        updated = reservationCollection().findOneAndUpdate(
+                                Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
+                                Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
+                                new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
+                    } catch (RuntimeException e) {
+                        DataAccessException translated = mongoTemplate.getExceptionTranslator().translateExceptionIfPossible(e);
+                        throw translated == null ? e : translated;
+                    }
                     long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DcbMarkerModel.COUNTER_POSITION)).longValue();
                     return lastPosition - eventCount + 1;
                 });
+    }
+
+    private MongoCollection<Document> reservationCollection() {
+        MongoCollection<Document> collection = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase().getCollection(dcbPositionCollectionName);
+        collection = collection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout));
+        Long timeoutMillis = DcbMarkerModel.reservationTimeoutMillis(collection.getTimeout(TimeUnit.MILLISECONDS), markerVersionsCommitTimeout);
+        return timeoutMillis == null ? collection : collection.withTimeout(timeoutMillis, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -937,7 +985,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * {@inheritDoc}
      * <p>
      * Sorts by position and clamps the upper bound to the store's highest written position at read time, so a
-     * concurrent append is never partially visible.
+     * concurrent append is never partially visible. Inside a MongoDB transaction on this store's database factory, with
+     * transaction synchronization active, the bound is the transaction's snapshot instead, which also holds the
+     * transaction's own appends. On a sharded cluster below read concern snapshot the shards aren't guaranteed to be
+     * read from one snapshot, so such a read can return events from different points in time.
      * <p>
      * The returned stream is backed by a live server cursor and is read one batch at a time, so a replay from the
      * beginning never holds the whole matched history in memory and the first event is available before the read has
@@ -955,7 +1006,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireNonNull(filter, "Filter cannot be null");
         requireNonNull(range, "Position range cannot be null");
 
-        long highWatermark = currentPosition.getAsLong();
+        long highWatermark = readUpTo(currentPosition.getAsLong(), template);
         long upperBound = Math.min(highWatermark, range.upToPosition().orElse(highWatermark));
         long lowerBound = range.afterPosition().orElse(0);
 
@@ -1044,9 +1095,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             final Throwable rootCause = e.getRootCause();
             if (rootCause instanceof MongoException mongoException) {
                 // A transient transaction conflict is left for TRANSIENT_CONFLICT_RETRY rather than mapped to the
-                // stream-path WriteConditionNotFulfilledException, which DCB does not use.
+                // stream-path WriteConditionNotFulfilledException, which DCB does not use. It stays translated, so an
+                // executor that owns the caller's transaction recognises it too.
                 if (isTransientTransactionError(mongoException)) {
-                    throw mongoException;
+                    throw e;
                 }
                 // Two disjoint DCB boundaries that hash to the same partition stream race on the next stream version and
                 // one loses on the unique streamid+streamversion index. This is not a duplicate CloudEvent, so rethrow
@@ -1216,7 +1268,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             // Evidence: explain("executionStats") on a 5,000-of-305,000 skewed dataset (a plausible popular-tag
             // boundary) showed a winning SORT stage over the dcbTags index without this compound index.
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true));
-            // A read after marker versions selects events by one mv element per criteria item (ADR 148).
+            // A read after marker versions selects events by one mv element per criteria item (ADR 148), and so does the check of a conditional append (ADR 149).
             eventStoreCollection.createIndex(DcbMarkerVersionsDocuments.markerVersionsIndex(), new IndexOptions().sparse(true));
         }
         // The position index is created whenever the store writes a position, so position-ordered reads and catch-up

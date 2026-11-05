@@ -25,9 +25,12 @@ import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.Projections;
+import com.mongodb.client.model.ReturnDocument;
+import com.mongodb.client.model.Updates;
 import com.mongodb.reactivestreams.client.ClientSession;
 import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
@@ -79,13 +82,14 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.ReactiveMongoDatabaseUtils;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.BulkOperations;
-import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveBulkOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.transaction.NoTransactionException;
+import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -94,6 +98,7 @@ import reactor.util.retry.Retry;
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
@@ -167,7 +172,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final boolean requireBackfilledPosition;
     private final boolean requireRepairedEvents;
     private final boolean resumeFromMarkerVersions;
+    private final boolean runsOnReplicaSet;
     private final TransactionOptions markerVersionsTransactionOptions;
+    private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
 
     /**
@@ -196,10 +203,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         this.requireRepairedEvents = config.requireRepairedEvents;
         this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
         this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
+        this.markerVersionsCommitTimeout = config.markerVersionsCommitTimeout;
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
         if (dcbEnabled && !resumeFromMarkerVersions) {
             LOGGER.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
+        this.runsOnReplicaSet = dcbEnabled && DcbAppendConditionCheck.runsOnReplicaSet(command -> mongoTemplate.executeCommand(command).block());
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate).block();
     }
 
@@ -305,18 +314,19 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     // The token, the head, the template and the query options are passed in so a catch-up read scope can read all of them
-    // through its own session at its own read concern
+    // through its own session
     private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Mono<DcbConsistencyToken> consistencyToken, Mono<Long> currentPosition, ReactiveMongoOperations template, Function<Query, Query> readQueryOptions) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads,
         // the events may include it while the token does not, which only makes a later conditional append
         // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The position comes
         // after the token. An append between a position read first and a token read second would be in the token and
         // above the position the events are capped at, so a later conditional append would miss it.
-        return consistencyToken.zipWhen(token -> currentPosition)
-                .flatMap(tokenAndHighWatermark -> {
-                    DcbConsistencyToken token = tokenAndHighWatermark.getT1();
-                    long highWatermark = tokenAndHighWatermark.getT2();
-                    long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+        return consistencyToken.zipWhen(token -> currentPosition).zipWith(readsUnbounded(template))
+                .flatMap(tokenHighWatermarkAndUnbounded -> {
+                    DcbConsistencyToken token = tokenHighWatermarkAndUnbounded.getT1().getT1();
+                    long highWatermark = tokenHighWatermarkAndUnbounded.getT1().getT2();
+                    long readUpTo = tokenHighWatermarkAndUnbounded.getT2() ? Long.MAX_VALUE : highWatermark;
+                    long upperBound = Math.min(readUpTo, options.upToPosition().orElse(readUpTo));
                     Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
                     boolean backward = options.direction() == DcbReadOptions.Direction.BACKWARD;
                     mongoQuery.with(Sort.by(backward ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
@@ -334,13 +344,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 });
     }
 
-    // Markers, counter and events come from one point in time, so the reported versions cover exactly the events read
-    // and a read after them misses none. This runs in a read-only snapshot transaction on a session of the store's own,
-    // never through the configured TransactionalOperator, and commits it once by hand. The majority commit makes sure
-    // the snapshot was majority-committed. Inside a reactive transaction it reports no versions, since the
-    // transaction's own increments may still abort and a later append would reuse them. A failure reports no versions
-    // instead of failing the read. A read after versions can't fall back to a full read without double-applying
-    // events, so it is refused in both cases.
+    // Markers, counter and events come from one point in time, so an event that commits after it is above the reported
+    // versions. ADR 148 and ADR 149 say what a read after them can still miss. This runs in a read-only snapshot
+    // transaction on a session of the store's own, never through the configured TransactionalOperator, and commits it
+    // once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a reactive transaction
+    // it reports no versions, since the transaction's own increments may still abort and a later append would reuse
+    // them. A failure reports no versions instead of failing the read. A read after versions can't fall back to a full
+    // read without double-applying events, so it is refused in both cases.
     private Mono<DcbEventStream> readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -354,7 +364,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 return readWithoutMarkerVersions(criteria, options);
             });
         }
-        return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()).flatMap(callerTransactionActive -> {
+        return callerTransactionActive().flatMap(callerTransactionActive -> {
             if (callerTransactionActive) {
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
             }
@@ -465,7 +475,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private static Criteria afterVersionsCriteria(DcbCriterion item, Map<String, Document> markers, DcbMarkerVersions saved) {
-        List<Criteria> elements = DcbMarkerVersionsDocuments.selections(item, markers, saved).stream()
+        return markerVersionsCriteria(DcbMarkerVersionsDocuments.selections(item, markers, saved));
+    }
+
+    private static Criteria markerVersionsCriteria(List<DcbMarkerVersionsDocuments.Selection> selections) {
+        List<Criteria> elements = selections.stream()
                 .map(selection -> where(DcbMarkerModel.EVENT_MARKER_VERSIONS).elemMatch(
                         where(DcbMarkerModel.EVENT_MARKER_VERSIONS_KEY).is(selection.key())
                                 .and(DcbMarkerModel.EVENT_MARKER_VERSIONS_EPOCH).is(selection.epoch())
@@ -481,7 +495,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return currentPosition().flatMap(highWatermark -> {
+        return readUpTo(currentPosition(), mongoTemplate).flatMap(highWatermark -> {
             long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
             return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound)), eventStoreCollectionName);
         });
@@ -494,7 +508,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return currentPosition().flatMap(highWatermark -> {
+        return readUpTo(currentPosition(), mongoTemplate).flatMap(highWatermark -> {
             long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
             return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound)), eventStoreCollectionName);
         });
@@ -532,12 +546,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
         int eventCount = eventsToAppend.size();
 
-        // Reserve the position block once, before the transaction body. When this store owns the transaction the
-        // counter findAndModify runs outside it, as a single atomic document update MongoDB serializes without raising
-        // a transaction conflict, and the reserved block is reused across transient-transaction-error retries. When an
-        // outer transaction is already active the operator joins it, so the counter update joins it too and the counter
-        // document becomes a conflict point shared by every concurrent append in that transaction. Either way a doomed
-        // or condition-failed append abandons its block, so position may have gaps (DCB permits this, see ADR 0021).
+        // Reserve the position block once, before the transaction body, outside the append's transaction and any
+        // caller's. MongoDB serializes the counter findAndModify as one atomic document update without a transaction
+        // conflict, and the block is reused across transient-transaction-error retries. A doomed or condition-failed
+        // append abandons its block, so position may have gaps (DCB permits this, see ADR 0021).
         return Mono.defer(() -> {
             // A DCB append always persists at least one event (validateDcbEvents above refuses an empty list), so this
             // is minted unconditionally, unlike the stream write path. Minted inside this defer, per subscription, so
@@ -578,12 +590,19 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         final Mono<Boolean> conflictMono;
         if (expectedToken.isPresent()) {
             // The condition carries the consistency token the command observed when it read the query. The check
-            // compares each of the query's markers with what the read saw of it (ADR 0149). Immune to read-watermark
-            // overshoot because marker versions bump inside the append transaction. The check can't yet ask the events,
-            // so an item the markers don't settle refuses the append.
-            conflictMono = queryMarkers(condition.criteria(), mongoTemplate)
-                    .map(markers -> DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers))
-                    .map(current -> !(DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current) instanceof DcbAppendConditionCheck.Pass));
+            // compares each of the query's markers with what the read saw of it, and then queries the events above those
+            // versions for an item that needs it (ADR 0149). Immune to read-watermark overshoot because marker versions
+            // bump inside the append transaction.
+            conflictMono = queryMarkers(condition.criteria(), mongoTemplate).flatMap(markers -> {
+                Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
+                return switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, runsOnReplicaSet)) {
+                    case DcbAppendConditionCheck.Pass ignored -> Mono.just(false);
+                    case DcbAppendConditionCheck.Refuse ignored -> Mono.just(true);
+                    case DcbAppendConditionCheck.QueryEvents query -> mongoTemplate.exists(new Query(new Criteria().orOperator(query.items().stream()
+                            .map(item -> new Criteria().andOperator(toCriteria(item.item()), markerVersionsCriteria(DcbMarkerVersionsDocuments.selections(item, markers))))
+                            .toList())), eventStoreCollectionName);
+                };
+            });
         } else {
             // No token: an absolute "fail if any matching event exists" guard. The marker increments below still
             // serialize concurrent unconditional guards on the same boundary so two of them cannot both pass.
@@ -646,27 +665,72 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<Long> reservePositions(int eventCount) {
-        Query query = new Query(where(ID).is(DcbMarkerModel.POSITION_DOCUMENT_ID));
-        Update update = new Update().inc(DcbMarkerModel.COUNTER_POSITION, eventCount);
-        FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
-        return mongoTemplate.findAndModify(query, update, options, Document.class, dcbPositionCollectionName)
+        // The factory's own database instead of mongoTemplate, which would bind the update to a transaction in the
+        // subscriber context. It waits for majority, see DcbMarkerModel.reservationWriteConcern.
+        return mongoTemplate.getMongoDatabaseFactory().getMongoDatabase()
+                .flatMap(database -> Mono.from(reservationCollection(database.getCollection(dcbPositionCollectionName)).findOneAndUpdate(
+                        Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
+                        Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
+                        new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER))))
                 .map(updated -> ((Number) updated.get(DcbMarkerModel.COUNTER_POSITION)).longValue() - eventCount + 1)
+                // Translated the way mongoTemplate would, so a caller sees the same exceptions as from the rest of the store
+                .onErrorMap(RuntimeException.class, e -> {
+                    RuntimeException translated = mongoTemplate.getMongoDatabaseFactory().getExceptionTranslator().translateExceptionIfPossible(e);
+                    return translated == null ? e : translated;
+                })
                 // Cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert it
                 // and all but one get a duplicate key. On retry the document exists and the upsert becomes an update.
-                // Like the append retry this only runs when the store owns the transaction, because a duplicate inside
-                // a joined transaction aborts it and no further attempt could commit.
-                .transform(reserve -> retryOnlyWhenThisStoreOwnsTheTransaction(reserve, COLD_START_COUNTER_RETRY));
+                // No transaction holds the upsert, so the retry needs no ownership check.
+                .retryWhen(COLD_START_COUNTER_RETRY);
+    }
+
+    private MongoCollection<Document> reservationCollection(MongoCollection<Document> collection) {
+        collection = collection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout));
+        Long timeoutMillis = DcbMarkerModel.reservationTimeoutMillis(collection.getTimeout(TimeUnit.MILLISECONDS), markerVersionsCommitTimeout);
+        return timeoutMillis == null ? collection : collection.withTimeout(timeoutMillis, TimeUnit.MILLISECONDS);
     }
 
     /**
      * Applies the retry spec only when this store owns the transaction. When one is already active the operator joins
      * it, a conflict aborts it, and every further attempt fails on its first read with {@code NoSuchTransaction}, so
-     * retrying could never commit. Route every retry on the write path through here so the ownership check cannot be
-     * forgotten. See ADR 0074.
+     * retrying could never commit. Route every retry of a transaction on the write path through here so the ownership
+     * check cannot be forgotten. See ADR 0074.
      */
-    private <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
-        return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory())
-                .flatMap(transactionAlreadyActive -> transactionAlreadyActive ? action : action.retryWhen(retry));
+    private static <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
+        return callerTransactionActive().flatMap(transactionAlreadyActive -> transactionAlreadyActive ? action : action.retryWhen(retry));
+    }
+
+    // A read through this store's template inside a MongoDB transaction on its database factory sees that transaction's
+    // snapshot and its own appends, but only with synchronization active, without which a template on a plain factory
+    // runs no session.
+    // A reservation commits before its events are inserted, so every event in the snapshot is at or below the
+    // snapshot's counter, and anything above it is this transaction's own. The reported head stays the snapshot's
+    // counter. On a sharded cluster below read concern snapshot the shards aren't guaranteed to be read from one
+    // snapshot, so the counter and the events can come from different points in time. When the template isn't in a
+    // transaction, the counter bounds the read, which is always safe.
+    private Mono<Boolean> readsUnbounded(ReactiveMongoOperations template) {
+        if (template != mongoTemplate) {
+            return Mono.just(false);
+        }
+        return TransactionSynchronizationManager.forCurrentTransaction()
+                .filter(TransactionSynchronizationManager::isSynchronizationActive)
+                .flatMap(__ -> ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()))
+                .onErrorResume(NoTransactionException.class, __ -> Mono.just(false))
+                .defaultIfEmpty(false);
+    }
+
+    private Mono<Long> readUpTo(Mono<Long> highWatermark, ReactiveMongoOperations template) {
+        return highWatermark.zipWith(readsUnbounded(template), (head, unbounded) -> unbounded ? Long.MAX_VALUE : head);
+    }
+
+    // Any transaction in the subscriber context, whichever database factory it was opened on, like the blocking store's
+    // TransactionSynchronizationManager.isActualTransactionActive(). ReactiveMongoDatabaseUtils.isTransactionActive looks
+    // only on this template's factory, so it misses a transaction opened on another until a write through this template
+    // joins it.
+    private static Mono<Boolean> callerTransactionActive() {
+        return TransactionSynchronizationManager.forCurrentTransaction()
+                .map(TransactionSynchronizationManager::isActualTransactionActive)
+                .onErrorResume(NoTransactionException.class, e -> Mono.just(false));
     }
 
     /**
@@ -749,6 +813,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     /**
      * {@inheritDoc}
+     * <p>
+     * Inside a MongoDB transaction on this store's database factory, with transaction synchronization active, the read
+     * also returns the transaction's own appends. On a sharded cluster below read concern snapshot the shards aren't
+     * guaranteed to be read from one snapshot, so such a read can return events from different points in time.
      */
     @Override
     public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
@@ -763,7 +831,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // The head, the template and the query options are passed in so a catch-up read scope can read through its own
     // session at its own read concern
     private Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range, Mono<Long> currentPosition, ReactiveMongoOperations template, Function<Query, Query> readQueryOptions) {
-        return currentPosition.flatMapMany(highWatermark -> {
+        return readUpTo(currentPosition, template).flatMapMany(highWatermark -> {
             long upperBound = Math.min(highWatermark, range.upToPosition().orElse(highWatermark));
             long lowerBound = range.afterPosition().orElse(0L);
             Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(lowerBound).lte(upperBound);
@@ -1119,7 +1187,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     // skewed dataset (a plausible popular-tag boundary) showed a winning SORT stage over the dcbTags
                     // index without this compound index.
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true)))
-                    // A read after marker versions selects events by one mv element per criteria item (ADR 148).
+                    // A read after marker versions selects events by one mv element per criteria item (ADR 148), and so does the check of a conditional append (ADR 149).
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, DcbMarkerVersionsDocuments.markerVersionsIndex(), new IndexOptions().sparse(true)))
                     .then();
         }

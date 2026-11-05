@@ -51,6 +51,10 @@ other sections compile fine and behave differently, so read them first.
   `DcbEventStore` of your own usually does.
 - [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, sharing a type
   with a criteria item that has tags is no longer a reason for a condition to refuse.
+- [An append on MongoDB waits for majority on its position reservation](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation).
+  This overrides a w:1 on that one write, which on the Spring and reactor stores now runs outside a transaction of yours
+  too. On a set of a primary, a secondary and an arbiter with the secondary down, an append throws after
+  `markerVersionsCommitTimeout`.
 
 ### Subscriptions and catch-up
 
@@ -570,8 +574,9 @@ What is new:
   each marker of the criteria, read at the same point in time as the events. It reports them only for a full forward
   read, with no limit, skip or position bound, and criteria other than `MatchAll`.
 - A conditional append with a consistency token reports the same in `DcbAppendResult.markerVersions()`.
-- `read(criteria, DcbReadOptions.afterVersions(saved))` returns every matching event appended after `saved`, including
-  one that committed late below a position an earlier read saw. When the store can't compare `saved` with its own
+- `read(criteria, DcbReadOptions.afterVersions(saved))` returns the matching events appended after `saved`, including
+  one that committed late below a position an earlier read saw. A failover can make it miss an event, as [What else a
+  token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. When the store can't compare `saved` with its own
   markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
   full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
   always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
@@ -597,7 +602,9 @@ What changes on MongoDB without you doing anything:
 The upgrade needs no manual step, provided nothing replaces the document of an event a 0.35 node wrote. That rules out
 a 0.34 node's `updateEvent`, a 0.34 tool, or your own code replacing event documents, during a rolling upgrade, after a
 rollback to 0.34 followed by a new upgrade, and from a tool that shares the event collection. Such an event loses its
-`mv` and is no longer returned by `afterVersions(..)`. A full read still returns it. A store built on
+`mv` and is no longer returned by `afterVersions(..)`. A full read still returns it. On a replica set, if that event
+matches an append condition and was committed after the condition's read, the append no longer fails, though it should.
+Replacing an event document isn't supported, and no setting turns this off. A store built on
 `MongoTemplate.withSession(..)` or `ReactiveMongoTemplate.withSession(..)` doesn't support reading versions.
 
 Three things break, and two of them are compile errors.
@@ -662,8 +669,9 @@ stacks, so it isn't affected on a store that returns the criteria it was given.
   read of `all()` with `afterVersions`. So when `all()` becomes a tag, use the three-argument constructor on that read,
   drop the versions from that append's result, and throw on that read yourself. In `append`, rewrite the criteria the
   same way, and give the inner store a condition with
-  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`. On MongoDB the added tag then counts in the check like
-  any other tag, so appending any event with that tag can make the check refuse, whether or not the event matches.
+  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`. On a sharded cluster the added tag then
+  counts in the check like any other tag, so appending any event with that tag makes the check refuse, whether or not
+  the event matches.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
   condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
   deprecation warning, and `wholeStoreLock(token)` and `new DcbAppendCondition(criteria, Optional.of(token))` compile
@@ -711,8 +719,25 @@ criteria than its read would then append on the read's criteria instead of throw
 
 ### What else a token holds on MongoDB
 
-On MongoDB, a token also holds what the read saw of each marker. An event with only some of a criteria item's tags no
-longer fails the condition.
+On MongoDB, a token also holds what the read saw of each marker. On a replica set, an event a 0.35.0 node appended that
+doesn't match a condition's criteria no longer fails it, so you'll see fewer `DcbAppendConditionNotFulfilledException`s
+on a busy tag. A condition can still fail with no matching event, for example after a marker was deleted, when a
+0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written. On anything else, such as a
+sharded cluster, this doesn't apply, and any event that moves a marker of the criteria still fails it.
+
+A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
+Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
+`withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction.
+On any deployment, a read whose events are behind its token can do this, for
+example when a read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A
+token also doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a
+matching event the read left out. 0.34.0 has the gap this paragraph describes too, except that it refused the append
+when the read caught only some of the event's markers, or when a later event moved a marker of the criteria, even one
+that didn't match. On 0.34.0 a failover can cause it as well, when it loses a position reservation made below majority.
+So can a rollback of your transaction on the Spring and reactor stores, when the store's own transaction manager uses
+the same database factory as yours and its transaction is set to `REQUIRES_NEW` or `NOT_SUPPORTED`. The event then
+commits above the last reserved position. 0.35.0 reserves positions outside every transaction and waits for majority on
+the reservation, as [the next section](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation) says.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
@@ -722,6 +747,63 @@ held across the prune.
 A `DcbEventStore` of your own needs no change, and `DcbConsistencyToken.of(criteria, version)` keeps working for it.
 A MongoDB store throws `IllegalArgumentException` for a token built that way.
 
+## An append on MongoDB waits for majority on its position reservation
+
+An append on a MongoDB event store reserves its positions with an update of a counter. That update now runs outside
+every transaction, one of yours included, and waits for write concern majority, whatever write concern you configured.
+A failover could lose an update made below majority while the append's event committed above the counter, and reads
+then missed the event.
+
+### What changes
+
+A w:1 on the client, on the database or as the server's default no longer applies to this update, and neither does a
+`wtimeout` you configured. The update waits for majority for at most `markerVersionsCommitTimeout`, 5 seconds by
+default, the setting that also bounds the commit of a read that asks for versions. When a majority doesn't acknowledge
+the update in that time, the append throws and writes no event, and the positions it reserved stay unused. On a client
+with a `timeoutMS` above 0, where the driver sends no `wtimeout`, your `timeoutMS` bounds the update instead. A
+`timeoutMS` of 0 waits forever, so there `markerVersionsCommitTimeout` bounds the whole update, the wait to select a
+primary included. The rest of the append keeps the write concern it had.
+
+Every append waits for as long as a majority takes to replicate the update. On MongoDB 5.0 or later, on a set without an
+arbiter and with no write concern configured, the update already waited for majority. What changes there, unless your
+client sets a `timeoutMS` above 0, is that a wait that used to have no limit now fails the append after
+`markerVersionsCommitTimeout`. On a local three-member set at w:1, a single writer's latency stayed within the noise
+between runs. With 8 writers, throughput went from about 990 to 1030 appends a second on the native store, 1050 to 875
+on the Spring store and 990 to 670 on the reactor store. These appends ran outside a transaction, and all members ran on
+one host, so the numbers show no network. Across a network, expect each append to wait about one more round trip to a
+secondary.
+
+### Inside a transaction of yours
+
+On the Spring and reactor stores, the update used to join a transaction already open when the append started, and
+committed with it. It now commits on its own, before the append writes its event.
+
+- After a rollback of your transaction, the reserved positions stay unused. Positions already have gaps, so nothing that
+  reads them has to change.
+- Two appends in transactions of yours no longer conflict on the counter, only on a marker or a partition stream they
+  share. An append that loses throws a `DataIntegrityViolationException` or a `TransientDataAccessException`, and your
+  transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it when
+  they opened it.
+- On a replica set, with transaction synchronization active, as it is by default, a read in your transaction reports, in
+  `lastSequencePosition()`, the head as of the first operation in your transaction's MongoDB session on the store's
+  database factory. It also returns your transaction's own appends, and those it started after that operation are at
+  positions above that head. If you keep that position and read after it later, you get those events again. On a sharded
+  cluster, unless your transaction reads at read concern snapshot, the shards aren't guaranteed to be read from one
+  snapshot, so the head and the events can come from different points in time.
+- An append joins your transaction when that's a Spring-managed MongoDB transaction on the template's database
+  factory, and the `TransactionTemplate` or `TransactionalOperator` you give the store, if any, keeps the default
+  propagation, `REQUIRED`.
+  [ADR 149](../architecture/decisions/0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md)
+  lists what happens in other setups.
+
+### What to do
+
+On a replica set of a primary, a secondary and an arbiter with the secondary down, a majority can't acknowledge the
+update. In a probe on all three stores, appends there used to complete in 6 to 18 ms. The store now bounds the update
+by `markerVersionsCommitTimeout`, so such an append throws after 5 seconds by default. To wait longer or
+shorter, set `markerVersionsCommitTimeout` in the store's `EventStoreConfig`. On a client with a `timeoutMS` above 0
+that setting doesn't bound the update, and the client's `timeoutMS` does.
+
 ## Criteria with tags conflict on their tags
 
 On the MongoDB stores, the check of a conditional append with a token reads only the tag markers of an item with tags,
@@ -730,16 +812,19 @@ refuse. Such an item also no longer adds its type markers to what a conditional 
 Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
-example. The MongoDB stores can still refuse an append the in-memory store accepts, for example after an event of
-another type that has every one of the criteria's tags. With a token, an item without tags is checked against its type markers as before. The change is the
-first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
+example. On a sharded cluster the MongoDB stores can still refuse an append the in-memory store accepts, for example
+after an event of another type that has one of the criteria's tags. On a replica set that event no longer refuses
+it, as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. With a token, an item without
+tags still reads its type markers. The change is the first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
 [ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
 describes it.
 
 ### What stays the same
 
 - A conditional append on criteria with tags is still refused when an event that matches them committed after the
-  read.
+  read. On a replica set the check reads the events as they are when the append runs, so an event deleted by then, or
+  changed so that it no longer matches, may not fail it. A read can also miss such an event and let the append through,
+  as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says.
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
 - This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the
@@ -762,6 +847,9 @@ describes it.
 - **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
   succeed, so a store that still reads the type marker for an item with tags fails the case.
+- **Code that switches over the TCK's `DcbAppendConditionModel`.** The enum gains `MARKERS_THEN_EVENTS`, which the
+  fixtures of the MongoDB stores declare, so a `switch` that lists every case and has no `default` stops compiling until
+  it handles the new one. A fixture that returns `EXACT_CRITERIA` or `TAG_MARKER` still compiles.
 - **Code that saved a token value.** For an item with both types and tags, a 0.34.0 token value is a sum over its tag
   and type markers, and 0.35.0 no longer counts the type markers of that item. An old value can then let an append through
   that should have been refused. Read again instead, as
