@@ -271,7 +271,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final Set<AskedFirst> askedFirst = ConcurrentHashMap.newKeySet();
     }
 
-    // A subscribe whose function is asked before it takes the claim, from the ask until the subscribe returns
+    // A subscribe whose function is asked before it takes the claim, kept from before the function is asked until the
+    // subscribe returns
     private static final class AskedFirst {
         private final String subscriptionId;
         private final Thread asker = Thread.currentThread();
