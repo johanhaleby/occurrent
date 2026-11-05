@@ -164,7 +164,8 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * Reads the live transaction state rather than emitting {@code true} unconditionally, because a caller-supplied
      * {@link TransactionalOperator} can be configured not to open one at all, for example with
      * {@code PROPAGATION_NOT_SUPPORTED} or {@code PROPAGATION_NEVER}. Claiming a transaction that does not exist would
-     * make a synchronous dispatch stop at the first handler failure, stranding the handlers behind it.
+     * make the DCB application service read and decide inside this executor, where a store reports no marker versions,
+     * so a DCB snapshot decider would save no snapshot.
      */
     @Override
     public Mono<Boolean> isTransactional() {

@@ -90,10 +90,10 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
      * <p>
      * With {@code transactional} true the first handler exception stops dispatch, because the write usually rolls back
      * and the handlers behind it would only be doing work that is discarded, possibly with effects outside the
-     * datastore. Otherwise the write has usually committed, so the other handlers are still offered the event and the
-     * failures are reported afterwards, though a handler that failed gets no more of that batch and an {@link Error}
-     * still stops it. A handler skipped because a sibling threw would never see the event again, since this model has
-     * no replay, which is why this argument exists. See the ADR 57 amendment.
+     * datastore. Otherwise the write can commit after the failure, so the other handlers are still offered the event
+     * and the failures are reported afterwards, though a handler that failed gets no more of that batch and an
+     * {@link Error} still stops it. A handler skipped because a sibling threw would never see the event again, since this
+     * model has no replay, which is why this argument exists. See the ADR 57 amendment.
      *
      * @param writtenCloudEvents The newly written cloud events.
      * @param transactional      Whether the write can't commit once a handler fails, for example because it runs in a

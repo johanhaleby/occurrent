@@ -1,4 +1,4 @@
-# 165. The retry sees a failure after the write only in a transaction the attempt opened
+# 165. A failure after the write is retried only in a transaction the attempt opened
 
 Date: 2026-10-30
 
@@ -180,7 +180,7 @@ can't tell any of these from a rollback, so this ADR doesn't change them.
 The holder lasts one `execute` or one subscription. A caller that retries around `execute` or subscribes to the returned
 `Mono` again runs the command again, and so does an outer service's retry around a service called from its domain function.
 
-On the blocking stack, a retry strategy's `onError` and `onAfterRetry` listeners hear a held failure and its `mapError` maps it, the same as for a failure its predicate doesn't match.
+On the blocking stack, the `onError` and `onAfterRetry` listeners of a strategy made by the factory methods of `RetryStrategy` hear a held failure and its `mapError` maps it, the same as for a failure its predicate doesn't match.
 
 A handler can still run more than once for one command under a transaction it owns, and one with a side effect outside the
 transaction, an HTTP call say, still has to tolerate that.

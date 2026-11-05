@@ -627,7 +627,7 @@ is the order the service has without synchronous subscriptions, and these are th
 - The executor's own conflict retry from [ADR 74](0074-retry-only-where-the-transaction-is-owned.md) re-runs the
   append, the re-read and the dispatch, with that same token, and not the read or the decision. A handler can run again
   on such a retry when a transaction rolled the earlier attempt back, as it could before.
-  [ADR 165](0165-the-retry-sees-a-failure-after-the-write-only-in-a-transaction-the-attempt-opened.md) covers a failure after an
+  [ADR 165](0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) covers a failure after an
   append that the attempt's own transaction doesn't undo. When the condition then fails, the service's retry
   strategy by default reads and decides again. Otherwise the append goes through on the decision it already made.
   The condition doesn't catch every append that happened since the read, for example after a prune

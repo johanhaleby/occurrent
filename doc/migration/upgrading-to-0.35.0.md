@@ -869,8 +869,10 @@ subscriptions behaves as before.
 ### What changes
 
 - `execute` throws the original failure to the caller, and the service's retry strategy doesn't run the command again.
-  On the blocking stack the strategy's `onError` and `onAfterRetry` listeners and its `mapError` still see the failure,
-  as for a failure its predicate doesn't match.
+  On the blocking stack a strategy made by the factory methods of `RetryStrategy` still gives the failure to its
+  `onError` listener and its `mapError`, and to its `onAfterRetry` listener when the attempt was a retry, as for a
+  failure its predicate doesn't match. A strategy of your own that ignores the shutdown predicate goes by its own, and
+  a run after the failure returns an empty attempt, so the failure reaches the caller after the strategy returns.
 - The `sideEffect` doesn't run.
 - The retry strategy can still run the command again for a failure of the write itself, and for any failure when the
   attempt opened a transaction. The
@@ -894,7 +896,7 @@ subscriptions behaves as before.
   `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring MongoDB stores the write often rolled
   back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or `PROPAGATION_NEVER`, and there a retry that used to
   work is gone.
-  [ADR 165](../architecture/decisions/0165-the-retry-sees-a-failure-after-the-write-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
+  [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
   so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open
   one with another already open, override `inTransactionTellingIfOpened` too, since the default counts that as joining.
