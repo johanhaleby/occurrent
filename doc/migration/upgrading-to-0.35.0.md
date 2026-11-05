@@ -51,6 +51,10 @@ other sections compile fine and behave differently, so read them first.
   `DcbEventStore` of your own usually does.
 - [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, sharing a type
   with a criteria item that has tags is no longer a reason for a condition to refuse.
+- [An append on MongoDB waits for majority on its position reservation](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation).
+  This overrides a w:1 on that one write, which on the Spring and reactor stores now runs outside a transaction of yours
+  too. On a set of a primary, a secondary and an arbiter with the secondary down, an append throws after
+  `markerVersionsCommitTimeout`.
 
 ### Subscriptions and catch-up
 
@@ -92,6 +96,8 @@ other sections compile fine and behave differently, so read them first.
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   Every subscription a catch-up subscription runs on MongoDB, which in Spring Boot is every subscription by default.
   Compiles unchanged.
+- [A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs](#a-blocking-cancel-doesnt-wait-for-a-subscribe-whose-startatdynamic-function-runs).
+  A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 
@@ -572,8 +578,9 @@ What is new:
   each marker of the criteria, read at the same point in time as the events. It reports them only for a full forward
   read, with no limit, skip or position bound, and criteria other than `MatchAll`.
 - A conditional append with a consistency token reports the same in `DcbAppendResult.markerVersions()`.
-- `read(criteria, DcbReadOptions.afterVersions(saved))` returns every matching event appended after `saved`, including
-  one that committed late below a position an earlier read saw. When the store can't compare `saved` with its own
+- `read(criteria, DcbReadOptions.afterVersions(saved))` returns the matching events appended after `saved`, including
+  one that committed late below a position an earlier read saw. A failover can make it miss an event, as [What else a
+  token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. When the store can't compare `saved` with its own
   markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
   full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
   always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
@@ -599,7 +606,9 @@ What changes on MongoDB without you doing anything:
 The upgrade needs no manual step, provided nothing replaces the document of an event a 0.35 node wrote. That rules out
 a 0.34 node's `updateEvent`, a 0.34 tool, or your own code replacing event documents, during a rolling upgrade, after a
 rollback to 0.34 followed by a new upgrade, and from a tool that shares the event collection. Such an event loses its
-`mv` and is no longer returned by `afterVersions(..)`. A full read still returns it. A store built on
+`mv` and is no longer returned by `afterVersions(..)`. A full read still returns it. On a replica set, if that event
+matches an append condition and was committed after the condition's read, the append no longer fails, though it should.
+Replacing an event document isn't supported, and no setting turns this off. A store built on
 `MongoTemplate.withSession(..)` or `ReactiveMongoTemplate.withSession(..)` doesn't support reading versions.
 
 Three things break, and two of them are compile errors.
@@ -657,15 +666,16 @@ stacks, so it isn't affected on a store that returns the criteria it was given.
 - **A `DcbEventStore` decorator that rewrites criteria**, adding a tenant tag for example, and passes the inner store's
   token through. It compiles, but the token holds the rewritten criteria, so a condition on the caller's criteria throws
   `IllegalArgumentException`. In `read`, return
-  `new DcbEventStream(inner.events(), inner.lastSequencePosition(), DcbConsistencyToken.of(criteria, innerToken.version()), inner.markerVersions())`,
+  `new DcbEventStream(inner.events(), inner.lastSequencePosition(), DcbConsistencyToken.of(criteria, innerToken.version(), innerToken.markers()), inner.markerVersions())`,
   since the three-argument constructor sets `markerVersions` to empty. Those versions hold the rewritten criteria's
   markers, the added tag's included, so pass them back to the inner store unchanged with the rewritten criteria. A store
   reports no versions for `all()`, on a read or on a conditional append, and throws `DcbSnapshotInvalidException` on a
   read of `all()` with `afterVersions`. So when `all()` becomes a tag, use the three-argument constructor on that read,
   drop the versions from that append's result, and throw on that read yourself. In `append`, rewrite the criteria the
   same way, and give the inner store a condition with
-  `DcbConsistencyToken.of(rewrittenCriteria, token.version())`. On MongoDB the added tag then counts in the check like
-  any other tag, so appending any event with that tag can make the check refuse, whether or not the event matches.
+  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`. On a sharded cluster the added tag then
+  counts in the check like any other tag, so appending any event with that tag makes the check refuse, whether or not
+  the event matches.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
   condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
   deprecation warning, and `wholeStoreLock(token)` and `new DcbAppendCondition(criteria, Optional.of(token))` compile
@@ -711,6 +721,93 @@ needs the criteria the read was given, and a recipe can't tell from the call sit
 `failIfEventsMatch(criteria, token)` to `failIfEventsMatch(token)` would compile too, but a condition that used other
 criteria than its read would then append on the read's criteria instead of throwing.
 
+### What else a token holds on MongoDB
+
+On MongoDB, a token also holds what the read saw of each marker. On a replica set, an event a 0.35.0 node appended that
+doesn't match a condition's criteria no longer fails it, so you'll see fewer `DcbAppendConditionNotFulfilledException`s
+on a busy tag. A condition can still fail with no matching event, for example after a marker was deleted, when a
+0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written. On anything else, such as a
+sharded cluster, this doesn't apply, and any event that moves a marker of the criteria still fails it.
+
+A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
+Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
+`withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction.
+On any deployment, a read whose events are behind its token can do this, for
+example when a read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A
+token also doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a
+matching event the read left out. 0.34.0 has the gap this paragraph describes too, except that it refused the append
+when the read caught only some of the event's markers, or when a later event moved a marker of the criteria, even one
+that didn't match. On 0.34.0 a failover can cause it as well, when it loses a position reservation made below majority.
+So can a rollback of your transaction on the Spring and reactor stores, when the store's own transaction manager uses
+the same database factory as yours and its transaction is set to `REQUIRES_NEW` or `NOT_SUPPORTED`. The event then
+commits above the last reserved position. 0.35.0 reserves positions outside every transaction and waits for majority on
+the reservation, as [the next section](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation) says.
+
+If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
+finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
+read concern snapshot. Earlier versions said pruning during quiescence was harmless. It isn't, because a token can be
+held across the prune.
+
+A `DcbEventStore` of your own needs no change, and `DcbConsistencyToken.of(criteria, version)` keeps working for it.
+A MongoDB store throws `IllegalArgumentException` for a token built that way.
+
+## An append on MongoDB waits for majority on its position reservation
+
+An append on a MongoDB event store reserves its positions with an update of a counter. That update now runs outside
+every transaction, one of yours included, and waits for write concern majority, whatever write concern you configured.
+A failover could lose an update made below majority while the append's event committed above the counter, and reads
+then missed the event.
+
+### What changes
+
+A w:1 on the client, on the database or as the server's default no longer applies to this update, and neither does a
+`wtimeout` you configured. The update waits for majority for at most `markerVersionsCommitTimeout`, 5 seconds by
+default, the setting that also bounds the commit of a read that asks for versions. When a majority doesn't acknowledge
+the update in that time, the append throws and writes no event, and the positions it reserved stay unused. On a client
+with a `timeoutMS` above 0, where the driver sends no `wtimeout`, your `timeoutMS` bounds the update instead. A
+`timeoutMS` of 0 waits forever, so there `markerVersionsCommitTimeout` bounds the whole update, the wait to select a
+primary included. The rest of the append keeps the write concern it had.
+
+Every append waits for as long as a majority takes to replicate the update. On MongoDB 5.0 or later, on a set without an
+arbiter and with no write concern configured, the update already waited for majority. What changes there, unless your
+client sets a `timeoutMS` above 0, is that a wait that used to have no limit now fails the append after
+`markerVersionsCommitTimeout`. On a local three-member set at w:1, a single writer's latency stayed within the noise
+between runs. With 8 writers, throughput went from about 990 to 1030 appends a second on the native store, 1050 to 875
+on the Spring store and 990 to 670 on the reactor store. These appends ran outside a transaction, and all members ran on
+one host, so the numbers show no network. Across a network, expect each append to wait about one more round trip to a
+secondary.
+
+### Inside a transaction of yours
+
+On the Spring and reactor stores, the update used to join a transaction already open when the append started, and
+committed with it. It now commits on its own, before the append writes its event.
+
+- After a rollback of your transaction, the reserved positions stay unused. Positions already have gaps, so nothing that
+  reads them has to change.
+- Two appends in transactions of yours no longer conflict on the counter, only on a marker or a partition stream they
+  share. An append that loses throws a `DataIntegrityViolationException` or a `TransientDataAccessException`, and your
+  transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it when
+  they opened it.
+- On a replica set, with transaction synchronization active, as it is by default, a read in your transaction reports, in
+  `lastSequencePosition()`, the head as of the first operation in your transaction's MongoDB session on the store's
+  database factory. It also returns your transaction's own appends, and those it started after that operation are at
+  positions above that head. If you keep that position and read after it later, you get those events again. On a sharded
+  cluster, unless your transaction reads at read concern snapshot, the shards aren't guaranteed to be read from one
+  snapshot, so the head and the events can come from different points in time.
+- An append joins your transaction when that's a Spring-managed MongoDB transaction on the template's database
+  factory, and the `TransactionTemplate` or `TransactionalOperator` you give the store, if any, keeps the default
+  propagation, `REQUIRED`.
+  [ADR 149](../architecture/decisions/0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md)
+  lists what happens in other setups.
+
+### What to do
+
+On a replica set of a primary, a secondary and an arbiter with the secondary down, a majority can't acknowledge the
+update. In a probe on all three stores, appends there used to complete in 6 to 18 ms. The store now bounds the update
+by `markerVersionsCommitTimeout`, so such an append throws after 5 seconds by default. To wait longer or
+shorter, set `markerVersionsCommitTimeout` in the store's `EventStoreConfig`. On a client with a `timeoutMS` above 0
+that setting doesn't bound the update, and the client's `timeoutMS` does.
+
 ## Criteria with tags conflict on their tags
 
 On the MongoDB stores, the check of a conditional append with a token reads only the tag markers of an item with tags,
@@ -719,16 +816,19 @@ refuse. Such an item also no longer adds its type markers to what a conditional 
 Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
-example. The MongoDB stores can still refuse an append the in-memory store accepts, for example after an event that has
-only one of the criteria's tags. With a token, an item without tags is checked against its type markers as before. The change is the
-first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
+example. On a sharded cluster the MongoDB stores can still refuse an append the in-memory store accepts, for example
+after an event of another type that has one of the criteria's tags. On a replica set that event no longer refuses
+it, as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. With a token, an item without
+tags still reads its type markers. The change is the first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
 [ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
 describes it.
 
 ### What stays the same
 
 - A conditional append on criteria with tags is still refused when an event that matches them committed after the
-  read, unless the markers were pruned in between ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)).
+  read. On a replica set the check reads the events as they are when the append runs, so an event deleted by then, or
+  changed so that it no longer matches, may not fail it. A read can also miss such an event and let the append through,
+  as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says.
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
 - This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the
@@ -751,15 +851,16 @@ describes it.
 - **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
   succeed, so a store that still reads the type marker for an item with tags fails the case.
+- **Code that switches over the TCK's `DcbAppendConditionModel`.** The enum gains `MARKERS_THEN_EVENTS`, which the
+  fixtures of the MongoDB stores declare, so a `switch` that lists every case and has no `default` stops compiling until
+  it handles the new one. A fixture that returns `EXACT_CRITERIA` or `TAG_MARKER` still compiles.
 - **Code that saved a token value.** For an item with both types and tags, a 0.34.0 token value is a sum over its tag
   and type markers, and 0.35.0 no longer counts the type markers of that item. An old value can then let an append through
   that should have been refused. Read again instead, as
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
   says.
-- **Code or an operator that prunes markers.** For an item with both types and tags, a token no longer counts the type
-  markers, so a prune between the read and the append can let through a conflicting append that 0.34.0 refused, until
-  [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. Prune only when no command holds a token it
-  can still append with.
+- **Code or an operator that deletes marker documents.** Follow the rule at the end of
+  [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
 ## A catch-up needs the event store itself
 
@@ -1420,6 +1521,67 @@ On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription 
 checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
 written while the application was down, and runs on every instance. Delete the old checkpoint of a subscription you
 later switch to `DEFAULT`, or it resumes from that position.
+
+## A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs
+
+In 0.34.0 the blocking `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel`, `CatchupSubscriptionModel` and
+`DurableSubscriptionModel` asked a `StartAt.dynamic(..)` function while they held the lock for the subscription id, and
+`cancelSubscription` for that id waited for the lock. When the function waited for a cancel of its own id on another
+thread, that cancel threw `IllegalStateException` after 10 seconds on the catch-up models, and on
+`DurableSubscriptionModel` it waited for as long as the function did. These models now ask the function for their own
+model with no lock for the id held.
+
+### Who is affected
+
+Code that subscribes through one of these models with a `StartAt.dynamic(..)` function and cancels the same id from
+another thread while the function can still be running. Code that subscribes the same id from two threads at once with
+such a function is affected too, and so is code that resumes the id on `DurableSubscriptionModel` from another thread
+while the function runs.
+
+### What changes
+
+* A `cancelSubscription(id)` made on another thread while the function of a subscribe of `id` runs returns without
+  waiting for that subscribe. The subscribe returns once the function has, subscribes nothing, and the `Subscription` it
+  returns answers `false` from `waitUntilStarted(..)`. A cancel the function makes on the subscribing thread doesn't
+  stop the subscribe, as in 0.34.0, and neither does a cancel that throws.
+* Two subscribes of the same id made at once on `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or
+  `CatchupSubscriptionModel` can both ask their function before either has registered. The one that is refused throws
+  `DuplicateSubscriptionIdException` once its function has returned. Until then a `pauseSubscription(id)` or
+  `resumeSubscription(id)` on another thread waits for it for up to 10 seconds, and then throws
+  `IllegalStateException`. A subscribe of an id these models already run throws before it asks the function, as in 0.34.0.
+  A `CatchupSubscriptionModel` with both catch-ups still asks the function first to pick the catch-up model, as in
+  0.34.0.
+* A subscribe on one of these catch-up models waits for the lock for the id before it asks the function, as in 0.34.0,
+  and throws `IllegalStateException` when another call for the id holds that lock for longer than 10 seconds. It waits
+  for that lock again once the function has returned, and can throw the same way then.
+* `DurableSubscriptionModel` asks the function before the model it wraps throws `DuplicateSubscriptionIdException`, as
+  in 0.34.0. A `cancelSubscription(id)` made on another thread while that function runs now cancels the subscription
+  that runs, and the duplicate then returns a `Subscription` that never starts instead of throwing. A
+  `resumeSubscription(id)` of the subscription that runs waits for that function, as the next bullet says.
+* A `resumeSubscription(id)` or the new `resumeSubscription(id, startAt)` on `DurableSubscriptionModel` made on another
+  thread while the function of a subscribe of `id` runs still waits for that subscribe, but throws
+  `IllegalStateException` when the function doesn't return within 10 seconds. In 0.34.0 `resumeSubscription(id)` waited
+  for as long as the function did. Its `pauseSubscription(id)` and `stop()` don't wait for the subscribe, as in 0.34.0.
+
+### What to do
+
+* Don't read a returned `cancelSubscription(id)` as a sign that a subscribe of `id` on another thread has returned. Call
+  `waitUntilStarted(..)` on the `Subscription` that subscribe returns when you need to know whether it started.
+* Keep effects that must happen only for a subscribe that goes ahead out of the function, since a subscribe that then
+  throws `DuplicateSubscriptionIdException` or `IllegalStateException` asks it too.
+* Don't wait in the function for a `pauseSubscription` or `resumeSubscription` of the same id on a catch-up model, or
+  for a `resumeSubscription` on `DurableSubscriptionModel`, on another thread. That call throws `IllegalStateException`
+  when the function doesn't return within 10 seconds.
+* Wait for the cancel only the first time a subscribe asks the function. A catch-up model asks it again while it holds
+  the lock for the id on a resume, on its replay thread during the handover to live delivery, and for the model it
+  wraps when that model is another wrapper such as `DurableSubscriptionModel` and the subscribe goes straight to live
+  delivery. A cancel made during one of those asks throws `IllegalStateException` after 10 seconds, or during the
+  handover waits for as long as the function does.
+* A `CatchupSubscriptionModel` with both a stream and a DCB catch-up asks the function first to choose between them for
+  a subscribe with no filter, or with a filter that is not a stream, DCB or agnostic one. A cancel made during that ask
+  returns, and the subscribe still goes ahead.
+
+The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 

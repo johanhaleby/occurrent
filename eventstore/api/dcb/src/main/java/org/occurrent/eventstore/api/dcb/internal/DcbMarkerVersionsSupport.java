@@ -18,8 +18,8 @@ package org.occurrent.eventstore.api.dcb.internal;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.dcb.*;
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken.MarkerObservation;
 
 import java.util.*;
 
@@ -38,28 +38,6 @@ public final class DcbMarkerVersionsSupport {
     public static final String MATCH_ALL_MARKER_KEY = "all";
 
     private DcbMarkerVersionsSupport() {
-    }
-
-    /**
-     * What a store observed for one marker in a point-in-time read.
-     *
-     * @param epoch     the marker's epoch, {@code null} when the marker has none
-     * @param version   the marker's version
-     * @param unstamped how many of the marker's increments wrote no marker versions
-     */
-    public record ObservedMarker(@Nullable String epoch, long version, long unstamped) {
-
-        /**
-         * Whether the marker can be reported, that is it has an epoch and values a {@link DcbMarkerVersions.MarkerVersion}
-         * accepts.
-         */
-        public boolean reportable() {
-            return epoch != null && !epoch.isBlank() && version >= 1 && unstamped >= 0 && unstamped <= version;
-        }
-
-        DcbMarkerVersions.MarkerVersion toMarkerVersion() {
-            return new DcbMarkerVersions.MarkerVersion(requireNonNull(epoch), version, unstamped);
-        }
     }
 
     /**
@@ -151,17 +129,17 @@ public final class DcbMarkerVersionsSupport {
     /**
      * The versions of {@code keys}, present only when every key has a reportable marker in {@code observed}.
      */
-    public static Optional<DcbMarkerVersions> versionsOf(Set<String> keys, Map<String, ObservedMarker> observed) {
+    public static Optional<DcbMarkerVersions> versionsOf(Set<String> keys, Map<String, MarkerObservation> observed) {
         if (keys.isEmpty()) {
             return Optional.empty();
         }
         Map<String, DcbMarkerVersions.MarkerVersion> versions = new TreeMap<>();
         for (String key : keys) {
-            ObservedMarker marker = observed.get(key);
-            if (marker == null || !marker.reportable()) {
+            MarkerObservation marker = observed.get(key);
+            if (marker == null || !reportable(marker)) {
                 return Optional.empty();
             }
-            versions.put(key, marker.toMarkerVersion());
+            versions.put(key, new DcbMarkerVersions.MarkerVersion(requireNonNull(marker.epoch()), marker.version(), marker.unstamped()));
         }
         return Optional.of(new DcbMarkerVersions(versions));
     }
@@ -171,7 +149,7 @@ public final class DcbMarkerVersionsSupport {
      * markers in {@code observed}. That needs the saved keys to be the marker keys of {@code criteria}, and for each key
      * a marker with an epoch, the saved epoch, a version at or above the saved one, and the saved unstamped count.
      */
-    public static void requireResumable(DcbCriteria criteria, DcbMarkerVersions saved, Map<String, ObservedMarker> observed) {
+    public static void requireResumable(DcbCriteria criteria, DcbMarkerVersions saved, Map<String, MarkerObservation> observed) {
         if (criteria instanceof DcbCriteria.MatchAll) {
             throw new DcbSnapshotInvalidException(criteria, saved, "Cannot read after marker versions for criteria that match every event");
         }
@@ -188,8 +166,8 @@ public final class DcbMarkerVersionsSupport {
         }
         for (String key : keys) {
             DcbMarkerVersions.MarkerVersion savedVersion = saved.get(key).orElseThrow();
-            ObservedMarker marker = observed.get(key);
-            if (marker == null) {
+            MarkerObservation marker = observed.get(key);
+            if (marker == null || marker.version() == 0) {
                 throw new DcbSnapshotInvalidException(criteria, saved, "There is no marker for marker key " + key);
             }
             if (marker.epoch() == null) {
@@ -205,5 +183,10 @@ public final class DcbMarkerVersionsSupport {
                 throw new DcbSnapshotInvalidException(criteria, saved, "The marker for marker key " + key + " was incremented by a writer that wrote no marker versions");
             }
         }
+    }
+
+    // A marker can be reported when it has an epoch and values a DcbMarkerVersions.MarkerVersion accepts
+    private static boolean reportable(MarkerObservation marker) {
+        return marker.epoch() != null && !marker.epoch().isBlank() && marker.version() >= 1 && marker.unstamped() >= 0 && marker.unstamped() <= marker.version();
     }
 }

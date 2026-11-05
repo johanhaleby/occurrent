@@ -33,6 +33,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
@@ -403,6 +404,17 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
         assertThat(observed.read().events()).extracting(CloudEvent::getId).containsExactly("before", "own");
         assertThat(observed.read().markerVersions()).as("versions that cover an increment of the transaction would be handed out again if it aborts").isEmpty();
         assertThat(observed.refusal()).isInstanceOf(DcbSnapshotInvalidException.class);
+    }
+
+    @Test
+    void reads_in_position_order_the_transactions_own_append_inside_a_transaction_the_caller_owns() {
+        append("before", DEPOSITED, ACCOUNT_A);
+
+        List<String> replayed = inCallerTransaction(() -> eventStore.read(BOUNDARY_A)
+                .then(eventStore.append(List.of(taggedEvent("own", DEPOSITED, ACCOUNT_A))))
+                .then(eventStore.readInPositionOrder(Filter.all(), PositionRange.fromBeginning()).map(CloudEvent::getId).collectList()));
+
+        assertThat(replayed).containsExactly("before", "own");
     }
 
     @Test
