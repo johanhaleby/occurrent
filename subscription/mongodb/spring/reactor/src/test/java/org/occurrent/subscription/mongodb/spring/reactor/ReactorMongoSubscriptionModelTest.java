@@ -1289,13 +1289,13 @@ public class ReactorMongoSubscriptionModelTest {
             CountDownLatch actionCalled = new CountDownLatch(1);
             CountDownLatch cancelStarted = new CountDownLatch(1);
             CountDownLatch mayFinishCancel = new CountDownLatch(1);
-            Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
-                actionCalled.countDown();
-                return Mono.<Void>never().doOnCancel(() -> {
-                    cancelStarted.countDown();
-                    awaitQuietly(mayFinishCancel, 20);
-                });
-            });
+            // Counted once the action's Mono is subscribed to, since a pause or a cancel before that ends the run without waiting for it
+            Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.<Void>never()
+                    .doOnSubscribe(__ -> actionCalled.countDown())
+                    .doOnCancel(() -> {
+                        cancelStarted.countDown();
+                        awaitQuietly(mayFinishCancel, 20);
+                    }));
             assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
             mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
             assertThat(actionCalled.await(10, SECONDS)).isTrue();
@@ -1347,13 +1347,13 @@ public class ReactorMongoSubscriptionModelTest {
             CountDownLatch actionCalled = new CountDownLatch(1);
             CountDownLatch cancelStarted = new CountDownLatch(1);
             CountDownLatch mayFinishCancel = new CountDownLatch(1);
-            Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
-                actionCalled.countDown();
-                return Mono.<Void>never().doOnCancel(() -> {
-                    cancelStarted.countDown();
-                    awaitQuietly(mayFinishCancel, 20);
-                });
-            });
+            // Counted once the action's Mono is subscribed to, since a pause or a cancel before that ends the run without waiting for it
+            Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.<Void>never()
+                    .doOnSubscribe(__ -> actionCalled.countDown())
+                    .doOnCancel(() -> {
+                        cancelStarted.countDown();
+                        awaitQuietly(mayFinishCancel, 20);
+                    }));
             assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
             mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
             assertThat(actionCalled.await(10, SECONDS)).isTrue();
