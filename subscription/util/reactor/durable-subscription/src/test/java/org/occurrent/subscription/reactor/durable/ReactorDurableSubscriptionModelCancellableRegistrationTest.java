@@ -29,6 +29,7 @@ import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -50,6 +51,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
@@ -269,6 +271,44 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
                     () -> assertThat(storage.calls).as("what storage was asked").doesNotContain("save x"),
                     () -> assertThat(storage.storage.read("x").blockOptional(TIMEOUT)).as("the checkpoint stored for x").isEmpty());
         }
+
+        @Test
+        void ends_its_read_of_the_position_when_the_call_is_cancelled_after_it_started_reading() {
+            // Given
+            UnansweredPositionModel wrapped = new UnansweredPositionModel();
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+
+            // When
+            Subscription subscription = model.subscribe("x", null, StartAt.subscriptionModelDefault(), NO_ACTION, () -> wrapped.readsStarted.get() > 0);
+
+            // Then
+            assertAll(
+                    () -> assertThat(subscription).as("the subscription returned").isNull(),
+                    () -> assertThat(wrapped.readsStarted).as("the reads of the position the wrapped model got").hasValue(1),
+                    () -> assertThat(wrapped.readsUnanswered).as("the reads of the position still waiting").hasValue(0));
+        }
+
+        @Test
+        void ends_its_read_of_the_position_when_a_subscribe_of_the_id_registers_first() throws Exception {
+            // Given
+            UnansweredPositionModel wrapped = new UnansweredPositionModel();
+            FirstReadHeldStorage storage = new FirstReadHeldStorage();
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
+            CompletableFuture<Subscription> first = CompletableFuture.supplyAsync(
+                    () -> model.subscribe("x", null, StartAt.subscriptionModelDefault(), NO_ACTION, () -> false));
+            awaitOrFail(storage.readEntered);
+            model.subscribe("x", null, StartAt.checkpoint(new StringBasedCheckpoint("1")), NO_ACTION);
+
+            // When
+            storage.releaseRead.countDown();
+            Throwable thrown = catchThrowable(() -> first.get(TIMEOUT.toSeconds(), SECONDS));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).as("what the first subscribe threw").hasCauseInstanceOf(DuplicateSubscriptionIdException.class),
+                    () -> assertThat(wrapped.readsStarted).as("the reads of the position the wrapped model got").hasValue(1),
+                    () -> assertThat(wrapped.readsUnanswered).as("the reads of the position still waiting").hasValue(0));
+        }
     }
 
     @Nested
@@ -384,6 +424,36 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
         }
     }
 
+    // Never answers where the feed is, and counts the reads that still wait
+    private static final class UnansweredPositionModel implements CheckpointAwareSubscriptionModel {
+        final AtomicInteger readsStarted = new AtomicInteger();
+        final AtomicInteger readsUnanswered = new AtomicInteger();
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.never();
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpoint() {
+            return unanswered();
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return unanswered();
+        }
+
+        private Mono<Checkpoint> unanswered() {
+            return Mono.<Checkpoint>never()
+                    .doOnSubscribe(__ -> {
+                        readsStarted.incrementAndGet();
+                        readsUnanswered.incrementAndGet();
+                    })
+                    .doOnCancel(readsUnanswered::decrementAndGet);
+        }
+    }
+
     // Records what it is asked, and holds every delete until releaseDeletes
     private static final class DeleteHeldStorage implements CheckpointStorage {
         final InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
@@ -429,6 +499,48 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
                         .subscribeOn(Schedulers.boundedElastic())
                         .then(storage.delete(subscriptionId));
             });
+        }
+    }
+
+    // Holds the caller of its first read until releaseRead
+    private static final class FirstReadHeldStorage implements CheckpointStorage {
+        private final InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        private final AtomicBoolean holdNext = new AtomicBoolean(true);
+        final CountDownLatch readEntered = new CountDownLatch(1);
+        final CountDownLatch releaseRead = new CountDownLatch(1);
+
+        @Override
+        public Mono<Checkpoint> read(String subscriptionId) {
+            if (holdNext.compareAndSet(true, false)) {
+                readEntered.countDown();
+                try {
+                    awaitOrFail(releaseRead);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            }
+            return storage.read(subscriptionId);
+        }
+
+        @Override
+        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            return storage.save(subscriptionId, checkpoint, condition);
+        }
+
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return storage.evaluatesWriteConditions();
+        }
+
+        @Override
+        public Mono<Long> writeVersion(String subscriptionId) {
+            return storage.writeVersion(subscriptionId);
+        }
+
+        @Override
+        public Mono<Void> delete(String subscriptionId) {
+            return storage.delete(subscriptionId);
         }
     }
 }

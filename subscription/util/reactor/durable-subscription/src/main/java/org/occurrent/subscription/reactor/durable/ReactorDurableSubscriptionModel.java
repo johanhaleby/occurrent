@@ -543,12 +543,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // Read before the subscription is put where a start, a resume, a pause, a stop, a cancel or a shutdown can find
         // it, so whichever generation starts it begins from where the feed was when it was registered, and not from
         // where the feed is once a generation gets to read. Subscribed here rather than under the monitor, which is
-        // never held while calling the wrapped model. Only a subscribe that a duplicate or a shutdown overtakes between
-        // the check above and the one below has read for nothing. On a running model storage is asked first, and the
-        // wrapped model only when nothing is stored, since a stored checkpoint is where the subscription starts and the
-        // read would answer nothing it uses. A delete of the id that a cancel started is taken over before storage is
-        // read, and the read does not wait for that delete, see takeOverPositionDelete. Both reads are of the moment of
-        // this call however late they answer, see capturePositionNow, so nothing here waits for them.
+        // never held while calling the wrapped model. A subscribe that a duplicate, a shutdown or a cancel overtakes
+        // between the check above and the one below ends these reads, see endUnreserved. On a running model storage
+        // is asked first, and the wrapped model only when nothing is stored, since a stored checkpoint is where the
+        // subscription starts and the read would answer nothing it uses. A delete of the id that a cancel started is
+        // taken over before storage is read, and the read does not wait for that delete, see takeOverPositionDelete.
+        // Both reads are of the moment of this call however late they answer, see capturePositionNow, so nothing here
+        // waits for them.
         Sinks.Empty<Void> readsAbandoned = Sinks.empty();
         // StartAt.now() begins where the feed was at this call, and not where it is when a start or a resume opens it. A
         // dynamic start position reads it as of its first start, in case it answers StartAt.now().
@@ -585,17 +586,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 }
             }
         } catch (RuntimeException | Error e) {
-            if (present != null) {
-                present.end();
-            }
-            giveBackPositionDelete(subscriptionId, takenOverAtTheCall, null);
+            endUnreserved(subscriptionId, readsAbandoned, present, takenOverAtTheCall, e);
             throw e;
         }
         if (reservation == null) {
-            if (present != null) {
-                present.end();
-            }
-            giveBackPositionDelete(subscriptionId, takenOverAtTheCall, null);
+            endUnreserved(subscriptionId, readsAbandoned, present, takenOverAtTheCall, cancelledBeforeItStarted(subscriptionId));
             return null;
         }
         try {
@@ -607,6 +602,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             releaseReservation(reservation);
             throw e;
         }
+    }
+
+    // For a subscribe that registered nothing after it started its reads. Ends the reads, the read of the present and
+    // the deletes it took over, as a cancel does for a subscription it ends before it started.
+    private void endUnreserved(String subscriptionId, Sinks.Empty<Void> readsAbandoned, @Nullable PresentRead present, TakeOver takenOver,
+                               Throwable reason) {
+        readsAbandoned.tryEmitError(reason);
+        if (present != null) {
+            present.end();
+        }
+        giveBackPositionDelete(subscriptionId, takenOver, null);
     }
 
     // Called under the monitor, when this model drives the feed itself
