@@ -21,6 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.PositionRange;
@@ -31,6 +32,7 @@ import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.occurrent.subscription.api.reactor.internal.CancellableRegistration;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -51,10 +53,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -65,6 +70,11 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * event, and once the subscribe returned the wrapped model is told to cancel again if it holds the id, unless a later
  * subscribe owns it. A second subscribe of the id is refused while the subscribe under way was not cancelled. A thread
  * that never returns fails its test at the deadline rather than hanging the build.
+ * <p>
+ * The tests at the top level wrap a model that doesn't implement {@code CancellableRegistration}, so a subscribe
+ * cancelled before that model registered it still registers there, and the catch-up cancels what it left. The nested
+ * tests wrap one that implements it, as {@code ReactorMongoSubscriptionModel} and {@code ReactorDurableSubscriptionModel}
+ * do, and that model registers nothing for such a subscribe.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorCatchupSubscribeUnderWayTest {
@@ -925,6 +935,240 @@ class ReactorCatchupSubscribeUnderWayTest {
         assertThat(catchup.isRunning("x")).as("whether the catch-up reports x running").isFalse();
     }
 
+    // The catch-up passes this wrapped model whether it cancelled a subscribe, so a subscribe cancelled before the model
+    // registered it leaves nothing there for the catch-up to cancel again
+    @Nested
+    class OverAWrappedModelThatSkipsACancelledSubscribe {
+
+        @Test
+        void a_cancel_of_a_subscription_whose_subscribe_is_under_way_cancels_in_the_wrapped_model_at_once_and_the_subscribe_registers_nothing() {
+            WrappedModel wrapped = new WrappedModelThatSkipsACancelledSubscribe();
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+            HeldStart held = new HeldStart();
+            AtomicReference<Subscription> cancelledSubscription = new AtomicReference<>();
+            CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+            daemon("subscribe-x", subscribeOfX, () -> cancelledSubscription.set(catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.empty()))).start();
+            held.awaitInside();
+
+            await(returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x did not complete while the subscribe of x was under way");
+            held.release();
+            await(subscribeOfX, "The subscribe of x did not return");
+            Set<String> heldOnceItReturned = wrapped.subscriptionIds();
+            boolean runningOnceItReturned = catchup.isRunning("x");
+            Throwable startFailure = catchThrowable(() -> cancelledSubscription.get().waitUntilStarted().block(DEADLINE));
+            Throwable later = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()));
+
+            assertAll(
+                    () -> assertThat(heldOnceItReturned).as("the ids the wrapped model holds once the cancelled subscribe returned").isEmpty(),
+                    () -> assertThat(runningOnceItReturned).as("whether the catch-up reports x running once the cancelled subscribe returned").isFalse(),
+                    () -> assertThat(startFailure).as("what waiting for the start of the cancelled subscribe threw").isInstanceOf(SubscriptionNotRunningException.class)
+                            .hasMessage("Subscription x was cancelled before it started."),
+                    () -> assertThat(later).as("what a subscribe of x once the cancelled subscribe returned threw").isNull(),
+                    () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "skipped:x", "subscribed:x"),
+                    () -> assertThat(catchup.isRunning("x")).as("whether the catch-up reports x running").isTrue());
+        }
+
+        @Test
+        void a_cancelled_subscribe_that_returns_after_the_run_of_a_later_subscribe_ended_on_its_own_leaves_nothing_running() {
+            WrappedModel wrapped = new WrappedModelThatSkipsACancelledSubscribe();
+            wrapped.refusesDuplicates = true;
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+            HeldStart cancelledStart = new HeldStart();
+            CompletableFuture<Void> cancelledSubscribe = new CompletableFuture<>();
+            List<String> cancelledReached = new CopyOnWriteArrayList<>();
+            List<String> laterReached = new CopyOnWriteArrayList<>();
+            List<String> lastReached = new CopyOnWriteArrayList<>();
+            daemon("subscribe-x", cancelledSubscribe, () -> catchup.subscribe("x", FILTER, cancelledStart.startAt(), cloudEvent -> Mono.fromRunnable(() -> cancelledReached.add(cloudEvent.getId())))).start();
+            cancelledStart.awaitInside();
+            await(returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x did not complete");
+            catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> laterReached.add(cloudEvent.getId())));
+            wrapped.deliver("x", anEvent("e0"));
+            wrapped.endsTheLastRunOnItsOwn("x");
+
+            cancelledStart.release();
+            await(cancelledSubscribe, "The cancelled subscribe of x did not return");
+            Set<String> heldOnceItReturned = wrapped.subscriptionIds();
+            wrapped.deliver("x", anEvent("e1"));
+            boolean runningOnceItReturned = catchup.isRunning("x");
+            Throwable subscribeAfterwards = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> lastReached.add(cloudEvent.getId()))));
+            wrapped.deliver("x", anEvent("e2"));
+
+            assertAll(
+                    () -> assertThat(heldOnceItReturned).as("the ids the wrapped model holds once the cancelled subscribe returned").isEmpty(),
+                    () -> assertThat(runningOnceItReturned).as("whether the catch-up reports x running once the cancelled subscribe returned").isFalse(),
+                    () -> assertThat(subscribeAfterwards).as("what a subscribe of x afterwards threw").isNull(),
+                    () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "subscribed:x", "ended:x", "skipped:x", "subscribed:x"),
+                    () -> assertThat(cancelledReached).as("events that reached the action of the cancelled subscribe").isEmpty(),
+                    () -> assertThat(laterReached).as("events that reached the action of the later subscribe").containsExactly("e0"),
+                    () -> assertThat(lastReached).as("events that reached the action of the subscribe made afterwards").containsExactly("e2"));
+        }
+
+        @Test
+        void a_straight_to_live_subscribe_made_after_a_cancel_runs_since_the_cancelled_subscribe_registers_nothing() {
+            WrappedModel wrapped = new WrappedModelThatSkipsACancelledSubscribe();
+            wrapped.refusesDuplicates = true;
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+            HeldStart cancelledStart = new HeldStart();
+            HeldStart laterStart = new HeldStart();
+            CompletableFuture<Void> cancelledSubscribe = new CompletableFuture<>();
+            CompletableFuture<Void> laterSubscribe = new CompletableFuture<>();
+            daemon("subscribe-x", cancelledSubscribe, () -> catchup.subscribe("x", FILTER, cancelledStart.startAt(), cloudEvent -> Mono.empty())).start();
+            cancelledStart.awaitInside();
+            await(returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x did not complete");
+            daemon("subscribe-x-again", laterSubscribe, () -> catchup.subscribe("x", FILTER, laterStart.startAt(), cloudEvent -> Mono.empty())).start();
+            laterStart.awaitInside();
+
+            cancelledStart.release();
+            await(cancelledSubscribe, "The cancelled subscribe of x did not return");
+            laterStart.release();
+            await(laterSubscribe, "The subscribe of x made after the cancel did not return");
+
+            assertAll(
+                    () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "skipped:x", "subscribed:x"),
+                    () -> assertThat(wrapped.isRunning("x")).as("whether the wrapped model runs x").isTrue(),
+                    () -> assertThat(catchup.isRunning("x")).as("whether the catch-up reports x running").isTrue());
+        }
+
+        @Test
+        void a_subscribe_with_catch_up_made_after_a_cancel_hands_over_since_the_cancelled_subscribe_registers_nothing() {
+            WrappedModel wrapped = new WrappedModelThatSkipsACancelledSubscribe();
+            wrapped.refusesDuplicates = true;
+            HeldReplay reader = new HeldReplay();
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+            HeldStart cancelledStart = new HeldStart();
+            CompletableFuture<Void> cancelledSubscribe = new CompletableFuture<>();
+            daemon("subscribe-x", cancelledSubscribe, () -> catchup.subscribe("x", FILTER, cancelledStart.startAt(), cloudEvent -> Mono.empty())).start();
+            cancelledStart.awaitInside();
+            await(returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x did not complete");
+            Subscription replaying = catchup.subscribe("x", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+            reader.awaitReading();
+
+            cancelledStart.release();
+            await(cancelledSubscribe, "The cancelled subscribe of x did not return");
+            reader.release();
+
+            assertThat(replaying.waitUntilStarted().toFuture()).as("the start of the subscribe with catch-up").succeedsWithin(DEADLINE);
+            assertAll(
+                    () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "skipped:x", "subscribed:x"),
+                    () -> assertThat(catchup.isRunning("x")).as("whether the catch-up reports x running").isTrue());
+        }
+
+        @Test
+        void a_subscribe_from_the_continuation_of_a_cancel_of_a_subscription_whose_subscribe_is_under_way_goes_through_and_gets_the_events() {
+            WrappedModel wrapped = new WrappedModelThatSkipsACancelledSubscribe();
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+            HeldStart held = new HeldStart();
+            List<String> outerReached = new CopyOnWriteArrayList<>();
+            List<String> continuationReached = new CopyOnWriteArrayList<>();
+            CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+            daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.fromRunnable(() -> outerReached.add(cloudEvent.getId())))).start();
+            held.awaitInside();
+            AtomicReference<Throwable> continuationFailure = new AtomicReference<>();
+            CompletableFuture<Void> cancel = returnedWithin("cancel-x", () -> catchup.cancelSubscription("x")
+                    .doOnSuccess(done -> continuationFailure.set(failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(),
+                            cloudEvent -> Mono.fromRunnable(() -> continuationReached.add(cloudEvent.getId()))))))
+                    .toFuture());
+            await(cancel, "The cancel of x did not complete");
+            held.release();
+            await(subscribeOfX, "The subscribe of x did not return");
+
+            wrapped.deliver("x", anEvent("e1"));
+
+            assertAll(
+                    () -> assertThat(continuationFailure.get()).as("what the subscribe of x from the continuation of the cancel threw").isNull(),
+                    () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "subscribed:x", "skipped:x"),
+                    () -> assertThat(wrapped.isRunning("x")).as("whether the wrapped model runs x").isTrue(),
+                    () -> assertThat(continuationReached).as("events that reached the action of the subscribe from the continuation").containsExactly("e1"),
+                    () -> assertThat(outerReached).as("events that reached the action of the cancelled subscribe").isEmpty());
+        }
+
+        @Test
+        void a_cancel_that_throws_while_the_subscribe_of_x_is_under_way_leaves_nothing_registered() {
+            WrappedModel wrapped = new WrappedModelThatSkipsACancelledSubscribe();
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+            HeldStart held = new HeldStart();
+            AtomicReference<Subscription> cancelledSubscription = new AtomicReference<>();
+            CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+            daemon("subscribe-x", subscribeOfX, () -> cancelledSubscription.set(catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.empty()))).start();
+            held.awaitInside();
+            wrapped.failCancelsFromNowOn();
+
+            Throwable cancel = failureOf(() -> catchup.cancelSubscription("x"));
+            wrapped.succeedCancels();
+            held.release();
+            await(subscribeOfX, "The subscribe of x did not return");
+            Set<String> heldOnceItReturned = wrapped.subscriptionIds();
+            Throwable startFailure = catchThrowable(() -> cancelledSubscription.get().waitUntilStarted().block(DEADLINE));
+            Throwable later = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()));
+
+            assertAll(
+                    () -> assertThat(cancel).as("what the cancel threw").isInstanceOf(IllegalStateException.class),
+                    () -> assertThat(heldOnceItReturned).as("the ids the wrapped model holds once the cancelled subscribe returned").isEmpty(),
+                    () -> assertThat(startFailure).as("what waiting for the start of the cancelled subscribe threw").isInstanceOf(SubscriptionNotRunningException.class),
+                    () -> assertThat(later).as("what a subscribe of x once the cancelled subscribe returned threw").isNull(),
+                    () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("skipped:x", "subscribed:x"));
+        }
+
+        @Test
+        void two_subscribes_return_when_the_dynamic_start_of_each_cancels_the_other_subscription_without_waiting_for_the_cancel() {
+            WrappedModel wrapped = new WrappedModelThatSkipsACancelledSubscribe();
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+            loadClassesOfASubscribeAndACancel(catchup);
+            CountDownLatch bothInsideTheWrappedSubscribe = new CountDownLatch(2);
+            Map<String, CompletableFuture<Void>> cancels = new ConcurrentHashMap<>();
+            CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+            CompletableFuture<Void> subscribeOfY = new CompletableFuture<>();
+            Thread subscribingX = daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER,
+                    cancellingFromTheWrappedModel(catchup, "y", bothInsideTheWrappedSubscribe, cancels, "x"), cloudEvent -> Mono.empty()));
+            Thread subscribingY = daemon("subscribe-y", subscribeOfY, () -> catchup.subscribe("y", FILTER,
+                    cancellingFromTheWrappedModel(catchup, "x", bothInsideTheWrappedSubscribe, cancels, "y"), cloudEvent -> Mono.empty()));
+            subscribingX.start();
+            subscribingY.start();
+            awaitLatch(bothInsideTheWrappedSubscribe, STARTUP, "The subscribes of x and y were not both inside the wrapped subscribe");
+
+            await(CompletableFuture.allOf(subscribeOfX, subscribeOfY), "The subscribes of x and y did not return. x returned: " + subscribeOfX.isDone()
+                    + ", " + describe(subscribingX) + ". y returned: " + subscribeOfY.isDone() + ", " + describe(subscribingY));
+            await(CompletableFuture.allOf(cancels.get("x"), cancels.get("y")), "A cancel did not complete");
+
+            // Each subscribe either registered before the other's cancel reached the wrapped model, or skipped it
+            assertAll(
+                    () -> assertThat(wrapped.subscriptionIds()).as("the ids the wrapped model holds").doesNotContain("x", "y"),
+                    () -> assertThat(catchup.isRunning("x")).as("whether the catch-up reports x running").isFalse(),
+                    () -> assertThat(catchup.isRunning("y")).as("whether the catch-up reports y running").isFalse());
+        }
+
+        @Test
+        void a_subscribe_returns_when_its_dynamic_start_cancels_another_subscription_whose_cancel_blocks_on_a_cancel_of_the_subscription_under_way() {
+            WrappedModel wrapped = new WrappedModelThatSkipsACancelledSubscribe();
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+            loadClassesOfASubscribeAndACancel(catchup);
+            wrapped.events.clear();
+            catchup.subscribe("b", FILTER, StartAt.now(), cloudEvent -> Mono.empty());
+            AtomicReference<Throwable> hookFailure = new AtomicReference<>();
+            wrapped.onCancel.put("b", () -> {
+                try {
+                    catchup.cancelSubscription("a").block(BLOCKED);
+                } catch (Throwable t) {
+                    hookFailure.set(t);
+                }
+            });
+            CompletableFuture<Void> subscribeOfA = new CompletableFuture<>();
+            daemon("subscribe-a", subscribeOfA, () -> catchup.subscribe("a", FILTER, StartAt.dynamic(context -> {
+                if (context.hasSubscriptionModelType(ReactorStreamCatchupSubscriptionModel.class)) {
+                    return null;
+                }
+                catchup.cancelSubscription("b").subscribe();
+                return StartAt.now();
+            }), cloudEvent -> Mono.empty())).start();
+
+            await(subscribeOfA, "The subscribe of a did not return");
+            assertAll(
+                    () -> assertThat(hookFailure.get()).as("what the block on a cancel of a inside the cancel of b threw").isNull(),
+                    () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("subscribed:b", "cancelled:b", "cancelled:a", "skipped:a"),
+                    () -> assertThat(wrapped.isRunning("a")).as("whether the wrapped model runs a").isFalse());
+        }
+    }
+
     // Keeps the time the threads of a test take to load these classes out of what the deadline measures
     private static void loadClassesOfASubscribeAndACancel(ReactorStreamCatchupSubscriptionModel catchup) {
         catchup.subscribe("warm-up", FILTER, StartAt.now(), cloudEvent -> Mono.empty());
@@ -1118,8 +1362,9 @@ class ReactorCatchupSubscribeUnderWayTest {
 
     // A named subscription model that evaluates the start on the calling thread inside subscribe(..), against the class of
     // ReactorMongoSubscriptionModel, and holds the subscription once that returned. Only registersBeforeTheStart holds
-    // it from before the evaluation, which is the order of ReactorMongoSubscriptionModel
-    private static final class WrappedModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions {
+    // it from before the evaluation, which is the order of ReactorMongoSubscriptionModel. It doesn't implement
+    // CancellableRegistration, so the catch-up never tells it that it cancelled a subscribe
+    private static class WrappedModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions {
         static final Checkpoint TOKEN = new StringBasedCheckpoint("token");
         final List<String> events = new CopyOnWriteArrayList<>();
         final Set<String> subscribed = ConcurrentHashMap.newKeySet();
@@ -1163,16 +1408,23 @@ class ReactorCatchupSubscribeUnderWayTest {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            return requireNonNull(subscribe(subscriptionId, filter, startAt, action, () -> false));
+        }
+
+        // The subscribe of CancellableRegistration, which only WrappedModelThatSkipsACancelledSubscribe exposes. Asks
+        // cancelled where it registers the id
+        public @Nullable Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action,
+                                                BooleanSupplier cancelled) {
             actions.computeIfAbsent(subscriptionId, id -> new CopyOnWriteArrayList<>()).add(action);
-            if (registersBeforeTheStart) {
-                register(subscriptionId);
+            if (registersBeforeTheStart && !register(subscriptionId, action, cancelled)) {
+                return null;
             }
             startAt.get(new SubscriptionModelContext(ReactorMongoSubscriptionModel.class));
             if (failingSubscribes.contains(subscriptionId)) {
                 throw new IllegalStateException("The wrapped subscribe of " + subscriptionId + " failed");
             }
-            if (!registersBeforeTheStart) {
-                register(subscriptionId);
+            if (!registersBeforeTheStart && !register(subscriptionId, action, cancelled)) {
+                return null;
             }
             return handle(subscriptionId);
         }
@@ -1182,7 +1434,12 @@ class ReactorCatchupSubscribeUnderWayTest {
             actions.getOrDefault(subscriptionId, List.of()).forEach(action -> action.apply(event).block(BLOCKED));
         }
 
-        private void register(String subscriptionId) {
+        private boolean register(String subscriptionId, Function<CloudEvent, Mono<Void>> action, BooleanSupplier cancelled) {
+            if (cancelled.getAsBoolean()) {
+                actions.get(subscriptionId).remove(action);
+                events.add("skipped:" + subscriptionId);
+                return false;
+            }
             if (refusesDuplicates && subscribed.contains(subscriptionId)) {
                 events.add("refused:" + subscriptionId);
                 throw new DuplicateSubscriptionIdException(subscriptionId);
@@ -1193,6 +1450,15 @@ class ReactorCatchupSubscribeUnderWayTest {
             if (hook != null) {
                 hook.run();
             }
+            return true;
+        }
+
+        // The run of the id ends with an error the model doesn't retry, as a Mongo run can
+        void endsTheLastRunOnItsOwn(String subscriptionId) {
+            subscribed.remove(subscriptionId);
+            List<Function<CloudEvent, Mono<Void>>> of = actions.get(subscriptionId);
+            of.remove(of.size() - 1);
+            events.add("ended:" + subscriptionId);
         }
 
         int cancelsHeld() {
@@ -1299,5 +1565,10 @@ class ReactorCatchupSubscribeUnderWayTest {
                 }
             };
         }
+    }
+
+    // Skips the registration of a subscribe the catch-up cancelled, as ReactorMongoSubscriptionModel and
+    // ReactorDurableSubscriptionModel do. The tests order the cancel and the registration themselves, so no lock is taken
+    private static final class WrappedModelThatSkipsACancelledSubscribe extends WrappedModel implements CancellableRegistration {
     }
 }
