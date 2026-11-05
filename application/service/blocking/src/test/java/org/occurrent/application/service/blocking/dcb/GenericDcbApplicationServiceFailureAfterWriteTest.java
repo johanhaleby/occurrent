@@ -76,6 +76,7 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
     private final AtomicInteger decisions = new AtomicInteger();
     private final List<String> decidedEventIds = new ArrayList<>();
     private final List<Throwable> errorsHeard = new ArrayList<>();
+    private final List<Throwable> errorsMapped = new ArrayList<>();
 
     @BeforeEach
     void initialize() {
@@ -513,6 +514,70 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
         assertThat(eventsInBoundary()).as("[events in the boundary]").isEmpty();
     }
 
+    @Test
+    void a_handler_failure_after_the_append_reaches_the_retry_strategy_and_the_caller_without_running_the_command_again_when_the_executor_swallows_it() {
+        RuntimeException failure = new IllegalStateException("handler failed");
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(new SwallowsWhatPassesThrough())
+                .retryStrategy(RETRY_EVERYTHING.mapError(error -> {
+                    errorsMapped.add(error);
+                    return error;
+                }).onError((info, error) -> errorsHeard.add(error)))
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(errorsHeard).as("[errors heard by onError]").containsExactly(failure);
+        assertThat(errorsMapped).as("[errors seen by mapError]").containsExactly(failure);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+        assertThat(eventsInBoundary()).as("[events in the boundary]").isEqualTo(decidedEventIds);
+    }
+
+    @Test
+    void a_handler_failure_after_the_append_reaches_the_retry_strategy_and_the_caller_without_running_the_command_again_when_the_executor_swallows_it_in_a_joined_transaction() {
+        RuntimeException failure = new IllegalStateException("handler failed");
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(new JoinsTransactionAndSwallowsWhatPassesThrough())
+                .retryStrategy(RETRY_EVERYTHING.mapError(error -> {
+                    errorsMapped.add(error);
+                    return error;
+                }).onError((info, error) -> errorsHeard.add(error)))
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(errorsHeard).as("[errors heard by onError]").containsExactly(failure);
+        assertThat(errorsMapped).as("[errors seen by mapError]").containsExactly(failure);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+        assertThat(eventsInBoundary()).as("[events in the boundary]").isEqualTo(decidedEventIds);
+    }
+
+    @Test
+    void a_failure_after_the_append_carries_what_the_executor_suppressed_once_when_the_retry_strategy_ignores_the_shutdown_predicate() {
+        RuntimeException failure = new RuntimeException("handler failed");
+        SuppressesCleanupFailure executor = new SuppressesCleanupFailure();
+        RetriesEveryFailureWithoutTheShutdownPredicate retryStrategy = new RetriesEveryFailureWithoutTheShutdownPredicate();
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new FailingOnceDispatcher(failure))
+                .transactionExecutor(executor)
+                .retryStrategy(retryStrategy)
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(CRITERIA, this::decide));
+
+        assertThat(retryStrategy.runs).as("[runs of the attempt]").isEqualTo(2);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(failure);
+        assertThat(thrown.getSuppressed()).as("[exceptions suppressed by the failure]").containsExactly(executor.cleanupFailure);
+    }
+
     private List<DomainEvent> decide(List<DomainEvent> events) {
         decisions.incrementAndGet();
         DomainEvent decided = nameWasChanged();
@@ -786,6 +851,45 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
                 return action.get();
             } catch (RuntimeException e) {
                 throw new IllegalStateException(new RuntimeException(e));
+            }
+        }
+    }
+
+    // Stand-in for an executor that catches what passes through it and returns nothing, and opens no transaction
+    private static class SwallowsWhatPassesThrough implements TransactionExecutor {
+        @Override
+        public <T> @Nullable T inTransaction(Supplier<T> action) {
+            try {
+                return action.get();
+            } catch (RuntimeException e) {
+                return null;
+            }
+        }
+    }
+
+    // Stand-in for an executor that runs in a transaction the caller opened and catches what passes through it
+    private static final class JoinsTransactionAndSwallowsWhatPassesThrough extends SwallowsWhatPassesThrough {
+        @Override
+        public boolean isTransactional() {
+            return true;
+        }
+    }
+
+    // Stand-in for a strategy implemented outside the retry module. It can't take the shutdown predicate, so it runs the attempt again after every failure.
+    private static final class RetriesEveryFailureWithoutTheShutdownPredicate implements RetryStrategy {
+        int runs;
+
+        @Override
+        public <T extends @Nullable Object> T execute(Supplier<T> supplier) {
+            while (true) {
+                runs++;
+                try {
+                    return supplier.get();
+                } catch (RuntimeException e) {
+                    if (runs == 100) {
+                        throw e;
+                    }
+                }
             }
         }
     }

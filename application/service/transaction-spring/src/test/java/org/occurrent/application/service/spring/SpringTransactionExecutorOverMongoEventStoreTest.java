@@ -45,6 +45,8 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -52,6 +54,7 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.UnexpectedRollbackException;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -64,6 +67,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -77,7 +81,9 @@ import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
  * fails, so the command runs again and leaves one event and one side effect. Under {@code PROPAGATION_NOT_SUPPORTED} it
  * opens no transaction and reports none, yet the store's session synchronization is active and still rolls the write back
  * when the handler fails. A transaction the caller opened changes nothing for an executor that opens its own, on
- * {@code PROPAGATION_REQUIRES_NEW} or on another transaction manager.
+ * {@code PROPAGATION_REQUIRES_NEW} or on another transaction manager. In a transaction the caller opened on the same
+ * manager, a failing handler stops the handlers behind it and keeps the caller from committing, unless the manager is set
+ * not to mark a transaction rollback-only after a failure in a part of it.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -274,6 +280,39 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
     }
 
     @Test
+    void a_failing_handler_stops_the_handlers_behind_it_and_the_caller_cannot_commit_the_write_after_catching_the_failure_in_a_transaction_the_caller_opened() {
+        RuntimeException failure = new IllegalStateException("handler a failed");
+        List<String> receivedByB = new ArrayList<>();
+        var applicationService = serviceWithHandlers(failure, receivedByB);
+        AtomicReference<Throwable> caught = new AtomicReference<>();
+
+        Throwable commitFailure = catchThrowable(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+                caught.set(catchThrowable(() -> applicationService.execute(streamId, this::decide)))));
+
+        assertThat(caught.get()).as("[exception caught by the caller]").isSameAs(failure);
+        assertThat(receivedByB).as("[events received by b]").isEmpty();
+        assertThat(commitFailure).as("[exception from the commit]").isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(eventsInStream()).as("[events in the stream]").isEmpty();
+    }
+
+    @Test
+    void a_failing_handler_does_not_stop_the_handlers_behind_it_and_the_caller_can_commit_the_write_after_catching_the_failure_when_the_manager_does_not_mark_the_transaction_rollback_only() {
+        transactionManager.setGlobalRollbackOnParticipationFailure(false);
+        RuntimeException failure = new IllegalStateException("handler a failed");
+        List<String> receivedByB = new ArrayList<>();
+        var applicationService = serviceWithHandlers(failure, receivedByB);
+        AtomicReference<Throwable> caught = new AtomicReference<>();
+
+        Throwable commitFailure = catchThrowable(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+                caught.set(catchThrowable(() -> applicationService.execute(streamId, this::decide)))));
+
+        assertThat(caught.get()).as("[exception caught by the caller]").isSameAs(failure);
+        assertThat(receivedByB).as("[events received by b]").containsExactlyElementsOf(decidedEventIds);
+        assertThat(commitFailure).as("[exception from the commit]").isNull();
+        assertThat(eventsInStream()).as("[events in the stream]").containsExactlyElementsOf(decidedEventIds);
+    }
+
+    @Test
     void the_action_is_told_that_the_executor_opened_a_transaction_when_none_is_open() {
         var executor = new SpringTransactionExecutor(transactionManager);
 
@@ -303,6 +342,19 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
         var executor = new SpringTransactionExecutor(templateWith(TransactionDefinition.PROPAGATION_NOT_SUPPORTED));
 
         assertThat(executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)).isFalse();
+    }
+
+    // Subscription a throws and b records the ids it receives
+    private GenericApplicationService<DomainEvent> serviceWithHandlers(RuntimeException failureOfA, List<String> receivedByB) {
+        SynchronousSubscriptionModel subscriptions = new SynchronousSubscriptionModel();
+        subscriptions.subscribe("a", null, StartAt.now(), event -> {
+            throw failureOfA;
+        });
+        subscriptions.subscribe("b", null, StartAt.now(), event -> receivedByB.add(event.getId()));
+        return GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(subscriptions)
+                .transactionExecutor(new SpringTransactionExecutor(transactionManager))
+                .build();
     }
 
     private TransactionTemplate anotherTransactionTemplate() {

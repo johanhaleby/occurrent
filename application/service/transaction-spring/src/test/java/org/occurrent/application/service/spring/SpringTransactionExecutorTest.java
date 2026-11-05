@@ -110,7 +110,7 @@ class SpringTransactionExecutorTest {
     }
 
     @Test
-    void rollsBackAJoinedTransactionOnFailure_is_true_when_the_manager_is_not_an_AbstractPlatformTransactionManager() {
+    void rollsBackAJoinedTransactionOnFailure_is_false_when_the_manager_is_not_an_AbstractPlatformTransactionManager() {
         // Given
         PlatformTransactionManager transactionManager = new PlatformTransactionManager() {
             @Override
@@ -134,7 +134,7 @@ class SpringTransactionExecutorTest {
         boolean rollsBack = executor.rollsBackAJoinedTransactionOnFailure();
 
         // Then
-        assertThat(rollsBack).isTrue();
+        assertThat(rollsBack).isFalse();
     }
 
     // A transaction manager with no real resource to manage: doBegin/doCommit/doRollback are no-ops, and
