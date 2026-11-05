@@ -514,6 +514,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         requireNonNull(cancelled, "cancelled cannot be null");
 
         if (delegate != null) {
+            // Before any refusal, so a cancelled call returns null also where the id is taken or the model is shut down
+            if (cancelled.getAsBoolean()) {
+                return null;
+            }
             // Refused here rather than left to the wrapped model, which may accept the subscribe and fail it only
             // later, a catch-up model replaying history and then failing at the handover for example.
             if (shutdown) {
@@ -527,8 +531,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
 
         // Checked before the read below, so a duplicate subscribe and one on a shut-down model do not ask the wrapped
-        // model where the feed is, and checked again under the monitor where the id is taken
+        // model where the feed is, and checked again under the monitor where the id is taken. A cancelled call returns
+        // null before both, so it takes over no delete of the id and reads nothing. A subscribe of the id made after
+        // the cancel takes the id under this monitor, so this check sees that cancel whenever it sees that subscribe.
         synchronized (this) {
+            if (cancelled.getAsBoolean()) {
+                return null;
+            }
             requireIdFreeAndNotShutDown(subscriptionId);
         }
         // Read before the subscription is put where a start, a resume, a pause, a stop, a cancel or a shutdown can find
@@ -617,14 +626,20 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * subscription from the subscription-model default is handed over once its start position is read, after this
      * returned, see startDelegatedOnceRead.
      * <p>
-     * A cancel of the id that comes before the subscription is registered here ends it, and
-     * {@link Subscription#waitUntilStarted()} then fails with {@link CancellationException}.
+     * Returns {@code null} and registers nothing when {@code cancelled} answers {@code true} before this model takes the
+     * id, see startingPositionWriter. A cancel of the id after that and before the subscription is registered here
+     * ends it, and {@link Subscription#waitUntilStarted()} then fails with {@link CancellationException}.
      */
     private @Nullable Subscription subscribeByDelegating(SubscriptionModel delegate, String subscriptionId, @Nullable SubscriptionFilter filter,
                                                          StartAt startAt, Function<CloudEvent, Mono<Void>> action, BooleanSupplier cancelled) {
         // Refused at the call where this check sees the id. One it misses is refused by the wrapped model at the hand-over,
         // before the start position is recorded, see startAtTheCall.
         if (heldByTheWrappedModel(delegate, subscriptionId)) {
+            // Asked again, since the cancel and a subscribe of the id made after it can both come after
+            // subscribe(..) asked
+            if (cancelled.getAsBoolean()) {
+                return null;
+            }
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         @Nullable PositionWriter writer = startingPositionWriter(subscriptionId, cancelled);
