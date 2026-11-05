@@ -162,11 +162,17 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 })
                 .map(appendResult -> new Result<>(withCheckedVersions(appendResult, versionsRequested, decision.eventStream()), decision.newDomainEvents()));
 
-        Mono<Result<E>> attempt = (dispatchSynchronously ? transactionExecutor.isTransactional().defaultIfEmpty(false) : Mono.just(false)).flatMap(transactionOpen -> {
-            if (transactionOpen) {
+        Mono<Boolean> readInTransaction = dispatchSynchronously
+                ? Mono.zip(transactionExecutor.isTransactional().defaultIfEmpty(false), transactionExecutor.allowsReadBeforeTransaction().defaultIfEmpty(false),
+                (transactionOpen, readBeforeAllowed) -> transactionOpen || !readBeforeAllowed)
+                : Mono.just(false);
+        Mono<Result<E>> attempt = readInTransaction.flatMap(readInside -> {
+            if (readInside) {
                 // The executor can leave the transaction that's open here for the append, so a read here could miss what the
                 // append's condition sees and fail on every attempt. The read and the decision go in the executor too, and
                 // that costs nothing, since a store already reports no marker versions in the open transaction.
+                // An executor that doesn't allow a read before it gets the read here too, for example under a caller's scope
+                // that has synchronization but no transaction, where a read would bind a session the executor then fails on.
                 return transactionExecutor.inTransaction(() -> readAndDecide.flatMap(appendAndDispatch));
             }
             // The read and the decision run outside the transaction, since a store reports no marker versions inside one. The

@@ -73,6 +73,29 @@ public interface TransactionExecutor {
     }
 
     /**
+     * Whether the application service may read and decide before it calls {@link #inTransaction(Supplier)}, and run only
+     * the append and the synchronous dispatch in it. A DCB application service with synchronous subscriptions asks this
+     * before every attempt, since a store reports marker versions only for a read outside a transaction, and a snapshot
+     * decider saves its snapshot only at those versions.
+     * <p>
+     * Answer {@code false} when a read on this thread right now can bind a resource that {@link #inTransaction(Supplier)}
+     * then fails on. Spring's MongoDB template, for example, binds a session to the caller's transaction synchronization when
+     * it reads, and a {@code PROPAGATION_NOT_SUPPORTED} or {@code PROPAGATION_NEVER} executor then fails on that session.
+     * Answer for the moment of the call, like {@link #isTransactional()}.
+     * <p>
+     * The default is {@code false}, so an implementation that doesn't override it reads inside
+     * {@link #inTransaction(Supplier)}, as every executor did before 0.35.0. A snapshot decider on a service with
+     * synchronous subscriptions then saves no snapshot when the executor opens a transaction, and reads its whole
+     * boundary on every command.
+     *
+     * @return {@code true} if {@link #inTransaction(Supplier)} still works after a read that ran before it on the same
+     * thread.
+     */
+    default boolean allowsReadBeforeTransaction() {
+        return false;
+    }
+
+    /**
      * A pass-through executor that runs the action with no transaction. This is the default used by the
      * application service and yields best-effort synchronous subscriptions (see the interface documentation).
      *
@@ -83,6 +106,12 @@ public interface TransactionExecutor {
             @Override
             public <T> T inTransaction(Supplier<T> action) {
                 return Objects.requireNonNull(action, "action cannot be null").get();
+            }
+
+            // Opens nothing, so nothing a read binds before it can make it fail
+            @Override
+            public boolean allowsReadBeforeTransaction() {
+                return true;
             }
 
             @Override

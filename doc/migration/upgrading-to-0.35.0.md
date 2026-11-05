@@ -160,7 +160,8 @@ other sections compile fine and behave differently, so read them first.
 - [DCB snapshots resume from marker versions](#dcb-snapshots-resume-from-marker-versions). The DCB deciders and
   a `@Snapshot` DCB view save at marker versions, and ignore a snapshot 0.34.0 saved at a position. `Snapshot` gains two
   components. **Breaks the build** if you use a record pattern over `Snapshot`. A DCB application service with
-  synchronous subscriptions no longer runs your domain function in its transaction executor's transaction.
+  synchronous subscriptions on `noTransaction()` or a Spring executor no longer runs your domain function in its
+  transaction executor's transaction outside a Spring transaction scope of yours.
 - [The reactive `executeAndReturnState` emits a non-null state](#the-reactive-executeandreturnstate-emits-a-non-null-state).
   The emitted state is declared non-null. Breaks the build only for a Kotlin `Mono<State?>` written by hand.
 
@@ -957,8 +958,9 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - Inside a transaction of yours a read reports no versions, so a decider that runs in one reads the whole
   boundary and saves no snapshot. This is a known limitation, tracked in
   [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
-- A DCB application service with synchronous subscriptions now reads and decides before it enters its transaction
-  executor's transaction when no transaction of yours is open, so a decider on it saves snapshots. Only the append, the
+- A DCB application service with synchronous subscriptions on `noTransaction()` or a Spring executor now reads and
+  decides before it enters its transaction executor's transaction when `execute` runs outside every Spring transaction
+  scope of yours, so a decider on it saves snapshots. Only the append, the
   re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
   write your domain function makes is no longer part of it. The executor's conflict retry re-runs the append, the re-read
   and the dispatch, with the token of the read the decision was made on, and not the read or your domain function. A
@@ -969,6 +971,13 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - The executor's conflict retry no longer covers that read. A transient failure of the read, such as a
   `QueryTimeoutException`, fails the command unless your retry strategy retries it. If you relied on that retry, add it to what you
   pass to `retryStrategy` on the blocking builder or `retry` on the reactive builder.
+- In a Spring scope of yours that opens no transaction, on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`, the
+  service reads and decides in the executor, as in 0.34.0. A read before it would bind a session to that scope, and a
+  Spring executor on `PROPAGATION_NOT_SUPPORTED` or `PROPAGATION_NEVER` fails on that session before the append.
+- An executor of your own keeps the read and the decision in its transaction, as in 0.34.0, since
+  `allowsReadBeforeTransaction()` answers `false` by default. A decider on it saves no snapshot when that transaction is
+  open. If your executor still works after a read that ran before `inTransaction` on the same thread, override the
+  method to answer `true`.
 - In a transaction you own, the service still reads and decides in the executor, so what such a command sees doesn't
   change, also on `PROPAGATION_REQUIRES_NEW` and `PROPAGATION_NOT_SUPPORTED`. On a blocking service an exception from
   your domain function no longer marks that transaction rollback-only, so if you catch it and continue, that transaction

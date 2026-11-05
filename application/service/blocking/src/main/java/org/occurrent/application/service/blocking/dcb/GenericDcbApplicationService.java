@@ -179,10 +179,12 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         };
 
         Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
-            if (dispatchSynchronously && transactionExecutor.isTransactional()) {
+            if (dispatchSynchronously && (transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
                 // The executor can leave the transaction that's open here for the append, so a read here could miss what the
                 // append's condition sees and fail on every attempt. The read and the decision go in the executor too, and
                 // that costs nothing, since a store already reports no marker versions in the open transaction.
+                // An executor that doesn't allow a read before it gets the read here too, for example under a caller's scope
+                // that has synchronization but no transaction, where a read would bind a session the executor then fails on.
                 // Their failure goes around the executor, so it can't mark that transaction rollback-only.
                 AtomicReference<@Nullable Throwable> failedBeforeAppend = new AtomicReference<>();
                 Tuple<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransaction(() -> {
