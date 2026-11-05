@@ -784,7 +784,9 @@ committed with it. It now commits on its own, before the append writes its event
   `lastSequencePosition()`, the head as of the first operation in your transaction's MongoDB session on the store's
   database factory. It also returns your transaction's own appends, and those it started after that operation are at
   positions above that head. If you keep that position and read after it later, you get those events again.
-- An append joins your transaction when that's a MongoDB transaction on the template's `MongoDatabaseFactory`.
+- An append joins your transaction when that's a Spring-managed MongoDB transaction on the template's database
+  factory, and the `TransactionTemplate` or `TransactionalOperator` you give the store, if any, keeps the default
+  propagation, `REQUIRED`.
   [ADR 149](../architecture/decisions/0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md)
   lists what happens in other setups.
 

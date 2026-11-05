@@ -44,8 +44,9 @@ import static java.util.Objects.requireNonNull;
  *                             factory, and {@code events} also holds the transaction's own appends. Those it started after that operation are at
  *                             positions above the head, so a read after this position, once the transaction has
  *                             committed, returns them again. An append joins the caller's transaction when that is a
- *                             MongoDB transaction on the template's database factory, and ADR 149 lists what happens in
- *                             other setups.
+ *                             Spring-managed MongoDB transaction on the template's database factory and the store's
+ *                             transaction settings keep the default propagation, {@code REQUIRED}. ADR 149 lists what
+ *                             happens in other setups.
  * @param consistencyToken     the token a conditional append is checked against. It holds the criteria the read was
  *                             given, so pass it unchanged to
  *                             {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)} and the append is
