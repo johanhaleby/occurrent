@@ -131,10 +131,10 @@ final class NamedCatchupSupport {
     // handOver park instead of subscribing the delegate on a stopped model. Same role as the blocking
     // AbstractCatchupSubscriptionModel's stopped flag.
     private volatile boolean stopped = false;
-    // Set by shutdown() and never cleared, since a shut-down model cannot be started again. Refuses every named
-    // subscribe, so none replays history and then fails at the handover to a wrapped model that is shut down. Refuses
-    // every pause and resume too, unless the wrapped model manages no named subscriptions, and keeps every start from
-    // reaching the wrapped model.
+    // Set by beginShutdown() and never cleared, since a shut-down model cannot be started again. Refuses every named
+    // subscribe, so none replays history and then fails at the handover to a wrapped model that is shut down. Refuses a
+    // pause or a resume that reads it set, see requireNotShutdown, unless the wrapped model manages no named
+    // subscriptions, and keeps every start from reaching the wrapped model.
     private volatile boolean shutdown = false;
     // Held by start(..) while it starts the wrapped model and by beginShutdown() while it sets shutdown, so the
     // wrapped model gets no start after the shutdown this model sends it
@@ -213,18 +213,12 @@ final class NamedCatchupSupport {
     }
 
     // A call that finds this model shut down is refused here and never reaches the wrapped model. A pause or a resume
-    // that a shutdown() overtakes after this check is refused the same way when that shutdown cancelled the catch-up
-    // it read for the id. One that reads no catch-up for the id goes to the wrapped model and gets what that model throws.
+    // that reads a catch-up in flight for the id checks again once it holds the monitor of that catch-up, so it is
+    // refused when the flag was set by then. One that reads no catch-up for the id goes to the wrapped model and gets
+    // what that model throws.
     private void requireNotShutdown(Supplier<SubscriptionModelShutdownException> refusal) {
         if (shutdown) {
             throw refusal.get();
-        }
-    }
-
-    // Called with the state monitor held, which shutdown() takes to cancel the state after it set the flag
-    private void requireNotCancelledByShutdown(CatchupState state, String call, String subscriptionId) {
-        if (state.cancelled.get() && shutdown) {
-            throw shutDownRefusal(call, subscriptionId);
         }
     }
 
@@ -991,7 +985,7 @@ final class NamedCatchupSupport {
         CatchupState state = catchingUp.get(subscriptionId);
         if (state != null) {
             synchronized (state) {
-                requireNotCancelledByShutdown(state, "pause", subscriptionId);
+                requireNotShutdown(() -> shutDownRefusal("pause", subscriptionId));
                 if (!state.handedOver.get()) {
                     if (state.parked.get() || state.pendingPause.getAndSet(true)) {
                         throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
@@ -1028,7 +1022,7 @@ final class NamedCatchupSupport {
             boolean replaying = false;
             Object launched = null;
             synchronized (state) {
-                requireNotCancelledByShutdown(state, "resume", subscriptionId);
+                requireNotShutdown(() -> shutDownRefusal("resume", subscriptionId));
                 if (!state.handedOver.get()) {
                     boolean pausedDuringReplay = state.pendingPause.getAndSet(false);
                     if (!state.parked.get() && !pausedDuringReplay) {
