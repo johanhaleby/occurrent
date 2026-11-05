@@ -215,10 +215,10 @@ final class NamedCatchupSupport {
     }
 
     // A call refused by its first check never reaches the wrapped model. A pause or a resume that reads a catch-up in
-    // flight for the id checks again once it holds the monitor of that catch-up, and a resume whose takeover runs
-    // nothing checks again after it, so either is refused when the flag was set by then. A resume refused there may
-    // already have started the wrapped model, when this model was stopped. A pause or a resume that reaches the wrapped
-    // model after the flag is set gets what that model throws.
+    // flight for the id checks again once it holds the monitor of that catch-up, and a resume checks again once it has
+    // read the handover, so either is refused when the flag was set by then. A resume refused after its first check may
+    // already have started the wrapped model, when this model was stopped. A pause that reaches the wrapped model after
+    // the flag is set, and a resume that read the flag just before it was set, get what that model answers.
     private void requireNotShutdown(Supplier<SubscriptionModelShutdownException> refusal) {
         if (shutdown) {
             throw refusal.get();
@@ -1048,7 +1048,14 @@ final class NamedCatchupSupport {
             }
         }
         Subscription takenOver = takeOverOnResume(subscriptionId);
-        return takenOver == null ? named.resumeSubscription(subscriptionId) : takenOver;
+        if (takenOver != null) {
+            return takenOver;
+        }
+        // Checked again after the handover was read. A shutdown sets the flag before it clears the handovers, and a
+        // resume that found the handover of a lost live start cleared would resume the wrapped model where it lost the
+        // history.
+        requireNotShutdown(() -> shutDownRefusal("resume", subscriptionId));
+        return named.resumeSubscription(subscriptionId);
     }
 
     // The wrapped model lost the live start, holds the subscription paused and no takeover replay runs, because the

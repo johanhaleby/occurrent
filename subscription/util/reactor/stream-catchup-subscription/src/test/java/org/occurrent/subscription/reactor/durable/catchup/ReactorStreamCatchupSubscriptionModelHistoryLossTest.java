@@ -537,6 +537,47 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     @Test
+    void a_resume_whose_handover_a_shutdown_cleared_before_the_wrapped_model_is_shut_down_throws_SubscriptionModelShutdownException_and_does_not_resume_the_wrapped_model_where_it_lost_the_history() throws InterruptedException {
+        // Given a subscription whose live start the wrapped model lost, and which it paused for a takeover it hasn't run yet
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        CountDownLatch shutsDownTheWrappedModel = new CountDownLatch(1);
+        CountDownLatch mayShutDownTheWrappedModel = new CountDownLatch(1);
+        try {
+            subscribeAndHandOver(catchup);
+            wrapped.asksTheListeners(ID, wrapped.positionOf(ID));
+            wrapped.pauseSubscription(ID);
+            wrapped.beforeShutdown = () -> {
+                shutsDownTheWrappedModel.countDown();
+                await(mayShutDownTheWrappedModel);
+            };
+
+            // When a shutdown on another thread clears the handovers after the resume passed its first check, and waits
+            // to shut down the wrapped model
+            Thread shutdown = new Thread(catchup::shutdown, "shutdown");
+            NamedCatchupMapHook.installIn(catchup, "owned").afterTheReadIn("resumeSubscription", () -> {
+                shutdown.start();
+                await(shutsDownTheWrappedModel);
+            });
+            Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+            int resumedWhereItWasHeld = wrapped.resumedWhereItWasHeld.get();
+            mayShutDownTheWrappedModel.countDown();
+            shutdown.join(10_000);
+
+            // Then the resume is refused, and the wrapped model is not resumed where it lost the history
+            assertAll(
+                    () -> assertThat(thrown).as("what the resume throws")
+                            .isInstanceOf(SubscriptionModelShutdownException.class).hasMessage("Cannot resume subscription " + ID + " because the subscription model is shutdown."),
+                    () -> assertThat(resumedWhereItWasHeld).as("resumed where it lost the history, before the wrapped model was shut down").isZero(),
+                    () -> assertThat(shutdown.isAlive()).as("whether the shutdown still runs 10 seconds after it may shut down the wrapped model").isFalse()
+            );
+        } finally {
+            mayShutDownTheWrappedModel.countDown();
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_resume_while_the_takeover_the_wrapped_model_runs_has_begun_and_not_yet_registered_its_replay_is_refused_as_already_running_and_does_not_resume_the_wrapped_model_where_it_lost_the_history() throws InterruptedException {
         // Given a subscription whose live start the wrapped model lost, and which it paused for a takeover
         LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
@@ -887,6 +928,9 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         // Runs on the thread of every subscribe(id, ..) before the model registers the subscription
         volatile Runnable beforeSubscribeRegisters = () -> {
         };
+        // Runs on the thread of every shutdown()
+        volatile Runnable beforeShutdown = () -> {
+        };
         final AtomicInteger subscribeCalls = new AtomicInteger();
         final AtomicInteger starts = new AtomicInteger();
         private volatile @Nullable Checkpoint refusedStart;
@@ -1151,6 +1195,11 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
         @Override
         public void stop() {
+        }
+
+        @Override
+        public void shutdown() {
+            beforeShutdown.run();
         }
 
         @Override
