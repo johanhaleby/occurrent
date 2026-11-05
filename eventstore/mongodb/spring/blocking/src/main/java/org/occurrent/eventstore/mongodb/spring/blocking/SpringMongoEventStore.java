@@ -501,11 +501,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // A read through this store's template inside a MongoDB transaction on its database factory sees that transaction's
-    // snapshot and its own appends. A reservation commits before its events are inserted, so every event in the snapshot
-    // is at or below the snapshot's counter, and anything above it is this transaction's own. The reported head stays
-    // the snapshot's counter. Otherwise the counter bounds the read, which is always safe.
+    // snapshot and its own appends, but only with synchronization active, without which the template runs no session.
+    // A reservation commits before its events are inserted, so every event in the snapshot is at or below the
+    // snapshot's counter, and anything above it is this transaction's own. The reported head stays the snapshot's
+    // counter. Otherwise the counter bounds the read, which is always safe.
     private long readUpTo(long highWatermark, MongoTemplate template) {
-        return template == mongoTemplate && MongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()) ? Long.MAX_VALUE : highWatermark;
+        return template == mongoTemplate && TransactionSynchronizationManager.isSynchronizationActive()
+                && MongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()) ? Long.MAX_VALUE : highWatermark;
     }
 
     @Override

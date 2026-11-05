@@ -699,11 +699,19 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     // A read through this store's template inside a MongoDB transaction on its database factory sees that transaction's
-    // snapshot and its own appends. A reservation commits before its events are inserted, so every event in the snapshot
-    // is at or below the snapshot's counter, and anything above it is this transaction's own. The reported head stays
-    // the snapshot's counter. Otherwise the counter bounds the read, which is always safe.
+    // snapshot and its own appends, but only with synchronization active, without which the template runs no session.
+    // A reservation commits before its events are inserted, so every event in the snapshot is at or below the
+    // snapshot's counter, and anything above it is this transaction's own. The reported head stays the snapshot's
+    // counter. Otherwise the counter bounds the read, which is always safe.
     private Mono<Boolean> readsUnbounded(ReactiveMongoOperations template) {
-        return template == mongoTemplate ? ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()) : Mono.just(false);
+        if (template != mongoTemplate) {
+            return Mono.just(false);
+        }
+        return TransactionSynchronizationManager.forCurrentTransaction()
+                .filter(TransactionSynchronizationManager::isSynchronizationActive)
+                .flatMap(__ -> ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()))
+                .onErrorResume(NoTransactionException.class, __ -> Mono.just(false))
+                .defaultIfEmpty(false);
     }
 
     private Mono<Long> readUpTo(Mono<Long> highWatermark, ReactiveMongoOperations template) {

@@ -780,12 +780,14 @@ committed with it. It now commits on its own, before the append writes its event
   transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it when
   they opened it.
 - A read in your transaction reports, in `lastSequencePosition()`, the head as of your transaction's first operation on
-  the store's database factory. It also returns the events your transaction appended after that, at positions above
-  that head. If you keep that position and read after it later, you get those events again.
-- An append joins your transaction only when the store's transaction manager is on the same `MongoDatabaseFactory`
-  instance as its template, which is how the Spring Boot starters set it up. With a manager on another instance, an
-  append commits in a MongoDB transaction of its own, and after a read in your transaction, later reads in it don't
-  return that append.
+  the store's database factory. It also returns your transaction's own appends, and those it started after that
+  operation are at positions above that head. If you keep that position and read after it later, you get those events
+  again.
+- An append joins your transaction only when a MongoDB transaction is already open on the store's
+  `MongoDatabaseFactory` instance, either one your `MongoTransactionManager` opened on it or one the store opened there
+  for an earlier read in your transaction. That also needs the store's transaction manager on that instance, which is how
+  the Spring Boot starters set it up. Otherwise the append commits in a MongoDB transaction of its own, so it doesn't
+  roll back with yours, and when your transaction read before it, later reads in it don't return that append.
 
 ### What to do
 

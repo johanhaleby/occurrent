@@ -40,12 +40,13 @@ import static java.util.Objects.requireNonNull;
  *                             reader can actually see. Use {@code consistencyToken} for optimistic concurrency.
  *                             Inside a caller's transaction, {@code SpringMongoEventStore} and
  *                             {@code ReactorMongoEventStore} report the head as of the transaction's first operation
- *                             on the store's database factory, and {@code events} also holds the events the
- *                             transaction appended after that, at positions above the head. A read after this
- *                             position, once the transaction has committed, returns those events again. With the
- *                             store's transaction manager on another database factory instance than its template, an
- *                             append commits in a transaction of its own, and when the caller's transaction read
- *                             before that append, its later reads don't return it.
+ *                             on the store's database factory, and {@code events} also holds the transaction's own
+ *                             appends. Those it started after that operation are at positions above the head, so a
+ *                             read after this position, once the transaction has committed, returns them again. An
+ *                             append joins the caller's transaction only when a MongoDB transaction is already open
+ *                             on the store's database factory instance. Otherwise it commits in a transaction of its
+ *                             own, and when the caller's transaction read before that append, its later reads don't
+ *                             return it.
  * @param consistencyToken     the token a conditional append is checked against. It holds the criteria the read was
  *                             given, so pass it unchanged to
  *                             {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)} and the append is
