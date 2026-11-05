@@ -669,14 +669,15 @@ versions in that scope binds a session with a transaction to it. A read with ver
 session of the store's own. I ran a plain `execute` in such a scope with the read before the executor. A
 `SpringTransactionExecutor` on `PROPAGATION_NOT_SUPPORTED` failed to suspend the scope with `IllegalStateException`, and
 one on `PROPAGATION_NEVER` took the session for an existing transaction and threw `IllegalTransactionStateException`,
-both before the append. On the reactive stack `PROPAGATION_NEVER` failed the same way. So the service also asks
-`allowsReadBeforeTransaction()`, a new default method on `TransactionExecutor` and `ReactiveTransactionExecutor`, and
-reads before the executor only when it answers `true`. The default answers `false`, which keeps an executor of your own
-reading in its transaction as in 0.34.0. `noTransaction()` answers `true`, `SpringTransactionExecutor` when no
-transaction synchronization is active, and `SpringReactiveTransactionExecutor` when the subscriber context holds no
-transaction context. `isTransactional()` keeps meaning an actual transaction, since the service passes it to the
-synchronous subscriptions as whether the write is in one. In such a scope a decider's read runs in the executor, so it
-gets versions only when the executor opens no transaction.
+both before the append. One on `PROPAGATION_REQUIRES_NEW` failed to suspend the scope the same way. On the reactive
+stack `PROPAGATION_NEVER` failed the same way, and `PROPAGATION_REQUIRES_NEW` stored nothing and threw nothing. So the
+service also asks `allowsReadBeforeTransaction()`, a new default method on `TransactionExecutor` and
+`ReactiveTransactionExecutor`, and reads before the executor only when it answers `true`. The default answers `false`,
+which keeps an executor of your own reading in its transaction as in 0.34.0. `noTransaction()` answers `true`,
+`SpringTransactionExecutor` when no transaction synchronization is active, and `SpringReactiveTransactionExecutor` when
+the subscriber context holds no transaction context. `isTransactional()` keeps meaning an actual transaction, since the
+service passes it to the synchronous subscriptions as whether the write is in one. In such a scope a decider's read runs
+in the executor, so it gets versions only when the executor opens no transaction.
 
 On the blocking service a failure of the read or the decision goes around the executor, so it can't mark a transaction
 the caller owns rollback-only, and a caller that catches it and continues commits. The service holds it inside the
