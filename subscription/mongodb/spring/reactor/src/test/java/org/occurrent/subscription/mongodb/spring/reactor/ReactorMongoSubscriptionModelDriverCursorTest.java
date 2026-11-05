@@ -57,6 +57,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.reactor.HistoryLostException;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -489,6 +490,25 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
                 .thenCancel()
                 .verify(Duration.ofSeconds(15));
         assertThat(answers).hasValue(2);
+    }
+
+    @Test
+    void the_flux_failing_on_history_loss_names_where_its_dynamic_position_opened_when_the_history_is_lost_after_a_failed_read_opened_it_again() {
+        // Given a dynamic position answering a live checkpoint, and a first read of the change stream that fails
+        Checkpoint live = liveCheckpoint();
+        StartAt startAt = StartAt.dynamic(ctx -> StartAt.checkpoint(live));
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", 2));
+
+        // When the flux is subscribed to, and the server has lost the history once the first read has failed and the flux has opened again
+        StepVerifier.create(subscriptionModel.subscribeFailingOnHistoryLoss(null, startAt))
+                .then(() -> {
+                    await().atMost(10, SECONDS).until(() -> !commands.failed("getMore").isEmpty());
+                    FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", 286));
+                })
+
+                // Then the flux fails with the position its dynamic answer opened at
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOfSatisfying(HistoryLostException.class, lost -> assertThat(lost.lostFrom()).isEqualTo(live)))
+                .verify(Duration.ofSeconds(15));
     }
 
     @Test
