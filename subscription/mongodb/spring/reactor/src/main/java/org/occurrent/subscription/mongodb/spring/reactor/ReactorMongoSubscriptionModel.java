@@ -40,6 +40,7 @@ import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.*;
+import org.occurrent.subscription.api.reactor.internal.CancellableRegistration;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
@@ -77,6 +78,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiPredicate;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -149,7 +151,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  */
 @NullMarked
 public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions, QuietPositionReportingSubscriptions,
-        HistoryLossReportingSubscriptions, RepositionableSubscriptions {
+        HistoryLossReportingSubscriptions, RepositionableSubscriptions, CancellableRegistration {
     private static final Logger log = LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
     // Above the 10 seconds between the no-op writes an idle replica set makes, so a client that is idle but has heard
     // from the server since the last one still starts from the cluster time it knows
@@ -301,12 +303,25 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        return requireNonNull(subscribe(subscriptionId, filter, startAt, action, () -> false));
+    }
+
+    // Internal, see CancellableRegistration
+    @Override
+    public @Nullable Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action,
+                                            BooleanSupplier cancelled) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        requireNonNull(cancelled, "cancelled cannot be null");
 
         RunStart runStart;
         synchronized (this) {
+            // Under the monitor that cancelSubscription(..) takes, so a cancel either finds the subscription or keeps it
+            // from being registered
+            if (cancelled.getAsBoolean()) {
+                return null;
+            }
             if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
