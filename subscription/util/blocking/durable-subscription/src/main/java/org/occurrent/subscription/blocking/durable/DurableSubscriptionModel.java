@@ -1016,17 +1016,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * <p>
      * It doesn't wait for a subscribe of the id on another thread whose start-position function is still being asked.
      * That subscribe subscribes nothing in the wrapped model, and the subscription it returns never starts. A cancel
-     * the function makes on the subscribing thread doesn't stop that subscribe.
+     * the function makes on the subscribing thread doesn't stop that subscribe, and neither does a cancel that throws.
      *
      * @param subscriptionId The subscription id to cancel
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
         runUnderLockFor(subscriptionId, () -> {
-            // A cancel the function makes on the subscribing thread doesn't stop that subscribe, as before the function
-            // was asked ahead of the lock
-            Thread current = Thread.currentThread();
-            asking.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current).forEach(asked -> asked.cancelled = true);
             subscriptionModel.cancelSubscription(subscriptionId);
             // The wrapped model doesn't wait for an action that is running, so its checkpoint is written before the
             // registrations are cancelled below or not at all. The untracked ones stop before anything is deleted
@@ -1039,6 +1035,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
             notCheckpointedSubscriptions.remove(subscriptionId);
             checkpointedSubscriptions.remove(subscriptionId);
+            // Only once the cancel has run without throwing, and still under the lock the subscribe needs, so a
+            // subscribe whose function is asked still goes ahead when the cancel throws. A cancel the function makes on
+            // the subscribing thread doesn't stop that subscribe, as before the function was asked ahead of the lock
+            Thread current = Thread.currentThread();
+            asking.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current).forEach(asked -> asked.cancelled = true);
         });
     }
 

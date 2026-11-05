@@ -2465,8 +2465,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * position. Returns without waiting for a replay that is in the subscriber's action, which stores nothing more once
      * it returns. It doesn't wait for a subscribe of the id on another thread whose start-position function is still
      * being asked either. That subscribe subscribes nothing, and the subscription it returns never starts. A cancel the
-     * function makes on the subscribing thread doesn't stop that subscribe. While this runs,
-     * {@link #start(boolean) start(true)} doesn't let the live delegate resume the subscription itself.
+     * function makes on the subscribing thread doesn't stop that subscribe, and neither does a cancel that throws.
+     * While this runs, {@link #start(boolean) start(true)} doesn't let the live delegate resume the subscription
+     * itself.
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
@@ -2478,7 +2479,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (nothingKept) {
                 deletePositionFromStorage(subscriptionId);
             }
+            cancelAskedSubscribes(subscriptionId);
         }
+    }
+
+    // Called by a cancel that holds the claim, once it has run without throwing, so a subscribe whose function is asked
+    // still goes ahead when the cancel throws. A cancel the function makes on the subscribing thread doesn't stop that
+    // subscribe, as before the function was asked ahead of the claim
+    void cancelAskedSubscribes(String subscriptionId) {
+        Thread cancelling = Thread.currentThread();
+        askedFirst.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != cancelling).forEach(asked -> asked.cancelled = true);
     }
 
     /**
@@ -2495,10 +2505,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * be deleted. False when a subscribe for the same id on this thread, made while {@code cancel} ran, is kept.
      */
     boolean cancelKeepingWhatWasSubscribedOnFailure(String subscriptionId, Runnable cancel) {
-        // A cancel the function makes on the subscribing thread doesn't stop that subscribe, as before the function was
-        // asked ahead of the claim
-        Thread cancelling = Thread.currentThread();
-        askedFirst.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != cancelling).forEach(asked -> asked.cancelled = true);
         Subscribed made = subscribed.get(subscriptionId);
         CancelUnderWay underWay = new CancelUnderWay(made == null ? CompletableFuture.completedFuture(null) : made.cancelledReplayReturned());
         // Before the cancel takes the replay away, so start(true) and every resume find it all through the cancel. A

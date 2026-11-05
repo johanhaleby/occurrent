@@ -1379,7 +1379,7 @@ while the function runs.
 * A `cancelSubscription(id)` made on another thread while the function of a subscribe of `id` runs returns without
   waiting for that subscribe. The subscribe returns once the function has, subscribes nothing, and the `Subscription` it
   returns answers `false` from `waitUntilStarted(..)`. A cancel the function makes on the subscribing thread doesn't
-  stop the subscribe, as in 0.34.0.
+  stop the subscribe, as in 0.34.0, and neither does a cancel that throws.
 * A subscribe of an id that `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or
   `CatchupSubscriptionModel` already runs asks its function before it throws `DuplicateSubscriptionIdException`. In
   0.34.0 the stream or DCB catch-up threw before it asked the function. `DurableSubscriptionModel` asked the function

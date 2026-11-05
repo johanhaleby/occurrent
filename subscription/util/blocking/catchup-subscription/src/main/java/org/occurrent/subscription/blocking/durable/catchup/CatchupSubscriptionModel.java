@@ -555,16 +555,16 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 presentCatchupModels().forEach(model -> model.cancelRunningCatchup(subscriptionId));
                 subscriptionModel.cancelSubscription(subscriptionId);
             });
-            if (!nothingKept) {
-                return;
+            if (nothingKept) {
+                // Position storage is shared config, not per-mode state. Either inner model's config deletes the same
+                // storage entry, so delegate to whichever is present instead of deleting twice.
+                if (streamCatchupSubscriptionModel != null) {
+                    streamCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
+                } else if (dcbCatchupSubscriptionModel != null) {
+                    dcbCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
+                }
             }
-            // Position storage is shared config, not per-mode state. Either inner model's config deletes the same
-            // storage entry, so delegate to whichever is present instead of deleting twice.
-            if (streamCatchupSubscriptionModel != null) {
-                streamCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
-            } else if (dcbCatchupSubscriptionModel != null) {
-                dcbCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
-            }
+            anyCatchupModel().cancelAskedSubscribes(subscriptionId);
         }
     }
 
