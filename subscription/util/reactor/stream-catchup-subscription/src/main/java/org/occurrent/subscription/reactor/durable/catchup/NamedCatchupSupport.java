@@ -355,6 +355,13 @@ final class NamedCatchupSupport {
             Disposable replaying = replayThenHandOver(replay, state, launched, notBefore, firstStart, replaysAgain)
                     .subscribe(unused -> {
                     }, throwable -> {
+                        // First, so a takeover or a resume that claims the record put back below finds no dead replay
+                        // in flight for the id. Identity-checked, since unlike handOver and cancelSubscription this
+                        // callback holds neither the state monitor nor the per-id lock, so a concurrent
+                        // cancel-then-resubscribe for the same id can already have installed a new state by the time a
+                        // stale failure reaches here. A plain remove(id) would delete that new attempt's entry instead
+                        // of this dead one's.
+                        catchingUp.remove(subscriptionId, state);
                         if (takenOver != null) {
                             // So a resume replays again, counting its replays again from 0
                             handedOver.computeIfPresent(subscriptionId, (id, made) -> made == takenOver ? made.withTheReplaysAgainOf(0) : made);
@@ -376,11 +383,6 @@ final class NamedCatchupSupport {
                             log.error("The catch-up replay for subscription {} after the subscription model lost the history from its live start failed, and the subscription model no longer holds it paused. The catch-up replays again when the subscription model reports that live start lost again, or when the subscription is resumed once it is paused.",
                                     subscriptionId, throwable);
                         }
-                        // Identity-checked, since unlike handOver and cancelSubscription this callback holds neither the
-                        // state monitor nor the per-id lock, so a concurrent cancel-then-resubscribe for the same id can already have
-                        // installed a new state by the time a stale failure reaches here. A plain remove(id) would
-                        // delete that new attempt's entry instead of this dead one's.
-                        catchingUp.remove(subscriptionId, state);
                         // Only a replay that never handed over leaves no subscription behind, so a subscribe of the id replays again
                         if (takenOver == null && !state.handedOver.get()) {
                             release(subscriptionId, replay.owned());
