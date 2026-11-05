@@ -490,9 +490,9 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
-    // ADR 132 decision 9's third case: a composition that can replay and can report its phase, but is wired so it
-    // is never asked to (the resolved start position never replays, or the composition has no catch-up layer at
-    // all). Recording still proceeds, since decision 9 allows it, but nothing ever clears it automatically.
+    // ADR 132 decision 9's third case, a composition that can replay and can report its phase but is wired so it is
+    // never asked to, or its durable-only case, a composition with no catch-up layer at all. Recording still proceeds,
+    // since decision 9 allows it, but nothing ever clears it automatically.
     // verifiedNeverReplays must already be a fact this registrar can stand behind (see verifiedNeverReplays(...)
     // below), never an inference from an unobservable composition's assumed behavior, so a false positive here
     // never happens.
@@ -507,9 +507,9 @@ class ProjectionAnnotationRegistrar {
     // owner that composed it, never from a probe or an annotation-only predicate:
     //   1. The composition structurally has no catch-up layer at all (the durable-only case of ADR 132 decision 9), a
     //      known fact resolveCatchupModel's ComposedCatchupModel branch already verified, not an unobserved absence.
-    //   2. NOW with resumeBehavior SAME_AS_START_AT, which is StartAt.now() on every start. On the shipped Mongo
-    //      composition neither a restart nor a resume replays from a catch-up checkpoint in storage
-    //      (ReactiveNowStartAtLeftOverCheckpointMongoTest). An application-supplied model that resumes from a stored
+    //   2. NOW with resumeBehavior SAME_AS_START_AT, which is StartAt.now() on every start. On the stream composition
+    //      ReactiveNowStartAtLeftOverCheckpointMongoTest boots, neither a restart nor a resume replays from a catch-up
+    //      checkpoint in storage. An application-supplied model that resumes from a stored
     //      position anyway is not seen here.
     // DEFAULT, and NOW with the default resumeBehavior, both start at the model default (StartPositionSupport's
     // nowThenResume and its DCB counterpart). A restart resumes from the stored checkpoint, and on the shipped

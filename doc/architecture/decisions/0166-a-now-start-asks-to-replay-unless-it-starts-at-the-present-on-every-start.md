@@ -14,9 +14,9 @@ Decision 9 of ADR 132 names a third composition that records with no automatic c
 phase, but is wired so it is never asked to. It says `StartPosition.DEFAULT` with no global start position
 set and `NOW` both put a catch-up-capable composition there, "since neither ever asks it to replay". Both starters'
 `ProjectionAnnotationRegistrar` built a startup warning on that sentence, for a `recordAppliedAppends = true`
-projection. The blocking one logged that recording never resets for every `startAt = NOW`, and for an unset `startAt` on the
-MongoDB composition the starter configures. The reactive one logged it for `NOW` and for an unset `startAt` on that
-composition.
+projection. The blocking one logged that recording never resets for every `startAt = NOW`, and for an unset
+`startAt` on the MongoDB composition the starter configures. The reactive one logged it for `NOW` and for an unset
+`startAt` on that composition.
 
 The sentence is not true of `NOW` with the default `resumeBehavior`. On a restart such a subscription continues from
 the checkpoint it stored, and when a catch-up stored that checkpoint, the catch-up replays from it. A projection whose
@@ -25,10 +25,11 @@ finish, replays on the next boot. On the reactive stack an unset `startAt` start
 registrar cannot know which kind of checkpoint a later boot finds, so it cannot promise that the projection never
 replays.
 
-On the blocking stack an unset `startAt` on a `@DcbSubscription` or a DCB projection reaches the catch-up layer as
-the model default, so it resumes from such a checkpoint and replays too. On a blocking stream or agnostic subscription
-an unset `startAt` does not replay from such a checkpoint. It starts at the present instead, and misses what was written while
-the application was down. That is a separate defect, older than 0.35.0, and this ADR does not change it.
+On the blocking stack an unset `startAt` on a `@DcbSubscription`, a DCB `@Snapshot` or a DCB projection reaches the
+catch-up layer as the model default, so it resumes from such a checkpoint and replays too. On a blocking stream or
+agnostic subscription an unset `startAt` does not replay from such a checkpoint. It starts at the present instead, and
+misses what was written while the application was down. That is a separate defect, older than 0.35.0, and this ADR
+does not change it.
 
 On the blocking stack, `NOW` with `resumeBehavior = SAME_AS_START_AT` keeps no position on Occurrent's durable and
 competing consumer models. A restart with a catch-up checkpoint in storage gets only the event written after it
@@ -54,11 +55,12 @@ for it.
 Neither `NOW` nor `DEFAULT` belongs to the third case when the application declares a `SubscriptionResumePoints`
 bean.
 
-Both registrars' warnings follow this.
+Both registrars' warnings follow this. A push projection with `catchup = NONE` still warns on both stacks, whatever
+beans are declared, since the bean doesn't start it. For a projection that subscribes to the event store:
 
 - The blocking one fires for `NOW` only with `SAME_AS_START_AT`, and for an unset `startAt` on a stream or an
-  agnostic projection on the composition the starter configures. While a `SubscriptionResumePoints` bean is declared
-  it fires only for a push projection with `catchup = NONE`, which the bean doesn't start.
+  agnostic projection on the composition the starter configures. It doesn't fire while a `SubscriptionResumePoints`
+  bean is declared.
 - The reactive one fires for `NOW` only with `SAME_AS_START_AT`, and for a composition with no catch-up layer. With
   a `SubscriptionResumePoints` bean declared it fires only for a composition with no catch-up layer, which never
   replays whatever the start.
@@ -72,7 +74,7 @@ Both registrars' warnings follow this.
 - `ComposedCatchupModel.defaultBypassesCatchup` still records that a first start with `startAt` unset doesn't replay,
   but the reactive warning no longer reads it.
 - On the blocking stack the warning for `NOW` with `SAME_AS_START_AT` rests on Occurrent's own models opting out of
-  keeping a position. On the reactive stack it rests on the tests of the composition the starter configures. In both,
+  keeping a position. On the reactive stack it rests on tests of the stream composition the starter configures. In both,
   an application-supplied model of another type that keeps a position is not seen by the registrar.
 - An application that declares a `SubscriptionResumePoints` bean gets the warning only for a push projection with
   `catchup = NONE` and, on the reactive stack, for a composition with no catch-up layer. That holds even for a
