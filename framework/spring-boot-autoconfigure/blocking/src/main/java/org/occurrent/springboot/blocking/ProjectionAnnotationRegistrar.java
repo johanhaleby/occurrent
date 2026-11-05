@@ -439,10 +439,10 @@ class ProjectionAnnotationRegistrar {
     // The two sound cases the recordAppliedAppends-never-resets warning may fire on for a DCB/agnostic/stream
     // projection, per the epic's doctrine that a fact about a composition comes from the owner that composed it,
     // never from a probe or an annotation-only predicate:
-    //   1. NOW with resumeBehavior SAME_AS_START_AT, which keeps no position, true regardless of what the composition
-    //      can do. A SubscriptionResumePoints answer can still make it replay, and this check does not ask for one.
-    //      Under the default resumeBehavior a restart resumes from the stored checkpoint and replays when that
-    //      checkpoint is a catch-up position.
+    //   1. NOW with resumeBehavior SAME_AS_START_AT, whose start keeps no position on any composition. A
+    //      SubscriptionResumePoints answer can still make it replay, and this check does not ask for one. Under the
+    //      default resumeBehavior a restart continues from the stored checkpoint, which replays when a catch-up stored
+    //      it, and this registrar cannot see which kind is stored.
     //   2. DEFAULT, where the auto-configuration that composed this stack's default model registered, through
     //      ComposedDefaultStartPosition, that its own DEFAULT bypasses catch-up, and capability is that exact
     //      composition. True for Occurrent's shipped Mongo composition (issue 865), never assumed for an

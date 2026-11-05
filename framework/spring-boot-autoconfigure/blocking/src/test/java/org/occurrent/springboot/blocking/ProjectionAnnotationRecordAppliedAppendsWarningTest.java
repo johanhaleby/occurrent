@@ -356,8 +356,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     @Test
     void startAt_now_with_same_as_start_at_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
-        // NOW with SAME_AS_START_AT keeps no checkpoint, so without a SubscriptionResumePoints bean every start
-        // begins at the present and never replays, whatever the composition is.
+        // NOW with SAME_AS_START_AT keeps no checkpoint and starts at the present, whatever the composition is.
         Subscribable model = unobservableModel();
 
         new ApplicationContextRunner()
@@ -377,8 +376,8 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     @Test
     void startAt_now_with_the_default_resume_behavior_does_not_warn_when_the_composition_cannot_say_whether_it_would_replay() {
-        // NOW with the default resumeBehavior resumes from its stored checkpoint on a restart, and the catch-up
-        // layer replays when that checkpoint is a global position.
+        // NOW with the default resumeBehavior continues from its stored checkpoint on a restart, and replays when a
+        // catch-up stored that checkpoint.
         Subscribable model = unobservableModel();
 
         new ApplicationContextRunner()
@@ -395,8 +394,8 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     @Test
     void startAt_now_with_the_default_resume_behavior_does_not_warn_even_on_the_shipped_composition() {
-        // The shipped composition bypasses catch-up for StartPosition.DEFAULT only. A NOW start resumes from its
-        // stored checkpoint on a restart, so it can replay on this composition too.
+        // The shipped composition bypasses catch-up for StartPosition.DEFAULT only. A NOW start continues from its
+        // stored checkpoint on a restart, and replays on this composition too when a catch-up stored it.
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
