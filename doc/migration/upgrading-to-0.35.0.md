@@ -1446,8 +1446,8 @@ again for that subscription id. So changing `startAt` on an existing id has no e
 checkpoint is deleted. If the position of that checkpoint is no longer in the oplog, the subscription stops, see
 [a subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
 
-On the blocking starter, `NOW` with `SAME_AS_START_AT` starts at the present on every restart and stores no
-checkpoint, so the events written while the application was down are not delivered. Before, it delivered them once it
+On the blocking starter, `NOW` with `SAME_AS_START_AT` starts at the present on every restart, and when it's paused
+and resumed, and stores no checkpoint, so the events written while the application was down are not delivered. Before, it delivered them once it
 had stored a checkpoint. As for any `NOW` start, an event written shortly before the subscription starts can still be
 delivered, and a `SubscriptionResumePoints` bean that answers for the subscription id still decides where it starts.
 It also no longer competes with the other instances of the application, so every instance is delivered every event, as the
