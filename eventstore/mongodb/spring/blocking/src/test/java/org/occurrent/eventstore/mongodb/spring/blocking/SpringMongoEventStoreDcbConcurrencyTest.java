@@ -624,9 +624,9 @@ class SpringMongoEventStoreDcbConcurrencyTest {
         // Whatever does lose the race must surface as an exception the Spring transaction executors retry. Spring
         // translates a WriteConflict to DataIntegrityViolationException, a non-transient type, so both count here.
         //
-        // Deliberately not asserting that at least one append fails. A conflict is near-certain with six transactions
-        // incrementing one counter document, but it is not guaranteed, and making the test depend on losing a race
-        // would be the same kind of flake this whole change came out of. The attempt count above is the real proof and
+        // Deliberately not asserting that at least one append fails. A conflict is near-certain with six concurrent
+        // appends here, but it is not guaranteed, and making the test depend on losing a race would be the same kind of
+        // flake this whole change came out of. The attempt count above is the real proof and
         // holds either way.
         assertThat(failures)
                 .as("A losing append inside a caller-owned transaction must surface a retryable conflict")

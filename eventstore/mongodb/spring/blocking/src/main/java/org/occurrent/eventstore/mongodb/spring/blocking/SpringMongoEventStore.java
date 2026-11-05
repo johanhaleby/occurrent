@@ -78,6 +78,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.MongoDatabaseUtils;
 import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -90,6 +91,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -499,11 +501,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return Math.min(readUpTo, options.upToPosition().orElse(readUpTo));
     }
 
-    // A read inside a transaction the caller owns sees its snapshot and the transaction's own appends. A reservation
-    // commits before its events are inserted, so every event in the snapshot is at or below the snapshot's counter, and
-    // anything above it is this transaction's own. The reported head stays the snapshot's counter.
+    // A read through this store's template inside a MongoDB transaction on its database factory sees that transaction's
+    // snapshot and its own appends. A reservation commits before its events are inserted, so every event in the snapshot
+    // is at or below the snapshot's counter, and anything above it is this transaction's own. The reported head stays
+    // the snapshot's counter. Otherwise the counter bounds the read, which is always safe.
     private long readUpTo(long highWatermark, MongoTemplate template) {
-        return template == mongoTemplate && TransactionSynchronizationManager.isActualTransactionActive() ? Long.MAX_VALUE : highWatermark;
+        return template == mongoTemplate && MongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()) ? Long.MAX_VALUE : highWatermark;
     }
 
     @Override
@@ -938,17 +941,28 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // transaction holds the upsert, so the retry needs no ownership check.
         return COLD_START_COUNTER_RETRY.execute(
                 () -> {
-                    // Not through mongoTemplate, which would bind the update to a transaction open on this thread
-                    var collection = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase().getCollection(dcbPositionCollectionName);
-                    Document updated = collection
-                            .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout))
-                            .findOneAndUpdate(
-                                    Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
-                                    Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
-                                    new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
+                    // Not through mongoTemplate, which would bind the update to a transaction open on this thread. Its
+                    // failures are translated the way mongoTemplate would, which the duplicate check of the retry needs.
+                    Document updated;
+                    try {
+                        updated = reservationCollection().findOneAndUpdate(
+                                Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
+                                Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
+                                new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
+                    } catch (RuntimeException e) {
+                        DataAccessException translated = mongoTemplate.getExceptionTranslator().translateExceptionIfPossible(e);
+                        throw translated == null ? e : translated;
+                    }
                     long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DcbMarkerModel.COUNTER_POSITION)).longValue();
                     return lastPosition - eventCount + 1;
                 });
+    }
+
+    private MongoCollection<Document> reservationCollection() {
+        MongoCollection<Document> collection = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase().getCollection(dcbPositionCollectionName);
+        collection = collection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout));
+        Long clientTimeout = collection.getTimeout(TimeUnit.MILLISECONDS);
+        return clientTimeout == null ? collection : collection.withTimeout(DcbMarkerModel.reservationTimeoutMillis(clientTimeout, markerVersionsCommitTimeout), TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -965,7 +979,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * {@inheritDoc}
      * <p>
      * Sorts by position and clamps the upper bound to the store's highest written position at read time, so a
-     * concurrent append is never partially visible.
+     * concurrent append is never partially visible. Inside a MongoDB transaction on this store's database factory the
+     * bound is the transaction's snapshot instead, which also holds the transaction's own appends.
      * <p>
      * The returned stream is backed by a live server cursor and is read one batch at a time, so a replay from the
      * beginning never holds the whole matched history in memory and the first event is available before the read has

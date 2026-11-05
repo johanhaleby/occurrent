@@ -47,6 +47,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -77,12 +78,18 @@ class MongoEventStoreReservationWriteConcernTest {
 
     @BeforeEach
     void open_a_store_on_a_client_at_write_concern_1_with_a_timeout_other_than_the_stores() {
+        openStore(settings -> {
+        });
+    }
+
+    private void openStore(Consumer<MongoClientSettings.Builder> clientSettings) {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reservation");
-        mongoClient = MongoClients.create(MongoClientSettings.builder()
+        MongoClientSettings.Builder settings = MongoClientSettings.builder()
                 .applyConnectionString(connectionString)
                 .writeConcern(WriteConcern.W1.withWTimeout(WTIMEOUT_MILLIS, TimeUnit.MILLISECONDS))
-                .addCommandListener(commands)
-                .build());
+                .addCommandListener(commands);
+        clientSettings.accept(settings);
+        mongoClient = MongoClients.create(settings.build());
         EventStoreConfig config = new EventStoreConfig.Builder().timeRepresentation(TimeRepresentation.RFC_3339_STRING).eventStoreCapabilities(STREAM, DCB).markerVersionsCommitTimeout(Duration.ofMillis(COMMIT_TIMEOUT_MILLIS)).build();
         store = new MongoEventStore(mongoClient, connectionString.getDatabase(), COLLECTION, config);
     }
@@ -135,6 +142,24 @@ class MongoEventStoreReservationWriteConcernTest {
                 () -> assertThat(reservation.document().getDocument("writeConcern", new BsonDocument()).get("w")).as("%s", reservation).isEqualTo(new BsonString("majority")),
                 () -> assertThat(reservation.document().containsKey("autocommit")).as("%s", reservation).isFalse(),
                 () -> assertThat(store.read(tags(tag("order:1"))).events()).extracting(CloudEvent::getId).containsExactly(event.getId())
+        );
+    }
+
+    @Test
+    void an_append_on_a_client_with_an_operation_timeout_reserves_its_position_within_the_marker_versions_commit_timeout() {
+        // Given
+        mongoClient.close();
+        openStore(settings -> settings.timeout(60, TimeUnit.SECONDS));
+        commands.clear();
+
+        // When
+        store.append(List.of(taggedEvent("Happened", "order:1")));
+
+        // Then
+        BsonDocument reservation = onlyReservation().document();
+        assertAll(
+                () -> assertThat(reservation.containsKey("maxTimeMS")).as("%s", reservation).isTrue(),
+                () -> assertThat(reservation.getNumber("maxTimeMS").longValue()).as("%s", reservation).isBetween(1L, COMMIT_TIMEOUT_MILLIS)
         );
     }
 

@@ -65,6 +65,7 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -800,13 +801,19 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 .maxAttempts(5)
                 .retryIf(MongoEventStore::isDuplicateKeyError)
                 .execute(() -> {
-                    Document updated = dcbPositionCollection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(dcbPositionCollection.getWriteConcern(), markerVersionsCommitTimeout)).findOneAndUpdate(
+                    Document updated = reservationCollection().findOneAndUpdate(
                             eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
                             Updates.inc(DcbMarkerModel.COUNTER_POSITION, (long) eventCount),
                             new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
                     long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DcbMarkerModel.COUNTER_POSITION)).longValue();
                     return lastPosition - eventCount + 1;
                 });
+    }
+
+    private MongoCollection<Document> reservationCollection() {
+        MongoCollection<Document> collection = dcbPositionCollection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(dcbPositionCollection.getWriteConcern(), markerVersionsCommitTimeout));
+        Long clientTimeout = collection.getTimeout(TimeUnit.MILLISECONDS);
+        return clientTimeout == null ? collection : collection.withTimeout(DcbMarkerModel.reservationTimeoutMillis(clientTimeout, markerVersionsCommitTimeout), TimeUnit.MILLISECONDS);
     }
 
     /**

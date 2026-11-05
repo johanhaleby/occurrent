@@ -85,6 +85,17 @@ public final class DcbMarkerModel {
         return writeConcern.withW("majority").withWTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * The operation timeout of a position reservation on a collection whose client sets {@code timeoutMS}. The driver
+     * then drops the {@code wtimeout} of every write concern, so {@code timeout} bounds the reservation this way
+     * instead. {@code collectionTimeoutMillis} is the collection's own timeout, where 0 means none, and the shorter of
+     * the two applies.
+     */
+    public static long reservationTimeoutMillis(long collectionTimeoutMillis, Duration timeout) {
+        long timeoutMillis = timeout.toMillis();
+        return collectionTimeoutMillis == 0 ? timeoutMillis : Math.min(collectionTimeoutMillis, timeoutMillis);
+    }
+
     public static String positionCollectionName(String eventStoreCollectionName) {
         return eventStoreCollectionName + POSITION_COLLECTION_SUFFIX;
     }

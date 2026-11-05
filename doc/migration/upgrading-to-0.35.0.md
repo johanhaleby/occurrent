@@ -757,8 +757,9 @@ then missed the event.
 A w:1 on the client, on the database or as the server's default no longer applies to this update, and neither does a
 `wtimeout` you configured. The update waits for majority for at most `markerVersionsCommitTimeout`, 5 seconds by
 default, the setting that also bounds the commit of a read that asks for versions. When a majority doesn't acknowledge
-the update in that time, the append throws and writes no event, and the positions it reserved stay unused. The rest of
-the append keeps the write concern it had.
+the update in that time, the append throws and writes no event, and the positions it reserved stay unused. A
+`timeoutMS` on your client that is shorter bounds the update instead. The rest of the append keeps the write concern
+it had.
 
 Every append waits for as long as a majority takes to replicate the update. On a set with three data-bearing members
 and no write concern configured, the update already waited for majority, so nothing changes there. On a local
@@ -778,18 +779,15 @@ committed with it. It now commits on its own, before the append writes its event
   share. An append that loses throws a `DataIntegrityViolationException` or a `TransientDataAccessException`, and your
   transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it when
   they opened it.
-- A read in your transaction reports, in `lastSequencePosition()`, the head as of your transaction's first operation.
-  It also returns the events your transaction appended after that, at positions above that head. If you keep that
-  position and read after it later, you get those events again.
-- When your Spring transaction isn't a MongoDB transaction, a JDBC one for example, a read doesn't see one point in
-  time. It can return events that other appends committed above the position it reports, and a later read after that
-  position returns them again.
+- A read in your transaction reports, in `lastSequencePosition()`, the head as of your transaction's first MongoDB
+  operation. It also returns the events your transaction appended after that, at positions above that head. If you keep
+  that position and read after it later, you get those events again.
 
 ### What to do
 
 On a replica set of a primary, a secondary and an arbiter with the secondary down, a majority can't acknowledge the
-update. In a probe on all three stores, appends there used to complete in 6 to 18 ms. The store now sets the update's
-`wtimeout` to `markerVersionsCommitTimeout`, so such an append throws after 5 seconds by default. To wait longer or
+update. In a probe on all three stores, appends there used to complete in 6 to 18 ms. The store now bounds the update
+by `markerVersionsCommitTimeout`, so such an append throws after 5 seconds by default. To wait longer or
 shorter, set `markerVersionsCommitTimeout` in the store's `EventStoreConfig`.
 
 ## Criteria with tags conflict on their tags

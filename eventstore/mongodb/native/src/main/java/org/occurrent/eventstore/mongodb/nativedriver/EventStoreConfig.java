@@ -367,6 +367,9 @@ public class EventStoreConfig {
          * How long the read-only transaction that reports marker versions may run and take to commit. Defaults to
          * 5 seconds. A read that doesn't commit within it reports no marker versions. The transaction never uses the
          * {@link #transactionOptions(TransactionOptions) transaction options} configured for writes.
+         * <p>
+         * It also bounds how long an append waits for a majority to acknowledge its position reservation. An append
+         * that isn't acknowledged within it throws and writes no event.
          *
          * @param markerVersionsCommitTimeout at least 1 millisecond
          * @return The same {@code Builder} instance.

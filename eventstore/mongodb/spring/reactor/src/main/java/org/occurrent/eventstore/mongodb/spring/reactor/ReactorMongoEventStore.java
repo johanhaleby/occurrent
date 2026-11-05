@@ -79,6 +79,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.ReactiveMongoDatabaseUtils;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
@@ -97,6 +98,7 @@ import reactor.util.retry.Retry;
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
@@ -666,20 +668,26 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // The factory's own database instead of mongoTemplate, which would bind the update to a transaction in the
         // subscriber context. It waits for majority, see DcbMarkerModel.reservationWriteConcern.
         return mongoTemplate.getMongoDatabaseFactory().getMongoDatabase()
-                .flatMap(database -> {
-                    var collection = database.getCollection(dcbPositionCollectionName);
-                    return Mono.from(collection
-                            .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout))
-                            .findOneAndUpdate(
-                                    Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
-                                    Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
-                                    new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER)));
-                })
+                .flatMap(database -> Mono.from(reservationCollection(database.getCollection(dcbPositionCollectionName)).findOneAndUpdate(
+                        Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
+                        Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
+                        new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER))))
                 .map(updated -> ((Number) updated.get(DcbMarkerModel.COUNTER_POSITION)).longValue() - eventCount + 1)
+                // Translated the way mongoTemplate would, so a caller sees the same exceptions as from the rest of the store
+                .onErrorMap(RuntimeException.class, e -> {
+                    RuntimeException translated = mongoTemplate.getMongoDatabaseFactory().getExceptionTranslator().translateExceptionIfPossible(e);
+                    return translated == null ? e : translated;
+                })
                 // Cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert it
                 // and all but one get a duplicate key. On retry the document exists and the upsert becomes an update.
                 // No transaction holds the upsert, so the retry needs no ownership check.
                 .retryWhen(COLD_START_COUNTER_RETRY);
+    }
+
+    private MongoCollection<Document> reservationCollection(MongoCollection<Document> collection) {
+        collection = collection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout));
+        Long clientTimeout = collection.getTimeout(TimeUnit.MILLISECONDS);
+        return clientTimeout == null ? collection : collection.withTimeout(DcbMarkerModel.reservationTimeoutMillis(clientTimeout, markerVersionsCommitTimeout), TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -688,25 +696,24 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
      * retrying could never commit. Route every retry of a transaction on the write path through here so the ownership
      * check cannot be forgotten. See ADR 0074.
      */
-    private static <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
+    private <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
         return callerTransactionActive().flatMap(transactionAlreadyActive -> transactionAlreadyActive ? action : action.retryWhen(retry));
     }
 
-    // Any transaction in the subscriber context, whichever database factory it was opened on, like the blocking store's
-    // TransactionSynchronizationManager.isActualTransactionActive(). ReactiveMongoDatabaseUtils.isTransactionActive looks
-    // only on this template's factory, so it misses a transaction opened on another until a write through this template
-    // joins it.
-    // A read inside a transaction the caller owns sees its snapshot and the transaction's own appends. A reservation
-    // commits before its events are inserted, so every event in the snapshot is at or below the snapshot's counter, and
-    // anything above it is this transaction's own. The reported head stays the snapshot's counter.
+    // A read through this store's template inside a MongoDB transaction on its database factory sees that transaction's
+    // snapshot and its own appends. A reservation commits before its events are inserted, so every event in the snapshot
+    // is at or below the snapshot's counter, and anything above it is this transaction's own. The reported head stays
+    // the snapshot's counter. Otherwise the counter bounds the read, which is always safe.
     private Mono<Boolean> readsUnbounded(ReactiveMongoOperations template) {
-        return template == mongoTemplate ? callerTransactionActive() : Mono.just(false);
+        return template == mongoTemplate ? ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory()) : Mono.just(false);
     }
 
     private Mono<Long> readUpTo(Mono<Long> highWatermark, ReactiveMongoOperations template) {
         return highWatermark.zipWith(readsUnbounded(template), (head, unbounded) -> unbounded ? Long.MAX_VALUE : head);
     }
 
+    // Any transaction, whichever factory or manager it is on. The store's transactional operator may join it, and
+    // ReactiveMongoDatabaseUtils.isTransactionActive misses one on another factory until this template has joined it.
     private static Mono<Boolean> callerTransactionActive() {
         return TransactionSynchronizationManager.forCurrentTransaction()
                 .map(TransactionSynchronizationManager::isActualTransactionActive)
