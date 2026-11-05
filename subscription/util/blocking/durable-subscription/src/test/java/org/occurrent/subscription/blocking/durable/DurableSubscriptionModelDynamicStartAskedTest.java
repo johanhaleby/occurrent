@@ -91,8 +91,8 @@ class DurableSubscriptionModelDynamicStartAskedTest {
     class When_a_resume_is_made_while_a_cancel_holds_the_lock_and_a_subscribe_whose_function_has_returned_waits_for_it {
 
         @Test
-        @DisplayName("the resume is still waiting after the function bound and returns once the cancel lets go")
-        void the_resume_is_still_waiting_after_the_function_bound_and_returns_once_the_cancel_lets_go() {
+        @DisplayName("the resume is still waiting after 10 seconds and returns once the cancel lets go")
+        void the_resume_is_still_waiting_after_10_seconds_and_returns_once_the_cancel_lets_go() {
             // Given
             HoldsDeletes storage = new HoldsDeletes(releaseTheHeldDelete);
             InMemoryWrappedModel wrapped = new InMemoryWrappedModel();

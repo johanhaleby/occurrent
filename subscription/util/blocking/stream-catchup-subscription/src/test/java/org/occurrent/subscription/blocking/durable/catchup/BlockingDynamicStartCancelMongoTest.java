@@ -92,7 +92,8 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
  * only once the function has returned. That cancel wins over the subscribe too. The case runs on the three wrappers
  * only, since a plain MongoDB model has no claim or lock for an id. The pause case runs on the two catch-up stacks, the
  * handover case on the catch-up over the durable model, and the case of a resume that waits for the subscribe on the
- * durable model.
+ * durable model. The case of a function that cancels its own id on the subscribing thread, which doesn't stop the
+ * subscribe, runs on the two catch-up stacks.
  */
 @Testcontainers
 @Timeout(120)
@@ -473,6 +474,40 @@ class BlockingDynamicStartCancelMongoTest {
                     () -> assertThat(model.isPaused(subscriptionId)).as("the id is paused").isFalse()
             );
             append();
+            await().atMost(EVENT_DELIVERY).until(() -> received.size() == 1);
+        }
+    }
+
+    @Nested
+    @DisplayName("when the start-position function cancels its own subscription id on the subscribing thread")
+    class When_the_function_cancels_its_own_id_on_the_subscribing_thread {
+
+        @ParameterizedTest
+        @EnumSource(value = Stack.class, names = {"CATCHUP_OVER_MONGO", "CATCHUP_OVER_DURABLE_OVER_MONGO"})
+        @DisplayName("the subscribe still subscribes and the subscription is delivered an event")
+        void the_subscribe_still_subscribes_and_the_subscription_is_delivered_an_event(Stack stack) {
+            // Given
+            model = build(stack);
+            List<CloudEvent> received = new CopyOnWriteArrayList<>();
+            AtomicBoolean cancelled = new AtomicBoolean();
+            StartAt function = StartAt.dynamic(context -> {
+                if (cancelled.compareAndSet(false, true)) {
+                    model.cancelSubscription(subscriptionId);
+                }
+                return StartAt.now();
+            });
+
+            // When
+            Subscription returned = model.subscribe(subscriptionId, function, received::add);
+            boolean started = returned.waitUntilStarted(Duration.ofSeconds(2));
+            append();
+
+            // Then
+            assertAll(
+                    () -> assertThat(cancelled).as("the function cancelled its own id").isTrue(),
+                    () -> assertThat(started).as("the returned subscription started").isTrue(),
+                    () -> assertThat(model.isRunning(subscriptionId)).as("the id is running").isTrue()
+            );
             await().atMost(EVENT_DELIVERY).until(() -> received.size() == 1);
         }
     }
