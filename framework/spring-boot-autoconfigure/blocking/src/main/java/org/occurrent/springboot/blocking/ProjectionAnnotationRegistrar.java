@@ -451,21 +451,23 @@ class ProjectionAnnotationRegistrar {
     //      composition. True for Occurrent's shipped Mongo composition (issue 865), never assumed for an
     //      application-supplied one, whose own DEFAULT semantics are its own to declare, and never assumed for a
     //      projection running on a Subscriptions/StreamSubscriptions/DcbSubscriptions replacement that wraps a
-    //      different composition than the one the fact was registered for (issue 871).
+    //      different composition than the one the fact was registered for (issue 871). Not for a DCB projection,
+    //      whose DEFAULT reaches the catch-up layer as the model default (StartPositionSupport.generateDcbStartAt), so a
+    //      restart that finds a DCB catch-up position in storage resumes from it and replays.
     // Unlike the reactor stack, ReplayAwareSubscriptions.findIn already unwraps a wrapper chain here (ADR 132
     // decision 8), so there is no separate "structurally no catch-up layer" fact distinct from "unknown composition"
     // to draw on for this path, both collapse to the same empty capability lookup. DEFAULT on a composition with no
     // registered fact, and BEGINNING/a global position on a composition whose capability cannot be read, both stay
     // silent. This registrar cannot verify either one. A SubscriptionResumePoints bean can replace any of these
     // starts with a checkpoint, so neither case holds when one is declared.
-    private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable SubscriptionModelCapability capability) {
+    private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable SubscriptionModelCapability capability, boolean dcb) {
         if (applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable() != null) {
             return false;
         }
         if (annotation.startAt() == org.occurrent.annotation.StartPosition.NOW) {
             return annotation.resumeBehavior() == ResumeBehavior.SAME_AS_START_AT;
         }
-        if (annotation.startAt() == org.occurrent.annotation.StartPosition.DEFAULT && annotation.startAtGlobalPosition() < 0) {
+        if (!dcb && annotation.startAt() == org.occurrent.annotation.StartPosition.DEFAULT && annotation.startAtGlobalPosition() < 0) {
             // startAtGlobalPosition >= 0 overrides DEFAULT and replays from that position regardless
             // (generateAgnosticStartAt/generateDcbStartAt check it first), so it must be excluded here too, or a
             // projection that genuinely replays from an explicit position would get the never-replays warning.
@@ -482,11 +484,11 @@ class ProjectionAnnotationRegistrar {
     // in front of the catch-up model (ADR 132 decision 8), the same lookup SagaAnnotationRegistrar already relies on
     // for its timer gate. Empty means the composition cannot say, and the projection is wrapped with nothing
     // watching it. Returns materializedView unchanged when recording is off.
-    private <E> MaterializedView<E> wrapForRecordingIfNeeded(org.occurrent.annotation.Projection annotation, String id, MaterializedView<E> materializedView, SubscriptionModelCapability capability) {
+    private <E> MaterializedView<E> wrapForRecordingIfNeeded(org.occurrent.annotation.Projection annotation, String id, MaterializedView<E> materializedView, SubscriptionModelCapability capability, boolean dcb) {
         if (!annotation.recordAppliedAppends()) {
             return materializedView;
         }
-        warnIfRecordingNeverResets(id, true, verifiedNeverReplays(annotation, capability));
+        warnIfRecordingNeverResets(id, true, verifiedNeverReplays(annotation, capability, dcb));
         return wrapForRecording(annotation, id, materializedView, ReplayAwareSubscriptions.findIn(capability).orElse(null), true);
     }
 
@@ -660,7 +662,7 @@ class ProjectionAnnotationRegistrar {
                 // is always a no-op here, but resolving the bean first still keeps this path shaped like the one
                 // below rather than a special case that happens to be safe only by that refusal holding.
                 Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
-                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, synchronousSubscriptions.getSubscriptionModel());
+                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, synchronousSubscriptions.getSubscriptionModel(), true);
                 synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.subscriptionModelDefault(), false, (metadata, event) -> {
                     materializedView.update(metadata, event);
                     return Unit.INSTANCE;
@@ -670,7 +672,7 @@ class ProjectionAnnotationRegistrar {
             // Resolved before wrapping the view, so the recording phase (when recordAppliedAppends is set) comes
             // from the exact model this subscription runs on, not an independently resolved bean of the same type.
             DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
-            MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, dcbSubscriptions.subscriptionModel());
+            MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, dcbSubscriptions.subscriptionModel(), true);
             DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
             startPositionSupport.applyStartupWorkarounds();
             var subscription = dcbSubscriptions.subscribeWithMetadata(id, dcbProjection.criteria(), startAt, (dcbMetadata, event) -> materializedView.update(dcbMetadata.eventMetadata(), event));
@@ -689,7 +691,7 @@ class ProjectionAnnotationRegistrar {
                 // recordAppliedAppends is refused earlier whenever mode = SYNCHRONOUS, so wrapForRecordingIfNeeded
                 // is always a no-op here, for the same reason the DCB branch above resolves the bean first anyway.
                 Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
-                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, synchronousSubscriptions.getSubscriptionModel());
+                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, synchronousSubscriptions.getSubscriptionModel(), false);
                 synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), StartAt.subscriptionModelDefault(), false, (metadata, event) -> {
                     materializedView.update(metadata, event);
                     return Unit.INSTANCE;
@@ -703,14 +705,14 @@ class ProjectionAnnotationRegistrar {
             // from the exact model this subscription runs on, not an independently resolved bean of the same type.
             if (stream) {
                 StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
-                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, streamSubscriptions.getSubscriptionModel());
+                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, streamSubscriptions.getSubscriptionModel(), false);
                 streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
                     materializedView.update(metadata, event);
                     return Unit.INSTANCE;
                 });
             } else {
                 Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
-                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, subscriptions.getSubscriptionModel());
+                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, subscriptions.getSubscriptionModel(), false);
                 subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
                     materializedView.update(metadata, event);
                     return Unit.INSTANCE;

@@ -246,37 +246,10 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void a_dcb_subscriptions_replacement_that_genuinely_replays_does_not_inherit_the_starters_never_replays_fact() {
-        // Same defect again, the DcbSubscriptions DSL bean replaced. DcbSubscriptions.subscriptionModel() hands back
-        // the raw SubscriptionModel it was built from, so that is what has to mismatch the holder's stored identity.
-        SubscriptionModel starterModel = mock(SubscriptionModel.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
-        ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
-        composedDefaultStartPosition.suppliedBy(starterModel);
-        composedDefaultStartPosition.defaultBypassesCatchup();
-
-        SubscriptionModel customModel = mock(SubscriptionModel.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
-        doReturn(java.util.Optional.of((ReplayAwareSubscriptions) customModel)).when(customModel).capability(ReplayAwareSubscriptions.class);
-        when(((ReplayAwareSubscriptions) customModel).isCatchingUp(anyString())).thenReturn(true);
-        when(customModel.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
-
-        new ApplicationContextRunner()
-                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(TestConfiguration.class)
-                .withBean("dcbDefaultStartPositionProjection", DcbDefaultStartPositionProjection.class, DcbDefaultStartPositionProjection::new)
-                .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
-                .withBean(DcbSubscriptions.class, () -> new DcbSubscriptions<>(customModel, testEventConverter()))
-                .withBean(ComposedDefaultStartPosition.class, () -> composedDefaultStartPosition)
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    assertThat(warnings()).isEmpty();
-                });
-    }
-
-    @Test
-    void a_dcb_subscriptions_replacement_that_matches_the_starters_registered_model_still_warns() {
-        // Positive control for the test above, the same reason a_stream_subscriptions_replacement_that_matches...
-        // exists: a DcbSubscriptions bean wrapping the exact model the holder was told about must still warn.
+    void a_dcb_projection_at_the_default_start_does_not_warn_even_on_the_model_the_starter_registered() {
+        // A DCB DEFAULT reaches the catch-up layer as the model default and a restart resumes from a stored DCB catch-up
+        // position, so it can replay and the registered fact does not apply to it. The stream test above is the contrast,
+        // the same registered model and the same isCatchingUp answer there still warn.
         SubscriptionModel model = mock(SubscriptionModel.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
@@ -295,10 +268,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean(ComposedDefaultStartPosition.class, () -> composedDefaultStartPosition)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(warnings()).hasSize(1);
-                    assertThat(warnings().get(0).getFormattedMessage())
-                            .contains(PROJECTION_ID)
-                            .contains("never replays");
+                    assertThat(warnings()).isEmpty();
                 });
     }
 

@@ -60,6 +60,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
@@ -231,6 +232,40 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
 
             assertThat(handler.names()).containsExactly("live-1", "live-2");
         }
+    }
+
+    // A BEGINNING start that has caught up leaves a live checkpoint in storage. A catch-up that was interrupted leaves a
+    // catch-up checkpoint, and a test cannot stop a catch-up halfway, so the one a catch-up stores after historic-1 is
+    // written here with the live start the first boot left in storage. A start with DEFAULT continues from it, so
+    // historic-2 is replayed and historic-1 is not.
+    @Test
+    void a_dcb_subscription_with_the_default_start_replays_from_the_catch_up_checkpoint_an_earlier_beginning_start_left_in_storage() {
+        String id = "dcb-left-over";
+        List<String> handledBySecondBoot;
+        try (ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
+                leftOverBootArgs("dcb-left-over-catch-up", "beginning", "historic-1,historic-2", ""))) {
+            awaitHandled(firstBoot.getBean(DcbLeftOverBeginning.class), "historic-2");
+            CheckpointStorage storage = firstBoot.getBean(CheckpointStorage.class);
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> {
+                Checkpoint stored = storage.read(id);
+                assertThat(stored).isNotNull();
+            });
+            storage.save(id, GlobalCheckpoint.of(1, storage.read(id), 0, 2));
+            assertThat(GlobalCheckpoint.isGlobalCheckpoint(storage.read(id))).as("catch-up checkpoint").isTrue();
+        }
+        try (ConfigurableApplicationContext secondBoot = SpringApplication.run(NowRestartApplication.class,
+                leftOverBootArgs("dcb-left-over-catch-up", "default", "while-down-1", "live-2"))) {
+            DcbLeftOverDefault handler = secondBoot.getBean(DcbLeftOverDefault.class);
+            awaitHandled(handler, "live-2");
+            handledBySecondBoot = handler.names();
+        }
+
+        assertThat(handledBySecondBoot).containsSubsequence("historic-2", "while-down-1", "live-2");
+        assertThat(handledBySecondBoot).filteredOn(name -> name.startsWith("historic")).containsExactly("historic-2");
+    }
+
+    private static String[] leftOverBootArgs(String databaseName, String startsAt, String beforeSubscribe, String afterStart) {
+        return Stream.concat(Arrays.stream(nowBootArgs(databaseName, beforeSubscribe, afterStart)), Stream.of("--test.left-over=" + startsAt)).toArray(String[]::new);
     }
 
     private static void restartNow(String databaseName, Class<? extends Handled> handlerType,
@@ -476,6 +511,18 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         }
 
         @Bean
+        @ConditionalOnProperty(name = "test.left-over", havingValue = "beginning")
+        DcbLeftOverBeginning dcbLeftOverBeginning() {
+            return new DcbLeftOverBeginning();
+        }
+
+        @Bean
+        @ConditionalOnProperty(name = "test.left-over", havingValue = "default")
+        DcbLeftOverDefault dcbLeftOverDefault() {
+            return new DcbLeftOverDefault();
+        }
+
+        @Bean
         DcbSubscriptionNowSameAsStartAt dcbSubscriptionNowSameAsStartAt() {
             return new DcbSubscriptionNowSameAsStartAt();
         }
@@ -675,6 +722,22 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
 
     static class DcbSubscriptionNowDefault extends Recording {
         @DcbSubscription(id = "dcb-now-sub-default", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.DEFAULT)
+        void onEvent(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    // Only the one named by test.left-over exists in a boot, so the same subscription id is started at BEGINNING by one
+    // boot and with no start position by the next, as when the annotation is edited between two deployments.
+    static class DcbLeftOverBeginning extends Recording {
+        @DcbSubscription(id = "dcb-left-over", startAt = StartPosition.BEGINNING, resumeBehavior = ResumeBehavior.DEFAULT)
+        void onEvent(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class DcbLeftOverDefault extends Recording {
+        @DcbSubscription(id = "dcb-left-over")
         void onEvent(TestEvent event) {
             record(event.name());
         }
