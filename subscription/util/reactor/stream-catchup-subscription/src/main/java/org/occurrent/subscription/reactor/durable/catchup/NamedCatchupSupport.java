@@ -591,7 +591,13 @@ final class NamedCatchupSupport {
         }
         CatchupState inFlight = catchingUp.get(subscriptionId);
         boolean gone = (inFlight == null || inFlight == ours) && !holds(delegate, subscriptionId);
-        return gone && owned.replace(subscriptionId, existing, record);
+        if (!gone || !owned.replace(subscriptionId, existing, record)) {
+            return false;
+        }
+        // A loss at the live start the gone subscription handed over would otherwise replay it through its own action
+        // and resume the subscription made here at a later live start
+        handedOver.remove(subscriptionId);
+        return true;
     }
 
     // Whether the wrapped model runs the id or holds it paused. A model that lists its ids answers from that list, since

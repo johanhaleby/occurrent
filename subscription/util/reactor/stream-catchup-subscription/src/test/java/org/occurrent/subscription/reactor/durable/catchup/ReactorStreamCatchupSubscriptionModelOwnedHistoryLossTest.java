@@ -566,6 +566,29 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
         assertThat(wrapped.takeOversRun).as("takeovers the wrapped model ran").hasValue(1);
     }
 
+    @Test
+    void a_straight_to_live_subscribe_at_the_live_start_of_a_catch_up_whose_subscription_ended_is_paused_for_good_when_that_live_start_is_lost() {
+        // Given an id whose catch-up handed over, and whose subscription the wrapped model then ended on its own
+        replayAndHandOver();
+        Checkpoint liveStartOfTheEndedCatchup = wrapped.positionOf(ID);
+        wrapped.endsTheSubscriptionOnItsOwn(ID);
+        received.clear();
+        List<String> receivedByTheNewSubscription = new CopyOnWriteArrayList<>();
+
+        // When the id is subscribed straight to live at that live start, and the wrapped model loses it there
+        catchup.subscribe(ID, FILTER, StartAt.checkpoint(liveStartOfTheEndedCatchup), event -> Mono.fromRunnable(() -> receivedByTheNewSubscription.add(event.getId())));
+        wrapped.losesTheHistoryFrom(ID, liveStartOfTheEndedCatchup);
+
+        // Then the ended catch-up replays nothing through its own action, and the new subscription is paused for good
+        assertAll(
+                () -> assertThat(received).as("delivered to the action of the ended catch-up").isEmpty(),
+                () -> assertThat(receivedByTheNewSubscription).as("delivered to the action of the new subscription").isEmpty(),
+                () -> assertThat(wrapped.resumedAt).as("resumed at a position by a takeover replay").isEmpty(),
+                () -> assertThat(catchupsStarted).as("catch-ups started").hasValue(1)
+        );
+        assertPausedForGoodFrom(liveStartOfTheEndedCatchup);
+    }
+
     // Paused with the one error the catch-up logs, nothing restarted from the present, and every resume refused
     private void assertPausedForGoodFrom(Checkpoint lostFrom) {
         assertAll(

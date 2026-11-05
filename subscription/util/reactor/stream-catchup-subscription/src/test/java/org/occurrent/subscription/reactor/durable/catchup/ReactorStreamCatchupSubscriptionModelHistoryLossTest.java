@@ -769,6 +769,12 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             reportsLoss(subscriptionId, lostFrom);
         }
 
+        // The subscription fails in a way the model does not retry, and the model no longer holds it, as the Mongo model
+        // drops a run that ends with an unrecoverable error
+        void endsTheSubscriptionOnItsOwn(String subscriptionId) {
+            held.remove(subscriptionId);
+        }
+
         void losesTheLiveStartOnTheNextCheckWhetherItRuns() {
             losesOnTheNextCheckWhetherItRuns.set(true);
         }
