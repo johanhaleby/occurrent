@@ -481,6 +481,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // Throwable, since a Kotlin function can throw a checked exception, and an entry left in asking makes every
             // later resume of the id on another thread throw after 10 seconds
             settle(asked);
+            // A subscribe whose function throws still stops what an earlier subscribe of the id left untracked, as when
+            // the function was asked under the lock
+            try {
+                runUnderLockFor(subscriptionId, () -> stopUntrackedRegistrations(subscriptionId));
+            } catch (RuntimeException | Error stopFailure) {
+                e.addSuppressed(stopFailure);
+            }
             throw e;
         }
         asked.returned.complete(null);

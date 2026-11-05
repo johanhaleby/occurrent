@@ -1384,9 +1384,10 @@ while the function runs.
   `CatchupSubscriptionModel` already runs asks its function before it throws `DuplicateSubscriptionIdException`. In
   0.34.0 the stream or DCB catch-up threw before it asked the function. `DurableSubscriptionModel` asked the function
   first in 0.34.0 too.
-* A `resumeSubscription(id)` on `DurableSubscriptionModel` made on another thread while the function of a subscribe of
-  `id` runs still waits for that subscribe, but throws `IllegalStateException` when the function doesn't return within
-  10 seconds. In 0.34.0 it waited for as long as the function did. Its `pauseSubscription(id)` and `stop()` don't wait for the subscribe, as in 0.34.0.
+* A `resumeSubscription(id)` or the new `resumeSubscription(id, startAt)` on `DurableSubscriptionModel` made on another
+  thread while the function of a subscribe of `id` runs still waits for that subscribe, but throws
+  `IllegalStateException` when the function doesn't return within 10 seconds. In 0.34.0 `resumeSubscription(id)` waited
+  for as long as the function did. Its `pauseSubscription(id)` and `stop()` don't wait for the subscribe, as in 0.34.0.
 
 ### What to do
 
