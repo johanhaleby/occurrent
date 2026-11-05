@@ -90,8 +90,9 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
  * run on a plain MongoDB model, which never held anything while it asked, and on the three wrappers that did. A cancel
  * made while the function runs can also wait for another call for the id to give up the claim or the lock, and get it
  * only once the function has returned. That cancel wins over the subscribe too. The case runs on the three wrappers
- * only, since a plain MongoDB model has no claim or lock for an id. The pause case runs on the two catch-up stacks, and
- * the handover case on the catch-up over the durable model.
+ * only, since a plain MongoDB model has no claim or lock for an id. The pause case runs on the two catch-up stacks, the
+ * handover case on the catch-up over the durable model, and the case of a resume that waits for the subscribe on the
+ * durable model.
  */
 @Testcontainers
 @Timeout(120)
