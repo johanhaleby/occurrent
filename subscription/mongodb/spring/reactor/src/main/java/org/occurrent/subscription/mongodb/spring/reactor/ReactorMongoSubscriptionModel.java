@@ -532,7 +532,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
         return openingPosition(currentStartAt, presentAt, recordOpeningPosition, openedAt -> {
             opened.accept(openedAt);
-            if (MongoCommons.recordWhereItOpened(openedAt, recordOpeningPosition)) {
+            // On a run a pause has closed, recordOpeningPosition answers true without moving the position, so there is
+            // nothing to give back
+            if (MongoCommons.recordWhereItOpened(openedAt, recordOpeningPosition) && currentStartAt.get() == openedAt.openingPosition()) {
                 recordedUntilRead.set(openedAt);
             }
         }).<CloudEvent>flatMapMany(openingPosition -> {
@@ -567,8 +569,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                     });
         }).doOnError(throwable -> {
             OpenedAt recorded = cannotOpenAt(throwable) ? recordedUntilRead.getAndSet(null) : null;
-            if (recorded != null) {
-                recordOpeningPosition.test(recorded.openingPosition(), recorded.tracked());
+            if (recorded != null && recordOpeningPosition.test(recorded.openingPosition(), recorded.tracked())) {
+                // Puts back the opening that tracked the dynamic position, since a later opening at the recorded position
+                // replaced it, and lostFrom would then name no checkpoint
+                opened.accept(recorded);
             }
         });
     }
