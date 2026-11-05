@@ -46,6 +46,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.UnsupportedStartAtException;
@@ -809,7 +810,7 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
-        void the_handle_of_a_subscribe_in_flight_when_the_model_is_shut_down_fails_with_a_message_saying_so() throws Exception {
+        void the_handle_of_a_subscribe_in_flight_when_the_model_is_shut_down_fails_with_subscription_model_shutdown_exception() throws Exception {
             // Given a dynamic position that answers an operation time the change stream can open at, once the test lets it
             String subscriptionId = UUID.randomUUID().toString();
             Checkpoint live = liveStart();
@@ -836,9 +837,9 @@ public class ReactorMongoSubscriptionModelTest {
                 mayAnswer.countDown();
                 Subscription shutDown = subscribing.get(10, SECONDS);
 
-                // Then the handle fails with the shutdown, and not with the timeout of the wait, which is an IllegalStateException too
+                // Then the handle fails with the shutdown, and not with the timeout of the wait
                 Throwable told = catchThrowable(() -> shutDown.waitUntilStarted().block(Duration.ofSeconds(5)));
-                assertThat(told).isExactlyInstanceOf(IllegalStateException.class).hasMessageContaining("shut down");
+                assertThat(told).isExactlyInstanceOf(SubscriptionModelShutdownException.class);
             } finally {
                 mayAnswer.countDown();
             }

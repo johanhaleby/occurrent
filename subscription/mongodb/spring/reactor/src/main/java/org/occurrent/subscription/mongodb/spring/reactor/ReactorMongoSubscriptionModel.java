@@ -1023,8 +1023,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     /**
      * {@inheritDoc}
      * <p>
-     * The {@code waitUntilStarted()} of a subscription cancelled before its change stream was subscribed to fails with
-     * a {@link SubscriptionNotRunningException}, since nothing can start it any more.
+     * The {@code waitUntilStarted()} of a subscription cancelled while it was starting fails with a
+     * {@link SubscriptionNotRunningException}, since nothing can start it any more. One that was paused before it started,
+     * or subscribed to while the model was stopped, never completes.
      */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
@@ -1046,8 +1047,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     /**
      * {@inheritDoc}
      * <p>
-     * The {@code waitUntilStarted()} of a subscription whose change stream wasn't subscribed to yet fails with an
-     * {@link IllegalStateException}, since nothing can start it any more.
+     * The {@code waitUntilStarted()} of a subscription that was starting when the model was shut down fails with a
+     * {@link SubscriptionModelShutdownException}. One that was paused before it started, or subscribed to while the model
+     * was stopped, never completes.
      */
     @PreDestroy
     @Override
@@ -1067,7 +1069,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         }
         runs.forEach(run -> {
             if (run.close()) {
-                run.failedToStart(new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " was shut down before the subscription started"));
+                run.failedToStart(new SubscriptionModelShutdownException(ReactorMongoSubscriptionModel.class.getSimpleName() + " was shut down before the subscription started"));
             }
         });
     }
