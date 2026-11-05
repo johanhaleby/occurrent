@@ -795,17 +795,17 @@ public class MongoCommons {
 
     /**
      * Records the position a change stream opened at in place of the dynamic position the subscription tracked, once
-     * the stream has opened. Opening again then starts at that position and doesn't call the dynamic position's
-     * function again, which could answer another position. Nothing is recorded when the tracked position isn't dynamic,
+     * the stream has opened, or as it opens when the subscription model can't tell when the server accepted the
+     * position. Opening again then starts at that position and doesn't call the dynamic position's function again,
+     * which could answer another position. Nothing is recorded when the tracked position isn't dynamic,
      * when the stream opened at the present without an operation time, or when the tracked position has changed since
      * {@code openedAt} was read, so a checkpoint written from another thread is kept.
      *
      * @param compareAndSet Sets the tracked position to its second argument when it still holds its first
+     * @return Whether the position the stream opened at was recorded
      */
-    public static void recordWhereItOpened(OpenedAt openedAt, BiPredicate<StartAt, StartAt> compareAndSet) {
-        if (openedAt.tracked().isDynamic() && !opensAtThePresent(openedAt.openingPosition())) {
-            compareAndSet.test(openedAt.tracked(), openedAt.openingPosition());
-        }
+    public static boolean recordWhereItOpened(OpenedAt openedAt, BiPredicate<StartAt, StartAt> compareAndSet) {
+        return openedAt.tracked().isDynamic() && !opensAtThePresent(openedAt.openingPosition()) && compareAndSet.test(openedAt.tracked(), openedAt.openingPosition());
     }
 
     /**

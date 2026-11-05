@@ -23,6 +23,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
+import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import com.mongodb.reactivestreams.client.ChangeStreamPublisher;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
@@ -31,6 +32,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonDocument;
 import org.bson.BsonString;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -351,6 +353,97 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
+    void a_resume_before_the_change_stream_of_spring_read_a_document_opens_where_the_dynamic_position_first_answered() {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position that answers a live checkpoint first and a global checkpoint after
+        useTheChangeStreamOfSpring();
+        Checkpoint live = liveCheckpoint();
+        AtomicInteger answers = new AtomicInteger();
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.checkpoint(live) : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        waitUntilStarted(subscriptionModel.subscribe("resumed-before-a-read", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId()))));
+
+        // When it is paused before it reads a document, an event is written, and it is resumed
+        subscriptionModel.pauseSubscription("resumed-before-a-read");
+        NameDefined written = nameDefined();
+        write(written);
+        Subscription resumed = subscriptionModel.resumeSubscription("resumed-before-a-read");
+
+        // Then it opens at the live checkpoint without asking the position again, so it isn't refused and delivers the event
+        waitUntilStarted(resumed);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(written.eventId()));
+        assertThat(answers).hasValue(1);
+    }
+
+    @Test
+    void a_first_answer_the_server_cannot_find_is_asked_again_when_the_model_reads_through_the_change_stream_of_spring() {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position whose first answer is a
+        // token of another collection, which the server accepts as the stream opens and can't find once it reads an event
+        useTheChangeStreamOfSpring();
+        Checkpoint live = liveCheckpoint();
+        Checkpoint ofAnotherCollection = tokenOfAnotherCollection();
+        AtomicInteger answers = new AtomicInteger();
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.checkpoint(ofAnotherCollection) : StartAt.checkpoint(live));
+
+        // When it subscribes and an event is written
+        waitUntilStarted(subscriptionModel.subscribe("not-found", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId()))));
+        NameDefined written = nameDefined();
+        write(written);
+
+        // Then the position is asked again, the second answer opens the stream and the event is delivered
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(written.eventId()));
+        assertThat(answers).hasValue(2);
+        assertThat(subscriptionModel.isRunning("not-found")).isTrue();
+    }
+
+    @Test
+    void the_flux_opened_again_before_it_read_a_document_opens_where_its_dynamic_position_first_answered() {
+        // Given a dynamic position that answers a live checkpoint first and a global checkpoint after, and a first read of the change stream that fails
+        Checkpoint live = liveCheckpoint();
+        AtomicInteger answers = new AtomicInteger();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.checkpoint(live) : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", 2));
+        NameDefined written = nameDefined();
+
+        // When the flux is subscribed to, and an event is written once the first read has failed
+        StepVerifier.create(subscriptionModel.subscribe(startAt))
+                .then(() -> {
+                    await().atMost(10, SECONDS).until(() -> !commands.failed("getMore").isEmpty());
+                    write(written);
+                })
+
+                // Then it opens again at the live checkpoint, so it isn't refused and delivers the event
+                .expectNextMatches(cloudEvent -> cloudEvent.getId().equals(written.eventId()))
+                .thenCancel()
+                .verify(Duration.ofSeconds(15));
+        // And the position wasn't asked again
+        assertThat(answers).hasValue(1);
+    }
+
+    @Test
+    void the_flux_asks_its_dynamic_position_again_when_the_server_cannot_read_the_first_answer() {
+        // Given a dynamic position whose first answer is a token the server can't read, and a live checkpoint after
+        Checkpoint live = liveCheckpoint();
+        AtomicInteger answers = new AtomicInteger();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1
+                ? StartAt.checkpoint(new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("not-a-token"))))
+                : StartAt.checkpoint(live));
+        NameDefined written = nameDefined();
+
+        // When the flux is subscribed to, and an event is written once the position has been asked again
+        StepVerifier.create(subscriptionModel.subscribe(startAt))
+                .then(() -> {
+                    await().atMost(10, SECONDS).until(() -> answers.get() >= 2);
+                    write(written);
+                })
+
+                // Then the second answer opens the stream and the event is delivered
+                .expectNextMatches(cloudEvent -> cloudEvent.getId().equals(written.eventId()))
+                .thenCancel()
+                .verify(Duration.ofSeconds(15));
+    }
+
+    @Test
     void a_dynamic_position_answering_a_catchup_position_is_refused_when_the_model_falls_back_to_the_change_stream_of_spring_while_it_subscribes() {
         // Given a model whose driver cursor turns out unreadable on the first subscription, and a dynamic position that answers the present first and a global checkpoint when it is asked again
         subscriptionModel.shutdown();
@@ -510,6 +603,19 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
             }
             return result;
         };
+    }
+
+    private Checkpoint liveCheckpoint() {
+        return requireNonNull(subscriptionModel.globalCheckpoint().block(Duration.ofSeconds(10)));
+    }
+
+    // A token of a document inserted into another collection
+    private Checkpoint tokenOfAnotherCollection() {
+        MongoCollection<Document> other = mongoClient.getDatabase(databaseName).getCollection("other-" + UUID.randomUUID());
+        BsonTimestamp before = requireNonNull(Mono.from(mongoClient.getDatabase(databaseName).runCommand(new Document("ping", 1))).block()).get("operationTime", BsonTimestamp.class);
+        Mono.from(other.insertOne(new Document("marker", 1))).block();
+        ChangeStreamDocument<Document> inserted = requireNonNull(Flux.from(other.watch().startAtOperationTime(before)).blockFirst(Duration.ofSeconds(10)));
+        return new MongoResumeTokenCheckpoint(requireNonNull(inserted.getResumeToken()));
     }
 
     // The first subscription finds out that the driver's cursor can't be read, and the model reads through Spring's changeStream from then on
