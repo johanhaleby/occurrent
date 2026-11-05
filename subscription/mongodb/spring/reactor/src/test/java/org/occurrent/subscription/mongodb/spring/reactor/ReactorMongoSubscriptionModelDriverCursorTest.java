@@ -54,6 +54,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnsupportedStartAtException;
@@ -509,6 +510,30 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
                 // Then the flux fails with the position its dynamic answer opened at
                 .expectErrorSatisfies(error -> assertThat(error).isInstanceOfSatisfying(HistoryLostException.class, lost -> assertThat(lost.lostFrom()).isEqualTo(live)))
                 .verify(Duration.ofSeconds(15));
+    }
+
+    @Test
+    void a_named_subscription_asks_its_history_loss_listener_where_its_dynamic_position_opened_when_the_history_is_lost_after_a_pause_opened_it_again() {
+        // Given a model that has fallen back to the change stream of Spring, a listener that takes a subscription over, and a dynamic position answering a live checkpoint
+        useTheChangeStreamOfSpring();
+        Checkpoint live = liveCheckpoint();
+        CopyOnWriteArrayList<String> asked = new CopyOnWriteArrayList<>();
+        subscriptionModel.addHistoryLossListener((subscriptionId, lostFrom) -> {
+            asked.add(subscriptionId + "@" + lostFrom.asString());
+            return HistoryLossHandling.takeOver(() -> {
+            });
+        });
+        StartAt startAt = StartAt.dynamic(ctx -> StartAt.checkpoint(live));
+        waitUntilStarted(subscriptionModel.subscribe("history-lost-after-a-pause", startAt, event -> Mono.empty()));
+
+        // When it is paused and resumed before it reads a document, and the server has lost the history
+        subscriptionModel.pauseSubscription("history-lost-after-a-pause");
+        waitUntilStarted(subscriptionModel.resumeSubscription("history-lost-after-a-pause"));
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", 286));
+
+        // Then the listener is asked with the live checkpoint the resumed run opened at, and takes the subscription over
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(asked).containsExactly("history-lost-after-a-pause@" + live.asString()));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isPaused("history-lost-after-a-pause")).isTrue());
     }
 
     @Test
