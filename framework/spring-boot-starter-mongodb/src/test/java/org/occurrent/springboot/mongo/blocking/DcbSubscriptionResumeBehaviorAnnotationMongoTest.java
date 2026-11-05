@@ -49,9 +49,11 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
@@ -74,6 +76,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -448,8 +451,23 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         NowEventWriter nowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter,
                                       @Value("${test.before-subscribe}") String beforeSubscribe,
                                       @Value("${test.after-start}") String afterStart,
-                                      MongoOperations mongoOperations) {
-            return new NowEventWriter(dcbEventStore, cloudEventConverter, beforeSubscribe, afterStart, mongoOperations);
+                                      MongoOperations mongoOperations, ObjectProvider<SubscriptionModel> subscriptionModel,
+                                      ObjectProvider<DcbSnapshotBeginningDefault> beginningDefault,
+                                      ObjectProvider<DcbSnapshotBeginningSameAsStartAt> beginningSameAsStartAt) {
+            // A BEGINNING snapshot replays the history. An event written while it replays is delivered by the replay and can
+            // be delivered by the live feed too, so the events written after start wait until the last history event is folded.
+            Runnable replayIsOver = () -> {
+                String lastHistory = List.of(beforeSubscribe.split(",")).getLast();
+                ReplayAwareSubscriptions replayAware = ReplayAwareSubscriptions.findIn(subscriptionModel.getObject()).orElseThrow();
+                Map<String, DcbSnapshotHandled> replaying = Map.of(
+                        "dcb-beginning-snapshot-default", beginningDefault.getObject(),
+                        "dcb-beginning-snapshot-same", beginningSameAsStartAt.getObject());
+                replaying.forEach((id, handler) -> await().atMost(ofSeconds(30)).pollInterval(ofMillis(50)).untilAsserted(() -> {
+                    assertThat(handler.folded()).contains(lastHistory);
+                    assertThat(replayAware.isCatchingUp(id)).isFalse();
+                }));
+            };
+            return new NowEventWriter(dcbEventStore, cloudEventConverter, beforeSubscribe, afterStart, mongoOperations, replayIsOver);
         }
 
         @Bean
@@ -559,8 +577,10 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         private final List<String> beforeSubscribe;
         private final List<String> afterStart;
         private final MongoOperations mongoOperations;
+        private final Runnable beforeAfterStart;
 
-        NowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter, String beforeSubscribe, String afterStart, MongoOperations mongoOperations) {
+        NowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter, String beforeSubscribe, String afterStart, MongoOperations mongoOperations, Runnable beforeAfterStart) {
+            this.beforeAfterStart = beforeAfterStart;
             this.dcbEventStore = dcbEventStore;
             this.cloudEventConverter = cloudEventConverter;
             this.beforeSubscribe = List.of(beforeSubscribe.split(","));
@@ -578,6 +598,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
 
         @Override
         public void run(ApplicationArguments args) {
+            beforeAfterStart.run();
             afterStart.forEach(this::write);
         }
 

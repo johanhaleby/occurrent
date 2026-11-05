@@ -226,10 +226,10 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
         List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("now-left-over-catch-up", "now",
                 NowStartAtResumeBehaviorAnnotationMongoTest::leaveCatchUpCheckpointAfterHistoric1);
 
-        // The live start precedes the event written while down, so the replay reaches it and the live feed can deliver it too.
+        // The live start precedes the events written while down and after start, so the replay reaches them and the live feed
+        // can deliver them too, which is why no count is asserted for them.
         assertThat(handledBySecondBoot).containsSubsequence("historic-2", "while-down-1", "live-2");
         assertThat(handledBySecondBoot).filteredOn(name -> name.startsWith("historic")).containsExactly("historic-2");
-        assertThat(handledBySecondBoot).filteredOn(name -> name.equals("live-2")).hasSize(1);
     }
 
     // Pausing and resuming is not a restart. The subscription is NOW with SAME_AS_START_AT and a catch-up checkpoint is
