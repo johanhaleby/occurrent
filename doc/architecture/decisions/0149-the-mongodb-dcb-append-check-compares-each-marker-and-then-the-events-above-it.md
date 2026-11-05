@@ -284,20 +284,10 @@ own yet then, so the bound loses nothing.
 This comes from reading Spring Data MongoDB 5.1.0. The probes below ran a no-op outer transaction manager in place of
 a JDBC one.
 
-An append runs in the store's own transaction manager. It joins the caller's transaction when that manager finds a
-MongoDB transaction open on its own factory instance, or when the caller's `MongoTransactionManager` opened one on the
-template's factory instance. `MongoTransactionManager` binds its session to the factory itself, and suspending the
-caller's synchronizations doesn't unbind it, so the template keeps using that session. In every other case
-the store's manager suspends the caller's synchronizations, which unbinds the session the template opened for an
-earlier read, and commits the append in a MongoDB transaction of its own, so it doesn't roll back with the caller's. A
-read in the caller's transaction before that append keeps its snapshot, so a read after the append in the same
-transaction doesn't return it. With the manager and the template on one factory instance, as the Spring Boot starters
-build them, the append joins a transaction the caller's `MongoTransactionManager` or an earlier read opened there, and
-an append that comes first in a JDBC transaction commits on its own. When the caller's transaction isn't a MongoDB one
-on the template's factory, the template's MongoDB transaction is a second one, which `MongoDatabaseUtils` commits after
-the caller's through transaction synchronization. A rollback of the caller's takes the append with it, but if something
-fails between the two commits, the caller's is committed and the append isn't. A probe on the blocking store ran each layout
-below with the append first and with a read first, and rolled the caller's transaction back.
+An append runs in the store's own transaction manager, and it joins the caller's transaction when that is a MongoDB
+transaction on the template's database factory. In other setups, what happens depends on which factory instance each
+transaction manager and the template use. A probe on the blocking store ran each layout below with the append first and
+with a read first, and rolled the caller's transaction back.
 
 - The caller's manager and the store's on one factory, the template on another. The append rolled back.
 - The caller's manager on the template's factory, the store's on another. The append rolled back.
@@ -305,10 +295,14 @@ below with the append first and with a read first, and rolled the caller's trans
 - A no-op outer manager, the store's manager on the template's factory. With the append first it stayed, and with a
   read first it rolled back.
 
-A read after the append inside the caller's transaction returned it in every case except the third with a read first.
-An earlier probe on both stores showed the third layout committing the append on its own. This reasoning comes from
-reading `AbstractPlatformTransactionManager.getTransaction` in spring-tx 7.0.9 and `MongoTransactionManager` in Spring
-Data MongoDB 5.1.0, and the reactor store's join cases weren't probed.
+A read after the append inside the caller's transaction returned it in every case except the third with a read first. An
+earlier probe on both stores showed the third layout committing the append on its own. The reactor store's cases weren't
+probed. In the first layout, and in the fourth with a read first, the append ran in a second MongoDB transaction on the
+template's factory, which `MongoDatabaseUtils` commits after the caller's through transaction synchronization. A failure
+between the two commits keeps the caller's work and loses the append. That comes from reading Spring Data MongoDB 5.1.0,
+not from a probe. 0.34.0 has the same window. At `occurrent-0.34.0` the Spring and reactor stores already ran the append
+through the store's transaction manager, with the template's session synchronization set to `ALWAYS`, so 0.35.0 doesn't
+change it.
 
 Whether a caller owns the transaction is a different question, since the store's own transaction manager may join a
 caller's transaction on another factory. Both stores answer it by any active Spring transaction, the blocking store
