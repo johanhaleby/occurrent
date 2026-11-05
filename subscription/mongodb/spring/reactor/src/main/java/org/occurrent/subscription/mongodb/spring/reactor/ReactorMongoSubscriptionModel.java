@@ -64,6 +64,7 @@ import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
 
@@ -357,11 +358,14 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         runningSubscriptions.put(subscriptionId, internalSubscription);
         // Covers every earlier run, and not only the last one, since a cancel can end a run that is still waiting for
         // the one before it
-        Mono<Void> earlierRunsEnded = runsEnded.getOrDefault(subscriptionId, Mono.empty());
-        Mono<Void> allRunsEnded = Mono.when(earlierRunsEnded, run.ended()).cache();
+        Mono<Void> earlierRunsEnded = runsEnded.get(subscriptionId);
+        Mono<Void> allRunsEnded = Mono.when(earlierRunsEnded == null ? Mono.empty() : earlierRunsEnded, run.ended()).cache();
         runsEnded.put(subscriptionId, allRunsEnded);
         allRunsEnded.doOnTerminate(() -> runsEnded.remove(subscriptionId, allRunsEnded)).subscribe();
-        return new RunStart(internalSubscription, run, earlierRunsEnded);
+        // An earlier run ends on the thread that closes it or ends its last step, such as a pause, a cancel or the
+        // failure of a run, which fails its handle after it closed it. The next run reads, and asks a dynamic position,
+        // on another thread, so that call isn't held up by the caller's function or made to wait for it.
+        return new RunStart(internalSubscription, run, earlierRunsEnded == null ? Mono.empty() : earlierRunsEnded.publishOn(Schedulers.boundedElastic()));
     }
 
     // Runs without the monitor, since subscribing resolves the start position, which can call the caller's function

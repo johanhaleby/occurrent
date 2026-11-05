@@ -1282,6 +1282,134 @@ public class ReactorMongoSubscriptionModelTest {
             }
         }
 
+        @Test
+        void a_pause_returns_while_the_dynamic_position_of_a_resume_waiting_for_the_paused_run_to_end_is_still_answering() throws Exception {
+            // Given a subscription whose action is running, and whose cancel is held by the test
+            String subscriptionId = UUID.randomUUID().toString();
+            CountDownLatch actionCalled = new CountDownLatch(1);
+            CountDownLatch cancelStarted = new CountDownLatch(1);
+            CountDownLatch mayFinishCancel = new CountDownLatch(1);
+            Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+                actionCalled.countDown();
+                return Mono.<Void>never().doOnCancel(() -> {
+                    cancelStarted.countDown();
+                    awaitQuietly(mayFinishCancel, 20);
+                });
+            });
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
+            assertThat(actionCalled.await(10, SECONDS)).isTrue();
+
+            // And a dynamic position that is held by the test while it answers, and notes the thread it is asked on
+            AtomicReference<Thread> askedOn = new AtomicReference<>();
+            CountDownLatch asked = new CountDownLatch(1);
+            CountDownLatch fnMayAnswer = new CountDownLatch(1);
+            StartAt resumeAt = StartAt.dynamic(ctx -> {
+                askedOn.set(Thread.currentThread());
+                asked.countDown();
+                awaitQuietly(fnMayAnswer, 10);
+                return StartAt.now();
+            });
+            ExecutorService executor = Executors.newCachedThreadPool();
+            try {
+                // And the subscription is paused on a thread that the held cancel blocks
+                AtomicReference<Thread> pausedOn = new AtomicReference<>();
+                CompletableFuture<Void> pausing = CompletableFuture.runAsync(() -> {
+                    pausedOn.set(Thread.currentThread());
+                    subscription.pauseSubscription(subscriptionId);
+                }, executor);
+                assertThat(cancelStarted.await(10, SECONDS)).isTrue();
+
+                // And it is resumed while the paused run has not ended
+                CompletableFuture.supplyAsync(() -> subscription.resumeSubscription(subscriptionId, resumeAt), executor).get(10, SECONDS);
+
+                // When the cancel finishes, so the paused run ends and the resumed run reads its position
+                mayFinishCancel.countDown();
+                assertThat(asked.await(10, SECONDS)).isTrue();
+
+                // Then the pause returns while the position is still answering, and the position is not asked on the thread of the pause
+                assertAll(
+                        () -> assertThat(catchThrowable(() -> pausing.get(2, SECONDS))).as("the pause completes while the position is answering").isNull(),
+                        () -> assertThat(askedOn.get()).as("the thread the position is asked on").isNotSameAs(pausedOn.get())
+                );
+            } finally {
+                fnMayAnswer.countDown();
+                mayFinishCancel.countDown();
+                subscription.cancelSubscription(subscriptionId).block(Duration.ofSeconds(10));
+                executor.shutdownNow();
+            }
+        }
+
+        @Test
+        void a_cancel_returns_while_the_dynamic_position_of_a_subscribe_waiting_for_the_cancelled_run_to_end_is_waiting_for_the_cancel() throws Exception {
+            // Given a subscription whose action is running, and whose cancel is held by the test
+            String subscriptionId = UUID.randomUUID().toString();
+            CountDownLatch actionCalled = new CountDownLatch(1);
+            CountDownLatch cancelStarted = new CountDownLatch(1);
+            CountDownLatch mayFinishCancel = new CountDownLatch(1);
+            Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+                actionCalled.countDown();
+                return Mono.<Void>never().doOnCancel(() -> {
+                    cancelStarted.countDown();
+                    awaitQuietly(mayFinishCancel, 20);
+                });
+            });
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
+            assertThat(actionCalled.await(10, SECONDS)).isTrue();
+
+            // And a dynamic position that waits for the cancel to complete before it answers
+            ExecutorService executor = Executors.newCachedThreadPool();
+            AtomicReference<CompletableFuture<Void>> cancelling = new AtomicReference<>();
+            CountDownLatch cancelSet = new CountDownLatch(1);
+            AtomicBoolean sawTheCancelComplete = new AtomicBoolean();
+            CountDownLatch asked = new CountDownLatch(1);
+            StartAt secondStartAt = StartAt.dynamic(ctx -> {
+                asked.countDown();
+                awaitQuietly(cancelSet, 10);
+                CompletableFuture<Void> cancel = cancelling.get();
+                if (cancel != null) {
+                    sawTheCancelComplete.set(catchThrowable(() -> cancel.get(5, SECONDS)) == null);
+                }
+                return StartAt.now();
+            });
+            try {
+                // And the subscription is cancelled on a thread that the held cancel blocks
+                CompletableFuture<Void> cancel = CompletableFuture.runAsync(() -> subscription.cancelSubscription(subscriptionId).block(Duration.ofSeconds(25)), executor);
+                cancelling.set(cancel);
+                cancelSet.countDown();
+                assertThat(cancelStarted.await(10, SECONDS)).isTrue();
+
+                // And the id is subscribed to again while the cancelled run has not ended
+                CompletableFuture.runAsync(() -> subscription.subscribe(subscriptionId, secondStartAt, cloudEvent -> Mono.empty()), executor);
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(subscription.isRunning(subscriptionId)).isTrue());
+
+                // When the cancel finishes, so the cancelled run ends and the new run reads its position
+                mayFinishCancel.countDown();
+                assertThat(asked.await(10, SECONDS)).isTrue();
+
+                // Then the cancel returns and the position sees it complete, so the two did not wait for each other
+                assertAll(
+                        () -> assertThat(catchThrowable(() -> cancel.get(3, SECONDS))).as("the cancel completes").isNull(),
+                        () -> assertThat(sawTheCancelComplete.get()).as("the position saw the cancel complete").isTrue()
+                );
+            } finally {
+                mayFinishCancel.countDown();
+                cancelSet.countDown();
+                subscription.cancelSubscription(subscriptionId).block(Duration.ofSeconds(10));
+                executor.shutdownNow();
+            }
+        }
+
+        private static void awaitQuietly(CountDownLatch latch, long seconds) {
+            try {
+                latch.await(seconds, SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
         private void assertWhatWasWrittenWhilePausedIsDeliveredAfterAResumeAt(StartAt resumeAt) throws InterruptedException {
             // Given a started subscription that delivered an event and is then paused
             String subscriptionId = UUID.randomUUID().toString();
