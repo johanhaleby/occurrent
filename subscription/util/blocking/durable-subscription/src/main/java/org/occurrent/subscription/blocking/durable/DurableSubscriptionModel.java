@@ -208,8 +208,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     private static final class Asked {
         private final String subscriptionId;
-        // Set and read under the lock for the id
-        private boolean cancelled;
+        private final Thread asker = Thread.currentThread();
+        // Set by a cancel on another thread before the subscribe holds the lock for the id
+        private volatile boolean cancelled;
 
         private Asked(String subscriptionId) {
             this.subscriptionId = subscriptionId;
@@ -960,7 +961,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     @Override
     public void cancelSubscription(String subscriptionId) {
         runUnderLockFor(subscriptionId, () -> {
-            asking.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId)).forEach(asked -> asked.cancelled = true);
+            // A cancel the function makes on the subscribing thread doesn't stop that subscribe, as before the function
+            // was asked ahead of the lock
+            Thread current = Thread.currentThread();
+            asking.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current).forEach(asked -> asked.cancelled = true);
             subscriptionModel.cancelSubscription(subscriptionId);
             // The wrapped model doesn't wait for an action that is running, so its checkpoint is written before the
             // registrations are cancelled below or not at all. The untracked ones stop before anything is deleted

@@ -1390,11 +1390,10 @@ such a function, is affected too.
 * Keep effects that must happen only for a subscribe that goes ahead out of the function, since a subscribe that then
   throws `DuplicateSubscriptionIdException` asks it too.
 * Don't wait in the function for a `pauseSubscription` or `resumeSubscription` of the same id on a catch-up model on
-  another thread. That call waits up to 10 seconds for the subscribe and then throws `IllegalStateException`, as it did
-  in 0.34.0.
+  another thread. That call waits up to 10 seconds for the subscribe and then throws `IllegalStateException`.
 * Wait for the cancel only the first time a subscribe asks the function. A catch-up model asks it again while it holds
-  the lock for the id, for the model it wraps, on a resume, and on its replay thread during the handover to live
-  delivery. A cancel made during one of those asks throws `IllegalStateException` after 10 seconds, or during the
+  the lock for the id, for the model it wraps when the subscribe goes straight to live delivery, on a resume, and on its
+  replay thread during the handover to live delivery. A cancel made during one of those asks throws `IllegalStateException` after 10 seconds, or during the
   handover waits for as long as the function does.
 * A `CatchupSubscriptionModel` with both a stream and a DCB catch-up asks the function first to choose between them for
   a subscribe with no filter. A cancel made during that ask returns, and the subscribe still goes ahead.

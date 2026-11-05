@@ -277,9 +277,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final String subscriptionId;
         private final Thread asker = Thread.currentThread();
         private final CompletableFuture<Void> returned = new CompletableFuture<>();
-        // Set and read under the claim of the id. A cancel that marks it after the subscribe has read it changes nothing,
-        // since that cancel finds the subscription the subscribe made
-        private boolean cancelled;
+        // Set by a cancel on another thread before the subscribe holds the claim. A cancel that marks it after the
+        // subscribe has read it changes nothing, since that cancel finds the subscription the subscribe made
+        private volatile boolean cancelled;
 
         private AskedFirst(String subscriptionId) {
             this.subscriptionId = subscriptionId;
@@ -2494,7 +2494,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * be deleted. False when a subscribe for the same id on this thread, made while {@code cancel} ran, is kept.
      */
     boolean cancelKeepingWhatWasSubscribedOnFailure(String subscriptionId, Runnable cancel) {
-        askedFirst.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId)).forEach(asked -> asked.cancelled = true);
+        // A cancel the function makes on the subscribing thread doesn't stop that subscribe, as before the function was
+        // asked ahead of the claim
+        Thread cancelling = Thread.currentThread();
+        askedFirst.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != cancelling).forEach(asked -> asked.cancelled = true);
         Subscribed made = subscribed.get(subscriptionId);
         CancelUnderWay underWay = new CancelUnderWay(made == null ? CompletableFuture.completedFuture(null) : made.cancelledReplayReturned());
         // Before the cancel takes the replay away, so start(true) and every resume find it all through the cancel. A
