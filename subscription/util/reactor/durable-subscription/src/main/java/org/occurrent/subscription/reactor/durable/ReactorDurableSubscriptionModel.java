@@ -32,6 +32,7 @@ import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.*;
+import org.occurrent.subscription.api.reactor.internal.CancellableRegistration;
 import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +64,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -256,7 +258,7 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  */
 @NullMarked
 public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions, HistoryLossReportingSubscriptions,
-        RepositionableSubscriptions {
+        RepositionableSubscriptions, CancellableRegistration {
     private static final Logger log = LoggerFactory.getLogger(ReactorDurableSubscriptionModel.class);
     // How long a failed delete of a cancelled subscription's checkpoint waits before it is tried again, about
     // doubling up to the longest, with jitter
@@ -497,9 +499,19 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        return requireNonNull(subscribe(subscriptionId, filter, startAt, action, () -> false));
+    }
+
+    // Internal, see CancellableRegistration. Asks cancelled where this model takes the id, under the lock its
+    // cancelSubscription(..) takes there. A cancel after that ends the subscribe as any cancel of a subscribe under way
+    // does.
+    @Override
+    public @Nullable Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action,
+                                            BooleanSupplier cancelled) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        requireNonNull(cancelled, "cancelled cannot be null");
 
         if (delegate != null) {
             // Refused here rather than left to the wrapped model, which may accept the subscribe and fail it only
@@ -511,7 +523,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // position waits on the checkpoint store and handing the subscription over calls the wrapped model, and
             // holding the monitor across either would let one slow subscribe block every life cycle call of every
             // other id, shutdown included.
-            return subscribeByDelegating(delegate, subscriptionId, filter, startAt, action);
+            return subscribeByDelegating(delegate, subscriptionId, filter, startAt, action, cancelled);
         }
 
         // Checked before the read below, so a duplicate subscribe and one on a shut-down model do not ask the wrapped
@@ -552,12 +564,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // Decided under the monitor and started after it is released, so a dynamic start position, the storage read
         // and the subscribe to the wrapped model's feed never hold up a call for another id. The id is taken before the
         // function runs, so a duplicate subscribe is refused without calling it.
-        final Reservation reservation;
+        final @Nullable Reservation reservation;
         try {
             synchronized (this) {
-                requireIdFreeAndNotShutDown(subscriptionId);
-                reservation = reserveInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action, positionNow, null,
-                        present, null, readsAbandoned, takenOverAtTheCall == TakeOver.NONE ? List.of() : List.of(takenOverAtTheCall));
+                if (cancelled.getAsBoolean()) {
+                    reservation = null;
+                } else {
+                    requireIdFreeAndNotShutDown(subscriptionId);
+                    reservation = reserveInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action, positionNow, null,
+                            present, null, readsAbandoned, takenOverAtTheCall == TakeOver.NONE ? List.of() : List.of(takenOverAtTheCall));
+                }
             }
         } catch (RuntimeException | Error e) {
             if (present != null) {
@@ -565,6 +581,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             }
             giveBackPositionDelete(subscriptionId, takenOverAtTheCall, null);
             throw e;
+        }
+        if (reservation == null) {
+            if (present != null) {
+                present.end();
+            }
+            giveBackPositionDelete(subscriptionId, takenOverAtTheCall, null);
+            return null;
         }
         try {
             return startReserved(reservation, storedAtTheCall);
@@ -597,14 +620,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * A cancel of the id that comes before the subscription is registered here ends it, and
      * {@link Subscription#waitUntilStarted()} then fails with {@link CancellationException}.
      */
-    private Subscription subscribeByDelegating(SubscriptionModel delegate, String subscriptionId, @Nullable SubscriptionFilter filter,
-                                               StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    private @Nullable Subscription subscribeByDelegating(SubscriptionModel delegate, String subscriptionId, @Nullable SubscriptionFilter filter,
+                                                         StartAt startAt, Function<CloudEvent, Mono<Void>> action, BooleanSupplier cancelled) {
         // Refused at the call where this check sees the id. One it misses is refused by the wrapped model at the hand-over,
         // before the start position is recorded, see startAtTheCall.
         if (heldByTheWrappedModel(delegate, subscriptionId)) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
-        PositionWriter writer = startingPositionWriter(subscriptionId);
+        @Nullable PositionWriter writer = startingPositionWriter(subscriptionId, cancelled);
+        if (writer == null) {
+            return null;
+        }
         writer.takeOver = takeOverPositionDelete(subscriptionId);
         // Where the feed is at this call. The subscription-model default reads it at once, see startDelegatedOnceRead.
         // Any other start position reads it only where it needs it, and then as of this call however late that is.
@@ -2184,9 +2210,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // Refused while another subscription of the id waits to be handed over, since a pause or a resume kept for the
     // waiting subscription would never reach the new one, and while refusesSubscribeOf refuses it. Both before the
     // subscribe takes a delete of the id over, which can write a checkpoint back.
-    private PositionWriter startingPositionWriter(String subscriptionId) {
+    // A subscribe its caller cancelled before this point gets no writer and registers nothing, see
+    // CancellableRegistration. cancelled is asked under positionLock, where cancelSubscription(..) marks the writers
+    // that still start.
+    private @Nullable PositionWriter startingPositionWriter(String subscriptionId, BooleanSupplier cancelled) {
         PositionWriter writer = new PositionWriter();
         synchronized (positionLock) {
+            if (cancelled.getAsBoolean()) {
+                return null;
+            }
             if (refusesSubscribeOf(subscriptionId) || keepsForAnotherWriter(subscriptionId, writer)) {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
