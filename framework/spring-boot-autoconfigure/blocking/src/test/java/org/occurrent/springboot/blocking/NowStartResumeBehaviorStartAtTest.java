@@ -24,6 +24,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.annotation.StreamSubscription;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -67,13 +68,20 @@ class NowStartResumeBehaviorStartAtTest {
         }
     }
 
+    static class CatchupSubscriptionModelSubclass extends CatchupSubscriptionModel {
+        CatchupSubscriptionModelSubclass() {
+            super(mock(CheckpointAwareSubscriptionModel.class), mock(EventStoreQueries.class));
+        }
+    }
+
     static Stream<Class<?>> layersThatLeaveTheStartToTheLiveModel() {
         return Stream.of(
                 DurableSubscriptionModel.class,
                 DurableSubscriptionModelSubclass.class,
                 CompetingConsumerSubscriptionModel.class,
                 CompetingConsumerSubscriptionModelSubclass.class,
-                CatchupSubscriptionModel.class);
+                CatchupSubscriptionModel.class,
+                CatchupSubscriptionModelSubclass.class);
     }
 
     static Stream<Class<?>> layersThatStartNow() {
