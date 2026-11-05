@@ -304,9 +304,9 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
     public Mono<Boolean> isTransactional() {
         return TransactionSynchronizationManager.forCurrentTransaction()
                 .map(TransactionSynchronizationManager::isActualTransactionActive)
-                // Absent context means no transaction. Matched by simple name for the same reason as in inTransaction:
-                // Spring keeps the type private, and swallowing every error would report "no transaction" for a genuine
-                // failure.
+                // Absent context means no transaction. Matched by simple name for the same reason as in
+                // inTransactionTellingIfOpened: Spring keeps the type private, and swallowing every error would report
+                // "no transaction" for a genuine failure.
                 .onErrorResume(throwable -> "NoTransactionInContextException".equals(throwable.getClass().getSimpleName())
                         ? Mono.just(false)
                         : Mono.error(throwable));
