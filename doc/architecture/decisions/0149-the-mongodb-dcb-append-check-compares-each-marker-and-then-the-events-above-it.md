@@ -293,7 +293,10 @@ earlier read, and commits the append in a MongoDB transaction of its own, so it 
 read in the caller's transaction before that append keeps its snapshot, so a read after the append in the same
 transaction doesn't return it. With the manager and the template on one factory instance, as the Spring Boot starters
 build them, the append joins a transaction the caller's `MongoTransactionManager` or an earlier read opened there, and
-an append that comes first in a JDBC transaction commits on its own. A probe on the blocking store ran each layout
+an append that comes first in a JDBC transaction commits on its own. When the caller's transaction isn't a MongoDB one
+on the template's factory, the template's MongoDB transaction is a second one, which `MongoDatabaseUtils` commits after
+the caller's through transaction synchronization. A rollback of the caller's takes the append with it, but if something
+fails between the two commits, the caller's is committed and the append isn't. A probe on the blocking store ran each layout
 below with the append first and with a read first, and rolled the caller's transaction back.
 
 - The caller's manager and the store's on one factory, the template on another. The append rolled back.
