@@ -44,6 +44,7 @@ import org.occurrent.subscription.internal.LongestReplay;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 import reactor.core.publisher.Sinks;
 
 import java.util.ArrayList;
@@ -507,7 +508,7 @@ final class NamedCatchupSupport {
         settle(subscriptionId, () -> owned.remove(subscriptionId, record));
     }
 
-    // A cancel that threw before the wrapped model cancelled. A live record whose subscription the wrapped model can run
+    // A cancel that threw, or whose Mono from the wrapped model failed. A live record whose subscription the wrapped model can run
     // stays while the wrapped model holds the id, so that subscription keeps reaching this model, and goes as in
     // own(..) once the wrapped model holds nothing. A record whose replay this cancel stopped before it handed over
     // goes at once, since what the wrapped model holds under the id then is what a cancelled subscribe left. That is
@@ -921,6 +922,11 @@ final class NamedCatchupSupport {
     }
 
     void pauseSubscription(String subscriptionId) {
+        // A cancelled subscribe whose subscription the wrapped model still runs, which isRunning(..) and isPaused(..)
+        // answer false for
+        if (cancelledUnderWay(subscriptionId)) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
         CatchupState state = catchingUp.get(subscriptionId);
         if (state != null) {
             synchronized (state) {
@@ -941,6 +947,9 @@ final class NamedCatchupSupport {
     Subscription resumeSubscription(String subscriptionId) {
         // Before anything starts, so a refused resume changes nothing
         Owned record = owned.get(subscriptionId);
+        if (record != null && record.cancelled) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
         Checkpoint historyLost = record == null ? null : record.historyLost;
         if (historyLost != null) {
             throw HistoryLossMessages.historyLost(subscriptionId, historyLost);
@@ -1025,9 +1034,13 @@ final class NamedCatchupSupport {
         Mono<Void> cancelled;
         try {
             // Ended before a subscriber of the cancel is told it completed, so a subscribe of the id from there goes through
-            cancelled = requireNonNull(named).cancelSubscription(subscriptionId).doOnTerminate(cancelUnderWayEnds).doFinally(__ -> {
+            cancelled = requireNonNull(named).cancelSubscription(subscriptionId).doOnTerminate(cancelUnderWayEnds).doFinally(signal -> {
                 cancelUnderWayEnds.run();
-                cancelEnded(subscriptionId, record);
+                if (signal == SignalType.ON_ERROR) {
+                    cancelRefused(subscriptionId, record, runsInWrappedModel);
+                } else {
+                    cancelEnded(subscriptionId, record);
+                }
             }).cache();
         } catch (RuntimeException | Error e) {
             cancelUnderWayEnds.run();

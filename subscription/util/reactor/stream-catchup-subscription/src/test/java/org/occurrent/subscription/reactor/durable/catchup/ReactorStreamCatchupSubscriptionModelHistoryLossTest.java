@@ -242,6 +242,53 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     @Test
+    void a_cancel_whose_mono_from_the_wrapped_model_fails_keeps_the_record_of_a_straight_to_live_subscription_so_a_later_history_loss_pauses_it_for_good() {
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(new StringBasedCheckpoint("a live token")),
+                    cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+            IllegalStateException refusal = new IllegalStateException("the wrapped model fails the cancel");
+            wrapped.cancelCompletesWhen = Mono.error(refusal);
+
+            Throwable cancelFailure = catchThrowable(() -> catchup.cancelSubscription(ID).block(Duration.ofSeconds(5)));
+            boolean wrappedRunsTheSubscription = wrapped.isRunning(ID);
+            wrapped.losesTheHistoryFrom(ID, new StringBasedCheckpoint("a later lost position"));
+
+            assertAll(
+                    () -> assertThat(cancelFailure).as("what the cancel failed with").isSameAs(refusal),
+                    () -> assertThat(wrappedRunsTheSubscription).as("whether the wrapped model runs the subscription after the failed cancel").isTrue(),
+                    () -> assertThat(wrapped.restartedFromThePresent).as("restarts from the present").isEmpty(),
+                    () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue()
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_cancel_whose_mono_from_the_wrapped_model_fails_keeps_the_record_of_a_handed_over_catch_up_so_a_later_history_loss_pauses_it_for_good() {
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            IllegalStateException refusal = new IllegalStateException("the wrapped model fails the cancel");
+            wrapped.cancelCompletesWhen = Mono.error(refusal);
+
+            Throwable cancelFailure = catchThrowable(() -> catchup.cancelSubscription(ID).block(Duration.ofSeconds(5)));
+            wrapped.losesTheHistoryFrom(ID, new StringBasedCheckpoint("a later lost position"));
+
+            assertAll(
+                    () -> assertThat(cancelFailure).as("what the cancel failed with").isSameAs(refusal),
+                    () -> assertThat(wrapped.restartedFromThePresent).as("restarts from the present").isEmpty(),
+                    () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue()
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_cancel_that_lands_after_the_wrapped_model_paused_the_subscription_and_before_it_ran_the_takeover_drops_the_takeover() {
         LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
         ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);

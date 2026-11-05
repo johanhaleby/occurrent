@@ -447,6 +447,31 @@ class ReactorCatchupSubscribeUnderWayTest {
     }
 
     @Test
+    void a_pause_or_resume_of_x_is_refused_as_unknown_while_the_wrapped_model_runs_what_a_cancelled_subscribe_left_after_its_second_cancel_threw() {
+        WrappedModel wrapped = new WrappedModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        HeldStart held = new HeldStart();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.empty())).start();
+        held.awaitInside();
+        await(returnedWithin("cancel-x-1", () -> catchup.cancelSubscription("x").toFuture()), "The first cancel of x did not complete while the subscribe of x was under way");
+        wrapped.failCancelsFromNowOn();
+        held.release();
+        await(subscribeOfX, "The subscribe of x did not return");
+
+        Throwable pause = failureOf(() -> catchup.pauseSubscription("x"));
+        boolean wrappedPausedX = wrapped.isPaused("x");
+        Throwable resume = failureOf(() -> catchup.resumeSubscription("x"));
+
+        assertAll(
+                () -> assertThat(wrapped.isRunning("x")).as("whether the wrapped model runs x").isTrue(),
+                () -> assertThat(pause).as("what a pause of x throws").isInstanceOf(UnknownSubscriptionException.class),
+                () -> assertThat(wrappedPausedX).as("whether the pause reached the wrapped model").isFalse(),
+                () -> assertThat(resume).as("what a resume of x throws").isInstanceOf(UnknownSubscriptionException.class),
+                () -> assertThat(catchup.isPaused("x")).as("whether the catch-up reports x paused").isFalse());
+    }
+
+    @Test
     void the_action_of_a_subscribe_cancelled_while_under_way_gets_no_event_while_a_nested_subscribe_of_the_id_gets_them() {
         WrappedModel wrapped = new WrappedModel();
         wrapped.registersBeforeTheStart = true;
