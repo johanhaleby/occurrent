@@ -335,6 +335,7 @@ class SpringReactiveTransactionExecutorOverMongoEventStoreTest {
 
         assertThat(caught.get()).as("[exception caught by the caller]").isSameAs(failure);
         assertThat(receivedByB).as("[events received by b]").containsExactlyElementsOf(decidedEventIds);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
         assertThat(commitFailure).as("[exception from the commit]").isNull();
         assertThat(eventsInStream()).as("[events in the stream]").containsExactlyElementsOf(decidedEventIds);
     }
@@ -358,6 +359,7 @@ class SpringReactiveTransactionExecutorOverMongoEventStoreTest {
 
         assertThat(caught.get()).as("[exception caught by the caller]").isSameAs(failure);
         assertThat(receivedByB).as("[events received by b]").containsExactlyElementsOf(decidedEventIds);
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
         assertThat(commitFailure).as("[exception from the commit]").isNull();
         assertThat(eventsInBoundary()).as("[events in the boundary]").containsExactlyElementsOf(decidedEventIds);
     }
