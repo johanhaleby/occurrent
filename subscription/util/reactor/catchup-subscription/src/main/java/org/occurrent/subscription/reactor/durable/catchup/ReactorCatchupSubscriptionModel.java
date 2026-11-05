@@ -367,25 +367,25 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     // Resuming one subscription starts a stopped model without resuming the others, as the life-cycle contract says.
     // Started here rather than by the owner, which would start only its own inner model and keep a subscription routed
-    // to another one paused. A model that was shut down starts nothing, and the owner refuses the resume.
+    // to another one paused. An inner model that was shut down starts nothing, and the owner refuses the resume.
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         SubscriptionModel owner = ownerOf(subscriptionId);
-        if (!isShutdown() && anyInnerModelStopped() && owner.isPaused(subscriptionId)) {
+        if (anyInnerModelStopped() && owner.isPaused(subscriptionId)) {
             start(false);
         }
         return owner.resumeSubscription(subscriptionId);
     }
 
-    // Asks the inner model subscribe(..) asks, since shutdown() shuts all of them down together
-    private boolean isShutdown() {
-        return (streamCatchupSubscriptionModel != null ? streamCatchupSubscriptionModel.namedSubscriptions : requireNonNull(dcbCatchupSubscriptionModel).namedSubscriptions).isShutdown();
+    private boolean anyInnerModelStopped() {
+        return namedSupports().anyMatch(NamedCatchupSupport::isStopped);
     }
 
-    private boolean anyInnerModelStopped() {
-        return streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.namedSubscriptions.isStopped()
-                || dcbCatchupSubscriptionModel != null && dcbCatchupSubscriptionModel.namedSubscriptions.isStopped()
-                || agnosticCatchupSubscriptionModel != null && agnosticCatchupSubscriptionModel.namedSubscriptions.isStopped();
+    private Stream<NamedCatchupSupport> namedSupports() {
+        return Stream.of(streamCatchupSubscriptionModel != null ? streamCatchupSubscriptionModel.namedSubscriptions : null,
+                        dcbCatchupSubscriptionModel != null ? dcbCatchupSubscriptionModel.namedSubscriptions : null,
+                        agnosticCatchupSubscriptionModel != null ? agnosticCatchupSubscriptionModel.namedSubscriptions : null)
+                .filter(Objects::nonNull);
     }
 
     @Override
@@ -441,6 +441,8 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     @Override
     public void shutdown() {
         subscriptionOwners.clear();
+        // Every inner model refuses a start before any of them shuts down the wrapped model they share
+        namedSupports().forEach(NamedCatchupSupport::beginShutdown);
         innerModels().forEach(SubscriptionModel::shutdown);
     }
 }

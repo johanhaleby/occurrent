@@ -45,13 +45,22 @@ import reactor.core.publisher.Mono;
 import java.net.URI;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorCatchupSubscriptionModelStopAndStartTest {
@@ -104,6 +113,58 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
         assertThatThrownBy(() -> catchup.pauseSubscription("s")).as("what a pause throws").isInstanceOf(SubscriptionModelShutdownException.class);
         assertThatThrownBy(() -> catchup.resumeSubscription("s")).as("what a resume throws").isInstanceOf(SubscriptionModelShutdownException.class);
         assertThat(wrapped.startCalls).as("starts of the wrapped model").isEmpty();
+    }
+
+    @Test
+    void a_resume_that_a_shutdown_overtakes_after_it_read_the_subscription_paused_throws_SubscriptionModelShutdownException_and_starts_nothing() throws Exception {
+        WrappedModel wrapped = new WrappedModel();
+        ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new DcbStoreThatNeverAnswers(), DcbCriteria.all(), Filter.all(), 100, 100);
+        catchup.subscribe("s", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        catchup.stop();
+
+        assertThat(resumeOvertakenByShutdown(wrapped, catchup, () -> catchup.resumeSubscription("s"))).as("what the resume throws")
+                .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(wrapped.startCallsAfterShutdown).as("starts of the wrapped model after its shutdown").isEmpty();
+    }
+
+    @Test
+    void a_resume_of_a_stream_catch_up_that_a_shutdown_overtakes_after_it_read_the_subscription_paused_throws_SubscriptionModelShutdownException_and_starts_nothing() throws Exception {
+        WrappedModel wrapped = new WrappedModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new OneEventReader());
+        catchup.subscribe("s", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        catchup.stop();
+
+        assertThat(resumeOvertakenByShutdown(wrapped, catchup, () -> catchup.resumeSubscription("s"))).as("what the resume throws")
+                .isExactlyInstanceOf(SubscriptionModelShutdownException.class)
+                .hasMessage("Cannot resume subscription s because the subscription model is shutdown.");
+        assertThat(wrapped.startCallsAfterShutdown).as("starts of the wrapped model after its shutdown").isEmpty();
+    }
+
+    // Runs the resume on another thread, holds it once it has read from the wrapped model that the subscription is
+    // paused, shuts the model down meanwhile, and returns what the resume threw
+    private static @Nullable Throwable resumeOvertakenByShutdown(WrappedModel wrapped, SubscriptionModel catchup, Callable<Subscription> resume) throws Exception {
+        CountDownLatch readPaused = new CountDownLatch(1);
+        CountDownLatch shutDown = new CountDownLatch(1);
+        wrapped.afterIsPausedRead.set(() -> {
+            readPaused.countDown();
+            try {
+                shutDown.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+        });
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Subscription> resuming = executor.submit(resume);
+            assertThat(readPaused.await(5, TimeUnit.SECONDS)).as("the resume read the subscription paused").isTrue();
+            catchup.shutdown();
+            shutDown.countDown();
+            Throwable thrown = catchThrowable(() -> resuming.get(5, TimeUnit.SECONDS));
+            return thrown instanceof ExecutionException ? thrown.getCause() : thrown;
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private static final class OneEventReader implements PositionOrderedReader, CatchupReads {
@@ -166,6 +227,10 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
         // Which start call throws after setting this model running, counting from 1, or none when 0
         volatile int failingStart = 0;
         volatile boolean running = true;
+        volatile boolean shutdown = false;
+        final List<Boolean> startCallsAfterShutdown = new CopyOnWriteArrayList<>();
+        // Runs once, on the thread of the next isPaused(..) call, after that call read its answer
+        final AtomicReference<@Nullable Runnable> afterIsPausedRead = new AtomicReference<>();
 
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
@@ -206,6 +271,9 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
+            if (shutdown) {
+                startCallsAfterShutdown.add(resumeSubscriptionsAutomatically);
+            }
             running = true;
             if (starts.incrementAndGet() == failingStart) {
                 throw new IllegalStateException(START_FAILED);
@@ -214,6 +282,12 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
             if (resumeSubscriptionsAutomatically) {
                 paused.clear();
             }
+        }
+
+        @Override
+        public void shutdown() {
+            shutdown = true;
+            running = false;
         }
 
         @Override
@@ -228,7 +302,12 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
 
         @Override
         public boolean isPaused(String subscriptionId) {
-            return paused.contains(subscriptionId);
+            boolean answer = paused.contains(subscriptionId);
+            Runnable hook = afterIsPausedRead.getAndSet(null);
+            if (hook != null) {
+                hook.run();
+            }
+            return answer;
         }
 
         @Override

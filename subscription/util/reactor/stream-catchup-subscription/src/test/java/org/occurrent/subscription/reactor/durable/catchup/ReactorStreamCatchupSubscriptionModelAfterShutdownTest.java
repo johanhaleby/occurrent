@@ -104,6 +104,14 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
     }
 
     @Test
+    void a_start_after_shutdown_starts_nothing() {
+        catchup.start(true);
+        catchup.start(false);
+
+        assertThat(catchup.isRunning()).as("isRunning() after a start that came after the shutdown").isFalse();
+    }
+
+    @Test
     void a_pause_or_a_resume_after_shutdown_of_a_model_wrapping_a_model_that_manages_no_named_subscriptions_throws_UnknownSubscriptionException() {
         ReactorStreamCatchupSubscriptionModel overColdOnly = new ReactorStreamCatchupSubscriptionModel(new ColdOnly(), new ThreeEvents());
         overColdOnly.shutdown();

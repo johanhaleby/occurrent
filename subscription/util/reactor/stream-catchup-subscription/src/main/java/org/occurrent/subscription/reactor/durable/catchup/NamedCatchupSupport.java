@@ -112,6 +112,9 @@ import static java.util.Objects.requireNonNull;
  * {@code isPaused(id)}, with the lock of that id held. So the wrapped model must not hold a lock those calls take while
  * it runs code that can call this model, such as an action, a dynamic start, a report of a history loss, or what runs
  * once a cancel or a start completes.</li>
+ * <li>The wrapped {@code start(..)} runs under a lock that {@code shutdown()} also takes, so the wrapped model gets no
+ * start after its shutdown. So code that the wrapped model runs on the calling thread while it starts must not wait for
+ * another thread that shuts this model down.</li>
  * </ul>
  */
 @NullMarked
@@ -129,8 +132,12 @@ final class NamedCatchupSupport {
     private volatile boolean stopped = false;
     // Set by shutdown() and never cleared, since a shut-down model cannot be started again. Refuses every named
     // subscribe, so none replays history and then fails at the handover to a wrapped model that is shut down. Refuses
-    // every pause and resume too, unless the wrapped model manages no named subscriptions.
+    // every pause and resume too, unless the wrapped model manages no named subscriptions, and keeps every start from
+    // reaching the wrapped model.
     private volatile boolean shutdown = false;
+    // Held by start(..) while it starts the wrapped model and by beginShutdown() while it sets shutdown, so the
+    // wrapped model gets no start after the shutdown this model sends it
+    private final Object startLock = new Object();
     // Who to tell about each id's catch-up boundaries. Kept until this model shuts down, since the registration
     // outlives any one catch-up and a recorder that stopped being told would record the next one's history as
     // though it were live.
@@ -214,8 +221,12 @@ final class NamedCatchupSupport {
     // shut down
     private void requireNotShutdown(String call, String subscriptionId) {
         if (shutdown) {
-            throw new SubscriptionModelShutdownException("Cannot " + call + " subscription " + subscriptionId + " because the subscription model is shutdown.");
+            throw shutDownRefusal(call, subscriptionId);
         }
+    }
+
+    private static SubscriptionModelShutdownException shutDownRefusal(String call, String subscriptionId) {
+        return new SubscriptionModelShutdownException("Cannot " + call + " subscription " + subscriptionId + " because the subscription model is shutdown.");
     }
 
     // What every named subscribe checks, run by the models before they evaluate a dynamic StartAt, so a subscribe
@@ -829,8 +840,9 @@ final class NamedCatchupSupport {
         return state;
     }
 
-    // --- Life cycle. Every call forwards to the wrapped model; the extra bookkeeping is only for subscriptions whose
-    // --- replay has not handed over yet, which the wrapped model does not know about.
+    // --- Life cycle. Each call forwards to the wrapped model, except a start, pause or resume that finds this model shut
+    // --- down. The extra bookkeeping is only for subscriptions whose replay has not handed over yet, which the wrapped
+    // --- model does not know about.
 
     void stop() {
         // Safe no-op on a cold-only composition: nothing named can be running, and a Spring context stop must not
@@ -858,8 +870,13 @@ final class NamedCatchupSupport {
     }
 
     void start(boolean resumeSubscriptionsAutomatically) {
+        startUnlessShutdown(resumeSubscriptionsAutomatically);
+    }
+
+    // False when this model was shut down, which starts nothing
+    private boolean startUnlessShutdown(boolean resumeSubscriptionsAutomatically) {
         if (!managesNamedSubscriptions()) {
-            return;
+            return !shutdown;
         }
         if (resumeSubscriptionsAutomatically) {
             // Before the wrapped model starts, since a replay can hand over while it starts and would apply the pause
@@ -871,10 +888,15 @@ final class NamedCatchupSupport {
         }
         // Cleared only once the wrapped model has started, so a start that throws keeps this model stopped and a
         // parked replay waits for the next start or resume.
-        named.start(resumeSubscriptionsAutomatically);
-        stopped = false;
+        synchronized (startLock) {
+            if (shutdown) {
+                return false;
+            }
+            named.start(resumeSubscriptionsAutomatically);
+            stopped = false;
+        }
         if (!resumeSubscriptionsAutomatically) {
-            return;
+            return true;
         }
         catchingUp.values().forEach(state -> {
             Object launched;
@@ -885,6 +907,7 @@ final class NamedCatchupSupport {
                 state.launcher.accept(launched);
             }
         });
+        return true;
     }
 
     boolean isStopped() {
@@ -986,8 +1009,8 @@ final class NamedCatchupSupport {
         }
         // Resuming one subscription starts a stopped model without resuming the others, as the life-cycle contract
         // says, whether its replay is parked or it has handed over. A start that throws resumes nothing.
-        if (stopped && isPaused(subscriptionId)) {
-            start(false);
+        if (stopped && isPaused(subscriptionId) && !startUnlessShutdown(false)) {
+            throw shutDownRefusal("resume", subscriptionId);
         }
         CatchupState state = catchingUp.get(subscriptionId);
         if (state != null) {
@@ -1143,7 +1166,7 @@ final class NamedCatchupSupport {
 
     void shutdown() {
         // Before the ids are read below, which the second check in subscribeWithCatchup depends on.
-        shutdown = true;
+        beginShutdown();
         catchupListeners.clear();
         handedOver.clear();
         if (historyLossReporting != null) {
@@ -1176,6 +1199,15 @@ final class NamedCatchupSupport {
             return;
         }
         named.shutdown();
+    }
+
+    // Refuses every later start, and waits for a start under way to return from the wrapped model. Called by
+    // ReactorCatchupSubscriptionModel on each inner model before it shuts any of them down, since they share one
+    // wrapped model.
+    void beginShutdown() {
+        synchronized (startLock) {
+            shutdown = true;
+        }
     }
 
     private static final class CatchupState {
