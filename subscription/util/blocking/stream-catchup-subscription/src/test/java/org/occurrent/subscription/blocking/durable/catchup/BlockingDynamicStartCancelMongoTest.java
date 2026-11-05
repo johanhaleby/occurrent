@@ -512,6 +512,49 @@ class BlockingDynamicStartCancelMongoTest {
         }
     }
 
+    @Nested
+    @DisplayName("when a cancel made while the start-position function blocks on another thread throws")
+    class When_a_cancel_made_while_the_function_blocks_throws {
+
+        @Test
+        @DisplayName("the cancel throws and the subscribe still subscribes and the subscription is delivered an event")
+        void the_cancel_throws_and_the_subscribe_still_subscribes_and_the_subscription_is_delivered_an_event() {
+            // Given
+            SpringMongoSubscriptionModel mongo = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
+            SpringMongoCheckpointStorage throwsOnDelete = new ThrowsOnDelete(mongoTemplate, "storage-" + UUID.randomUUID());
+            model = new StreamCatchupSubscriptionModel(mongo, eventStore, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(throwsOnDelete)));
+            List<CloudEvent> received = new CopyOnWriteArrayList<>();
+            CompletableFuture<Void> functionStarted = new CompletableFuture<>();
+            CompletableFuture<Void> releaseTheFunction = new CompletableFuture<>();
+            StartAt function = StartAt.dynamic(context -> {
+                functionStarted.complete(null);
+                releaseTheFunction.orTimeout(30, SECONDS).join();
+                return StartAt.now();
+            });
+            CompletableFuture<Subscription> subscribe = CompletableFuture.supplyAsync(() -> model.subscribe(subscriptionId, function, received::add), otherThreads);
+            assertThat(functionStarted).as("the function asked").succeedsWithin(EVENT_DELIVERY);
+
+            // When
+            CompletableFuture<Void> cancel = CompletableFuture.runAsync(() -> model.cancelSubscription(subscriptionId), otherThreads);
+            assertThat(cancel).as("the cancel").failsWithin(EVENT_DELIVERY)
+                    .withThrowableOfType(ExecutionException.class)
+                    .withCauseInstanceOf(IllegalStateException.class)
+                    .withMessageContaining("the delete failed");
+            releaseTheFunction.complete(null);
+
+            // Then
+            assertThat(subscribe).as("the subscribe").succeedsWithin(EVENT_DELIVERY);
+            Subscription returned = subscribe.join();
+            boolean started = returned.waitUntilStarted(Duration.ofSeconds(2));
+            assertAll(
+                    () -> assertThat(started).as("the returned subscription started").isTrue(),
+                    () -> assertThat(model.isRunning(subscriptionId)).as("the id is running").isTrue()
+            );
+            append();
+            await().atMost(EVENT_DELIVERY).until(() -> received.size() == 1);
+        }
+    }
+
     private SubscriptionModel build(Stack stack) {
         SpringMongoSubscriptionModel mongo = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
         return switch (stack) {
@@ -558,6 +601,17 @@ class BlockingDynamicStartCancelMongoTest {
     // parked there is already queued for it, behind every thread that queued before
     private static boolean waitsForALock(Thread thread) {
         return thread != null && LockSupport.getBlocker(thread) instanceof AbstractQueuedSynchronizer;
+    }
+
+    private static final class ThrowsOnDelete extends SpringMongoCheckpointStorage {
+        private ThrowsOnDelete(MongoTemplate mongoTemplate, String checkpointCollection) {
+            super(mongoTemplate, checkpointCollection);
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            throw new IllegalStateException("the delete failed");
+        }
     }
 
     /**

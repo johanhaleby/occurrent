@@ -19,9 +19,11 @@ package org.occurrent.subscription.blocking.durable.catchup;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -32,9 +34,15 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
+import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoCheckpointStorage;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -63,6 +71,7 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
 /**
  * The {@link CatchupSubscriptionModel} dispatcher cancels an id on behalf of its inner catch-up models, and a dynamic
@@ -185,6 +194,48 @@ class CatchupSubscriptionModelDynamicStartCancelMongoTest {
         assertThat(started).isTrue();
     }
 
+    @Test
+    void a_cancel_that_throws_while_the_function_waits_does_not_stop_the_subscribe() {
+        // Given
+        MongoCollection<Document> events = database.getCollection("events-" + UUID.randomUUID());
+        MongoEventStore eventStore = new MongoEventStore(mongoClient, database, events, new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
+        ExecutorService executor = Executors.newCachedThreadPool();
+        NativeMongoSubscriptionModel nativeModel = new NativeMongoSubscriptionModel(database, events, TimeRepresentation.RFC_3339_STRING, executor, RetryStrategy.none());
+        NativeMongoCheckpointStorage throwsOnDelete = new ThrowsOnDelete(database, "checkpoints-" + UUID.randomUUID());
+        CatchupSubscriptionModel dispatcher = new CatchupSubscriptionModel(nativeModel, eventStore, new CatchupSubscriptionModelConfig(useCheckpointStorage(throwsOnDelete)));
+        try {
+            CompletableFuture<Void> functionStarted = new CompletableFuture<>();
+            CompletableFuture<Void> releaseTheFunction = new CompletableFuture<>();
+            StartAt function = StartAt.dynamic(context -> {
+                functionStarted.complete(null);
+                releaseTheFunction.orTimeout(30, TimeUnit.SECONDS).join();
+                return StartAt.now();
+            });
+            CompletableFuture<Subscription> subscribe = CompletableFuture.supplyAsync(() -> dispatcher.subscribe(subscriptionId, function, event -> {
+            }), otherThreads);
+            assertThat(functionStarted).as("the function asked").succeedsWithin(EVENT_DELIVERY);
+
+            // When
+            CompletableFuture<Void> cancel = CompletableFuture.runAsync(() -> dispatcher.cancelSubscription(subscriptionId), otherThreads);
+            assertThat(cancel).as("the cancel").failsWithin(EVENT_DELIVERY)
+                    .withThrowableOfType(ExecutionException.class)
+                    .withCauseInstanceOf(IllegalStateException.class)
+                    .withMessageContaining("the delete failed");
+            releaseTheFunction.complete(null);
+
+            // Then
+            assertThat(subscribe).as("the subscribe").succeedsWithin(EVENT_DELIVERY);
+            boolean started = subscribe.join().waitUntilStarted(Duration.ofSeconds(2));
+            assertAll(
+                    () -> assertThat(started).as("the returned subscription started").isTrue(),
+                    () -> assertThat(dispatcher.isRunning(subscriptionId)).as("the id is running").isTrue()
+            );
+        } finally {
+            dispatcher.shutdown();
+            executor.shutdownNow();
+        }
+    }
+
     private static CloudEvent anEvent() {
         return CloudEventBuilder.v1()
                 .withId(UUID.randomUUID().toString())
@@ -194,6 +245,17 @@ class CatchupSubscriptionModelDynamicStartCancelMongoTest {
                 .withDataContentType("application/json")
                 .withData("{}".getBytes(StandardCharsets.UTF_8))
                 .build();
+    }
+
+    private static final class ThrowsOnDelete extends NativeMongoCheckpointStorage {
+        private ThrowsOnDelete(MongoDatabase database, String checkpointCollection) {
+            super(database, checkpointCollection);
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            throw new IllegalStateException("the delete failed");
+        }
     }
 
     /**

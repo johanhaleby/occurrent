@@ -200,6 +200,44 @@ class DurableSubscriptionModelDynamicStartAskedTest {
         }
     }
 
+    @Nested
+    @DisplayName("when a cancel made while the function of a subscribe of the id blocks on another thread throws")
+    class When_a_cancel_made_while_the_function_blocks_throws {
+
+        @Test
+        @DisplayName("the cancel throws and the subscribe still subscribes")
+        void the_cancel_throws_and_the_subscribe_still_subscribes() {
+            // Given
+            InMemoryWrappedModel wrapped = new InMemoryWrappedModel();
+            DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, new ThrowsOnDelete());
+            CountDownLatch functionStarted = new CountDownLatch(1);
+            CompletableFuture<Subscription> subscribe = CompletableFuture.supplyAsync(() -> durable.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(context -> {
+                functionStarted.countDown();
+                releaseTheFunction.orTimeout(BOUND.toSeconds(), TimeUnit.SECONDS).join();
+                return StartAt.checkpoint(new StringBasedCheckpoint("a-position"));
+            }), event -> {
+            }), otherThreads);
+            await().atMost(BOUND).until(() -> functionStarted.getCount() == 0);
+
+            // When
+            CompletableFuture<Void> cancel = CompletableFuture.runAsync(() -> durable.cancelSubscription(SUBSCRIPTION_ID), otherThreads);
+            assertThat(cancel).as("the cancel").failsWithin(BOUND)
+                    .withThrowableOfType(ExecutionException.class)
+                    .withCauseInstanceOf(IllegalStateException.class)
+                    .withMessageContaining("the delete failed");
+            releaseTheFunction.complete(null);
+
+            // Then
+            assertThat(subscribe).as("the subscribe").succeedsWithin(BOUND);
+            Subscription subscription = subscribe.join();
+            assertAll(
+                    () -> assertThat(subscription.waitUntilStarted(Duration.ofSeconds(1))).as("the subscription started").isTrue(),
+                    () -> assertThat(wrapped.subscriptions).as("the ids the wrapped model holds").containsExactly(SUBSCRIPTION_ID),
+                    () -> assertThat(durable.isRunning(SUBSCRIPTION_ID)).as("the id is running").isTrue()
+            );
+        }
+    }
+
     private static boolean waits(@Nullable Thread thread) {
         return thread != null && (thread.getState() == Thread.State.WAITING || thread.getState() == Thread.State.TIMED_WAITING);
     }
@@ -225,6 +263,13 @@ class DurableSubscriptionModelDynamicStartAskedTest {
             deleteStarted.complete(null);
             release.orTimeout(BOUND.toSeconds(), TimeUnit.SECONDS).join();
             super.delete(subscriptionId);
+        }
+    }
+
+    private static final class ThrowsOnDelete extends InMemoryCheckpointStorage {
+        @Override
+        public void delete(String subscriptionId) {
+            throw new IllegalStateException("the delete failed");
         }
     }
 
