@@ -247,7 +247,8 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         List<String> handledBySecondBoot;
         try (ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
                 leftOverBootArgs("dcb-left-over-catch-up", "beginning", "historic-1,historic-2", ""))) {
-            awaitHandled(firstBoot.getBean(DcbLeftOverBeginning.class), "historic-2");
+            DcbLeftOverBeginning firstBootHandler = firstBoot.getBean(DcbLeftOverBeginning.class);
+            awaitHandled(firstBootHandler, "historic-2");
             CheckpointStorage storage = firstBoot.getBean(CheckpointStorage.class);
             // The catch-up stores a checkpoint of its own while it replays, so one existing says nothing about the handover.
             AtomicReference<Checkpoint> live = new AtomicReference<>();
@@ -259,6 +260,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
             });
             storage.save(id, GlobalCheckpoint.of(1, live.get(), 0, 2));
             assertThat(GlobalCheckpoint.isGlobalCheckpoint(storage.read(id))).as("catch-up checkpoint").isTrue();
+            assertThat(firstBootHandler.names()).containsExactly("historic-1", "historic-2");
         }
         try (ConfigurableApplicationContext secondBoot = SpringApplication.run(NowRestartApplication.class,
                 leftOverBootArgs("dcb-left-over-catch-up", "default", "while-down-1", "live-2"))) {
@@ -638,7 +640,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
             this.dcbEventStore = dcbEventStore;
             this.cloudEventConverter = cloudEventConverter;
             this.beforeSubscribe = List.of(beforeSubscribe.split(","));
-            this.afterStart = List.of(afterStart.split(","));
+            this.afterStart = afterStart.isEmpty() ? List.of() : List.of(afterStart.split(","));
             this.mongoOperations = mongoOperations;
         }
 
