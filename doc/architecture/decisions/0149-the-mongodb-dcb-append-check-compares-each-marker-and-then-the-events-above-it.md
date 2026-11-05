@@ -9,7 +9,8 @@ Accepted. Decides [#1231](https://github.com/johanhaleby/occurrent/issues/1231) 
 [ADR 21](0021-dcb-write-path-query-scoped-concurrency.md) on how the append check compares a token and on pruning
 markers, [ADR 88](0088-what-a-dcb-append-condition-guarantees.md) on what the MongoDB stores answer for an excluded
 type, [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md) on what the token holds, and
-[ADR 31](0031-capture-dcb-consistency-token-in-a-single-read.md) on what one read of the markers gives.
+[ADR 31](0031-capture-dcb-consistency-token-in-a-single-read.md) on what one read of the markers gives, and
+[ADR 74](0074-retry-only-where-the-transaction-is-owned.md) on an append in a caller's transaction.
 Builds on the marker versions of [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md).
 
 The second part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), splitting each type marker into
@@ -222,7 +223,7 @@ unless a later event moved a marker of the criteria. The sum refuses then, and t
 doesn't match. In 0.34.0 the update on the Spring and reactor stores joined a caller's transaction and committed with
 the event. A store whose own transaction manager used the same database factory as the caller's, with its transaction
 set to `REQUIRES_NEW` or `NOT_SUPPORTED`, committed E apart from that transaction, so a caller's rollback left E above
-the counter with no failover. Now the update commits before E's transaction starts, and a test on each Spring store
+the counter with no failover. Now the update commits before E is inserted, and a test on each Spring store
 rolls a caller's transaction back and finds the reserved position taken and no event. The probes of the loss itself ran
 before the update waited for majority, and used a stepdown, and a raw `$inc` standing in for the reservation below E's.
 All three stores lost the update at w:1 on three members, and the native store did at w:2 on five members and on a
@@ -237,9 +238,42 @@ update, where appends used to complete in 6 to 18 ms. In a probe on all three st
 `wtimeout` of its own, an append with no timeout was still waiting after 25 seconds and completed when the secondary
 came back. `wtimeoutMS=2000` and `timeoutMS=2000` on the connection string failed it after 2 seconds, and
 `socketTimeoutMS=2000` after 4. The store now sets the update's `wtimeout` to `markerVersionsCommitTimeout`, 5 seconds
-by default, in place of any `wtimeout` on the client, the database or a Spring database factory. A test on each store
-asserts the `wtimeout` the update sends, and no probe on such a set has run since. An append that fails this way writes
+by default, in place of any `wtimeout` on the client, the database or a Spring database factory. On a client with
+`timeoutMS`, where the driver sends no `wtimeout`, the store gives the update an operation timeout of the shorter of the
+two instead. A test on each store asserts the `wtimeout` the update sends, and the `maxTimeMS` it sends on such a
+client, and no probe on such a set has run since. An append that fails this way writes
 no event, and the positions it reserved can stay unused.
+
+### An append in a caller's transaction
+
+[ADR 74](0074-retry-only-where-the-transaction-is-owned.md) has the Spring stores run an append once inside a
+caller's transaction and leave the retry to the layer that owns it. This decision changes three things there.
+
+In 0.34.0 the counter update joined the caller's transaction, so every concurrent append in such transactions
+conflicted on that one document, also appends to disjoint boundaries, and a test saw only one of six contended appends
+reach the append body. The update now runs outside every transaction, so such an append conflicts only on a marker or
+a partition stream it shares with another append.
+
+`SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry only Spring's translated exceptions.
+`SpringMongoEventStore` rethrew a write conflict on the event insert as the driver's `MongoException`, so a command
+whose append lost there failed instead of being retried. It now rethrows the translated
+`DataIntegrityViolationException`, as `ReactorMongoEventStore` already did.
+
+Both stores set their template's session synchronization to `ALWAYS`. Inside any Spring transaction, a JDBC one or a
+MongoDB one on another database factory too, the template then runs its operations in a MongoDB transaction on the
+store's factory that commits with the caller's, so a read through it reads in one snapshot. That snapshot holds a
+counter below the transaction's own appends, so once the template is in a MongoDB transaction on the store's factory,
+which `MongoDatabaseUtils.isTransactionActive` and `ReactiveMongoDatabaseUtils.isTransactionActive` answer, the read has
+no upper bound and reports the snapshot's counter as its head. It returns the transaction's own appends above that head,
+and a read after that head once the transaction has committed returns them again. Before the template's first
+operation in the caller's transaction, the counter bounds the read, and no appends of the transaction exist yet. This
+comes from reading Spring Data MongoDB 5.1.0, and no probe ran under a JDBC transaction.
+
+Whether a caller owns the transaction is a different question, since the store's own transaction manager may join a
+caller's transaction on another factory. Both stores answer it by any active Spring transaction, the blocking store
+with `TransactionSynchronizationManager.isActualTransactionActive()` and the reactor store with its reactive
+counterpart. A test on the reactor store opens the caller's transaction on another factory and fails when the store
+retries there.
 
 ### Pruning markers
 
