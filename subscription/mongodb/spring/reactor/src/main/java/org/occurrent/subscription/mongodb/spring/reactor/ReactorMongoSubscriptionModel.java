@@ -381,15 +381,18 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     private void runEnded(InternalSubscription internalSubscription, Run run, Throwable throwable) {
         String subscriptionId = internalSubscription.subscriptionId;
         log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
-        run.close();
+        boolean closedHere = run.close();
         // A dead subscription must not count as running, or isRunning(id) would lie and the id couldn't be reused
         // without an explicit cancelSubscription(). Only while this run is still the subscription's, since a pause
         // and a resume, or a cancel and a new subscription with the same id, start a newer run. Without the monitor,
         // since a caller can hold it while it waits for the failure published below.
         runningSubscriptions.computeIfPresent(subscriptionId, (id, current) -> current.run == run ? null : current);
         // After the id is free, so a caller that reacts to the failure can subscribe with it again. No-op if the
-        // subscription had already started, otherwise this keeps waitUntilStarted() from hanging forever
-        run.failedToStart(throwable);
+        // subscription had already started, otherwise this keeps waitUntilStarted() from hanging forever. Not for a run
+        // a pause closed first, since a resume starts the subscription again, and a cancel fails the start itself
+        if (closedHere) {
+            run.failedToStart(throwable);
+        }
     }
 
     private Flux<Void> reads(InternalSubscription internalSubscription, Run run) {
@@ -1000,7 +1003,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             StartAt answered = startAt.get(ctx);
             if (MongoCommons.isCatchupPosition(answered)) {
                 logResumingFromItsOwnPosition(subscriptionId, answered);
-                StartAt readTo = paused.currentStartAt.get();
+                // Answered before the present is read, since a paused position that is itself a resume at a dynamic
+                // position sets the present it was made with when it answers
+                StartAt readTo = paused.currentStartAt.get().get(ctx);
                 presentAt.set(paused.presentAt.get());
                 return readTo;
             }
@@ -1014,6 +1019,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 subscriptionId, catchupPosition);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The {@code waitUntilStarted()} of a subscription cancelled before its change stream was subscribed to fails with
+     * a {@link SubscriptionNotRunningException}, since nothing can start it any more.
+     */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
         Run run = null;
@@ -1025,10 +1036,19 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             }
             pausedSubscriptions.remove(subscriptionId);
         }
-        closeOutsideTheMonitor(run);
+        if (run != null) {
+            run.close();
+            run.failedToStart(new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " was cancelled before it started."));
+        }
         return Mono.empty();
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The {@code waitUntilStarted()} of a subscription whose change stream wasn't subscribed to yet fails with an
+     * {@link IllegalStateException}, since nothing can start it any more.
+     */
     @PreDestroy
     @Override
     public void shutdown() {
@@ -1045,7 +1065,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             runningSubscriptions.clear();
             pausedSubscriptions.clear();
         }
-        runs.forEach(ReactorMongoSubscriptionModel::closeOutsideTheMonitor);
+        runs.forEach(run -> {
+            run.close();
+            run.failedToStart(new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " was shut down before the subscription started"));
+        });
     }
 
     @Override
@@ -1261,13 +1284,17 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             reads.update(disposable);
         }
 
-        void close() {
+        // True for the call that closed it
+        boolean close() {
+            boolean wasOpen;
             synchronized (this) {
+                wasOpen = open;
                 open = false;
             }
             // Cancels a step under way, whose end then counts it out
             reads.dispose();
             endIfIdle();
+            return wasOpen;
         }
 
         <T> Mono<T> step(Supplier<Mono<T>> work) {
