@@ -79,8 +79,11 @@ public class ReactorDurableSubscriptionModelConfig {
      * {@code globalCheckpointAsOfNow()} answers empty, starts anyway instead of being refused. Starting anyway means no
      * start position is recorded before the first delivery, so a crash before the first checkpoint is saved starts
      * over from wherever the feed has reached by then, and an event whose delivery failed before the crash is not
-     * redelivered. The default is {@code false}, which refuses such a registration the way
-     * {@code ReactorDurableSubscriptionModel}'s javadoc describes.
+     * redelivered. The same setting applies to a dynamic start position that answers {@code StartAt.now()} over a
+     * wrapped model that manages named subscriptions, when {@code globalCheckpointAsOfNow()} answers empty. Started
+     * anyway, that subscription begins from {@code StartAt.now()} when the wrapped model gets it, after the subscribe
+     * call returned, and skips what was written in between. The default is {@code false}, which refuses such a
+     * registration the way {@code ReactorDurableSubscriptionModel}'s javadoc describes.
      *
      * @param startWhenNoStartPositionCanBeRecorded {@code true} to start anyway, accepting that loss window
      * @return A new instance of {@code ReactorDurableSubscriptionModelConfig}

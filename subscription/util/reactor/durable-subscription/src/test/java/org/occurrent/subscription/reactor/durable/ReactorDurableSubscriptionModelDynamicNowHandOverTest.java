@@ -106,8 +106,27 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
     }
 
     @Test
-    void a_read_that_answers_nothing_hands_the_subscription_over_at_now() {
+    void a_read_that_answers_nothing_fails_the_start_and_is_logged_as_an_error() {
         // Given
+        feed.presentRead = atTheCall -> Mono.empty();
+
+        // When
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, dynamicNow(), cloudEvent -> Mono.empty());
+
+        // Then
+        Throwable notStarted = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
+        assertThat(notStarted).as("why the subscription did not start").isInstanceOf(IllegalStateException.class)
+                .hasMessageStartingWith("The wrapped subscription model " + NamedFeed.class.getName() + " answered nothing when asked for the current position for subscription " + SUBSCRIPTION_ID + ",");
+        assertThat(logged.at(Level.ERROR)).as("errors logged").anySatisfy(message -> assertThat(message).startsWith("Subscription " + SUBSCRIPTION_ID + " could not be started"));
+        assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").isEmpty();
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).as("running after the failed start").isFalse();
+    }
+
+    @Test
+    void a_read_that_answers_nothing_hands_the_subscription_over_at_now_when_configured_to_start_anyway() {
+        // Given
+        ReactorDurableSubscriptionModel startsAnyway = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage(),
+                new ReactorDurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
         List<Long> delivered = new CopyOnWriteArrayList<>();
         feed.presentRead = atTheCall -> Mono.empty();
         StartAt startAt = StartAt.dynamic(() -> {
@@ -115,17 +134,20 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
             return StartAt.now();
         });
 
-        // When
-        model.subscribe(SUBSCRIPTION_ID, null, startAt, action(delivered)).waitUntilStarted().block(TIMEOUT);
-        long writtenAfter = feed.write();
+        try {
+            // When
+            startsAnyway.subscribe(SUBSCRIPTION_ID, null, startAt, action(delivered)).waitUntilStarted().block(TIMEOUT);
+            long writtenAfter = feed.write();
 
-        // Then
-        // The function asked for now() and an empty read gives no earlier position, so the wrapped model opens at its
-        // own present, as this model does where it drives the feed itself. That present is after the event written
-        // while the function ran
-        await().atMost(TIMEOUT).until(() -> delivered.contains(writtenAfter));
-        assertThat(delivered).as("events delivered").containsExactly(writtenAfter);
-        assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("running in the wrapped model").isTrue();
+            // Then
+            // startWhenNoStartPositionCanBeRecorded accepts losing what is written before the wrapped model opens its
+            // feed, so the event written while the function ran is skipped
+            await().atMost(TIMEOUT).until(() -> delivered.contains(writtenAfter));
+            assertThat(delivered).as("events delivered").containsExactly(writtenAfter);
+            assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("running in the wrapped model").isTrue();
+        } finally {
+            startsAnyway.shutdown();
+        }
     }
 
     @Test
