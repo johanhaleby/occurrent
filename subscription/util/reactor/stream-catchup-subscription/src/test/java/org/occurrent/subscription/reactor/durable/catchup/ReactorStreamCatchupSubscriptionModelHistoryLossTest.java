@@ -537,6 +537,36 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     @Test
+    void a_resume_while_a_cancel_of_a_subscription_paused_for_a_takeover_is_under_way_throws_UnknownSubscriptionException_and_does_not_resume_the_wrapped_model_where_it_lost_the_history() {
+        // Given a subscription whose live start the wrapped model lost, and which it paused for a takeover it hasn't run yet
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        Sinks.Empty<Void> cancelCompletes = Sinks.empty();
+        try {
+            subscribeAndHandOver(catchup);
+            wrapped.asksTheListeners(ID, wrapped.positionOf(ID));
+            wrapped.pauseSubscription(ID);
+            wrapped.cancelCompletesWhen = cancelCompletes.asMono();
+
+            // When the subscription is resumed after a cancel began and before the wrapped model has cancelled it
+            catchup.cancelSubscription(ID);
+            Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+            int resumedWhereItWasHeld = wrapped.resumedWhereItWasHeld.get();
+            cancelCompletes.tryEmitEmpty();
+
+            // Then the resume is refused as one of a cancelled subscription, and the wrapped model is not resumed where it
+            // lost the history
+            assertAll(
+                    () -> assertThat(thrown).as("what the resume throws").isInstanceOf(UnknownSubscriptionException.class),
+                    () -> assertThat(resumedWhereItWasHeld).as("resumed where it lost the history, while the cancel was under way").isZero()
+            );
+        } finally {
+            cancelCompletes.tryEmitEmpty();
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_resume_whose_handover_a_shutdown_cleared_before_the_wrapped_model_is_shut_down_throws_SubscriptionModelShutdownException_and_does_not_resume_the_wrapped_model_where_it_lost_the_history() throws InterruptedException {
         // Given a subscription whose live start the wrapped model lost, and which it paused for a takeover it hasn't run yet
         LosingLiveStartModel wrapped = new LosingLiveStartModel(true);

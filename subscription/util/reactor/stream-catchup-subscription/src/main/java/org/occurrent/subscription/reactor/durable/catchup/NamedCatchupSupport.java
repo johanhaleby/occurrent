@@ -161,7 +161,8 @@ final class NamedCatchupSupport {
     // One lock per id, held by the subscribes and the cancel of that id, and removed once no thread holds or waits for it
     private final ConcurrentMap<String, IdLock> idLocks = new ConcurrentHashMap<>();
     // How many cancels of each id have not had the wrapped model cancel yet. A subscribe of such an id is refused, since
-    // that cancel runs after the per-id lock is released and would cancel the subscription the subscribe makes.
+    // that cancel runs after the per-id lock is released and would cancel the subscription the subscribe makes. A resume
+    // of such an id that would go to the wrapped model is refused too, see refuseIfShutDownOrCancelled.
     private final ConcurrentMap<String, Integer> cancelsUnderWay = new ConcurrentHashMap<>();
     // What each id's cancelled subscribes can still leave in the wrapped model, see Leftovers
     private final ConcurrentMap<String, Leftovers> leftovers = new ConcurrentHashMap<>();
@@ -1051,11 +1052,19 @@ final class NamedCatchupSupport {
         if (takenOver != null) {
             return takenOver;
         }
-        // Checked again after the handover was read. A shutdown sets the flag before it clears the handovers, and a
-        // resume that found the handover of a lost live start cleared would resume the wrapped model where it lost the
-        // history.
-        requireNotShutdown(() -> shutDownRefusal("resume", subscriptionId));
+        refuseIfShutDownOrCancelled(subscriptionId);
         return named.resumeSubscription(subscriptionId);
+    }
+
+    // Read after the handover. A shutdown sets the flag before it clears the handovers, and a cancel counts itself under
+    // way before it removes the handover, so a resume that found the handover of a lost live start gone is refused here
+    // instead of resuming the wrapped model where it lost the history. A resume of an id a cancel is under way for is
+    // refused as one of a cancelled subscription.
+    private void refuseIfShutDownOrCancelled(String subscriptionId) {
+        requireNotShutdown(() -> shutDownRefusal("resume", subscriptionId));
+        if (cancelsUnderWay.containsKey(subscriptionId)) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
     }
 
     // The wrapped model lost the live start, holds the subscription paused and no takeover replay runs, because the
@@ -1146,9 +1155,10 @@ final class NamedCatchupSupport {
     }
 
     private Cancelled cancelHoldingIdLock(String subscriptionId) {
-        // A loss reported or a resume asked for after this removal finds no handover of this subscription to take over,
-        // unless a handover in flight puts its record before the removal below. takeOver checks the handover again under
-        // this lock either way.
+        // Before the handover is removed, so a resume that finds no handover sees this cancel under way and is refused
+        cancelsUnderWay.merge(subscriptionId, 1, Integer::sum);
+        // A loss reported after this removal finds no handover of this subscription to take over, unless a handover in
+        // flight puts its record before the removal below. takeOver checks the handover again under this lock either way.
         handedOver.remove(subscriptionId);
         // Forgotten only once the wrapped model has cancelled, so a loss it reports meanwhile still pauses the
         // subscription rather than letting the wrapped model restart it from now
@@ -1171,7 +1181,6 @@ final class NamedCatchupSupport {
         }
         // A handover that held the state monitor between the removal at the top and the block above put its record then
         handedOver.remove(subscriptionId);
-        cancelsUnderWay.merge(subscriptionId, 1, Integer::sum);
         return new Cancelled(record, replaying, failsStart ? state : null);
     }
 
