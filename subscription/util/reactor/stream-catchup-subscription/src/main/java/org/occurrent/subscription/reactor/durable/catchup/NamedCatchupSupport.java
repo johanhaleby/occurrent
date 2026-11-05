@@ -211,17 +211,11 @@ final class NamedCatchupSupport {
         return named;
     }
 
-    private void requireNotShutdown() {
+    // A call that finds this model shut down is refused here and never reaches the wrapped model. A pause or a resume
+    // that a shutdown() overtakes after this check can still reach it, and gets what the wrapped model throws.
+    private void requireNotShutdown(Supplier<SubscriptionModelShutdownException> refusal) {
         if (shutdown) {
-            throw new SubscriptionModelShutdownException();
-        }
-    }
-
-    // Refused here rather than forwarded, so what is thrown does not depend on what the wrapped model throws once it is
-    // shut down
-    private void requireNotShutdown(String call, String subscriptionId) {
-        if (shutdown) {
-            throw shutDownRefusal(call, subscriptionId);
+            throw refusal.get();
         }
     }
 
@@ -233,7 +227,7 @@ final class NamedCatchupSupport {
     // this model refuses runs none of the caller's code.
     void requireNamedAndNotShutdown() {
         requireNamed();
-        requireNotShutdown();
+        requireNotShutdown(SubscriptionModelShutdownException::new);
     }
 
     /**
@@ -252,7 +246,7 @@ final class NamedCatchupSupport {
                                       CatchupScopes scopes, long windowSize, int handoverCacheSize, CatchupCheckpoints.Position start,
                                       Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
-        requireNotShutdown();
+        requireNotShutdown(SubscriptionModelShutdownException::new);
         BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(handoverCacheSize);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(scopes, windowSize, handoverCacheSize);
         CatchupState state = new CatchupState(null);
@@ -478,7 +472,7 @@ final class NamedCatchupSupport {
     Subscription subscribeStraightToLive(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
                                          StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
-        requireNotShutdown();
+        requireNotShutdown(SubscriptionModelShutdownException::new);
         // Before the wrapped model opens, since it can report a loss before its subscribe returns
         Owned record = new Owned();
         underIdLock(subscriptionId, () -> {
@@ -972,7 +966,7 @@ final class NamedCatchupSupport {
         if (!managesNamedSubscriptions()) {
             throw new UnknownSubscriptionException(subscriptionId);
         }
-        requireNotShutdown("pause", subscriptionId);
+        requireNotShutdown(() -> shutDownRefusal("pause", subscriptionId));
         // A cancelled subscribe whose subscription the wrapped model still runs, which isRunning(..) and isPaused(..)
         // answer false for
         if (cancelledUnderWay(subscriptionId)) {
@@ -997,7 +991,7 @@ final class NamedCatchupSupport {
         if (!managesNamedSubscriptions()) {
             throw new UnknownSubscriptionException(subscriptionId);
         }
-        requireNotShutdown("resume", subscriptionId);
+        requireNotShutdown(() -> shutDownRefusal("resume", subscriptionId));
         // Before anything starts, so a refused resume changes nothing
         Owned record = owned.get(subscriptionId);
         if (record != null && record.cancelled) {

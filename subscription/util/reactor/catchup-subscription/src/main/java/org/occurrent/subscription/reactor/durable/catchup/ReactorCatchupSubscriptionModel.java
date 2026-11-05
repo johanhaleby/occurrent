@@ -229,8 +229,8 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
-        // Before route(..), which can evaluate a dynamic StartAt. shutdown() shuts this inner model down first.
-        (streamCatchupSubscriptionModel != null ? streamCatchupSubscriptionModel.namedSubscriptions : requireNonNull(dcbCatchupSubscriptionModel).namedSubscriptions).requireNamedAndNotShutdown();
+        // Before route(..), which can evaluate a dynamic StartAt
+        namedSupports().forEach(NamedCatchupSupport::requireNamedAndNotShutdown);
         SubscriptionModel routed = (SubscriptionModel) route(subscriptionId, filter, startAt);
         // Claim the owner slot before subscribing, so a life-cycle call racing the subscribe reaches the model that
         // owns the replay before that model has registered the replay itself; roll the claim back if the subscribe
