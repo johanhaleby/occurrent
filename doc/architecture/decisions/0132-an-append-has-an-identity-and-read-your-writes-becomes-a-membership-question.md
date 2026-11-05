@@ -23,7 +23,7 @@ thread before its first read.
 
 Amended by [ADR 166](0166-a-now-start-asks-to-replay-unless-it-starts-at-the-present-on-every-start.md). Decision 9's
 third case holds for `NOW` only with `resumeBehavior = SAME_AS_START_AT`, for an unset `startAt` only for a stream or
-an agnostic subscription on the blocking stack, and for neither while a `SubscriptionResumePoints` bean is declared.
+an agnostic projection on the blocking stack, and for neither while a `SubscriptionResumePoints` bean is declared.
 
 ## Context
 

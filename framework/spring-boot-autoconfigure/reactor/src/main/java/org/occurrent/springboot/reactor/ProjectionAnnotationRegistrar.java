@@ -505,14 +505,14 @@ class ProjectionAnnotationRegistrar {
     // The two sound cases the recordAppliedAppends-never-resets warning may fire on for an event-store
     // (DCB/agnostic/stream) projection, per the epic's doctrine that a fact about a composition comes from the
     // owner that composed it, never from a probe or an annotation-only predicate:
-    //   1. The composition structurally has no catch-up layer at all (ADR 132 decision 9's third case), a known
-    //      fact resolveCatchupModel's ComposedCatchupModel branch already verified, not an unobserved absence.
+    //   1. The composition structurally has no catch-up layer at all (the durable-only case of ADR 132 decision 9), a
+    //      known fact resolveCatchupModel's ComposedCatchupModel branch already verified, not an unobserved absence.
     //   2. NOW with resumeBehavior SAME_AS_START_AT, which is StartAt.now() on every start. On the shipped Mongo
-    //      composition a resume doesn't replay from a catch-up checkpoint in storage
+    //      composition neither a restart nor a resume replays from a catch-up checkpoint in storage
     //      (ReactiveNowStartAtLeftOverCheckpointMongoTest). An application-supplied model that resumes from a stored
     //      position anyway is not seen here.
     // DEFAULT, and NOW with the default resumeBehavior, both start at the model default (StartPositionSupport's
-    // nowThenResume and its DCB counterpart). A restart resumes either from the stored checkpoint, and on the shipped
+    // nowThenResume and its DCB counterpart). A restart resumes from the stored checkpoint, and on the shipped
     // Mongo composition that replays when a catch-up stored the checkpoint (ADR 166), so neither is case 2. A
     // SubscriptionResumePoints bean can replace the start with a checkpoint, so case 2 does not hold while one is
     // declared.
