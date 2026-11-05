@@ -92,6 +92,20 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
         assertThat(catchup.isPaused("d")).isTrue();
     }
 
+    @Test
+    void a_pause_or_a_resume_after_the_model_was_stopped_and_shut_down_throws_SubscriptionModelShutdownException_and_starts_nothing() {
+        // The wrapped model still holds s paused after its shutdown, so nothing but the shutdown keeps a resume from starting it
+        WrappedModel wrapped = new WrappedModel();
+        ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new DcbStoreThatNeverAnswers(), DcbCriteria.all(), Filter.all(), 100, 100);
+        catchup.subscribe("s", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        catchup.stop();
+        catchup.shutdown();
+
+        assertThatThrownBy(() -> catchup.pauseSubscription("s")).as("what a pause throws").isInstanceOf(SubscriptionModelShutdownException.class);
+        assertThatThrownBy(() -> catchup.resumeSubscription("s")).as("what a resume throws").isInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(wrapped.startCalls).as("starts of the wrapped model").isEmpty();
+    }
+
     private static final class OneEventReader implements PositionOrderedReader, CatchupReads {
         @Override
         public Mono<CatchupReadScope> openCatchupReadScope(@Nullable String notBefore) {

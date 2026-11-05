@@ -891,6 +891,10 @@ final class NamedCatchupSupport {
         return stopped;
     }
 
+    boolean isShutdown() {
+        return shutdown;
+    }
+
     // Whether launched is the replay that owns the subscription right now. A stop() parks the subscription and a
     // start(true) or resume runs a new launch, so an older launch still running past its last check is not current.
     private static boolean isCurrent(CatchupState state, Object launched) {
