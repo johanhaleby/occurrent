@@ -43,8 +43,12 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.StringJoiner;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -206,9 +210,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // The subscribes that ask their function before they take the lock for their id, kept until they hold it
     private final Set<Asked> asking = ConcurrentHashMap.newKeySet();
 
+    // How long a resume of an id on another thread waits for a subscribe of the id whose function is asked
+    private static final Duration ASKED_WAIT = Duration.ofSeconds(10);
+
     private static final class Asked {
         private final String subscriptionId;
         private final Thread asker = Thread.currentThread();
+        // Completes once the subscribe holds the lock for the id or its function has thrown
+        private final CompletableFuture<Void> settled = new CompletableFuture<>();
         // Set by a cancel on another thread before the subscribe holds the lock for the id
         private volatile boolean cancelled;
 
@@ -244,6 +253,47 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             call.run();
             return null;
         });
+    }
+
+    private void settle(Asked asked) {
+        asking.remove(asked);
+        asked.settled.complete(null);
+    }
+
+    // A resume waits for the subscribes of the id whose function another thread asks, as it waited for the lock they
+    // held while the function was asked under it. The asking thread itself goes ahead. An interrupt doesn't end the
+    // wait, and is set again once the wait is over
+    private void waitForAsksOnOtherThreads(String subscriptionId) {
+        Thread current = Thread.currentThread();
+        CompletableFuture<?>[] asks = asking.stream()
+                .filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current)
+                .map(asked -> asked.settled)
+                .toArray(CompletableFuture[]::new);
+        if (asks.length == 0) {
+            return;
+        }
+        CompletableFuture<Void> settled = CompletableFuture.allOf(asks);
+        long deadline = System.nanoTime() + ASKED_WAIT.toNanos();
+        boolean interrupted = false;
+        try {
+            while (true) {
+                try {
+                    settled.get(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+                    return;
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                } catch (ExecutionException e) {
+                    return;
+                } catch (TimeoutException e) {
+                    throw new IllegalStateException("Cannot resume subscription " + subscriptionId + ", because the StartAt.dynamic function of a subscribe of it on another thread didn't return within "
+                            + ASKED_WAIT.toMillis() + " ms. Nothing was changed.");
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /**
@@ -425,7 +475,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 answered = answered.get(new SubscriptionModelContext(DurableSubscriptionModel.class));
             }
         } catch (RuntimeException | Error e) {
-            asking.remove(asked);
+            settle(asked);
             throw e;
         }
         StartAt askedOnce = answered;
@@ -436,7 +486,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // reads the checkpoint or writes a first position. An evaluation that comes while this records the first
         // position waits for that write and takes its outcome, see FirstPosition.
         return underLockFor(subscriptionId, () -> {
-            asking.remove(asked);
+            settle(asked);
             if (asked.cancelled) {
                 return new CancelledWhileAsked(subscriptionId);
             }
@@ -807,11 +857,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * present and would silently drop whatever was published while this subscription was paused. For the same
      * reason a MongoDB model resumes from its own tracked position when the stored checkpoint is one it cannot open
      * its change stream at, such as the position a catch-up stores while it replays.
+     * <p>
+     * A subscribe of the id on another thread whose {@code StartAt.dynamic} function is still being asked is waited for
+     * up to 10 seconds, and then this throws {@link IllegalStateException} and changes nothing.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         // Held for the whole decision, reposition call included, so a concurrent subscribe or cancelSubscription
         // for this id cannot land between the marker check and acting on it.
+        waitForAsksOnOtherThreads(subscriptionId);
         return underLockFor(subscriptionId, () -> resumeFromStoredCheckpoint(subscriptionId));
     }
 
@@ -862,7 +916,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * or one the wrapped model doesn't report as paused, is passed on to the wrapped model as it is and nothing is
      * stored. The wrapped model then throws for a subscription it doesn't hold paused.
      * <p>
-     * Holds the same lock per subscription id as {@link #resumeSubscription(String)} for the whole call.
+     * Holds the same lock per subscription id as {@link #resumeSubscription(String)} for the whole call, and waits for a
+     * subscribe of the id on another thread as that method does.
      *
      * @throws UnsupportedOperationException if the wrapped model is not repositionable, in which case
      *                                       {@link RepositionableSubscriptions#findIn} doesn't find this model either.
@@ -873,6 +928,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel())
                 .orElseThrow(() -> new UnsupportedOperationException(getWrappedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"));
+        waitForAsksOnOtherThreads(subscriptionId);
         return underLockFor(subscriptionId, () -> {
             if (notCheckpointedSubscriptions.contains(subscriptionId) || !getWrappedSubscriptionModel().isPaused(subscriptionId)) {
                 return repositionable.resumeSubscription(subscriptionId, startAt);
