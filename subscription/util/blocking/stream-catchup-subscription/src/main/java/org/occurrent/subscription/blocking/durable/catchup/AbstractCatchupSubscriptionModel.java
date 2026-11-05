@@ -175,7 +175,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // subscription. A cycle through it has to pass through a wait for an action, which LIFECYCLE_WAIT bounds, and so
     // does one through any other caller.
     private final ConcurrentMap<String, ClaimLock> lifecycleClaims;
-    // The subscribes whose function is asked before they take the claim, shared by every child of the same dispatcher
+    // The subscribes whose function is asked with no claim held, shared by every child of the same dispatcher
     private final Set<AskedFirst> askedFirst;
     // The ids a resume at a given position runs for that read as running when it took their claim, so they keep reading
     // as running and not paused until it returns, also while it holds a replay in the way. The subscription runs once
@@ -271,7 +271,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final Set<AskedFirst> askedFirst = ConcurrentHashMap.newKeySet();
     }
 
-    // A subscribe whose function is asked before it takes the claim, kept from before the function is asked until the
+    // A subscribe whose function is asked with no claim held, kept from before the function is asked until the
     // subscribe returns
     private static final class AskedFirst {
         private final String subscriptionId;
@@ -1950,8 +1950,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         lifecycleClaims.computeIfPresent(subscriptionId, (id, used) -> --used.users == 0 ? null : used);
     }
 
-    // Whether every subscribe for the id whose function another thread asks before the claim returns within timeout. The
-    // asking thread itself goes ahead, as it did when the function was asked under the claim.
+    // Whether every subscribe for the id whose function another thread asks with no claim held returns within timeout.
+    // The asking thread itself goes ahead, as it did when the function was asked under the claim.
     private boolean asksOnOtherThreadsReturnWithin(String subscriptionId, Duration timeout) {
         Thread current = Thread.currentThread();
         CompletableFuture<?>[] asks = askedFirst.stream()
