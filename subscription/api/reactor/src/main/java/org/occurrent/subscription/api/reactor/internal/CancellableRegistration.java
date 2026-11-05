@@ -24,6 +24,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.Subscription;
 import reactor.core.publisher.Mono;
 
+import java.util.Arrays;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
@@ -34,7 +35,9 @@ import java.util.function.Function;
  * model first, when there is nothing here to cancel yet.
  * <p>
  * A catch-up over a model that doesn't implement this interface lets the cancelled subscribe register, and cancels the
- * id in that model again once the subscribe has returned.
+ * id in that model again once the subscribe has returned. So does a catch-up over a subclass that overrides
+ * {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, see
+ * {@link #standsInForSubscribe(CancellableRegistration)}.
  */
 @NullMarked
 public interface CancellableRegistration {
@@ -51,4 +54,25 @@ public interface CancellableRegistration {
      */
     @Nullable Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
                                      Function<CloudEvent, Mono<Void>> action, BooleanSupplier cancelled);
+
+    /**
+     * Whether {@code model}'s {@code subscribe(String, SubscriptionFilter, StartAt, Function)} is declared by a class
+     * that implements this interface itself, so calling the {@code subscribe(..)} of this interface runs the same code.
+     * It answers {@code false} for a subclass that overrides that {@code subscribe(..)}, since calling this interface
+     * would skip the override. A caller then calls the override, and the subclass keeps the cleanup a model that
+     * doesn't implement this interface gets.
+     *
+     * @param model The model to call.
+     * @return {@code true} when the {@code subscribe(..)} of this interface can be called in place of the one of
+     * {@code SubscriptionModel}.
+     */
+    static boolean standsInForSubscribe(CancellableRegistration model) {
+        Class<?> declaring;
+        try {
+            declaring = model.getClass().getMethod("subscribe", String.class, SubscriptionFilter.class, StartAt.class, Function.class).getDeclaringClass();
+        } catch (NoSuchMethodException e) {
+            return false;
+        }
+        return Arrays.asList(declaring.getInterfaces()).contains(CancellableRegistration.class);
+    }
 }

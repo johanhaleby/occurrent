@@ -1318,15 +1318,18 @@ because of that cancel:
 `IllegalStateException` also comes from failures that have nothing to do with a cancel, so treat it as the cancel only
 when your application cancelled the id.
 
-Another wrapped model can still register the cancelled `subscribe(..)` after the cancel. When the wrapped
-`subscribe(..)` returns holding the id, the catch-up cancels the id there again, unless a subscribe of the id made after
-the cancel took it there. That cancel waits until no other subscribe of the id is under way. Until that second cancel
-has completed, a subscribe of the id throws `DuplicateSubscriptionIdException` whenever the wrapped model holds the id
-for the cancelled `subscribe(..)`, also after the first cancel has completed. When the cancel came before the wrapped
-model had taken the id for the cancelled `subscribe(..)`, the wrapped model can refuse a subscribe of the id made after
-the cancel with `DuplicateSubscriptionIdException`, since the cancelled one can take the id there first. A subscribe that
-replays history first gets that exception from `waitUntilStarted()` once the replay hands over. The catch-up then
-cancels the id there again. A wrapped model that takes the id only after it called the function makes that likely.
+Another wrapped model can still register the cancelled `subscribe(..)` after the cancel. So can a subclass of
+`ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel` that overrides
+`subscribe(String, SubscriptionFilter, StartAt, Function)`, since the catch-up calls that override as before. When the
+wrapped `subscribe(..)` returns holding the id, the catch-up cancels the id there again, unless a subscribe of the id
+made after the cancel took it there. That cancel waits until no other subscribe of the id is under way. Until that
+second cancel has completed, a subscribe of the id throws `DuplicateSubscriptionIdException` whenever the wrapped model
+holds the id for the cancelled `subscribe(..)`, also after the first cancel has completed. When the cancel came before
+the wrapped model had taken the id for the cancelled `subscribe(..)`, the wrapped model can refuse a subscribe of the id
+made after the cancel with `DuplicateSubscriptionIdException`, since the cancelled one can take the id there first. A
+subscribe that replays history first gets that exception from `waitUntilStarted()` once the replay hands over. The
+catch-up then cancels the id there again. A wrapped model that takes the id only after it called the function makes that
+likely.
 
 A `CatchupListener` given to `listenForCatchup` can still run while the catch-up holds a lock, so don't call the
 catch-up model from it. The listener is told that a catch-up started from inside an operation on a map the catch-up

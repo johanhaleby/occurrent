@@ -106,7 +106,9 @@ import static java.util.Objects.requireNonNull;
  * subscribe when the cancel reaches it first, and the subscribe then returns a {@link Subscription} whose
  * {@code waitUntilStarted()} fails with {@link SubscriptionNotRunningException}. A wrapped model that doesn't implement it
  * can register the subscribe after the cancel, so the id is cancelled there again once the wrapped {@code subscribe(..)}
- * returned holding it, unless a later subscribe took the id there. These calls still run with a lock held.
+ * returned holding it, unless a later subscribe took the id there. A subclass of either model that overrides
+ * {@code subscribe(String, SubscriptionFilter, StartAt, Function)} has that override called, and gets the same second
+ * cancel as a model that doesn't implement {@code CancellableRegistration}. These calls still run with a lock held.
  * <ul>
  * <li>The handover runs the wrapped {@code subscribe(..)}, or {@code resumeSubscription(id, startAt)} for a takeover,
  * and {@code isRunning(id)} and {@code pauseSubscription(id)} under the monitor of the subscription's state. So the
@@ -129,6 +131,9 @@ final class NamedCatchupSupport {
 
     private final CheckpointAwareSubscriptionModel wrapped;
     private final @Nullable SubscriptionModel named;
+    // The wrapped model when its subscribe(..) of CancellableRegistration runs the code of its named subscribe(..), so
+    // not for a subclass that overrides the named one
+    private final @Nullable CancellableRegistration cancellable;
     private final Class<?> modelClass;
     private final ConcurrentMap<String, CatchupState> catchingUp = new ConcurrentHashMap<>();
     // Set by stop(), cleared by start(..). Gates new replays, truncates in-flight ones (takeWhile), and makes
@@ -172,6 +177,7 @@ final class NamedCatchupSupport {
         this.wrapped = requireNonNull(wrapped);
         this.modelClass = requireNonNull(modelClass);
         this.named = wrapped instanceof SubscriptionModel subscriptionModel ? subscriptionModel : null;
+        this.cancellable = named instanceof CancellableRegistration registration && CancellableRegistration.standsInForSubscribe(registration) ? registration : null;
         HistoryLossReportingSubscriptions reporting = wrapped instanceof SubscriptionModelCapability capabilities ? HistoryLossReportingSubscriptions.findIn(capabilities).orElse(null) : null;
         RepositionableSubscriptions resumesAtPosition = wrapped instanceof SubscriptionModelCapability capabilities ? RepositionableSubscriptions.findIn(capabilities).orElse(null) : null;
         boolean takesOver = named != null && reporting != null && resumesAtPosition != null;
@@ -502,8 +508,8 @@ final class NamedCatchupSupport {
         Function<CloudEvent, Mono<Void>> liveAction = cloudEvent -> !record.cancelled && livePredicate.test(cloudEvent) ? action.apply(cloudEvent) : Mono.empty();
         @Nullable Subscription subscription;
         try {
-            subscription = delegate instanceof CancellableRegistration registration
-                    ? registration.subscribe(subscriptionId, liveSubscriptionFilter, startAt, liveAction, () -> record.cancelled)
+            subscription = cancellable != null
+                    ? cancellable.subscribe(subscriptionId, liveSubscriptionFilter, startAt, liveAction, () -> record.cancelled)
                     : delegate.subscribe(subscriptionId, liveSubscriptionFilter, startAt, liveAction);
         } catch (RuntimeException | Error e) {
             subscribeReturned(subscriptionId, record, false);
@@ -1310,8 +1316,8 @@ final class NamedCatchupSupport {
     // The cancelled subscribes of an id whose wrapped subscribe(..) can have taken the id after their cancel, changed
     // under the per-id lock. underWay counts those still in the wrapped subscribe(..). standIn is the first of them,
     // the record of the id while one is under way or the wrapped model cancels what they left, and no other record owns
-    // the id. A wrapped model that implements CancellableRegistration registers nothing for a subscribe cancelled first,
-    // so the second cancel finds nothing there to end.
+    // the id. A wrapped model that this model calls through CancellableRegistration registers nothing for a subscribe
+    // cancelled first, so the second cancel finds nothing there to end.
     private static final class Leftovers {
         final Owned standIn;
         int underWay;

@@ -315,6 +315,39 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
     class UnderAReactorCatchup {
 
         @Test
+        void tells_a_model_whose_named_subscribe_is_not_overridden_of_a_cancel_that_came_first() throws Exception {
+            // Given
+            HeldOnceDurableModel durable = new HeldOnceDurableModel(new RecordingSubscriptionModel("feed"));
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(durable, new NoReplay());
+            CompletableFuture<Subscription> cancelledSubscribe = CompletableFuture.supplyAsync(
+                    () -> catchup.subscribe("x", StreamSubscriptionFilter.filter(Filter.all()), StartAt.now(), NO_ACTION));
+            awaitOrFail(durable.held);
+            catchup.cancelSubscription("x").block(TIMEOUT);
+
+            // When
+            durable.release.countDown();
+            cancelledSubscribe.get(TIMEOUT.toSeconds(), SECONDS);
+
+            // Then
+            assertThat(durable.cancelledOnRelease).as("whether the subscribe the model got answered that it was cancelled").hasValue(true);
+        }
+
+        @Test
+        void calls_the_named_subscribe_a_subclass_overrides() {
+            // Given
+            OverridingDurableModel durable = new OverridingDurableModel(new RecordingSubscriptionModel("feed"));
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(durable, new NoReplay());
+
+            // When
+            Subscription subscription = catchup.subscribe("x", StreamSubscriptionFilter.filter(Filter.all()), StartAt.now(), NO_ACTION);
+
+            // Then
+            assertAll(
+                    () -> assertThat(durable.subscribed).as("the ids the override subscribed").containsExactly("x"),
+                    () -> assertThat(subscription.waitUntilStarted().block(TIMEOUT)).as("what waiting for the subscription gives").isNull());
+        }
+
+        @Test
         void a_cancelled_subscribe_fails_its_start_after_a_later_subscribe_took_the_id_over_a_model_that_only_streams_events() throws Exception {
             cancelledSubscribeFailsItsStartAfterALaterSubscribeTookTheId(new RecordingSubscriptionModel("feed"));
         }
@@ -379,6 +412,8 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
     private static final class HeldOnceDurableModel extends ReactorDurableSubscriptionModel {
         final CountDownLatch held = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
+        // What the held subscribe's cancelled answered once released
+        final AtomicReference<@Nullable Boolean> cancelledOnRelease = new AtomicReference<>();
         private final AtomicBoolean holdNext = new AtomicBoolean(true);
 
         HeldOnceDurableModel(CheckpointAwareSubscriptionModel wrapped) {
@@ -396,8 +431,24 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException(e);
                 }
+                cancelledOnRelease.set(cancelled.getAsBoolean());
             }
             return super.subscribe(subscriptionId, filter, startAt, action, cancelled);
+        }
+    }
+
+    // Overrides the named subscribe of SubscriptionModel, as a user's subclass can
+    private static final class OverridingDurableModel extends ReactorDurableSubscriptionModel {
+        final List<String> subscribed = new CopyOnWriteArrayList<>();
+
+        OverridingDurableModel(CheckpointAwareSubscriptionModel wrapped) {
+            super(wrapped, new InMemoryCheckpointStorage());
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            subscribed.add(subscriptionId);
+            return super.subscribe(subscriptionId, filter, startAt, action);
         }
     }
 
