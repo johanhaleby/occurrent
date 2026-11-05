@@ -705,9 +705,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // runs no session.
     // A reservation commits before its events are inserted, so every event in the snapshot is at or below the
     // snapshot's counter, and anything above it is this transaction's own. On a sharded cluster below read concern
-    // snapshot each shard has its own snapshot, so an event above it can be another writer's and comes back on a read
-    // after the head. The reported head stays the snapshot's counter. Otherwise the counter bounds the read, which is
-    // always safe.
+    // snapshot each shard has its own snapshot, so the counter and the events can come from different points in time.
+    // The reported head stays the snapshot's counter. Otherwise the counter bounds the read, which is always safe.
     private Mono<Boolean> readsUnbounded(ReactiveMongoOperations template) {
         if (template != mongoTemplate) {
             return Mono.just(false);
@@ -815,7 +814,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
      * {@inheritDoc}
      * <p>
      * Inside a MongoDB transaction on this store's database factory, with transaction synchronization active, the read
-     * returns what the transaction's snapshot holds instead of stopping at the store's highest written position, so it
      * also returns the transaction's own appends. On a sharded cluster below read concern snapshot each shard has a
      * snapshot of its own, so such a read can also return another writer's event that committed after the transaction's
      * first operation.
