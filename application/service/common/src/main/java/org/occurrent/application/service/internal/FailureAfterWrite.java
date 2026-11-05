@@ -26,8 +26,9 @@ import java.util.List;
  * didn't open a transaction.
  * <p>
  * One instance per execute. The failure stays here, and only a stand-in exception passes through the transaction executor,
- * so an executor that opens a transaction without reporting it still rolls back. The service rethrows the failure once the
- * retry has returned. It asks {@link #isHeld()} rather than matching on a type, so neither a retry predicate that matches
+ * so an executor that opens a transaction without reporting it still rolls back. On the blocking stack the service also
+ * throws the failure into the retry strategy, which can map it or throw something else, and on both stacks it rethrows
+ * the failure when the retry returns. It asks {@link #isHeld()} rather than matching on a type, so neither a retry predicate that matches
  * every {@link RuntimeException} nor an executor that translates or retries what passes through it can run the command again.
  */
 public final class FailureAfterWrite {

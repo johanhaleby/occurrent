@@ -873,8 +873,8 @@ subscriptions behaves as before.
   `RetryStrategy` still gives the failure to its `onError` listener, and to its `onAfterRetry` listener when the
   attempt was a retry, and throws it as its `mapError` maps it, as for a failure its predicate doesn't match. A
   strategy of your own that ignores the shutdown predicate decides by its own predicate whether to run the command
-  again. When it does, that run returns an empty attempt and the failure reaches the caller after the strategy
-  returns, and when it gives up, the caller gets what the strategy throws.
+  again, and a run after the failure returns an empty attempt before it reads or writes. When that strategy returns,
+  the held failure is thrown, and when it throws, the caller gets what it throws.
 - The `sideEffect` doesn't run.
 - The retry strategy can still run the command again for a failure of the write itself, and for any failure when the
   attempt opened a transaction. The

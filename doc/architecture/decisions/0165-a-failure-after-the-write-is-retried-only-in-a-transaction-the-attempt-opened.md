@@ -55,7 +55,7 @@ transaction undoes the write. Otherwise the retry strategy doesn't run the comma
   then doesn't ask its own predicate, doesn't run the command again, and gives the failure to `onError`, to `onAfterRetry` when
   the attempt was a retry, and to `mapError`, as a failure it doesn't retry. A strategy of your own that ignores the
   shutdown predicate gets an empty attempt from any later run, before it reads or writes, and the held failure is thrown
-  after the strategy returns. When such a strategy gives up instead, the caller gets what the strategy throws. On the
+  after the strategy returns. When such a strategy throws instead, the caller gets what it throws. On the
   reactive stack, whatever comes out of the executor means an empty attempt, a later run returns an empty attempt, and the
   original failure is thrown after the retry returns. So on both stacks a predicate that matches every exception, an
   executor that translates what passes through it and an executor with its own retry can't run the command again. An exception that replaces the

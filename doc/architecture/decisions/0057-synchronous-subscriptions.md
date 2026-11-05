@@ -154,9 +154,10 @@ drives, and it stops at the first failure as it always did. Only the interfaces 
 during dispatch, which runs inside `inTransaction`, so an implementation can read the live state. The two Spring
 executors do: the blocking one returns `TransactionSynchronizationManager.isActualTransactionActive()` and the reactive
 one reads the same thing out of the subscriber context. Both accept a caller-configured `TransactionTemplate` or
-`TransactionalOperator`, so a fixed `true` would lie under `PROPAGATION_NOT_SUPPORTED` or `PROPAGATION_NEVER` and bring
-back the stranding this amendment removes. `NativeMongoTransactionExecutor` does answer a fixed `true`, correctly: it
-always opens or joins a session transaction and has no propagation setting that could turn that off.
+`TransactionalOperator`, so a fixed `true` would lie under `PROPAGATION_NOT_SUPPORTED` or `PROPAGATION_NEVER`. On the
+blocking stack that brings back the stranding this amendment removes, since `SpringTransactionExecutor` also says a
+failure rolls back a transaction it joined. `NativeMongoTransactionExecutor` reads whether the session bound to the
+thread has a transaction in force.
 
 On the reactive stack `isTransactional()` returns `Mono<Boolean>` rather than a `boolean`, because there the transaction
 lives in the subscriber context and only a reactive answer can reach it. The asymmetry with the blocking `boolean` is

@@ -42,9 +42,9 @@ import java.util.function.Supplier;
  * doesn't run the command again, since that could write its events twice. A strategy made by the factory methods of
  * {@code RetryStrategy} still gives the failure to its {@code onError} listener, and to its {@code onAfterRetry}
  * listener when the attempt was a retry, and throws it as its {@code mapError} maps it. A strategy of your own that
- * ignores the shutdown predicate decides by its own predicate whether to run the command again. When it does, that run
- * returns an empty attempt and the failure reaches the caller after the strategy returns, and when it gives up, the
- * caller gets what the strategy throws. A failure of the write itself is retried as before.
+ * ignores the shutdown predicate decides by its own predicate whether to run the command again, and a run after the
+ * failure returns an empty attempt before it reads or writes. When that strategy returns, the held failure is thrown,
+ * and when it throws, the caller gets what it throws. A failure of the write itself is retried as before.
  * <p>
  * An implementation that opens a transaction and overrides neither that method nor {@link #isTransactional()} still sees
  * an exception pass through and can roll back, but the command doesn't run again. See ADR 165.
