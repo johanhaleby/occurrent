@@ -69,6 +69,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.AbstractQueuedSynchronizer;
+import java.util.concurrent.locks.LockSupport;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -83,8 +86,11 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
 /**
  * A dynamic start-position function can wait for a call for the same subscription id made on another thread. The blocking subscription models ask the function before they take the claim or the lock for the id, so a
  * cancel made meanwhile returns at once and wins over the subscribe, and a pause on a catch-up model waits for the
- * subscribe, up to {@code LIFECYCLE_WAIT}, and then throws. Each cancel case runs on a plain MongoDB model, which never
- * held anything while it asked, and on the three wrappers that did. The pause case runs on the two catch-up stacks, and
+ * subscribe, up to {@code LIFECYCLE_WAIT}, and then throws. The cases where the function waits for the cancel to return
+ * run on a plain MongoDB model, which never held anything while it asked, and on the three wrappers that did. A cancel
+ * made while the function runs can also wait for another call for the id to give up the claim or the lock, and get it
+ * only once the function has returned. That cancel wins over the subscribe too. The case runs on the three wrappers
+ * only, since a plain MongoDB model has no claim or lock for an id. The pause case runs on the two catch-up stacks, and
  * the handover case on the catch-up over the durable model.
  */
 @Testcontainers
@@ -262,6 +268,100 @@ class BlockingDynamicStartCancelMongoTest {
     }
 
     @Nested
+    @DisplayName("when a cancel of its own subscription made while the start-position function runs waits behind another call for the id until the function has returned")
+    class When_a_cancel_waits_behind_another_call_until_the_function_has_returned {
+
+        private StorageThatHoldsTheFirstDelete storageThatHoldsTheFirstDelete;
+
+        @BeforeEach
+        void hold_the_first_delete_of_a_checkpoint() {
+            storageThatHoldsTheFirstDelete = new StorageThatHoldsTheFirstDelete(mongoTemplate, "storage-" + UUID.randomUUID());
+            storage = storageThatHoldsTheFirstDelete;
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = Stack.class, names = {"DURABLE_OVER_MONGO", "CATCHUP_OVER_MONGO", "CATCHUP_OVER_DURABLE_OVER_MONGO"})
+        @DisplayName("the returned subscription never starts and the id is not running")
+        void the_returned_subscription_never_starts_and_the_id_is_not_running(Stack stack) {
+            // Given
+            model = build(stack);
+            Subscription returned = subscribeWhileACancelWaitsBehindAnotherCall(new CopyOnWriteArrayList<>());
+
+            // When
+            boolean started = returned.waitUntilStarted(Duration.ofMillis(500));
+
+            // Then
+            assertAll(
+                    () -> assertThat(started).as("the returned subscription started").isFalse(),
+                    () -> assertThat(model.isRunning(subscriptionId)).as("the id is running").isFalse()
+            );
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = Stack.class, names = {"DURABLE_OVER_MONGO", "CATCHUP_OVER_MONGO", "CATCHUP_OVER_DURABLE_OVER_MONGO"})
+        @DisplayName("no event reaches the action of the cancelled subscribe")
+        void no_event_reaches_the_action_of_the_cancelled_subscribe(Stack stack) {
+            // Given
+            model = build(stack);
+            List<CloudEvent> received = new CopyOnWriteArrayList<>();
+            subscribeWhileACancelWaitsBehindAnotherCall(received);
+
+            // When
+            append();
+
+            // Then an event that does not arrive can only be shown by waiting, so the action is watched for a while
+            await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5))
+                    .untilAsserted(() -> assertThat(received).as("events that reached the cancelled subscribe").isEmpty());
+        }
+
+        // Another cancel holds the claim or the lock for the id while it deletes the checkpoint. The function starts the cancel
+        // and returns once that cancel waits for the claim or the lock, and the delete goes on once the subscribe waits
+        // behind it. The cancel then gets the claim or the lock first, with the function returned and the subscribe not
+        // yet holding it
+        private Subscription subscribeWhileACancelWaitsBehindAnotherCall(List<CloudEvent> received) {
+            CompletableFuture<Void> otherCall = CompletableFuture.runAsync(() -> model.cancelSubscription(subscriptionId), otherThreads);
+            assertThat(storageThatHoldsTheFirstDelete.firstDeleteStarted).as("the other call holding the id").succeedsWithin(EVENT_DELIVERY);
+
+            AtomicBoolean asked = new AtomicBoolean();
+            AtomicBoolean functionReturned = new AtomicBoolean();
+            AtomicReference<Thread> cancelling = new AtomicReference<>();
+            CompletableFuture<Void> cancel = new CompletableFuture<>();
+            StartAt function = StartAt.dynamic(context -> {
+                if (asked.compareAndSet(false, true)) {
+                    CompletableFuture.runAsync(() -> {
+                        cancelling.set(Thread.currentThread());
+                        model.cancelSubscription(subscriptionId);
+                    }, otherThreads).whenComplete((__, error) -> {
+                        if (error == null) {
+                            cancel.complete(null);
+                        } else {
+                            cancel.completeExceptionally(error);
+                        }
+                    });
+                    await().atMost(EVENT_DELIVERY).until(() -> waitsForALock(cancelling.get()));
+                    functionReturned.set(true);
+                }
+                return StartAt.now();
+            });
+            AtomicReference<Thread> subscribing = new AtomicReference<>();
+            CompletableFuture<Subscription> subscribe = CompletableFuture.supplyAsync(() -> {
+                subscribing.set(Thread.currentThread());
+                return model.subscribe(subscriptionId, function, received::add);
+            }, otherThreads);
+            await().atMost(EVENT_DELIVERY).until(() -> functionReturned.get() && waitsForALock(subscribing.get()));
+
+            storageThatHoldsTheFirstDelete.firstDeleteMayGoOn.complete(null);
+
+            assertAll(
+                    () -> assertThat(otherCall).as("the other call holding the id").succeedsWithin(EVENT_DELIVERY),
+                    () -> assertThat(cancel).as("the cancel made while the function ran").succeedsWithin(EVENT_DELIVERY),
+                    () -> assertThat(subscribe).as("the subscribe").succeedsWithin(EVENT_DELIVERY)
+            );
+            return subscribe.join();
+        }
+    }
+
+    @Nested
     @DisplayName("when the start-position function is asked during the handover and waits for a cancel of its own subscription made on another thread")
     class When_the_function_is_asked_during_the_handover {
 
@@ -362,6 +462,35 @@ class BlockingDynamicStartCancelMongoTest {
     }
 
     private record PauseOutcome(Throwable thrown, Duration waited) {
+    }
+
+    // Parked on a ReentrantLock, which the claim of a catch-up model and the lock of a durable model are. A thread
+    // parked there is already queued for it, behind every thread that queued before
+    private static boolean waitsForALock(Thread thread) {
+        return thread != null && LockSupport.getBlocker(thread) instanceof AbstractQueuedSynchronizer;
+    }
+
+    /**
+     * Checkpoint storage whose first delete waits until the test lets it go on, so the call that deletes holds the claim
+     * or the lock for its id meanwhile. Every later delete goes on at once.
+     */
+    private static final class StorageThatHoldsTheFirstDelete extends SpringMongoCheckpointStorage {
+        private final AtomicBoolean deleted = new AtomicBoolean();
+        private final CompletableFuture<Void> firstDeleteStarted = new CompletableFuture<>();
+        private final CompletableFuture<Void> firstDeleteMayGoOn = new CompletableFuture<>();
+
+        private StorageThatHoldsTheFirstDelete(MongoTemplate mongoTemplate, String checkpointCollection) {
+            super(mongoTemplate, checkpointCollection);
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            if (deleted.compareAndSet(false, true)) {
+                firstDeleteStarted.complete(null);
+                firstDeleteMayGoOn.orTimeout(30, SECONDS).join();
+            }
+            super.delete(subscriptionId);
+        }
     }
 
     /**
