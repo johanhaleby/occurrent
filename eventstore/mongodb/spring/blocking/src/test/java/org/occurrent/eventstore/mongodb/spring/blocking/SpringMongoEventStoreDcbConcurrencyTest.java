@@ -18,7 +18,6 @@ package org.occurrent.eventstore.mongodb.spring.blocking;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.ExplainVerbosity;
-import com.mongodb.MongoException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -622,10 +621,8 @@ class SpringMongoEventStoreDcbConcurrencyTest {
         assertThat(transactionBodyRuns.get())
                 .as("The store must not retry its transaction body when it does not own the transaction")
                 .isEqualTo(threadCount);
-        // Whatever does lose the race must surface as something the caller can recognise as worth retrying. A
-        // WriteConflict on the event insert reaches the caller as the driver's MongoException with the
-        // TransientTransactionError label, and Spring translates other conflicts to DataIntegrityViolationException, a
-        // non-transient type, so all of them count here.
+        // Whatever does lose the race must surface as an exception the Spring transaction executors retry. Spring
+        // translates a WriteConflict to DataIntegrityViolationException, a non-transient type, so both count here.
         //
         // Deliberately not asserting that at least one append fails. A conflict is near-certain with six transactions
         // incrementing one counter document, but it is not guaranteed, and making the test depend on losing a race
@@ -682,13 +679,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     }
 
     private static boolean hasRetryableConflictCause(Throwable throwable) {
-        for (Throwable cause = throwable; cause != null; cause = cause.getCause()) {
-            if (cause instanceof TransientDataAccessException || cause instanceof DataIntegrityViolationException
-                    || cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
-                return true;
-            }
-        }
-        return false;
+        return throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException;
     }
 
     private MongoTransactionManager buildTransactionManager() {

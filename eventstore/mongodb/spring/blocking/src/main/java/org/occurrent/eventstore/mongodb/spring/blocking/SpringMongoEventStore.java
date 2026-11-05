@@ -1072,9 +1072,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             final Throwable rootCause = e.getRootCause();
             if (rootCause instanceof MongoException mongoException) {
                 // A transient transaction conflict is left for TRANSIENT_CONFLICT_RETRY rather than mapped to the
-                // stream-path WriteConditionNotFulfilledException, which DCB does not use.
+                // stream-path WriteConditionNotFulfilledException, which DCB does not use. It stays translated, so an
+                // executor that owns the caller's transaction recognises it too.
                 if (isTransientTransactionError(mongoException)) {
-                    throw mongoException;
+                    throw e;
                 }
                 // Two disjoint DCB boundaries that hash to the same partition stream race on the next stream version and
                 // one loses on the unique streamid+streamversion index. This is not a duplicate CloudEvent, so rethrow
