@@ -436,7 +436,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * replay this starts waits on its own thread until that replay has returned. When this doesn't replay, it waits up
      * to ten seconds for that replay to return before the live delegate resumes the subscription, and throws
      * {@link IllegalStateException} without resuming it when the replay hasn't returned by then, or at once when called
-     * from inside the action. Like every other call for the subscription it runs alone, so a
+     * from inside the action. It runs alone, so a
      * {@link #pauseSubscription(String)} or {@link #cancelSubscription(String)} for the subscription that comes meanwhile
      * doesn't run until it returns, and a {@link #stop()} can be held up the same way.
      * <p>
@@ -496,7 +496,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * {@link IllegalStateException} at once and changes nothing. An action that hands the call to another thread and
      * waits for it fails once the ten seconds have passed.
      * <p>
-     * Like every other call that changes the subscription, it runs alone. A pause, resume, cancel or subscribe for the
+     * It runs alone. A pause, resume, cancel or subscribe for the
      * same id waits until it returns, for up to ten seconds, and then acts on what it left. While it runs, a subscription
      * that read as running when it began reads as running and not paused, also while it waits for the action, so a
      * caller that pauses what runs calls {@link #pauseSubscription(String)}, which pauses it once this has returned. One

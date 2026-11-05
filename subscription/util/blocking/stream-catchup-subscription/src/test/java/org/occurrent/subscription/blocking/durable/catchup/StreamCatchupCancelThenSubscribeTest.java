@@ -40,9 +40,8 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * A cancel of an id marks only the subscribes of the id whose start-position function another thread is asking when the
- * cancel takes the claim. A subscribe made after that waits for the cancel and then goes ahead, as it did before the
- * function was asked ahead of the claim.
+ * A subscribe of an id made while a cancel of the id holds the claim waits for the cancel and then goes ahead, as in
+ * 0.34.0.
  */
 @Timeout(60)
 @DisplayName("StreamCatchupCancelThenSubscribe")

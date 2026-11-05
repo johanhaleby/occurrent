@@ -413,9 +413,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     // The caller's function is asked for this model with no claim held, since it can wait for a call for the id on
-    // another thread. A cancel made before the subscribe takes the claim again wins, and nothing reaches the live
-    // delegate. A pause, resume or other lifecycle call for the id on another thread waits for a subscribe whose function
-    // is asked to return, up to LIFECYCLE_WAIT. A cancel and another subscribe of the id don't wait for the function.
+    // another thread. A cancel that takes the claim after the subscribe is added to askedFirst, and before the subscribe
+    // takes the claim again, wins, and nothing reaches the live delegate. A pause, resume or other lifecycle call for the
+    // id on another thread waits for a subscribe whose function is asked to return, up to LIFECYCLE_WAIT. A cancel and
+    // another subscribe of the id don't wait for the function.
     private Subscription subscribeAndRemember(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         // An id in use is refused before the function is asked, as in 0.34.0, so the function of a duplicate holds up no
         // call for the subscription that runs. This waits for the claim as any subscribe of 0.34.0 did, and under the
@@ -727,7 +728,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * replay this starts waits on its own thread until that replay has returned. When this doesn't replay, it waits up
      * to ten seconds for that replay to return before the live delegate resumes the subscription, and throws
      * {@link IllegalStateException} without resuming it when the replay hasn't returned by then, or at once when called
-     * from inside the action. Like every other call for the subscription it runs alone, so a
+     * from inside the action. It runs alone, so a
      * {@link #pauseSubscription(String)} or {@link #cancelSubscription(String)} for the subscription that comes meanwhile
      * doesn't run until it returns, and a {@link #stop()} can be held up the same way.
      * <p>
@@ -784,7 +785,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * inside the action, on the replay's own thread, this throws {@link IllegalStateException} at once and changes
      * nothing. An action that hands the call to another thread and waits for it fails once the ten seconds have passed.
      * <p>
-     * Like every other call that changes the subscription, it runs alone. A pause, resume, cancel or subscribe for the
+     * It runs alone. A pause, resume, cancel or subscribe for the
      * same id waits until it returns, for up to ten seconds, and then acts on what it left. While it runs, a subscription
      * that read as running when it began reads as running and not paused, also while it waits for the action, so a
      * caller that pauses what runs calls {@link #pauseSubscription(String)}, which pauses it once this has returned. One
@@ -1874,8 +1875,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * It goes ahead when no other call holds the claim, and throws {@link IllegalStateException} at once when one does,
      * since that call can be waiting for the action to return. Any other call waits at most {@link #LIFECYCLE_WAIT},
      * and then logs at {@code ERROR} and throws {@link IllegalStateException}. That wait includes a subscribe for the id
-     * on another thread whose start-position function is still being asked, since the subscribe asks it before it takes
-     * the claim, so a function that waits for such a call fails that call after {@link #LIFECYCLE_WAIT}. A cancel doesn't
+     * on another thread whose start-position function is still being asked, since the subscribe asks it with no claim
+     * held, so a function that waits for such a call fails that call after {@link #LIFECYCLE_WAIT}. A cancel doesn't
      * wait for the function, see {@link #cancelSubscription(String)}. An interrupt doesn't end the wait, and is set again
      * once the claim is taken or the wait is over.
      * <p>
@@ -2475,11 +2476,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Cancels the catch-up of {@code subscriptionId} and the subscription in the live delegate, and deletes its stored
      * position. Returns without waiting for a replay that is in the subscriber's action, which stores nothing more once
-     * it returns. It doesn't wait for a subscribe of the id on another thread whose start-position function is still
-     * being asked either. That subscribe subscribes nothing, and the subscription it returns never starts. A cancel the
-     * function makes on the subscribing thread doesn't stop that subscribe, and neither does a cancel that throws.
-     * While this runs, {@link #start(boolean) start(true)} doesn't let the live delegate resume the subscription
-     * itself.
+     * it returns. It doesn't wait either for a subscribe of the id on another thread whose start-position function is
+     * asked for this model with no claim held. That subscribe subscribes nothing, and the subscription it returns never
+     * starts. A cancel the function makes on the subscribing thread doesn't stop that subscribe, and neither does a
+     * cancel that throws. While this runs, {@link #start(boolean) start(true)} doesn't let the live delegate resume the
+     * subscription itself.
      */
     @Override
     public void cancelSubscription(String subscriptionId) {

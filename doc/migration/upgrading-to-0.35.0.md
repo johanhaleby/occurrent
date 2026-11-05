@@ -1387,9 +1387,12 @@ while the function runs.
   A `CatchupSubscriptionModel` with both catch-ups still asks the function first to pick the catch-up model, as in
   0.34.0.
 * A subscribe on one of these catch-up models waits for the lock for the id before it asks the function, as in 0.34.0,
-  and throws `IllegalStateException` when another call for the id holds that lock for longer than 10 seconds.
-  `DurableSubscriptionModel` asks the function before the model it wraps throws `DuplicateSubscriptionIdException`, as
-  in 0.34.0.
+  and throws `IllegalStateException` when another call for the id holds that lock for longer than 10 seconds. It waits
+  for that lock again once the function has returned, and can throw the same way then.
+* `DurableSubscriptionModel` asks the function before the model it wraps throws `DuplicateSubscriptionIdException`, as
+  in 0.34.0. A `cancelSubscription(id)` made on another thread while that function runs now cancels the subscription
+  that runs, and the duplicate then returns a `Subscription` that never starts instead of throwing. A
+  `resumeSubscription(id)` of the subscription that runs waits for that function, as the next bullet says.
 * A `resumeSubscription(id)` or the new `resumeSubscription(id, startAt)` on `DurableSubscriptionModel` made on another
   thread while the function of a subscribe of `id` runs still waits for that subscribe, but throws
   `IllegalStateException` when the function doesn't return within 10 seconds. In 0.34.0 `resumeSubscription(id)` waited
@@ -1400,7 +1403,7 @@ while the function runs.
 * Don't read a returned `cancelSubscription(id)` as a sign that a subscribe of `id` on another thread has returned. Call
   `waitUntilStarted(..)` on the `Subscription` that subscribe returns when you need to know whether it started.
 * Keep effects that must happen only for a subscribe that goes ahead out of the function, since a subscribe that then
-  throws `DuplicateSubscriptionIdException` asks it too.
+  throws `DuplicateSubscriptionIdException` or `IllegalStateException` asks it too.
 * Don't wait in the function for a `pauseSubscription` or `resumeSubscription` of the same id on a catch-up model, or
   for a `resumeSubscription` on `DurableSubscriptionModel`, on another thread. That call throws `IllegalStateException`
   when the function doesn't return within 10 seconds.

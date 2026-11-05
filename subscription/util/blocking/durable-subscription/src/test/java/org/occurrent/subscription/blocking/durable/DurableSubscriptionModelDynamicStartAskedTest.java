@@ -30,6 +30,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
@@ -51,6 +52,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.AbstractQueuedSynchronizer;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -144,6 +146,16 @@ class DurableSubscriptionModelDynamicStartAskedTest {
         @Test
         @DisplayName("the resume throws IllegalStateException saying the function didn't return within 10000 ms and resumes nothing")
         void the_resume_throws_IllegalStateException_saying_the_function_did_not_return_within_10000_ms_and_resumes_nothing() {
+            resumeWhileTheFunctionBlocksAndAssertItThrowsAndResumesNothing(durable -> durable.resumeSubscription(SUBSCRIPTION_ID));
+        }
+
+        @Test
+        @DisplayName("a resume at a given position throws IllegalStateException saying the function didn't return within 10000 ms and resumes nothing")
+        void a_resume_at_a_given_position_throws_IllegalStateException_saying_the_function_did_not_return_within_10000_ms_and_resumes_nothing() {
+            resumeWhileTheFunctionBlocksAndAssertItThrowsAndResumesNothing(durable -> durable.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(new StringBasedCheckpoint("another-position"))));
+        }
+
+        private void resumeWhileTheFunctionBlocksAndAssertItThrowsAndResumesNothing(Function<DurableSubscriptionModel, Subscription> resumeCall) {
             // Given
             InMemoryWrappedModel wrapped = new InMemoryWrappedModel();
             DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
@@ -157,7 +169,7 @@ class DurableSubscriptionModelDynamicStartAskedTest {
             await().atMost(BOUND).until(() -> functionStarted.getCount() == 0);
 
             // When
-            CompletableFuture<Subscription> resume = CompletableFuture.supplyAsync(() -> durable.resumeSubscription(SUBSCRIPTION_ID), otherThreads);
+            CompletableFuture<Subscription> resume = CompletableFuture.supplyAsync(() -> resumeCall.apply(durable), otherThreads);
 
             // Then
             assertThat(resume).as("the resume").failsWithin(BOUND)
@@ -356,7 +368,7 @@ class DurableSubscriptionModelDynamicStartAskedTest {
         }
     }
 
-    private static final class InMemoryWrappedModel implements CheckpointAwareSubscriptionModel {
+    private static final class InMemoryWrappedModel implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
         private final Set<String> subscriptions = ConcurrentHashMap.newKeySet();
         private final Set<String> paused = ConcurrentHashMap.newKeySet();
         private final List<String> resumed = new CopyOnWriteArrayList<>();
@@ -379,6 +391,11 @@ class DurableSubscriptionModelDynamicStartAskedTest {
             resumed.add(subscriptionId);
             paused.remove(subscriptionId);
             return started(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return resumeSubscription(subscriptionId);
         }
 
         @Override
