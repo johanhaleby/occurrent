@@ -262,6 +262,45 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
     }
 
     @Test
+    void a_loss_the_wrapped_model_reports_after_a_cancel_came_while_a_straight_to_live_subscribe_was_under_way_pauses_the_subscription_and_the_id_ends_cancelled_once_the_subscribe_returned() throws Exception {
+        CountDownLatch insideSubscribe = new CountDownLatch(1);
+        CountDownLatch releaseSubscribe = new CountDownLatch(1);
+        AtomicBoolean blockedOnce = new AtomicBoolean();
+        wrapped.beforeSubscribeRegisters = () -> {
+            if (blockedOnce.compareAndSet(false, true)) {
+                insideSubscribe.countDown();
+                await(releaseSubscribe);
+            }
+        };
+        Thread subscriber = new Thread(() -> catchup.subscribe(ID, FILTER, StartAt.checkpoint(LIVE_TOKEN), action()), "subscriber");
+        subscriber.start();
+        assertThat(insideSubscribe.await(5, TimeUnit.SECONDS)).as("the subscribe reached the wrapped model").isTrue();
+        catchup.cancelSubscription(ID).block(Duration.ofSeconds(10));
+        List<String> cancelledWhileTheSubscribeWasUnderWay = List.copyOf(wrapped.cancelled);
+
+        wrapped.losesTheHistoryFrom(ID, LIVE_TOKEN);
+        boolean subscribeStillUnderWay = subscriber.isAlive();
+        int takeOversWhileTheSubscribeWasUnderWay = wrapped.takeOversRun.get();
+        List<Checkpoint> restartsWhileTheSubscribeWasUnderWay = List.copyOf(wrapped.restartedFromThePresent);
+        releaseSubscribe.countDown();
+        subscriber.join(5_000);
+
+        assertAll(
+                () -> assertThat(cancelledWhileTheSubscribeWasUnderWay).as("cancels that reached the wrapped model before the loss").containsExactly(ID),
+                () -> assertThat(subscribeStillUnderWay).as("the subscribe was still under way when the loss was reported").isTrue(),
+                () -> assertThat(takeOversWhileTheSubscribeWasUnderWay).as("takeovers the wrapped model ran when the loss was reported").isEqualTo(1),
+                () -> assertThat(restartsWhileTheSubscribeWasUnderWay).as("restarts from the present when the loss was reported").isEmpty(),
+                () -> assertThat(wrapped.restartedFromThePresent).as("restarts from the present").isEmpty(),
+                () -> assertThat(subscriber.isAlive()).as("the subscribe is still running").isFalse(),
+                () -> assertThat(wrapped.cancelled).as("cancels that reached the wrapped model, the second for what the subscribe made").containsExactly(ID, ID),
+                () -> assertThat(wrapped.isRunning(ID)).as("the wrapped model runs the subscription").isFalse(),
+                () -> assertThat(wrapped.isPaused(ID)).as("the wrapped model holds the subscription paused").isFalse(),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isFalse(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse()
+        );
+    }
+
+    @Test
     void a_loss_the_wrapped_model_reports_while_its_cancel_is_under_way_pauses_the_subscription_and_the_id_subscribes_again_once_the_cancel_completes() {
         catchup.subscribe(ID, FILTER, StartAt.checkpoint(LIVE_TOKEN), action());
         Sinks.Empty<Void> wrappedCancel = Sinks.empty();

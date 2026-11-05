@@ -33,6 +33,7 @@ import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.net.URI;
 import java.time.Duration;
@@ -47,6 +48,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -323,7 +325,7 @@ class ReactorCatchupSubscribeUnderWayTest {
     }
 
     @Test
-    void both_cancels_that_waited_for_a_wrapped_subscribe_that_threw_complete_and_the_id_can_be_subscribed_again() {
+    void two_cancels_of_an_id_whose_wrapped_subscribe_throws_complete_and_the_id_can_be_subscribed_again() {
         WrappedModel wrapped = new WrappedModel();
         wrapped.failingSubscribes.add("x");
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
@@ -377,11 +379,66 @@ class ReactorCatchupSubscribeUnderWayTest {
         await(returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x did not complete while the subscribe of x was under way");
 
         wrapped.deliver("x", anEvent("e1"));
+        boolean runningWhileUnderWay = catchup.isRunning("x");
+        boolean pausedWhileUnderWay = catchup.isPaused("x");
         held.release();
 
         await(subscribeOfX, "The subscribe of x did not return");
         assertThat(reached).as("events that reached the action of x after its cancel completed").isEmpty();
+        assertThat(runningWhileUnderWay).as("whether the catch-up reports x running while the subscribe is under way").isFalse();
+        assertThat(pausedWhileUnderWay).as("whether the catch-up reports x paused while the subscribe is under way").isFalse();
+    }
+
+    @Test
+    void a_first_cancel_that_completes_after_the_second_cancel_started_leaves_x_not_running_while_the_second_is_held_and_after_it_completes() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.holdsCancels = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        HeldStart held = new HeldStart();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.empty())).start();
+        held.awaitInside();
+        CompletableFuture<Void> firstCancel = returnedWithin("cancel-x-1", () -> catchup.cancelSubscription("x").toFuture());
+        held.release();
+        await(subscribeOfX, "The subscribe of x did not return");
+        int cancelsAsked = wrapped.cancelsHeld();
+
+        wrapped.completeCancel(0);
+        await(firstCancel, "The first cancel of x did not complete");
+        boolean runningWhileTheSecondCancelIsHeld = catchup.isRunning("x");
+        wrapped.completeCancel(1);
+
+        assertThat(cancelsAsked).as("cancels the wrapped model was asked for once the subscribe returned").isEqualTo(2);
+        assertThat(runningWhileTheSecondCancelIsHeld).as("whether the catch-up reports x running while the second cancel is held").isFalse();
+        assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancel-asked:x", "subscribed:x", "cancel-asked:x", "cancelled:x", "cancelled:x");
         assertThat(catchup.isRunning("x")).as("whether the catch-up reports x running").isFalse();
+        assertThat(wrapped.isRunning("x")).as("whether the wrapped model runs x").isFalse();
+    }
+
+    @Test
+    void a_second_cancel_that_throws_leaves_the_catch_up_reporting_what_the_wrapped_model_runs_and_a_later_cancel_stops_x() {
+        WrappedModel wrapped = new WrappedModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        HeldStart held = new HeldStart();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.empty())).start();
+        held.awaitInside();
+        await(returnedWithin("cancel-x-1", () -> catchup.cancelSubscription("x").toFuture()), "The first cancel of x did not complete while the subscribe of x was under way");
+        wrapped.failCancelsFromNowOn();
+        held.release();
+        await(subscribeOfX, "The subscribe of x did not return");
+
+        boolean wrappedRunsX = wrapped.isRunning("x");
+        boolean catchupRunsX = catchup.isRunning("x");
+        wrapped.succeedCancels();
+        await(returnedWithin("cancel-x-3", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x after the failed one did not complete");
+        Throwable failure = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()));
+
+        assertThat(wrappedRunsX).as("whether the wrapped model runs x after the second cancel threw").isTrue();
+        assertThat(catchupRunsX).as("whether the catch-up reports x running after the second cancel threw").isEqualTo(wrappedRunsX);
+        assertThat(failure).as("what the subscribe after the later cancel threw").isNull();
+        assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "subscribed:x", "cancelled:x", "subscribed:x");
+        assertThat(wrapped.isRunning("x")).as("whether the wrapped model runs x").isTrue();
     }
 
     @Test
@@ -419,6 +476,81 @@ class ReactorCatchupSubscribeUnderWayTest {
         assertThat(outerReached).as("events that reached the action of the outer subscribe").isEmpty();
         assertThat(wrapped.isRunning("x") || wrapped.isPaused("x")).as("whether the wrapped model holds x").isFalse();
         assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("subscribed:x", "cancelled:x", "subscribed:x", "cancelled:x");
+    }
+
+    @Test
+    void a_straight_to_live_subscribe_that_the_wrapped_model_refuses_since_a_cancelled_subscribe_took_the_id_after_it_cancels_what_that_subscribe_left() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.refusesDuplicates = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        HeldStart cancelledStart = new HeldStart();
+        HeldStart laterStart = new HeldStart();
+        CompletableFuture<Void> cancelledSubscribe = new CompletableFuture<>();
+        CompletableFuture<Void> laterSubscribe = new CompletableFuture<>();
+        daemon("subscribe-x", cancelledSubscribe, () -> catchup.subscribe("x", FILTER, cancelledStart.startAt(), cloudEvent -> Mono.empty())).start();
+        cancelledStart.awaitInside();
+        await(returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x did not complete");
+        daemon("subscribe-x-again", laterSubscribe, () -> catchup.subscribe("x", FILTER, laterStart.startAt(), cloudEvent -> Mono.empty())).start();
+        laterStart.awaitInside();
+
+        cancelledStart.release();
+        await(cancelledSubscribe, "The cancelled subscribe of x did not return");
+        laterStart.release();
+
+        assertThat(laterSubscribe).as("the subscribe of x made after the cancel").failsWithin(DEADLINE).withThrowableOfType(ExecutionException.class).withCauseInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "subscribed:x", "refused:x", "cancelled:x");
+        assertThat(wrapped.isRunning("x") || wrapped.isPaused("x")).as("whether the wrapped model holds x").isFalse();
+        assertThat(catchup.isRunning("x")).as("whether the catch-up reports x running").isFalse();
+        assertThat(failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()))).as("what a subscribe of x after that threw").isNull();
+    }
+
+    @Test
+    void a_subscribe_with_catch_up_whose_handover_the_wrapped_model_refuses_since_a_cancelled_subscribe_took_the_id_during_the_replay_cancels_what_that_subscribe_left() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.refusesDuplicates = true;
+        HeldReplay reader = new HeldReplay();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        HeldStart cancelledStart = new HeldStart();
+        CompletableFuture<Void> cancelledSubscribe = new CompletableFuture<>();
+        daemon("subscribe-x", cancelledSubscribe, () -> catchup.subscribe("x", FILTER, cancelledStart.startAt(), cloudEvent -> Mono.empty())).start();
+        cancelledStart.awaitInside();
+        await(returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x did not complete");
+        Subscription replaying = catchup.subscribe("x", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        reader.awaitReading();
+
+        cancelledStart.release();
+        await(cancelledSubscribe, "The cancelled subscribe of x did not return");
+        reader.release();
+
+        assertThat(replaying.waitUntilStarted().toFuture()).as("the start of the subscribe with catch-up").failsWithin(DEADLINE).withThrowableOfType(ExecutionException.class).withCauseInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "subscribed:x", "refused:x", "cancelled:x");
+        assertThat(wrapped.isRunning("x") || wrapped.isPaused("x")).as("whether the wrapped model holds x").isFalse();
+        assertThat(catchup.isRunning("x")).as("whether the catch-up reports x running").isFalse();
+    }
+
+    @Test
+    void a_subscribe_with_catch_up_made_after_a_cancel_runs_when_the_wrapped_model_took_the_id_for_the_cancelled_subscribe_before_its_start() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.refusesDuplicates = true;
+        wrapped.registersBeforeTheStart = true;
+        HeldReplay reader = new HeldReplay();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        HeldStart cancelledStart = new HeldStart();
+        CompletableFuture<Void> cancelledSubscribe = new CompletableFuture<>();
+        daemon("subscribe-x", cancelledSubscribe, () -> catchup.subscribe("x", FILTER, cancelledStart.startAt(), cloudEvent -> Mono.empty())).start();
+        cancelledStart.awaitInside();
+        await(returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x did not complete");
+        Subscription replaying = catchup.subscribe("x", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        reader.awaitReading();
+
+        cancelledStart.release();
+        await(cancelledSubscribe, "The cancelled subscribe of x did not return");
+        reader.release();
+
+        await(replaying.waitUntilStarted().toFuture(), "The subscribe with catch-up did not start");
+        assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("subscribed:x", "cancelled:x", "subscribed:x");
+        assertThat(wrapped.isRunning("x")).as("whether the wrapped model runs x").isTrue();
+        assertThat(catchup.isRunning("x")).as("whether the catch-up reports x running").isTrue();
     }
 
     // Keeps the time the threads of a test take to load these classes out of what the deadline measures
@@ -562,6 +694,38 @@ class ReactorCatchupSubscribeUnderWayTest {
         return "thread " + thread.getName() + " is " + thread.getState() + " at " + Arrays.stream(thread.getStackTrace()).limit(6).toList();
     }
 
+    // Replays nothing, and ends a read only once released, so a handover waits until then
+    private static final class HeldReplay implements UnscopedPositionOrderedReader {
+        private final CountDownLatch reading = new CountDownLatch(1);
+        private final Sinks.Empty<Void> released = Sinks.empty();
+
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            return Flux.defer(() -> {
+                reading.countDown();
+                return released.asMono().thenMany(Flux.empty());
+            });
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return Mono.just(5L);
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
+        }
+
+        void awaitReading() {
+            awaitLatch(reading, STARTUP, "The replay never read");
+        }
+
+        void release() {
+            released.tryEmitEmpty().orThrow();
+        }
+    }
+
     // Nothing is replayed here, since the subscribes under test go straight to live or are refused first
     private static final class UnusedReader implements UnscopedPositionOrderedReader {
         @Override
@@ -589,10 +753,17 @@ class ReactorCatchupSubscribeUnderWayTest {
         final Set<String> subscribed = ConcurrentHashMap.newKeySet();
         final Set<String> paused = ConcurrentHashMap.newKeySet();
         final Set<String> failingSubscribes = ConcurrentHashMap.newKeySet();
+        // When on, a cancel completes only once completeCancel(..) is called for it, and removes the id only if it held it when asked
+        volatile boolean holdsCancels;
+        final List<Sinks.Empty<Void>> heldCancels = new CopyOnWriteArrayList<>();
+        final AtomicInteger cancelCalls = new AtomicInteger();
+        volatile int failingCancelsFrom = Integer.MAX_VALUE;
         // Run on the thread that cancels the id, as the cancel of a Mongo subscription runs its cancel hooks
         final Map<String, Runnable> onCancel = new ConcurrentHashMap<>();
         // Holds the id from before it evaluates the start, as ReactorMongoSubscriptionModel does
         volatile boolean registersBeforeTheStart;
+        // Refuses a subscribe of an id it holds, as ReactorMongoSubscriptionModel does
+        volatile boolean refusesDuplicates;
         // Every action each id was subscribed with, since a nested subscribe of an id adds one
         final Map<String, List<Function<CloudEvent, Mono<Void>>>> actions = new ConcurrentHashMap<>();
 
@@ -633,12 +804,48 @@ class ReactorCatchupSubscribeUnderWayTest {
         }
 
         private void register(String subscriptionId) {
+            if (refusesDuplicates && subscribed.contains(subscriptionId)) {
+                events.add("refused:" + subscriptionId);
+                throw new DuplicateSubscriptionIdException(subscriptionId);
+            }
             subscribed.add(subscriptionId);
             events.add("subscribed:" + subscriptionId);
         }
 
+        int cancelsHeld() {
+            return heldCancels.size();
+        }
+
+        void completeCancel(int index) {
+            heldCancels.get(index).tryEmitEmpty().orThrow();
+        }
+
+        void failCancelsFromNowOn() {
+            failingCancelsFrom = cancelCalls.get() + 1;
+        }
+
+        void succeedCancels() {
+            failingCancelsFrom = Integer.MAX_VALUE;
+        }
+
         @Override
         public Mono<Void> cancelSubscription(String subscriptionId) {
+            if (cancelCalls.incrementAndGet() >= failingCancelsFrom) {
+                throw new IllegalStateException("The wrapped cancel of " + subscriptionId + " failed");
+            }
+            if (holdsCancels) {
+                events.add("cancel-asked:" + subscriptionId);
+                boolean heldWhenAsked = subscribed.contains(subscriptionId);
+                Sinks.Empty<Void> completion = Sinks.empty();
+                heldCancels.add(completion);
+                return completion.asMono().doOnSuccess(done -> {
+                    if (heldWhenAsked) {
+                        subscribed.remove(subscriptionId);
+                        paused.remove(subscriptionId);
+                    }
+                    events.add("cancelled:" + subscriptionId);
+                });
+            }
             boolean held = subscribed.remove(subscriptionId);
             paused.remove(subscriptionId);
             events.add("cancelled:" + subscriptionId);

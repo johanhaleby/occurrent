@@ -270,8 +270,14 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
      * for example when a {@code StartAt.dynamic} function that model calls there cancels the id. This method then sends
      * the wrapped model the cancel at once, without waiting for that subscribe, and the action of that subscribe gets no
      * event after that. When the wrapped {@code subscribe(..)} returns holding the id, the subscribe cancels the id there
-     * again, unless a subscribe of the id made after this cancel owns it. A subscribe of the id is refused while that
-     * second cancel runs too.
+     * again, unless a subscribe of the id made after this cancel owns it. A subscribe of the id is refused while the
+     * wrapped model holds the id for that subscribe, also once the returned {@code Mono} has completed, and while that
+     * second cancel runs.
+     * <p>
+     * When this cancel comes before the wrapped model has taken the id for that subscribe, a subscribe of the id made
+     * after this cancel can be refused by the wrapped model with {@link DuplicateSubscriptionIdException}, since the
+     * cancelled subscribe can take the id there first. The id is then cancelled there again. A wrapped model that takes
+     * the id only after it evaluated the start makes that likely. {@code ReactorMongoSubscriptionModel} takes it before.
      */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
