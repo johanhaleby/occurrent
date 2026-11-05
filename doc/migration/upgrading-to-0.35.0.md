@@ -868,13 +868,12 @@ subscriptions behaves as before.
 
 ### What changes
 
-- `execute` throws the failure to the caller, and the service's retry strategy doesn't run the command again. On the
-  reactive stack the caller gets the original failure. On the blocking stack a strategy made by the factory methods of
-  `RetryStrategy` still gives the failure to its `onError` listener, and to its `onAfterRetry` listener when the
-  attempt was a retry, and throws it as its `mapError` maps it, as for a failure its predicate doesn't match. A
-  strategy of your own that ignores the shutdown predicate decides by its own predicate whether to run the command
-  again, and a run after the failure returns an empty attempt before it reads or writes. When that strategy returns,
-  the held failure is thrown, and when it throws, the caller gets what it throws.
+- `execute` fails, and the service's retry strategy doesn't run the command again. On the reactive stack the caller
+  gets the original failure. On the blocking stack a strategy made by the factory methods of `RetryStrategy` still
+  gives the failure to its `onError` listener and throws it as its `mapError` maps it, as for a failure its predicate
+  doesn't match. A strategy of your own that ignores the shutdown predicate gets an empty attempt from any later run,
+  before it reads or writes. When that strategy returns, the failure is thrown, and when it throws, the caller gets
+  what it throws.
 - The `sideEffect` doesn't run.
 - The retry strategy can still run the command again for a failure of the write itself, and for any failure when the
   attempt opened a transaction. The

@@ -52,8 +52,8 @@ transaction undoes the write. Otherwise the retry strategy doesn't run the comma
   the failure, and a private stand-in exception passes through the executor so a transaction the attempt opened still rolls back. On
   the blocking stack, whatever comes out of the executor once a failure is held is replaced by the held failure, and the
   service passes `RetryStrategy.execute` a shutdown predicate that answers `false` while a failure is held. The strategy
-  then doesn't ask its own predicate, doesn't run the command again, and gives the failure to `onError`, to `onAfterRetry` when
-  the attempt was a retry, and to `mapError`, as a failure it doesn't retry. A strategy of your own that ignores the
+  then doesn't ask its own predicate, doesn't run the command again, and gives the failure to `onError` and `mapError`, as a
+  failure it doesn't retry. A strategy of your own that ignores the
   shutdown predicate gets an empty attempt from any later run, before it reads or writes, and the held failure is thrown
   after the strategy returns. When such a strategy throws instead, the caller gets what it throws. On the
   reactive stack, whatever comes out of the executor means an empty attempt, a later run returns an empty attempt, and the
@@ -181,7 +181,7 @@ can't tell any of these from a rollback, so this ADR doesn't change them.
 The holder lasts one `execute` or one subscription. A caller that retries around `execute` or subscribes to the returned
 `Mono` again runs the command again, and so does an outer service's retry around a service called from its domain function.
 
-On the blocking stack, the `onError` listener of a strategy made by the factory methods of `RetryStrategy` hears a held failure, its `onAfterRetry` listener hears it when the attempt was a retry, and its `mapError` maps it, the same as for a failure its predicate doesn't match.
+On the blocking stack, the `onError` listener of a strategy made by the factory methods of `RetryStrategy` hears a held failure and its `mapError` maps it, the same as for a failure its predicate doesn't match.
 
 A handler can still run more than once for one command under a transaction it owns, and one with a side effect outside the
 transaction, an HTTP call say, still has to tolerate that.

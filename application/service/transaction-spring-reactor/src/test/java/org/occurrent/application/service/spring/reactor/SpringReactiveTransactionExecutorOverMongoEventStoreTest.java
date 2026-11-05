@@ -325,7 +325,7 @@ class SpringReactiveTransactionExecutorOverMongoEventStoreTest {
         var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
                 .synchronousSubscriptions(subscriptionsWhereAFailsAndBRecords(failure, receivedByB))
                 .transactionExecutor(new SpringReactiveTransactionExecutor(transactionManager))
-                // Retries every exception, so only the held failure keeps the command from running again
+                // Retries every exception
                 .retry(Retry.max(3))
                 .build();
         AtomicReference<Throwable> caught = new AtomicReference<>();
@@ -351,7 +351,7 @@ class SpringReactiveTransactionExecutorOverMongoEventStoreTest {
                 .tagGenerator(event -> Set.of(TAG))
                 .synchronousSubscriptions(subscriptionsWhereAFailsAndBRecords(failure, receivedByB))
                 .transactionExecutor(new SpringReactiveTransactionExecutor(transactionManager))
-                // Retries every exception, so only the held failure keeps the command from running again
+                // Retries every exception
                 .retry(Retry.max(3))
                 .build();
         AtomicReference<Throwable> caught = new AtomicReference<>();

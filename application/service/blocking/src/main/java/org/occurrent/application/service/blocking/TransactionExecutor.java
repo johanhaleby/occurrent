@@ -40,11 +40,10 @@ import java.util.function.Supplier;
  * a transaction, which the service takes to mean that transaction undoes the write. That takes a store that joins the
  * transaction and a rollback rule that covers the failure, and the service can't check either. Otherwise the strategy
  * doesn't run the command again, since that could write its events twice. A strategy made by the factory methods of
- * {@code RetryStrategy} still gives the failure to its {@code onError} listener, and to its {@code onAfterRetry}
- * listener when the attempt was a retry, and throws it as its {@code mapError} maps it. A strategy of your own that
- * ignores the shutdown predicate decides by its own predicate whether to run the command again, and a run after the
- * failure returns an empty attempt before it reads or writes. When that strategy returns, the held failure is thrown,
- * and when it throws, the caller gets what it throws. A failure of the write itself is retried as before.
+ * {@code RetryStrategy} still gives the failure to its {@code onError} listener and throws it as its {@code mapError}
+ * maps it. A strategy of your own that ignores the shutdown predicate gets an empty attempt from any later run, before
+ * it reads or writes. When that strategy returns, the failure is thrown, and when it throws, the caller gets what it
+ * throws. A failure of the write itself is retried as before.
  * <p>
  * An implementation that opens a transaction and overrides neither that method nor {@link #isTransactional()} still sees
  * an exception pass through and can roll back, but the command doesn't run again. See ADR 165.
