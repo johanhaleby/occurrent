@@ -91,6 +91,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -501,7 +502,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // A read through this store's template inside a MongoDB transaction on its database factory sees that transaction's
-    // snapshot and its own appends, but only with synchronization active, without which the template runs no session.
+    // snapshot and its own appends, but only with synchronization active, without which a template on a plain factory
+    // runs no session.
     // A reservation commits before its events are inserted, so every event in the snapshot is at or below the
     // snapshot's counter, and anything above it is this transaction's own. The reported head stays the snapshot's
     // counter. Otherwise the counter bounds the read, which is always safe.
@@ -934,7 +936,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * for the store as a whole under very high append rates. It runs on the database factory's own database, outside
      * the append transaction and outside any transaction of the caller (ADR 0021), so it does not turn into transaction
      * conflicts, and so it waits for {@link DcbMarkerModel#reservationWriteConcern majority} for at most
-     * {@code markerVersionsCommitTimeout}. The global monotonic sequence cannot be sharded away.
+     * {@code markerVersionsCommitTimeout}, or the client's {@code timeoutMS} when that is set and not 0. The global
+     * monotonic sequence cannot be sharded away.
      */
     private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
@@ -944,15 +947,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 () -> {
                     // Not through mongoTemplate, which would bind the update to a transaction open on this thread. Its
                     // failures are translated the way mongoTemplate would, which the duplicate check of the retry needs.
-                    var collection = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase().getCollection(dcbPositionCollectionName);
                     Document updated;
                     try {
-                        updated = collection
-                                .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout))
-                                .findOneAndUpdate(
-                                        Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
-                                        Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
-                                        new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
+                        updated = reservationCollection().findOneAndUpdate(
+                                Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
+                                Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
+                                new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
                     } catch (RuntimeException e) {
                         DataAccessException translated = mongoTemplate.getExceptionTranslator().translateExceptionIfPossible(e);
                         throw translated == null ? e : translated;
@@ -962,6 +962,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 });
     }
 
+    private MongoCollection<Document> reservationCollection() {
+        MongoCollection<Document> collection = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase().getCollection(dcbPositionCollectionName);
+        collection = collection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout));
+        Long timeoutMillis = DcbMarkerModel.reservationTimeoutMillis(collection.getTimeout(TimeUnit.MILLISECONDS), markerVersionsCommitTimeout);
+        return timeoutMillis == null ? collection : collection.withTimeout(timeoutMillis, TimeUnit.MILLISECONDS);
+    }
 
     /**
      * {@inheritDoc}

@@ -39,6 +39,7 @@ import org.springframework.dao.TransientDataAccessException;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
@@ -646,6 +647,40 @@ class SpringMongoEventStoreDcbConcurrencyTest {
         assertThat(failures)
                 .as("Retrying at the caller's own transaction boundary must let every append commit")
                 .isEmpty();
+    }
+
+    @Test
+    void a_read_in_a_transaction_whose_manager_does_not_synchronize_returns_no_event_above_the_head_it_reports() {
+        SimpleMongoClientDatabaseFactory factory = new SimpleMongoClientDatabaseFactory(mongoClient, databaseName);
+        AtomicReference<Runnable> beforeEventsQuery = new AtomicReference<>();
+        SpringMongoEventStore store = new SpringMongoEventStore(new MongoTemplate(factory), new EventStoreConfig.Builder()
+                .eventStoreCollectionName(COLLECTION)
+                .transactionConfig(new MongoTransactionManager(factory))
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM, DCB)
+                .queryOptions(query -> {
+                    Runnable action = query.getSortObject().containsKey("position") ? beforeEventsQuery.getAndSet(null) : null;
+                    if (action != null) {
+                        action.run();
+                    }
+                    return query;
+                })
+                .build());
+        DcbCriteria boundary = tags(Tag.parse("unsynchronized:1"));
+        store.append(List.of(taggedEvent("Before", "unsynchronized:1")));
+        MongoTransactionManager callersManager = new MongoTransactionManager(factory);
+        callersManager.setTransactionSynchronization(AbstractPlatformTransactionManager.SYNCHRONIZATION_NEVER);
+
+        DcbEventStream read = new TransactionTemplate(callersManager).execute(status -> {
+            // Commits between the read of the head and the events query
+            beforeEventsQuery.set(() -> CompletableFuture.runAsync(() -> eventStore.append(List.of(taggedEvent("Concurrent", "unsynchronized:1")))).join());
+            return store.read(boundary);
+        });
+
+        assertThat(requireNonNull(read).events()).extracting(CloudEvent::getType).containsExactly("Before");
+        assertThat(store.read(boundary).events()).extracting(CloudEvent::getType)
+                .as("the concurrent append committed, or the read above proves nothing")
+                .containsExactly("Before", "Concurrent");
     }
 
     private List<Throwable> runAppendsInOuterTransaction(SpringMongoEventStore store, MongoTransactionManager txManager, int threadCount, String tagPrefix, int maxAttempts) throws Exception {

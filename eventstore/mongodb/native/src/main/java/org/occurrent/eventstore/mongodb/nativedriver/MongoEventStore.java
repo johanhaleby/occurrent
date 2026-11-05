@@ -65,6 +65,7 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -790,7 +791,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
      * by the DCB and stream write paths so both draw from one sequence. Every positioned append passes through this
      * document, so it serializes writes and caps append throughput under very high load. It is kept outside the append
      * transaction so it does not cause transaction conflicts, and so it waits for {@link DcbMarkerModel#reservationWriteConcern majority}
-     * for at most {@code markerVersionsCommitTimeout}.
+     * for at most {@code markerVersionsCommitTimeout}, or the client's {@code timeoutMS} when that is set and not 0.
      */
     private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
@@ -800,13 +801,19 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 .maxAttempts(5)
                 .retryIf(MongoEventStore::isDuplicateKeyError)
                 .execute(() -> {
-                    Document updated = dcbPositionCollection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(dcbPositionCollection.getWriteConcern(), markerVersionsCommitTimeout)).findOneAndUpdate(
+                    Document updated = reservationCollection().findOneAndUpdate(
                             eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
                             Updates.inc(DcbMarkerModel.COUNTER_POSITION, (long) eventCount),
                             new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER));
                     long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DcbMarkerModel.COUNTER_POSITION)).longValue();
                     return lastPosition - eventCount + 1;
                 });
+    }
+
+    private MongoCollection<Document> reservationCollection() {
+        MongoCollection<Document> collection = dcbPositionCollection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(dcbPositionCollection.getWriteConcern(), markerVersionsCommitTimeout));
+        Long timeoutMillis = DcbMarkerModel.reservationTimeoutMillis(collection.getTimeout(TimeUnit.MILLISECONDS), markerVersionsCommitTimeout);
+        return timeoutMillis == null ? collection : collection.withTimeout(timeoutMillis, TimeUnit.MILLISECONDS);
     }
 
     /**

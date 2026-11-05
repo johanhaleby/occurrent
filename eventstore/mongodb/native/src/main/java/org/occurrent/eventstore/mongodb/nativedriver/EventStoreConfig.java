@@ -369,8 +369,9 @@ public class EventStoreConfig {
          * {@link #transactionOptions(TransactionOptions) transaction options} configured for writes.
          * <p>
          * It also bounds how long an append waits for a majority to acknowledge its position reservation. An append
-         * that isn't acknowledged within it throws and writes no event. On a client with {@code timeoutMS}, where the
-         * driver sends no {@code wtimeout}, the client's timeout bounds that wait instead.
+         * that isn't acknowledged within it throws and writes no event. On a client with a {@code timeoutMS} above
+         * 0, where the driver sends no {@code wtimeout}, the client's timeout bounds that wait instead. A
+         * {@code timeoutMS} of 0 waits forever, so there this timeout still bounds it.
          *
          * @param markerVersionsCommitTimeout at least 1 millisecond
          * @return The same {@code Builder} instance.

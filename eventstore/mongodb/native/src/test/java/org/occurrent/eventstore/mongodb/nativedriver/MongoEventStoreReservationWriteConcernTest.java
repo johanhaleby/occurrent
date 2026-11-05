@@ -166,6 +166,27 @@ class MongoEventStoreReservationWriteConcernTest {
         );
     }
 
+    @Test
+    void an_append_on_a_client_with_an_infinite_operation_timeout_reserves_its_position_at_majority_within_the_marker_versions_commit_timeout() {
+        // Given
+        mongoClient.close();
+        openStore(settings -> settings.timeout(0, TimeUnit.SECONDS));
+        commands.clear();
+
+        // When
+        store.append(List.of(taggedEvent("Happened", "order:1")));
+
+        // Then
+        BsonDocument reservation = onlyReservation().document();
+        BsonDocument writeConcern = reservation.getDocument("writeConcern", new BsonDocument());
+        assertAll(
+                () -> assertThat(writeConcern.get("w")).as("%s", reservation).isEqualTo(new BsonString("majority")),
+                () -> assertThat(writeConcern.containsKey("wtimeout")).as("%s", reservation).isFalse(),
+                () -> assertThat(reservation.containsKey("maxTimeMS")).as("%s", reservation).isTrue(),
+                () -> assertThat(reservation.getNumber("maxTimeMS").longValue()).as("%s", reservation).isBetween(1L, COMMIT_TIMEOUT_MILLIS)
+        );
+    }
+
     private Command onlyReservation() {
         List<Command> reservations = commands.commands("findAndModify", POSITIONS);
         assertThat(reservations).as("reservations in %s", commands.commands()).hasSize(1);

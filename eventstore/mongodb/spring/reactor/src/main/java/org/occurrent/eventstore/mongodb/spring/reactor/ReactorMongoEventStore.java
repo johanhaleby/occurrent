@@ -98,6 +98,7 @@ import reactor.util.retry.Retry;
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
@@ -667,15 +668,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // The factory's own database instead of mongoTemplate, which would bind the update to a transaction in the
         // subscriber context. It waits for majority, see DcbMarkerModel.reservationWriteConcern.
         return mongoTemplate.getMongoDatabaseFactory().getMongoDatabase()
-                .flatMap(database -> {
-                    var collection = database.getCollection(dcbPositionCollectionName);
-                    return Mono.from(collection
-                            .withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout))
-                            .findOneAndUpdate(
-                                    Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
-                                    Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
-                                    new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER)));
-                })
+                .flatMap(database -> Mono.from(reservationCollection(database.getCollection(dcbPositionCollectionName)).findOneAndUpdate(
+                        Filters.eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID),
+                        Updates.inc(DcbMarkerModel.COUNTER_POSITION, eventCount),
+                        new FindOneAndUpdateOptions().upsert(true).returnDocument(ReturnDocument.AFTER))))
                 .map(updated -> ((Number) updated.get(DcbMarkerModel.COUNTER_POSITION)).longValue() - eventCount + 1)
                 // Translated the way mongoTemplate would, so a caller sees the same exceptions as from the rest of the store
                 .onErrorMap(RuntimeException.class, e -> {
@@ -686,6 +682,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 // and all but one get a duplicate key. On retry the document exists and the upsert becomes an update.
                 // No transaction holds the upsert, so the retry needs no ownership check.
                 .retryWhen(COLD_START_COUNTER_RETRY);
+    }
+
+    private MongoCollection<Document> reservationCollection(MongoCollection<Document> collection) {
+        collection = collection.withWriteConcern(DcbMarkerModel.reservationWriteConcern(collection.getWriteConcern(), markerVersionsCommitTimeout));
+        Long timeoutMillis = DcbMarkerModel.reservationTimeoutMillis(collection.getTimeout(TimeUnit.MILLISECONDS), markerVersionsCommitTimeout);
+        return timeoutMillis == null ? collection : collection.withTimeout(timeoutMillis, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -699,7 +701,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     // A read through this store's template inside a MongoDB transaction on its database factory sees that transaction's
-    // snapshot and its own appends, but only with synchronization active, without which the template runs no session.
+    // snapshot and its own appends, but only with synchronization active, without which a template on a plain factory
+    // runs no session.
     // A reservation commits before its events are inserted, so every event in the snapshot is at or below the
     // snapshot's counter, and anything above it is this transaction's own. The reported head stays the snapshot's
     // counter. Otherwise the counter bounds the read, which is always safe.

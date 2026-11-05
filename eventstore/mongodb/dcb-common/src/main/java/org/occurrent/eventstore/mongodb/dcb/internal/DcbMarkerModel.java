@@ -19,6 +19,7 @@ package org.occurrent.eventstore.mongodb.dcb.internal;
 import com.mongodb.WriteConcern;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
@@ -79,10 +80,21 @@ public final class DcbMarkerModel {
      * with, because a failover that lost the reservation would leave the append's event above the counter, where no
      * read finds it (ADR 149). {@code timeout} is the store's {@code markerVersionsCommitTimeout} and replaces any
      * {@code wtimeout} on the given write concern, so a reservation that majority doesn't acknowledge in time fails the
-     * append instead of blocking it.
+     * append instead of blocking it. A client with {@code timeoutMS} makes the driver send no {@code wtimeout}, and
+     * {@link #reservationTimeoutMillis} gives such a reservation its bound instead.
      */
     public static WriteConcern reservationWriteConcern(WriteConcern writeConcern, Duration timeout) {
         return writeConcern.withW("majority").withWTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * The operation timeout a position reservation needs on a collection whose timeout is {@code collectionTimeoutMillis},
+     * or {@code null} when it needs none. A {@code timeoutMS} of 0 on the client waits forever, so it gets
+     * {@code timeout} instead. Any other {@code timeoutMS} bounds the reservation as it is, and without one the
+     * {@code wtimeout} of {@link #reservationWriteConcern} does.
+     */
+    public static @Nullable Long reservationTimeoutMillis(@Nullable Long collectionTimeoutMillis, Duration timeout) {
+        return collectionTimeoutMillis != null && collectionTimeoutMillis == 0 ? timeout.toMillis() : null;
     }
 
     public static String positionCollectionName(String eventStoreCollectionName) {

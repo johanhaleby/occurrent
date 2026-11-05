@@ -758,8 +758,9 @@ A w:1 on the client, on the database or as the server's default no longer applie
 `wtimeout` you configured. The update waits for majority for at most `markerVersionsCommitTimeout`, 5 seconds by
 default, the setting that also bounds the commit of a read that asks for versions. When a majority doesn't acknowledge
 the update in that time, the append throws and writes no event, and the positions it reserved stay unused. On a client
-with `timeoutMS`, where the driver sends no `wtimeout`, your `timeoutMS` bounds the update instead. The rest of the
-append keeps the write concern it had.
+with a `timeoutMS` above 0, where the driver sends no `wtimeout`, your `timeoutMS` bounds the update instead. A
+`timeoutMS` of 0 waits forever, so there `markerVersionsCommitTimeout` still bounds it. The rest of the append keeps
+the write concern it had.
 
 Every append waits for as long as a majority takes to replicate the update. On a set with three data-bearing members
 and no write concern configured, the update already waited for majority, so nothing changes there. On a local
@@ -779,22 +780,26 @@ committed with it. It now commits on its own, before the append writes its event
   share. An append that loses throws a `DataIntegrityViolationException` or a `TransientDataAccessException`, and your
   transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it when
   they opened it.
-- A read in your transaction reports, in `lastSequencePosition()`, the head as of your transaction's first operation on
-  the store's database factory. It also returns your transaction's own appends, and those it started after that
-  operation are at positions above that head. If you keep that position and read after it later, you get those events
+- A read in your transaction reports, in `lastSequencePosition()`, the head as of the first operation in your
+  transaction's MongoDB session on the store's database factory. It also returns your transaction's own appends, and
+  those it started after that operation are at positions above that head. If you keep that position and read after it later, you get those events
   again.
-- An append joins your transaction only when a MongoDB transaction is already open on the store's
-  `MongoDatabaseFactory` instance, either one your `MongoTransactionManager` opened on it or one the store opened there
-  for an earlier read in your transaction. That also needs the store's transaction manager on that instance, which is how
-  the Spring Boot starters set it up. Otherwise the append commits in a MongoDB transaction of its own, so it doesn't
-  roll back with yours, and when your transaction read before it, later reads in it don't return that append.
+- An append joins your transaction when the store's transaction manager, the one in its `EventStoreConfig`, finds a
+  MongoDB transaction open on its own `MongoDatabaseFactory` instance, or when your `MongoTransactionManager` opened
+  one on the template's factory instance. The Spring Boot starters build the store's manager on the
+  `MongoDatabaseFactory` bean that Spring Boot also builds its `MongoTemplate` on. With one factory instance, the
+  append joins a transaction your `MongoTransactionManager` opened there, or one the store opened there for an earlier
+  read in your transaction. Otherwise the append commits in a MongoDB transaction of its own, so it doesn't roll back
+  with yours, and when your transaction read before it, later reads in it don't return that append. That happens, for
+  example, when the append is the first thing a JDBC transaction does on the store.
 
 ### What to do
 
 On a replica set of a primary, a secondary and an arbiter with the secondary down, a majority can't acknowledge the
 update. In a probe on all three stores, appends there used to complete in 6 to 18 ms. The store now bounds the update
 by `markerVersionsCommitTimeout`, so such an append throws after 5 seconds by default. To wait longer or
-shorter, set `markerVersionsCommitTimeout` in the store's `EventStoreConfig`, or `timeoutMS` on a client that has it.
+shorter, set `markerVersionsCommitTimeout` in the store's `EventStoreConfig`. On a client with a `timeoutMS` above 0
+that setting doesn't bound the update, and the client's `timeoutMS` does.
 
 ## Criteria with tags conflict on their tags
 
