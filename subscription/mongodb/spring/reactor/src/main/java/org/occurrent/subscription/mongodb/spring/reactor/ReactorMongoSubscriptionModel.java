@@ -946,7 +946,11 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     /**
      * Resumes a paused subscription at {@code startAt}, as {@link #resumeSubscription(String)} resumes it from the
-     * position it had read to. {@link StartAt#now()} and the model default resume it from the moment of this call.
+     * position it had read to. {@link StartAt#now()} and the model default resume it from the moment of this call. A
+     * {@code startAt} that is a catch-up's position, a {@code GlobalCheckpoint} or a {@code CatchupTimeCheckpoint},
+     * resumes from the position the subscription had read to as well, since the change stream can't open at either and
+     * opening it at the present would skip what was written while the subscription was paused. So does a dynamic
+     * {@code startAt} each time it answers one of them.
      *
      * @throws IllegalArgumentException If this model can't open a change stream at {@code startAt}.
      */
@@ -969,10 +973,45 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 throw new UnknownSubscriptionException(subscriptionId);
             }
             running = true;
-            // A position of its own, since a step of the paused run that is still under way can move the old one
-            runStart = startRun(new InternalSubscription(subscriptionId, paused.filter, new AtomicReference<>(startAt), new AtomicReference<>(presentNow()), paused.opened, paused.action));
+            if (MongoCommons.isCatchupPosition(startAt)) {
+                logResumingFromItsOwnPosition(subscriptionId, startAt);
+                // As resumeSubscription(id) resumes it, sharing the position a step of the paused run that is still
+                // under way moves
+                runStart = startRun(paused);
+            } else {
+                // A position of its own, since a step of the paused run that is still under way can move the old one
+                AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
+                runStart = startRun(new InternalSubscription(subscriptionId, paused.filter, new AtomicReference<>(repositioned(subscriptionId, startAt, paused, presentAt)), presentAt, paused.opened, paused.action));
+            }
         }
         return launch(runStart);
+    }
+
+    // startAt, or for a dynamic one a function that answers the position the paused subscription read to whenever
+    // startAt answers a catch-up's position. presentAt is then the present that position was made with, so a
+    // subscription paused before its change stream opened doesn't skip what was written during the pause. Reads the
+    // position before the present, since a restart sets the present first
+    private StartAt repositioned(String subscriptionId, StartAt startAt, InternalSubscription paused, AtomicReference<Present> presentAt) {
+        if (!startAt.isDynamic()) {
+            return startAt;
+        }
+        Present resumedAt = presentAt.get();
+        return StartAt.dynamic(ctx -> {
+            StartAt answered = startAt.get(ctx);
+            if (MongoCommons.isCatchupPosition(answered)) {
+                logResumingFromItsOwnPosition(subscriptionId, answered);
+                StartAt readTo = paused.currentStartAt.get();
+                presentAt.set(paused.presentAt.get());
+                return readTo;
+            }
+            presentAt.set(resumedAt);
+            return answered;
+        });
+    }
+
+    private static void logResumingFromItsOwnPosition(String subscriptionId, StartAt catchupPosition) {
+        log.info("Subscription {} resumes from its own position rather than at {}, which is not a change stream position. Events that checkpoint already covers can be delivered again.",
+                subscriptionId, catchupPosition);
     }
 
     @Override
