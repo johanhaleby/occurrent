@@ -439,8 +439,10 @@ class ProjectionAnnotationRegistrar {
     // The two sound cases the recordAppliedAppends-never-resets warning may fire on for a DCB/agnostic/stream
     // projection, per the epic's doctrine that a fact about a composition comes from the owner that composed it,
     // never from a probe or an annotation-only predicate:
-    //   1. An explicit NOW, StartAt.now() is a documented, composition-independent contract every Subscribable
-    //      must honor, true regardless of what the composition can do.
+    //   1. NOW with resumeBehavior SAME_AS_START_AT, which keeps no position, true regardless of what the composition
+    //      can do. A SubscriptionResumePoints answer can still make it replay, and this check does not ask for one.
+    //      Under the default resumeBehavior a restart resumes from the stored checkpoint and replays when that
+    //      checkpoint is a catch-up position.
     //   2. DEFAULT, where the auto-configuration that composed this stack's default model registered, through
     //      ComposedDefaultStartPosition, that its own DEFAULT bypasses catch-up, and capability is that exact
     //      composition. True for Occurrent's shipped Mongo composition (issue 865), never assumed for an
@@ -454,7 +456,7 @@ class ProjectionAnnotationRegistrar {
     // silent. This registrar cannot verify either one.
     private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable SubscriptionModelCapability capability) {
         if (annotation.startAt() == org.occurrent.annotation.StartPosition.NOW) {
-            return true;
+            return annotation.resumeBehavior() == ResumeBehavior.SAME_AS_START_AT;
         }
         if (annotation.startAt() == org.occurrent.annotation.StartPosition.DEFAULT && annotation.startAtGlobalPosition() < 0) {
             // startAtGlobalPosition >= 0 overrides DEFAULT and replays from that position regardless
