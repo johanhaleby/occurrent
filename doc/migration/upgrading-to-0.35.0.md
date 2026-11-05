@@ -1120,17 +1120,18 @@ change stream reads instead.
 Once a change stream has opened, the model opens it again at the same position and doesn't call the function again.
 That covers a pause and a resume, an action that throws, and a failure reading the change stream before the first
 event. A reactor subscription that counts the first document takes the position the function answered when its `Flux`
-was subscribed to. It calls the function again only when the server rejects that position before a document is read,
-also when a pause or another failure opened the change stream again at that position first. In
-0.34.0 the models called the function again at each opening before the first event, and a catch-up's checkpoint from
+was subscribed to. It calls the function again only when the change stream fails before it reads a document with error
+code 9, 280 or 286, the codes the server rejects a start position with. That holds also when a pause or another failure
+opened the change stream again at that position first. In 0.34.0 the models could call the function again at an opening
+before the first event, and a catch-up's checkpoint from
 that later call opened at the present and skipped the events written in between.
 
 Three cases still lose events, as they did in 0.34.0:
 
 - A resume token of another collection as the function's first answer, on the blocking models and on a reactor
   subscription that reads through the driver's cursor. The server opens the change stream at it and rejects it only on
-  the first read after an event is written to the watched collection. The subscription keeps running and delivers
-  nothing.
+  the first read after an event is written to the watched collection. The subscription keeps running and can retry at
+  that token without delivering anything.
 - An operation time ahead of the server's clock as the function's answer. The server opens the change stream at it, and
   the events written before that time aren't delivered.
 - A position the server rejects only after an event is written, such as a resume token of another collection, on a

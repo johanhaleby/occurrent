@@ -1107,13 +1107,17 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         }
 
         // Not for a run a pause has closed, whose reads go on until the subscribe that started it has returned. Records
-        // where the run opened, so opening again doesn't ask a dynamic position again
+        // where the run opened, so opening again doesn't ask a dynamic position again. Holds the run's lock, so a pause
+        // closes the run either before the record and the flag or after both, and a resume never finds the check ended
+        // with the dynamic position still in place
         void changeStreamOpened(Run run) {
-            if (run.isOpen()) {
-                opened.set(true);
-                OpenedAt openedAt = run.openedAt();
-                if (openedAt != null) {
-                    MongoCommons.recordWhereItOpened(openedAt, (expected, next) -> run.compareAndMove(currentStartAt, expected, next));
+            synchronized (run) {
+                if (run.isOpen()) {
+                    OpenedAt openedAt = run.openedAt();
+                    if (openedAt != null) {
+                        MongoCommons.recordWhereItOpened(openedAt, (expected, next) -> run.compareAndMove(currentStartAt, expected, next));
+                    }
+                    opened.set(true);
                 }
             }
         }
