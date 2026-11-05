@@ -1050,12 +1050,16 @@ final class NamedCatchupSupport {
     // The wrapped model lost the live start, holds the subscription paused and no takeover replay runs, because the
     // wrapped model hasn't run the takeover yet or the takeover replay failed. Resuming the wrapped model would open
     // the subscription where it lost the history, so the takeover replay runs now instead. A resume whose takeover runs
-    // nothing once the shutdown flag is set is refused, rather than resuming the wrapped model there.
+    // nothing once the shutdown flag is set is refused, rather than resuming the wrapped model there. A takeover of the
+    // same loss already under way resumes the subscription itself, so a resume meanwhile is refused as one of a running
+    // replay is.
     private @Nullable Subscription takeOverOnResume(String subscriptionId) {
         HandedOver made = handedOver.get(subscriptionId);
-        if (made == null || !made.takeOverAsked().get() || !named.isPaused(subscriptionId)
-                || !made.takingOver().compareAndSet(false, true)) {
+        if (made == null || !made.takeOverAsked().get() || !named.isPaused(subscriptionId)) {
             return null;
+        }
+        if (!made.takingOver().compareAndSet(false, true)) {
+            throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
         CatchupState taking = takeOver(subscriptionId, made);
         if (taking == null) {

@@ -57,10 +57,13 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.UnaryOperator;
 import java.util.stream.LongStream;
@@ -534,6 +537,47 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     @Test
+    void a_resume_while_the_takeover_the_wrapped_model_runs_has_begun_and_not_yet_registered_its_replay_is_refused_as_already_running_and_does_not_resume_the_wrapped_model_where_it_lost_the_history() throws InterruptedException {
+        // Given a subscription whose live start the wrapped model lost, and which it paused for a takeover
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            HistoryLossHandling.TakeOver lossOfTheLiveStart = (HistoryLossHandling.TakeOver) wrapped.asksTheListeners(ID, wrapped.positionOf(ID));
+            wrapped.pauseSubscription(ID);
+            reader.head = 4;
+
+            // When the wrapped model runs the takeover on its own thread, and a resume comes after that takeover began and
+            // before it registered its replay
+            CountDownLatch registers = new CountDownLatch(1);
+            CountDownLatch mayRegister = new CountDownLatch(1);
+            NamedCatchupMapHook.installIn(catchup, "catchingUp").beforeTheComputeIn("takeOver", () -> {
+                registers.countDown();
+                await(mayRegister);
+            });
+            Thread takeover = new Thread(lossOfTheLiveStart.afterPause(), "takeover");
+            takeover.start();
+            await(registers);
+            Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+            int resumedWhereItWasHeld = wrapped.resumedWhereItWasHeld.get();
+            mayRegister.countDown();
+            takeover.join(10_000);
+            awaitNoReplayInFlight(catchup);
+
+            // Then the resume is refused as one of a running subscription, the wrapped model is not resumed where it lost
+            // the history, and the takeover delivers the event written in the gap
+            assertAll(
+                    () -> assertThat(thrown).as("what the resume throws").isInstanceOf(SubscriptionAlreadyRunningException.class),
+                    () -> assertThat(resumedWhereItWasHeld).as("resumed where it lost the history, right after the resume").isZero(),
+                    () -> assertThat(takeover.isAlive()).as("whether the takeover still runs 10 seconds after it may register").isFalse(),
+                    () -> assertThat(received).as("the history again, now with the event written in the gap").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4")
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_loss_of_the_lost_live_start_reported_again_as_the_takeover_hands_over_is_taken_over_when_the_model_restarts_from_the_present() {
         verifiesALossReportedAgainAsTheTakeoverHandsOverIsTakenOver(new LosingLiveStartModel(true));
     }
@@ -668,17 +712,41 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         assertThat(received).containsExactly("e1", "e2", "e3");
     }
 
+    // Until no replay of the id is in flight, as when a takeover replay has handed over
+    private static void awaitNoReplayInFlight(ReactorStreamCatchupSubscriptionModel catchup) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (catchup.isCatchingUp(ID)) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("A replay of " + ID + " still in flight after 10 seconds");
+            }
+            Thread.sleep(10);
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("Not released within 10 seconds");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Interrupted while waiting", e);
+        }
+    }
+
     private static CloudEvent liveEvent(String id, long position) {
         return OccurrentCloudEventExtension.withPosition(CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("type").build(), position);
     }
 
-    // Takes the place of a map of the catch-up and runs a hook once, right after the first read of it that a given method
-    // of the catch-up makes itself. That puts the hook between a call reading the map and acting on what it read, which
-    // no thread schedule reaches every time.
+    // Takes the place of a map of the catch-up and runs a hook once, right after the first read of it or right before the
+    // first compute on it that a given method of the catch-up makes itself. That puts the hook between two steps of a
+    // call, which no thread schedule reaches every time.
     @SuppressWarnings({"rawtypes", "unchecked"})
     private static final class NamedCatchupMapHook extends ConcurrentHashMap {
         private final AtomicReference<@Nullable String> readIn = new AtomicReference<>();
         private final AtomicReference<@Nullable Runnable> afterRead = new AtomicReference<>();
+        private final AtomicReference<@Nullable String> computeIn = new AtomicReference<>();
+        private final AtomicReference<@Nullable Runnable> beforeCompute = new AtomicReference<>();
 
         static NamedCatchupMapHook installIn(ReactorStreamCatchupSubscriptionModel model, String fieldName) {
             NamedCatchupMapHook hook = new NamedCatchupMapHook();
@@ -698,11 +766,22 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             afterRead.set(hook);
         }
 
+        void beforeTheComputeIn(String method, Runnable hook) {
+            computeIn.set(method);
+            beforeCompute.set(hook);
+        }
+
         @Override
         public Object get(Object key) {
             Object value = super.get(key);
             runOnceIfCalledFrom(readIn, afterRead);
             return value;
+        }
+
+        @Override
+        public Object compute(Object key, BiFunction remapping) {
+            runOnceIfCalledFrom(computeIn, beforeCompute);
+            return super.compute(key, remapping);
         }
 
         private static void runOnceIfCalledFrom(AtomicReference<@Nullable String> method, AtomicReference<@Nullable Runnable> hook) {
