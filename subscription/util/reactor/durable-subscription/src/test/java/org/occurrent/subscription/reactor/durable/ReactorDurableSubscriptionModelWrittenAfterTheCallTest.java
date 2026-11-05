@@ -90,9 +90,10 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     /**
      * The model is stopped when the subscribe comes, and a cancel of the same id is still deleting its position. The
-     * dynamic start position runs where it would without the delete. StartAt.now() starts from where the feed is at the
-     * start, so what is written after the start is delivered. The model default starts from where the feed was at the
-     * subscribe, so what is written between the subscribe and the start is delivered too.
+     * dynamic start position runs where it would without the delete. Where this model drives the feed itself,
+     * StartAt.now() starts from where the feed is at the start, so what is written after the start is delivered. The
+     * model default starts from where the feed was at the subscribe, and so does StartAt.now() handed to the wrapped
+     * model, so what is written between the subscribe and the start is delivered too.
      */
     @ParameterizedTest
     @CsvSource({"false, now", "false, default", "true, now", "true, default"})
@@ -122,6 +123,8 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             assertThat(delivered).as("events delivered to the subscription").containsAll(ids(writtenAfterTheStart));
             if (answer.equals("default")) {
                 assertThat(delivered).as("events delivered to the subscription from the model default").contains(String.valueOf(writtenBeforeTheStart));
+            } else if (handsOver) {
+                assertThat(delivered).as("events delivered to the subscription from StartAt.now() handed over").contains(String.valueOf(writtenBeforeTheStart));
             } else {
                 assertThat(delivered).as("events delivered to the subscription from StartAt.now()").doesNotContain(String.valueOf(writtenBeforeTheStart));
             }
@@ -238,10 +241,13 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     /**
      * The subscribe comes while the delete of an earlier cancel of the same id runs, with a dynamic start position that
-     * answers StartAt.now(), and the read of where the feed is fails or answers nothing. A read that failed is read
-     * again until it answers, and one that answers nothing has the subscription open its feed at StartAt.now(). Either
-     * way the subscription starts, as it does without the delete, and what is written after the subscribe returned is
-     * delivered.
+     * answers StartAt.now(), and the read of where the feed is fails or answers nothing. Where this model drives the
+     * feed itself, a read that failed is read again until it answers, and one that answers nothing has the subscription
+     * open its feed at StartAt.now(). Either way the subscription starts, as it does without the delete, and what is
+     * written after the subscribe returned is delivered. Handed to the wrapped model, a read that fails fails the start,
+     * as it does for the model default, and one that answers nothing hands the subscription over at StartAt.now() once
+     * the subscribe has returned. The wrapped model then opens its feed after the event written right after the
+     * subscribe returned, so that event is skipped.
      */
     @ParameterizedTest
     @CsvSource({"false, fails", "false, empty", "true, fails", "true, empty"})
@@ -266,9 +272,15 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             written.add(feed.write());
 
             // Then
+            if (handsOver && read.equals("fails")) {
+                assertThat(thrown).as("how waiting for the start of the subscription ended").isInstanceOf(IllegalStateException.class).hasMessage(POSITION_READ_FAILED);
+                assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
+                return;
+            }
             assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
             await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(written.getLast())));
-            assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(ids(written));
+            List<Long> deliveredOnceStarted = handsOver ? List.of(written.getLast()) : written;
+            assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(ids(deliveredOnceStarted));
         } finally {
             storage.releaseDelete.countDown();
             model.shutdown();
@@ -1396,8 +1408,9 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     /**
      * The wrapped model is stopped at the subscribe, the read of where its feed is fails or answers nothing, and the
-     * delete of an earlier cancel of the same id runs. A dynamic start position answering StartAt.now() needs no such
-     * read, so the subscription starts when the wrapped model is started, as it does without the delete.
+     * delete of an earlier cancel of the same id runs. A dynamic start position answering StartAt.now() starts from
+     * that read. One that answers nothing hands the subscription over at StartAt.now(), so it starts when the wrapped
+     * model is started, as it does without the delete. One that fails fails the start, as it does for the model default.
      */
     @ParameterizedTest
     @ValueSource(strings = {"fails", "empty"})
@@ -1421,8 +1434,13 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
             // Then
             assertThat(startEnded).as("how the start ended").isNull();
-            assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
-            assertThat(feed.started()).as("subscriptions that began reading from the feed").isEqualTo(1);
+            if (read.equals("fails")) {
+                assertThat(thrown).as("how waiting for the start of the subscription ended").isInstanceOf(IllegalStateException.class).hasMessage(POSITION_READ_FAILED);
+                assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
+            } else {
+                assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
+                assertThat(feed.started()).as("subscriptions that began reading from the feed").isEqualTo(1);
+            }
         } finally {
             storage.releaseDelete.countDown();
             model.shutdown();
