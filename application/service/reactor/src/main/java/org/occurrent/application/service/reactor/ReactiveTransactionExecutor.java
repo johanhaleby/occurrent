@@ -74,10 +74,10 @@ public interface ReactiveTransactionExecutor {
     }
 
     /**
-     * Whether a transaction is in force right now. A synchronous subscription reads this to decide what happens to the
-     * handlers behind one that errors: inside a transaction dispatch stops at the first failure, outside one every
-     * handler is offered the event and the failures are reported together. The default of
-     * {@link #inTransactionTellingIfOpened(Function)} reads it to tell whether this call opened the transaction.
+     * Whether a transaction is in force right now. When it emits {@code true} for a transaction this call joined, the
+     * application service asks {@link #rollsBackAJoinedTransactionOnFailure()} whether synchronous dispatch stops at the
+     * first handler that errors. The default of {@link #inTransactionTellingIfOpened(Function)} reads it to tell whether
+     * this call opened the transaction.
      * <p>
      * <strong>Answer for the moment of subscription, not for the executor as a whole.</strong> It can be asked before
      * {@link #inTransaction(Supplier)}, by the DCB application service and by the default of
@@ -99,14 +99,18 @@ public interface ReactiveTransactionExecutor {
     }
 
     /**
-     * Whether a failure that leaves this executor while it runs in a transaction someone else opened makes that transaction
-     * roll back, so the caller can't commit the write after handling the failure. Synchronous dispatch stops at the first
-     * failing handler only when the write can't commit after the failure: when this call opened the transaction, or when it
-     * joined one and this answers {@code true}. Otherwise every handler gets the event, since a synchronous subscription has
-     * no replay and a handler skipped while the caller commits the write would never see it.
+     * Whether a failure thrown out of this executor, while it runs in a transaction someone else opened, makes that
+     * transaction roll back, so the caller can't commit the write after catching the failure. Synchronous dispatch stops at the first
+     * handler that errors only when this call opened the transaction, or when it joined one and this answers {@code true}.
+     * Otherwise every handler gets the event and the failures are reported together, since a synchronous subscription has
+     * no replay and a handler skipped while the caller commits the write would never see the event.
      * <p>
-     * The default is {@code false}, so an implementation that doesn't override it gets the isolating behaviour, which can't
-     * lose a reaction. An implementation whose participant marks the caller's transaction rollback-only answers {@code true}.
+     * The default is {@code false}, so a handler failure in a joined transaction never keeps the event from the handlers
+     * behind it. {@code SpringReactiveTransactionExecutor} keeps the default, because a caller that catches the error
+     * from a transaction it joined still commits that transaction.
+     *
+     * @return {@code true} if the transaction this executor joined can't commit after a failure is thrown
+     * out of this executor.
      */
     default boolean rollsBackAJoinedTransactionOnFailure() {
         return false;

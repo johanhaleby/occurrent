@@ -35,11 +35,13 @@ import java.util.function.Supplier;
  * already committed by the time a handler runs, so a throwing handler does not roll the write back. Wire a
  * real implementation (for example a Spring-backed one) to make the write and the handlers commit atomically.
  * <p>
- * A failure after the write, in the re-read of the written events or in a handler, reaches the application service's
- * retry strategy only when {@link #inTransactionTellingIfOpened(Function)} says this attempt opened a transaction, which
- * the service takes to mean that transaction undoes the write. That takes a store that joins the transaction and a
- * rollback rule that covers the failure, and the service can't check either. Otherwise it reaches the caller, since
- * running the command again could write its events twice. The retry strategy still sees a failure of the write itself.
+ * A failure after the write, in the re-read of the written events or in a handler, can make the application service's
+ * retry strategy run the command again only when {@link #inTransactionTellingIfOpened(Function)} says this attempt opened
+ * a transaction, which the service takes to mean that transaction undoes the write. That takes a store that joins the
+ * transaction and a rollback rule that covers the failure, and the service can't check either. Otherwise the strategy
+ * doesn't run the command again, since that could write its events twice, but its {@code onError} and
+ * {@code onAfterRetry} listeners and its {@code mapError} still see the failure. A failure of the write itself is retried
+ * as before.
  * An implementation that opens a transaction and overrides neither that method nor {@link #isTransactional()} still sees
  * an exception pass through and can roll back, but the command doesn't run again. See ADR 165.
  */
@@ -77,10 +79,10 @@ public interface TransactionExecutor {
     }
 
     /**
-     * Whether a transaction is in force right now. A synchronous subscription reads this to decide what happens to the
-     * handlers behind one that throws: inside a transaction dispatch stops at the first failure, outside one every
-     * handler is offered the event and the failures are reported together. The default of
-     * {@link #inTransactionTellingIfOpened(Function)} reads it to tell whether this call opened the transaction.
+     * Whether a transaction is in force right now. When it answers {@code true} for a transaction this call joined, the
+     * application service asks {@link #rollsBackAJoinedTransactionOnFailure()} whether synchronous dispatch stops at the
+     * first handler that throws. The default of {@link #inTransactionTellingIfOpened(Function)} reads it to tell whether
+     * this call opened the transaction.
      * <p>
      * <strong>Answer for the moment of the call, not for the executor as a whole.</strong> It can be asked before
      * {@link #inTransaction(Supplier)}, by the DCB application service and by the default of
@@ -100,14 +102,18 @@ public interface TransactionExecutor {
     }
 
     /**
-     * Whether a failure that leaves this executor while it runs in a transaction someone else opened makes that transaction
-     * roll back, so the caller can't commit the write after handling the failure. Synchronous dispatch stops at the first
-     * failing handler only when the write can't commit after the failure: when this call opened the transaction, or when it
-     * joined one and this answers {@code true}. Otherwise every handler gets the event, since a synchronous subscription has
-     * no replay and a handler skipped while the caller commits the write would never see it.
+     * Whether a failure thrown out of this executor, while it runs in a transaction someone else opened, makes that
+     * transaction roll back, so the caller can't commit the write after catching the failure. Synchronous dispatch stops at the first
+     * handler that throws only when this call opened the transaction, or when it joined one and this answers {@code true}.
+     * Otherwise every handler gets the event and the failures are reported together, since a synchronous subscription has
+     * no replay and a handler skipped while the caller commits the write would never see the event.
      * <p>
-     * The default is {@code false}, so an implementation that doesn't override it gets the isolating behaviour, which can't
-     * lose a reaction. An implementation whose participant marks the caller's transaction rollback-only answers {@code true}.
+     * The default is {@code false}, so a handler failure in a joined transaction never keeps the event from the handlers
+     * behind it. Answer {@code true} when a failure marks the caller's transaction rollback-only, as Spring's
+     * {@code AbstractPlatformTransactionManager} does by default.
+     *
+     * @return {@code true} if the transaction this executor joined can't commit after a failure is thrown
+     * out of this executor.
      */
     default boolean rollsBackAJoinedTransactionOnFailure() {
         return false;

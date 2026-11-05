@@ -5,7 +5,8 @@ Date: 2026-10-30
 ## Status
 
 Accepted. Changes what [ADR 57](0057-synchronous-subscriptions.md) and
-[ADR 74](0074-retry-only-where-the-transaction-is-owned.md) say about a handler running again. Both have shipped in a
+[ADR 74](0074-retry-only-where-the-transaction-is-owned.md) say about a handler running again, and what ADR 57 says about
+the handlers behind a failing one in a transaction the attempt joined. Both have shipped in a
 release, so they get a pointer here rather than an edit.
 
 ## Context
@@ -36,7 +37,7 @@ reason itself, that a retry only works where it owns the transaction.
 
 A failure after a successful write, in the re-read of the written events or in a handler, reaches the service's retry
 strategy only when the attempt opened a transaction, which the service takes to mean that transaction undoes the write.
-Otherwise the failure reaches the caller without the retry strategy seeing it.
+Otherwise the retry strategy doesn't run the command again, and the failure reaches the caller.
 
 - **Who says the attempt opened it.** The service runs the attempt through `inTransactionTellingIfOpened`, a new default
   method on `TransactionExecutor` and `ReactiveTransactionExecutor`, which tells the action whether this call opened the
@@ -48,15 +49,29 @@ Otherwise the failure reaches the caller without the retry strategy seeing it.
 - **What the retry strategy still sees.** A failure of the write itself, which normally means nothing was written. Whether that
   retries is up to the strategy's predicate.
 - **How the failure stays away from the retry.** One object per `execute`, or per subscription on the reactive stack, holds
-  the failure, and a private stand-in exception passes through the executor so a transaction the attempt opened still rolls back. Once a
-  failure is held, whatever comes out of the executor means an empty attempt, a later run of the action returns an empty
-  attempt before it reads or writes, and the original failure is thrown after the retry returns. So a predicate that
-  matches every exception, an executor that translates what passes through it and an executor with its own retry can't run
-  the command again, and a retry that runs until the action returns stops at its second run. An exception that replaces the
+  the failure, and a private stand-in exception passes through the executor so a transaction the attempt opened still rolls back. On
+  the blocking stack, whatever comes out of the executor once a failure is held is replaced by the held failure, and the
+  service passes `RetryStrategy.execute` a shutdown predicate that answers `false` while a failure is held. The strategy
+  then doesn't ask its own predicate, doesn't run the command again, and gives the failure to `onError`, `onAfterRetry` and
+  `mapError` as a failure it doesn't retry. A strategy of your own that ignores the shutdown predicate gets an empty
+  attempt from any later run, before it reads or writes, and the held failure is thrown after the strategy returns. On the
+  reactive stack, whatever comes out of the executor means an empty attempt, a later run returns an empty attempt, and the
+  original failure is thrown after the retry returns. So on both stacks a predicate that matches every exception, an
+  executor that translates what passes through it and an executor with its own retry can't run the command again. An exception that replaces the
   stand-in on the way out, a failed rollback say, stays with the failure as a suppressed exception, and so does an
   exception an executor attached to a wrapper of the stand-in.
 - **`NativeMongoTransactionExecutor`.** `isTransactional()` now answers whether the session bound to the thread has a
   transaction in force instead of always `true`, so the service can tell a transaction it would open from one it would join.
+- **Which handlers get the event when one fails.** The dispatch stops at the first failing handler only when the write
+  can't commit after the failure, that is when the attempt opened the transaction, or when it joined one and
+  `rollsBackAJoinedTransactionOnFailure()` answers `true`. That's a new default method on `TransactionExecutor` and
+  `ReactiveTransactionExecutor`, and it answers `false`. `SpringTransactionExecutor` answers whether its transaction
+  manager marks a transaction rollback-only when a participant fails, which `AbstractPlatformTransactionManager` does
+  unless `setGlobalRollbackOnParticipationFailure(false)` was called. In 0.34.0 the dispatch stopped whenever
+  `isTransactional()` answered `true` inside the executor. At the `occurrent-0.34.0` tag, a caller that caught the handler
+  failure and committed a transaction `NativeMongoTransactionExecutor` had joined stored the event, and the handler behind
+  the failing one never got it. `SpringReactiveTransactionExecutor` commits in the same case, as the table under
+  Consequences shows.
 - **The side effect.** It doesn't run, the same as for a handler failure that was never retried. It's for a command that
   succeeded, and the caller is about to get an exception.
 
@@ -82,6 +97,18 @@ run, where a failing handler rolls the write back today.
 **Wrap the failure in a type and catch that type outside the executor.** It's what I built first. An executor that
 translates what passes through it turns the wrapper into another exception that reaches the retry, and an executor that
 retries what passes through it writes again before the catch runs. Both ran the command twice in a probe.
+
+**Keep the held failure out of the retry and throw it after the retry returns, on the blocking stack too.** It's the first
+version of this decision. It skipped `onError`, `onAfterRetry` and `mapError`, so a strategy that maps every failure to an exception
+of the application's own let a handler failure through unmapped, and `onAfterRetry` reported success for an attempt
+that failed. `RetryStrategy.execute` already takes a shutdown predicate that the built-in strategies honour, so the
+decision fits inside the retry.
+
+**Make `rollsBackAJoinedTransactionOnFailure()` answer `true` by default.** It keeps the 0.34.0 behaviour for an executor
+of your own that answers a fixed `true` from `isTransactional()`, and `NativeMongoTransactionExecutor` and
+`SpringReactiveTransactionExecutor` would override it to `false`. An executor of your own that joins a transaction the
+caller can still commit after a failure would keep losing the reactions behind the failing handler. With `false` the
+worst case is handlers doing work that a rollback then discards.
 
 **Mark the failure with a type and leave it to the predicate.** A predicate is the application's code, and one that
 matches `RuntimeException` is a reasonable thing to write, so it would still run the command again.
@@ -120,8 +147,10 @@ throws. Nothing runs the handler's command again, since the first service's retr
 a synchronous subscription has no replay. On the commit before this decision the same setup stored both events and threw
 nothing. An executor that opens a transaction on the handler's service keeps the retry.
 
-When `isTransactional()` answers `true` inside the executor, the dispatch stops at the first failure, so in a row where the
-caller gets the failure and a transaction stores 1, the handlers behind the failing one don't get the events.
+The dispatch stops at the first failure when the attempt opened the transaction, or joined one with
+`SpringTransactionExecutor` on the default transaction manager settings, and there the handlers behind the failing one
+don't get the events. In the `SpringReactiveTransactionExecutor` and `NativeMongoTransactionExecutor` rows every handler
+gets them.
 I didn't key on `isSynchronizationActive`, since a store that ignores the
 synchronization doesn't roll back under it, and the service can't see the store.
 
@@ -151,7 +180,7 @@ can't tell any of these from a rollback, so this ADR doesn't change them.
 The holder lasts one `execute` or one subscription. A caller that retries around `execute` or subscribes to the returned
 `Mono` again runs the command again, and so does an outer service's retry around a service called from its domain function.
 
-A retry strategy that logs through `onError` hears nothing about a held failure.
+On the blocking stack, a retry strategy's `onError` and `onAfterRetry` listeners hear a held failure and its `mapError` maps it, the same as for a failure its predicate doesn't match.
 
 A handler can still run more than once for one command under a transaction it owns, and one with a side effect outside the
 transaction, an HTTP call say, still has to tolerate that.
