@@ -1376,16 +1376,17 @@ while the function runs.
 
 ### What changes
 
-* A `cancelSubscription(id)` made while the function of a subscribe of `id` runs returns without waiting for that
-  subscribe. The subscribe returns once the function has, subscribes nothing, and the `Subscription` it returns answers
-  `false` from `waitUntilStarted(..)`.
+* A `cancelSubscription(id)` made on another thread while the function of a subscribe of `id` runs returns without
+  waiting for that subscribe. The subscribe returns once the function has, subscribes nothing, and the `Subscription` it
+  returns answers `false` from `waitUntilStarted(..)`. A cancel the function makes on the subscribing thread doesn't
+  stop the subscribe, as in 0.34.0.
 * A subscribe of an id that `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or
   `CatchupSubscriptionModel` already runs asks its function before it throws `DuplicateSubscriptionIdException`. In
   0.34.0 the stream or DCB catch-up threw before it asked the function. `DurableSubscriptionModel` asked the function
   first in 0.34.0 too.
 * A `resumeSubscription(id)` on `DurableSubscriptionModel` made on another thread while the function of a subscribe of
-  `id` runs waits up to 10 seconds for that subscribe and then throws `IllegalStateException`. In 0.34.0 it waited for
-  as long as the function did. Its `pauseSubscription(id)` and `stop()` don't wait for the subscribe, as in 0.34.0.
+  `id` runs still waits for that subscribe, but throws `IllegalStateException` when the function doesn't return within
+  10 seconds. In 0.34.0 it waited for as long as the function did. Its `pauseSubscription(id)` and `stop()` don't wait for the subscribe, as in 0.34.0.
 
 ### What to do
 
@@ -1394,14 +1395,16 @@ while the function runs.
 * Keep effects that must happen only for a subscribe that goes ahead out of the function, since a subscribe that then
   throws `DuplicateSubscriptionIdException` asks it too.
 * Don't wait in the function for a `pauseSubscription` or `resumeSubscription` of the same id on a catch-up model, or
-  for a `resumeSubscription` on `DurableSubscriptionModel`, on another thread. That call waits up to 10 seconds for the
-  subscribe and then throws `IllegalStateException`.
+  for a `resumeSubscription` on `DurableSubscriptionModel`, on another thread. That call throws `IllegalStateException`
+  when the function doesn't return within 10 seconds.
 * Wait for the cancel only the first time a subscribe asks the function. A catch-up model asks it again while it holds
-  the lock for the id, for the model it wraps when the subscribe goes straight to live delivery, on a resume, and on its
-  replay thread during the handover to live delivery. A cancel made during one of those asks throws `IllegalStateException` after 10 seconds, or during the
+  the lock for the id on a resume, on its replay thread during the handover to live delivery, and for the model it
+  wraps when that model is another wrapper such as `DurableSubscriptionModel` and the subscribe goes straight to live
+  delivery. A cancel made during one of those asks throws `IllegalStateException` after 10 seconds, or during the
   handover waits for as long as the function does.
 * A `CatchupSubscriptionModel` with both a stream and a DCB catch-up asks the function first to choose between them for
-  a subscribe with no filter. A cancel made during that ask returns, and the subscribe still goes ahead.
+  a subscribe with no filter, or with a filter that is not a stream, DCB or agnostic one. A cancel made during that ask
+  returns, and the subscribe still goes ahead.
 
 The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
 

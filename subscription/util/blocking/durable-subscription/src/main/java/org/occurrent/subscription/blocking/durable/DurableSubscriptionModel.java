@@ -862,8 +862,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * reason a MongoDB model resumes from its own tracked position when the stored checkpoint is one it cannot open
      * its change stream at, such as the position a catch-up stores while it replays.
      * <p>
-     * A subscribe of the id on another thread whose {@code StartAt.dynamic} function is still being asked is waited for.
-     * If that function doesn't return within 10 seconds, this throws {@link IllegalStateException} and changes nothing.
+     * A subscribe of the id on another thread whose {@code StartAt.dynamic} function is still being asked is waited
+     * for. If that function doesn't return within 10 seconds, this throws {@link IllegalStateException} and changes
+     * nothing.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -1013,8 +1014,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * {@code subscribe(..)} of the id threw, before it deletes the checkpoint. An action of such a subscription that
      * returns after this call has returned writes no checkpoint, and an evaluation of its start position records none.
      * <p>
-     * It doesn't wait for a subscribe of the id whose start-position function is still being asked. That subscribe
-     * subscribes nothing in the wrapped model, and the subscription it returns never starts.
+     * It doesn't wait for a subscribe of the id on another thread whose start-position function is still being asked.
+     * That subscribe subscribes nothing in the wrapped model, and the subscription it returns never starts. A cancel
+     * the function makes on the subscribing thread doesn't stop that subscribe.
      *
      * @param subscriptionId The subscription id to cancel
      */

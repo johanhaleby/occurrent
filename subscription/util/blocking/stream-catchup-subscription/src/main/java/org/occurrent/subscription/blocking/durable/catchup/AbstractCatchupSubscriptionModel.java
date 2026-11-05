@@ -2463,8 +2463,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Cancels the catch-up of {@code subscriptionId} and the subscription in the live delegate, and deletes its stored
      * position. Returns without waiting for a replay that is in the subscriber's action, which stores nothing more once
-     * it returns. It doesn't wait for a subscribe of the id whose start-position function is still being asked either.
-     * That subscribe subscribes nothing, and the subscription it returns never starts. While this runs,
+     * it returns. It doesn't wait for a subscribe of the id on another thread whose start-position function is still
+     * being asked either. That subscribe subscribes nothing, and the subscription it returns never starts. A cancel the
+     * function makes on the subscribing thread doesn't stop that subscribe. While this runs,
      * {@link #start(boolean) start(true)} doesn't let the live delegate resume the subscription itself.
      */
     @Override
