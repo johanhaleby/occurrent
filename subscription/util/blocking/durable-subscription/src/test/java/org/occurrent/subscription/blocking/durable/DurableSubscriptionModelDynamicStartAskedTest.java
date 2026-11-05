@@ -176,6 +176,49 @@ class DurableSubscriptionModelDynamicStartAskedTest {
     }
 
     @Nested
+    @DisplayName("when a subscribe with a start that isn't dynamic waits for the lock behind a cancel that waits for it too")
+    class When_a_subscribe_with_a_start_that_is_not_dynamic_waits_behind_a_cancel {
+
+        @Test
+        @DisplayName("the cancel that takes the lock first doesn't stop the subscribe")
+        void the_cancel_that_takes_the_lock_first_does_not_stop_the_subscribe() {
+            // Given a cancel holding the lock, a second cancel parked for it, and then a subscribe parked behind that
+            HoldsDeletes storage = new HoldsDeletes(releaseTheHeldDelete);
+            InMemoryWrappedModel wrapped = new InMemoryWrappedModel();
+            DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+            CompletableFuture<Void> holdingCancel = CompletableFuture.runAsync(() -> durable.cancelSubscription(SUBSCRIPTION_ID), otherThreads);
+            assertThat(storage.deleteStarted).as("the cancel holding the lock").succeedsWithin(BOUND);
+            AtomicReference<Thread> cancelling = new AtomicReference<>();
+            CompletableFuture<Void> queuedCancel = CompletableFuture.runAsync(() -> {
+                cancelling.set(Thread.currentThread());
+                durable.cancelSubscription(SUBSCRIPTION_ID);
+            }, otherThreads);
+            await().atMost(BOUND).until(() -> waitsForALock(cancelling.get()));
+            AtomicReference<Thread> subscribing = new AtomicReference<>();
+            CompletableFuture<Subscription> subscribe = CompletableFuture.supplyAsync(() -> {
+                subscribing.set(Thread.currentThread());
+                return durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("a-position")), event -> {
+                });
+            }, otherThreads);
+            await().atMost(BOUND).until(() -> waitsForALock(subscribing.get()));
+
+            // When the lock goes to the parked threads in the order they parked
+            releaseTheHeldDelete.complete(null);
+
+            // Then
+            assertAll(
+                    () -> assertThat(holdingCancel).as("the cancel holding the lock").succeedsWithin(BOUND),
+                    () -> assertThat(queuedCancel).as("the cancel parked for the lock").succeedsWithin(BOUND),
+                    () -> assertThat(subscribe).as("the subscribe").succeedsWithin(BOUND)
+            );
+            assertAll(
+                    () -> assertThat(subscribe.join().waitUntilStarted(Duration.ofSeconds(1))).as("the subscription started").isTrue(),
+                    () -> assertThat(wrapped.subscriptions).as("the ids the wrapped model holds").containsExactly(SUBSCRIPTION_ID)
+            );
+        }
+    }
+
+    @Nested
     @DisplayName("when the function of a subscribe cancels its own id on the subscribing thread")
     class When_the_function_cancels_its_own_id_on_the_subscribing_thread {
 

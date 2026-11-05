@@ -469,9 +469,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
         // The caller's function runs here, with no lock held, since it can wait for a cancel of the id on another thread.
-        // A cancel made before this takes the lock finds asked, and then nothing reaches the wrapped model.
+        // A cancel made before this takes the lock finds asked, and then nothing reaches the wrapped model. A start that
+        // isn't dynamic asks nothing, so a cancel doesn't stop it, as before the function was asked ahead of the lock
         Asked asked = new Asked(subscriptionId);
-        asking.add(asked);
+        if (startAt.isDynamic()) {
+            asking.add(asked);
+        }
         StartAt answered = startAt;
         try {
             while (answered != null && !answered.isDefault() && answered.isDynamic()) {

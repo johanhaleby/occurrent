@@ -414,11 +414,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     // The caller's function is asked for this model before the claim, since it can wait for a call for the id on another
     // thread. A cancel made before the subscribe takes the claim wins, and nothing reaches the live delegate. A pause,
-    // resume or other lifecycle call for the id on another thread waits for the subscribe to return, up to
-    // LIFECYCLE_WAIT. A cancel and another subscribe of the id don't wait for the function.
+    // resume or other lifecycle call for the id on another thread waits for a subscribe whose function is asked to
+    // return, up to LIFECYCLE_WAIT. A cancel and another subscribe of the id don't wait for the function.
     private Subscription subscribeAndRemember(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
+        // A start that isn't dynamic asks nothing, so a cancel doesn't stop it, as before the function was asked ahead
+        // of the claim
         AskedFirst asked = new AskedFirst(subscriptionId);
-        askedFirst.add(asked);
+        if (startAt.isDynamic()) {
+            askedFirst.add(asked);
+        }
         try {
             StartAt answered = answeredForThisModel(startAt);
             // Under the handover lock as well as the claim, so a handover or a failure of a replay for the id comes either
