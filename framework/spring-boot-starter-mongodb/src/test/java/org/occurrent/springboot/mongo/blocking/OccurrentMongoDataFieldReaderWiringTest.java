@@ -53,7 +53,7 @@ class OccurrentMongoDataFieldReaderWiringTest {
             .withPropertyValues(
                     "occurrent.event-store.enabled=false",
                     // Subscriptions need an EventStoreQueries bean, which the line above removes. Turning both on is
-                    // more scaffolding than a bean-presence test needs, and the reactive starter's wiring test already
+                    // more setup than a bean-presence test needs, and the reactive starter's wiring test already
                     // covers the absent-reader case with subscriptions running.
                     "occurrent.subscription.enabled=false",
                     "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:test"

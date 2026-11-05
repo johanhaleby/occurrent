@@ -4,7 +4,8 @@ Date: 2026-07-03
 
 ## Status
 
-Accepted
+Accepted. A position read is a range query with no promise about resuming, see
+[ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md).
 
 ## Context
 
