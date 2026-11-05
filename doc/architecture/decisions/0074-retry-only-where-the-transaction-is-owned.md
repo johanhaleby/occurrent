@@ -6,7 +6,7 @@ Date: 2026-07-26
 
 Accepted. Amended by [ADR 149](0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md)
 on what an append in a caller's transaction conflicts on, which exception the blocking store throws for a write
-conflict, and how the Spring stores tell a caller's transaction.
+conflict, how the Spring stores tell a caller's transaction, and that the counter update retries inside one.
 
 ## Context
 

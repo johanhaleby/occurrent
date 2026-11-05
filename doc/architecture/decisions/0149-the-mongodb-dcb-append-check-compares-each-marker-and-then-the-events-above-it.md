@@ -239,9 +239,11 @@ update, where appends used to complete in 6 to 18 ms. In a probe on all three st
 came back. `wtimeoutMS=2000` and `timeoutMS=2000` on the connection string failed it after 2 seconds, and
 `socketTimeoutMS=2000` after 4. The store now sets the update's `wtimeout` to `markerVersionsCommitTimeout`, 5 seconds
 by default, in place of any `wtimeout` on the client, the database or a Spring database factory. On a client with
-`timeoutMS`, where the driver sends no `wtimeout`, the store gives the update an operation timeout of the shorter of the
-two instead. A test on each store asserts the `wtimeout` the update sends, and the `maxTimeMS` it sends on such a
-client, and no probe on such a set has run since. An append that fails this way writes
+`timeoutMS` the driver sends no `wtimeout`, and the client's `timeoutMS` bounds the update instead. The store doesn't
+shorten it to `markerVersionsCommitTimeout`, because the same timeout also bounds how long the driver waits to select a
+primary, which an election can need. A test on each store asserts the `wtimeout` the update sends, and on a client with
+`timeoutMS` that it sends no `wtimeout` and a `maxTimeMS` above `markerVersionsCommitTimeout`, and no probe on such a
+set has run since. An append that fails this way writes
 no event, and the positions it reserved can stay unused.
 
 ### An append in a caller's transaction
@@ -252,7 +254,9 @@ caller's transaction and leave the retry to the layer that owns it. This decisio
 In 0.34.0 the counter update joined the caller's transaction, so every concurrent append in such transactions
 conflicted on that one document, also appends to disjoint boundaries, and a test saw only one of six contended appends
 reach the append body. The update now runs outside every transaction, so such an append conflicts only on a marker or
-a partition stream it shares with another append.
+a partition stream it shares with another append. Its retry on a duplicate key, when concurrent appends create the
+counter document at once, no longer goes through `retryOnlyWhenThisStoreOwnsTheTransaction`, so it also retries inside
+a caller's transaction. No transaction holds the update, so the retry repeats nothing of the caller's.
 
 `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry only Spring's translated exceptions.
 `SpringMongoEventStore` rethrew a write conflict on the event insert as the driver's `MongoException`, so a command
@@ -266,8 +270,15 @@ counter below the transaction's own appends, so once the template is in a MongoD
 which `MongoDatabaseUtils.isTransactionActive` and `ReactiveMongoDatabaseUtils.isTransactionActive` answer, the read has
 no upper bound and reports the snapshot's counter as its head. It returns the transaction's own appends above that head,
 and a read after that head once the transaction has committed returns them again. Before the template's first
-operation in the caller's transaction, the counter bounds the read, and no appends of the transaction exist yet. This
-comes from reading Spring Data MongoDB 5.1.0, and no probe ran under a JDBC transaction.
+operation in the caller's transaction, the counter bounds the read. This comes from reading Spring Data MongoDB 5.1.0,
+and no probe ran under a JDBC transaction.
+
+An append runs in the store's own transaction manager, and it joins that MongoDB transaction only when the manager is
+on the template's database factory instance, as the Spring Boot starters set it up. A manager on another instance finds
+no transaction on its factory, suspends the caller's synchronizations, and commits the append in a MongoDB transaction
+of its own. A read in the caller's transaction before that append keeps its snapshot, so a read after the append in
+the same transaction doesn't return it. A probe on both stores showed that with a no-op outer transaction manager and
+with a MongoDB one on a separate factory, and showed the append returned with the manager on the template's factory.
 
 Whether a caller owns the transaction is a different question, since the store's own transaction manager may join a
 caller's transaction on another factory. Both stores answer it by any active Spring transaction, the blocking store
