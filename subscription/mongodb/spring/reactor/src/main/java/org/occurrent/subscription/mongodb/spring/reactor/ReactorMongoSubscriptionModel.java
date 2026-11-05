@@ -1171,7 +1171,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * run is open, and the position moves only while the run is open or a step is under way. The run has ended once it
      * is closed and no step is under way, and the next run for the subscription reads nothing before that.
      * <p>
-     * The monitor of the run guards only its own fields, and no code of the caller runs while it's held.
+     * The monitor of the run is held while its own fields change, and while the subscription records where the driver
+     * cursor opened and ends the check of a dynamic position. No code of the caller runs while it's held.
      */
     static final class Run {
         private final Sinks.Empty<Void> started = Sinks.empty();

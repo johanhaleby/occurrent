@@ -1120,8 +1120,9 @@ change stream reads instead.
 Once a change stream has opened, the model opens it again at the same position and doesn't call the function again.
 That covers a pause and a resume, an action that throws, and a failure reading the change stream before the first
 event. A reactor subscription that counts the first document takes the position the function answered when its `Flux`
-was subscribed to. It calls the function again only when the change stream fails before it reads a document with error
-code 9, 280 or 286, the codes the server rejects a start position with. That holds also when a pause or another failure
+was subscribed to. It gives that position back to the function only when the change stream fails before it reads a
+document with error code 9, 280 or 286, the codes the server rejects a start position with, so the next opening calls
+the function again. That holds also when a pause or another failure
 opened the change stream again at that position first. In 0.34.0 the models could call the function again at an opening
 before the first event, and a catch-up's checkpoint from
 that later call opened at the present and skipped the events written in between.
