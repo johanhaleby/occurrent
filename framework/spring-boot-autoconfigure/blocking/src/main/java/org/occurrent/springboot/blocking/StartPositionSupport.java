@@ -132,19 +132,19 @@ class StartPositionSupport {
     private StartAt nowThenResume(ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case DEFAULT -> StartAt.now();
-            case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                return delegatesItsStart(ctx) || isCatchupLayer(ctx) ? null : StartAt.now();
-            });
+            case SAME_AS_START_AT -> StartAt.dynamic(ctx -> leavesNowToTheLiveModel(ctx) ? null : StartAt.now());
         };
     }
 
     private DcbStartAt dcbNowThenResume(ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case DEFAULT -> DcbStartAt.now();
-            case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> {
-                return delegatesItsStart(ctx) || isCatchupLayer(ctx) ? null : DcbStartAt.now();
-            });
+            case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> leavesNowToTheLiveModel(ctx) ? null : DcbStartAt.now());
         };
+    }
+
+    private static boolean leavesNowToTheLiveModel(SubscriptionModelContext ctx) {
+        return delegatesItsStart(ctx) || isCatchupLayer(ctx);
     }
 
     private static boolean isCatchupLayer(SubscriptionModelContext ctx) {
