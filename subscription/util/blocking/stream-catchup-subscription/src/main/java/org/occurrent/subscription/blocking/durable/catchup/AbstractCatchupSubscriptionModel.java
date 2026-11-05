@@ -414,8 +414,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     // The caller's function is asked for this model before the claim, since it can wait for a call for the id on another
-    // thread. A cancel made while it runs wins, and nothing reaches the live delegate. Any other call for the id on another
-    // thread waits until the subscribe returns, as it waits for its claim.
+    // thread. A cancel made while it runs wins, and nothing reaches the live delegate. A pause, resume or other lifecycle
+    // call for the id on another thread waits for the subscribe to return, up to LIFECYCLE_WAIT. A cancel and another
+    // subscribe of the id don't wait for the function.
     private Subscription subscribeAndRemember(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         AskedFirst asked = new AskedFirst(subscriptionId);
         askedFirst.add(asked);

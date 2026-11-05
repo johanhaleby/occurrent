@@ -82,9 +82,10 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
 
 /**
  * A dynamic start-position function can wait for a call for the same subscription id made on another thread. The blocking subscription models ask the function before they take the claim or the lock for the id, so a
- * cancel made meanwhile returns at once and wins over the subscribe, and a pause waits for the subscribe, up to
- * {@code LIFECYCLE_WAIT}, and then throws. Each case runs on a plain MongoDB model, which never held anything while it
- * asked, and on the three wrappers that did.
+ * cancel made meanwhile returns at once and wins over the subscribe, and a pause on a catch-up model waits for the
+ * subscribe, up to {@code LIFECYCLE_WAIT}, and then throws. Each cancel case runs on a plain MongoDB model, which never
+ * held anything while it asked, and on the three wrappers that did. The pause case runs on the two catch-up stacks, and
+ * the handover case on the catch-up over the durable model.
  */
 @Testcontainers
 @Timeout(120)
@@ -382,8 +383,8 @@ class BlockingDynamicStartCancelMongoTest {
         }
 
         // Answers beginning of time to the catch-up, to have it replay and hand over, and waits for the cancel the second
-        // time the live delegate asks on the replay thread. The first of its asks answers null, since the durable model
-        // stores no position, and the handover asks again.
+        // time the live delegate asks on the replay thread. The first of its asks there answers null, and the handover
+        // asks again.
         StartAt startAtWhenTheHandoverAsks(String subscribingThread) {
             AtomicInteger asksOnTheReplayThread = new AtomicInteger();
             return StartAt.dynamic(context -> {

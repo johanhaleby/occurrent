@@ -1364,8 +1364,8 @@ In 0.34.0 the blocking `StreamCatchupSubscriptionModel`, `DcbCatchupSubscription
 `DurableSubscriptionModel` asked a `StartAt.dynamic(..)` function while they held the lock for the subscription id, and
 `cancelSubscription` for that id waited for the lock. When the function waited for a cancel of its own id on another
 thread, that cancel threw `IllegalStateException` after 10 seconds on the catch-up models, and on
-`DurableSubscriptionModel` it waited for as long as the function did. These models now ask the function before they
-take the lock.
+`DurableSubscriptionModel` it waited for as long as the function did. These models now ask the function for their own
+model before they take the lock.
 
 ### Who is affected
 
@@ -1391,6 +1391,10 @@ such a function, is affected too.
 * Don't wait in the function for a `pauseSubscription` or `resumeSubscription` of the same id on a catch-up model on
   another thread. That call waits up to 10 seconds for the subscribe and then throws `IllegalStateException`, as it did
   in 0.34.0.
+* Wait for the cancel only when the function is asked for the model you subscribe to. A catch-up model asks the function
+  again for the model it wraps while it holds the lock for the id, and the cancel then throws `IllegalStateException`
+  after 10 seconds. When the catch-up asks for the wrapped model on its replay thread during the handover to live
+  delivery, the cancel waits for as long as the function does.
 
 The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
 
