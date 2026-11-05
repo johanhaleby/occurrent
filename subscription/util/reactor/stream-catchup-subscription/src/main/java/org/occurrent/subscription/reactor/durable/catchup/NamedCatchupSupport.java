@@ -99,14 +99,17 @@ import static java.util.Objects.requireNonNull;
  * code can subscribe, cancel, stop or shut down any subscription. A subscribe that goes straight to live runs the
  * wrapped {@code subscribe(..)} with no lock held, since {@code ReactorMongoSubscriptionModel} can evaluate a dynamic
  * {@link StartAt} that answered {@code null} here again on the calling thread. A cancel of the id meanwhile goes to the
- * wrapped model at once, and the subscribe cancels the id there again once the wrapped {@code subscribe(..)} returned
- * holding it. Two calls still run with a lock held.
+ * wrapped model at once, and the id is cancelled there again once the wrapped {@code subscribe(..)} returned holding it,
+ * unless a later subscribe took the id there. Three calls still run with a lock held.
  * <ul>
  * <li>The handover runs the wrapped {@code subscribe(..)}, or {@code resumeSubscription(id, startAt)} for a takeover,
  * under the monitor of the subscription's state. So the wrapped model must run no action and report no history loss on
  * the calling thread before those calls return.</li>
  * <li>A {@link CatchupListener} is told that a catch-up started inside an operation on a {@link ConcurrentHashMap},
  * which holds a lock of that map. A listener that calls this model can deadlock with another thread.</li>
+ * <li>Whether the wrapped model holds an id is asked, through {@code subscriptionIds()} or {@code isRunning(id)} and
+ * {@code isPaused(id)}, with the lock of that id held. So the wrapped model must not hold a lock those calls take while
+ * it reports a history loss, completes a cancel or runs a dynamic start.</li>
  * </ul>
  */
 @NullMarked
@@ -145,6 +148,8 @@ final class NamedCatchupSupport {
     // How many cancels of each id have not had the wrapped model cancel yet. A subscribe of such an id is refused, since
     // that cancel runs after the per-id lock is released and would cancel the subscription the subscribe makes.
     private final ConcurrentMap<String, Integer> cancelsUnderWay = new ConcurrentHashMap<>();
+    // What each id's cancelled subscribes can still leave in the wrapped model, see Leftovers
+    private final ConcurrentMap<String, Leftovers> leftovers = new ConcurrentHashMap<>();
 
     NamedCatchupSupport(CheckpointAwareSubscriptionModel wrapped, Class<?> modelClass) {
         this.wrapped = requireNonNull(wrapped);
@@ -267,7 +272,9 @@ final class NamedCatchupSupport {
         try {
             launchOrPark(state);
         } catch (RuntimeException | Error e) {
-            release(subscriptionId, record, delegate);
+            // Before the release, which cancels nothing in the wrapped model while a replay of the id is in flight
+            catchingUp.remove(subscriptionId, state);
+            release(subscriptionId, record);
             throw e;
         }
         return new NamedCatchupSubscription(subscriptionId, state.started.asMono());
@@ -351,7 +358,7 @@ final class NamedCatchupSupport {
                         catchingUp.remove(subscriptionId, state);
                         // Only a replay that never handed over leaves no subscription behind, so a subscribe of the id replays again
                         if (takenOver == null && !state.handedOver.get()) {
-                            release(subscriptionId, replay.owned(), replay.delegate());
+                            release(subscriptionId, replay.owned());
                         }
                         failStart(state, subscriptionId, throwable);
                     });
@@ -461,80 +468,95 @@ final class NamedCatchupSupport {
             return null;
         });
         // With no lock held, since the wrapped model can run a dynamic start of the caller's on this thread
+        Subscription subscription;
         try {
-            return delegate.subscribe(subscriptionId, liveSubscriptionFilter, startAt,
+            subscription = delegate.subscribe(subscriptionId, liveSubscriptionFilter, startAt,
                     cloudEvent -> !record.cancelled && livePredicate.test(cloudEvent) ? action.apply(cloudEvent) : Mono.empty());
         } catch (RuntimeException | Error e) {
-            release(subscriptionId, record, delegate);
+            subscribeReturned(subscriptionId, record, false);
             throw e;
-        } finally {
-            subscribeReturned(subscriptionId, record, delegate);
         }
+        subscribeReturned(subscriptionId, record, true);
+        return subscription;
     }
 
-    // A cancel during the wrapped subscribe cancelled what the wrapped model held by then. What it took after that it
-    // holds now, and is cancelled here, unless a later subscribe owns the id.
-    private void subscribeReturned(String subscriptionId, Owned record, SubscriptionModel delegate) {
-        boolean again = underIdLock(subscriptionId, () -> {
+    // A cancel during the wrapped subscribe cancelled what the wrapped model held by then, and what that subscribe took
+    // after it is cancelled once no live record owns the id, see settleHoldingIdLock. A subscribe that took the id
+    // shows that no cancelled subscribe that returned before it holds the id.
+    private void subscribeReturned(String subscriptionId, Owned record, boolean tookTheId) {
+        settle(subscriptionId, () -> {
             record.subscribing = false;
-            if (!record.cancelled) {
-                return false;
+            Leftovers left = leftovers.get(subscriptionId);
+            // None for a cancelled record after a shutdown, which forgets them all
+            if (record.cancelled) {
+                if (left != null) {
+                    left.underWay--;
+                    left.returned = true;
+                }
+            } else if (!tookTheId) {
+                owned.remove(subscriptionId, record);
+            } else if (left != null) {
+                left.returned = false;
+                if (left.underWay == 0) {
+                    leftovers.remove(subscriptionId);
+                }
             }
-            Owned current = owned.get(subscriptionId);
-            if (current != null && current != record) {
-                return false;
-            }
-            if (!holds(delegate, subscriptionId)) {
-                releaseHoldingIdLock(subscriptionId, record, delegate);
-                return false;
-            }
-            cancelsUnderWay.merge(subscriptionId, 1, Integer::sum);
-            record.cancelledAgain = true;
-            return true;
         });
-        if (again) {
-            try {
-                cancelInWrappedModel(subscriptionId, record, true, cancelUnderWayEnds(subscriptionId));
-            } catch (RuntimeException | Error e) {
-                // Forgotten, so isRunning(..) answers what the wrapped model runs rather than that the id is cancelled
-                forget(subscriptionId, record, true);
-                log.warn("Could not cancel subscription {} in the wrapped model {}. That model may still hold the subscription.", subscriptionId, delegate.getClass().getName(), e);
+    }
+
+    // Removes the record of a subscribe with catch-up that failed
+    private void release(String subscriptionId, Owned record) {
+        settle(subscriptionId, () -> owned.remove(subscriptionId, record));
+    }
+
+    // Runs change under the per-id lock, then what settleHoldingIdLock says
+    private void settle(String subscriptionId, Runnable change) {
+        boolean cancel = underIdLock(subscriptionId, () -> {
+            change.run();
+            return settleHoldingIdLock(subscriptionId);
+        });
+        if (cancel) {
+            cancelLeftover(subscriptionId);
+        }
+    }
+
+    // Called under the per-id lock once a cancelled subscribe returned, a subscribe failed or a cancel ended. While a
+    // cancelled subscribe is under way, the id has a record, so a loss the wrapped model reports for what that subscribe
+    // takes pauses it, and isRunning(..) answers false. Once none is under way and no live record owns the id, true says
+    // the caller is to cancel the id in the wrapped model, counted under way, when a cancelled subscribe returned since
+    // the last such cancel and the wrapped model holds the id. A cancelled record is forgotten once no cancel is under way.
+    private boolean settleHoldingIdLock(String subscriptionId) {
+        Leftovers left = leftovers.get(subscriptionId);
+        if (left != null && left.underWay > 0) {
+            owned.putIfAbsent(subscriptionId, left.standIn);
+            return false;
+        }
+        Owned current = owned.get(subscriptionId);
+        if (catchingUp.containsKey(subscriptionId) || current != null && !current.cancelled) {
+            return false;
+        }
+        if (left != null) {
+            leftovers.remove(subscriptionId);
+            if (left.returned && named != null && holds(named, subscriptionId)) {
+                cancelsUnderWay.merge(subscriptionId, 1, Integer::sum);
+                return true;
             }
         }
+        if (current != null && !cancelsUnderWay.containsKey(subscriptionId)) {
+            owned.remove(subscriptionId, current);
+        }
+        return false;
     }
 
-    // Removes the record of a subscribe that failed, see releaseHoldingIdLock
-    private void release(String subscriptionId, Owned record, SubscriptionModel delegate) {
-        if (underIdLock(subscriptionId, () -> releaseHoldingIdLock(subscriptionId, record, delegate))) {
-            cancelWhatTheReplacedSubscribeLeft(subscriptionId, delegate);
-        }
-    }
-
-    // Called under the per-id lock. Removes record, and when it replaced a cancelled record whose subscribe was still
-    // under way, gives the id what that subscribe skipped while record owned the id, which is its cancel again. One
-    // still under way owns the id again and cancels it once it returns. One that has returned can have taken the id in
-    // the wrapped model, and true says the caller is to cancel the id there, with a cancel counted under way.
-    private boolean releaseHoldingIdLock(String subscriptionId, Owned record, SubscriptionModel delegate) {
-        Owned replaced = record.replaced;
-        if (!owned.remove(subscriptionId, record) || replaced == null) {
-            return false;
-        }
-        if (replaced.subscribing) {
-            owned.putIfAbsent(subscriptionId, replaced);
-            return false;
-        }
-        if (catchingUp.containsKey(subscriptionId) || !holds(delegate, subscriptionId)) {
-            return false;
-        }
-        cancelsUnderWay.merge(subscriptionId, 1, Integer::sum);
-        return true;
-    }
-
-    private void cancelWhatTheReplacedSubscribeLeft(String subscriptionId, SubscriptionModel delegate) {
+    private void cancelLeftover(String subscriptionId) {
         try {
-            cancelInWrappedModel(subscriptionId, null, false, cancelUnderWayEnds(subscriptionId));
+            cancelInWrappedModel(subscriptionId, null, cancelUnderWayEnds(subscriptionId));
         } catch (RuntimeException | Error e) {
-            log.warn("Could not cancel subscription {} in the wrapped model {}. That model may still hold the subscription.", subscriptionId, delegate.getClass().getName(), e);
+            // Forgets the cancelled record, so isRunning(..) answers what the wrapped model runs rather than that the
+            // id is cancelled
+            settle(subscriptionId, () -> {
+            });
+            log.warn("Could not cancel subscription {} in the wrapped model {}. That model may still hold the subscription.", subscriptionId, requireNonNull(named).getClass().getName(), e);
         }
     }
 
@@ -555,13 +577,7 @@ final class NamedCatchupSupport {
         }
         CatchupState inFlight = catchingUp.get(subscriptionId);
         boolean gone = (inFlight == null || inFlight == ours) && !holds(delegate, subscriptionId);
-        if (!gone || !owned.replace(subscriptionId, existing, record)) {
-            return false;
-        }
-        if (existing.subscribing) {
-            record.replaced = existing;
-        }
-        return true;
+        return gone && owned.replace(subscriptionId, existing, record);
     }
 
     // Whether the wrapped model runs the id or holds it paused. A model that lists its ids answers from that list, since
@@ -987,19 +1003,19 @@ final class NamedCatchupSupport {
         // A cold-only composition runs nothing by name and stores nothing by id, so there is nothing to stop or delete
         if (!managesNamedSubscriptions()) {
             cancelUnderWayEnds.run();
-            forget(subscriptionId, cancel.record(), cancel.cancelledAgain());
+            cancelEnded(subscriptionId, cancel.record());
             return Mono.empty();
         }
-        return cancelInWrappedModel(subscriptionId, cancel.record(), cancel.cancelledAgain(), cancelUnderWayEnds);
+        return cancelInWrappedModel(subscriptionId, cancel.record(), cancelUnderWayEnds);
     }
 
-    private Mono<Void> cancelInWrappedModel(String subscriptionId, @Nullable Owned record, boolean cancelledAgainAtCancel, Runnable cancelUnderWayEnds) {
+    private Mono<Void> cancelInWrappedModel(String subscriptionId, @Nullable Owned record, Runnable cancelUnderWayEnds) {
         Mono<Void> cancelled;
         try {
             // Ended before a subscriber of the cancel is told it completed, so a subscribe of the id from there goes through
             cancelled = requireNonNull(named).cancelSubscription(subscriptionId).doOnTerminate(cancelUnderWayEnds).doFinally(__ -> {
                 cancelUnderWayEnds.run();
-                forget(subscriptionId, record, cancelledAgainAtCancel);
+                cancelEnded(subscriptionId, record);
             }).cache();
         } catch (RuntimeException | Error e) {
             cancelUnderWayEnds.run();
@@ -1014,9 +1030,8 @@ final class NamedCatchupSupport {
     }
 
     // What a cancel took under the per-id lock, for the work it does once that lock is released. failsTheStartOf is the
-    // state whose waiters it fails, since the subscription never handed over, or null. cancelledAgain is the record's
-    // flag as the cancel was counted under way, so its completion is told apart from that of a cancel sent again later.
-    private record Cancelled(@Nullable Owned record, boolean cancelledAgain, @Nullable Disposable replaying, @Nullable CatchupState failsTheStartOf) {
+    // state whose waiters it fails, since the subscription never handed over, or null.
+    private record Cancelled(@Nullable Owned record, @Nullable Disposable replaying, @Nullable CatchupState failsTheStartOf) {
     }
 
     private Cancelled cancelHoldingIdLock(String subscriptionId) {
@@ -1025,8 +1040,9 @@ final class NamedCatchupSupport {
         // Forgotten only once the wrapped model has cancelled, so a loss it reports meanwhile still pauses the
         // subscription rather than letting the wrapped model restart it from now
         Owned record = owned.get(subscriptionId);
-        if (record != null && record.subscribing) {
+        if (record != null && record.subscribing && !record.cancelled) {
             record.cancelled = true;
+            leftovers.computeIfAbsent(subscriptionId, id -> new Leftovers(record)).underWay++;
         }
         CatchupState state = catchingUp.remove(subscriptionId);
         Disposable replaying = null;
@@ -1043,7 +1059,7 @@ final class NamedCatchupSupport {
         // A handover that held the state monitor between the removal at the top and the block above put its record then
         handedOver.remove(subscriptionId);
         cancelsUnderWay.merge(subscriptionId, 1, Integer::sum);
-        return new Cancelled(record, record != null && record.cancelledAgain, replaying, failsStart ? state : null);
+        return new Cancelled(record, replaying, failsStart ? state : null);
     }
 
     // Ends one cancel of subscriptionId in cancelsUnderWay, however often it runs
@@ -1056,29 +1072,14 @@ final class NamedCatchupSupport {
         };
     }
 
-    // Removes only the record the cancel read, so a subscribe of the id after the cancel keeps its own. One whose
-    // subscribe is under way stays, marked, until that subscribe has returned, and is then forgotten by the cancel it
-    // sends again, if any. cancelledAgainAtCancel is the record's cancelledAgain when the cancel was counted under way, so
-    // a first cancel that completes after the subscribe sent it again skips the record, which that second cancel removes
-    // once it completes. Under the per-id lock, since the subscribe clears subscribing and sets cancelledAgain under it.
-    private void forget(String subscriptionId, @Nullable Owned record, boolean cancelledAgainAtCancel) {
-        if (record == null) {
-            return;
-        }
-        SubscriptionModel delegate = named;
-        boolean cancel = underIdLock(subscriptionId, () -> {
-            if (record.subscribing || record.cancelledAgain != cancelledAgainAtCancel) {
-                return false;
-            }
-            if (delegate == null) {
+    // Removes the record the cancel read, unless a subscribe of it was under way, so a subscribe of the id after the
+    // cancel keeps its own. A record whose subscribe was under way stays, marked, and settleHoldingIdLock forgets it.
+    private void cancelEnded(String subscriptionId, @Nullable Owned record) {
+        settle(subscriptionId, () -> {
+            if (record != null && !record.cancelled) {
                 owned.remove(subscriptionId, record);
-                return false;
             }
-            return releaseHoldingIdLock(subscriptionId, record, delegate);
         });
-        if (cancel) {
-            cancelWhatTheReplacedSubscribeLeft(subscriptionId, requireNonNull(delegate));
-        }
     }
 
     void shutdown() {
@@ -1090,6 +1091,7 @@ final class NamedCatchupSupport {
             historyLossReporting.removeHistoryLossListener(historyLossListener);
         }
         owned.clear();
+        leftovers.clear();
         new ArrayList<>(catchingUp.keySet()).forEach(subscriptionId -> {
             CatchupState state = catchingUp.remove(subscriptionId);
             if (state != null) {
@@ -1197,12 +1199,22 @@ final class NamedCatchupSupport {
         volatile @Nullable Checkpoint historyLost;
         // Set while the wrapped subscribe(..) of a straight-to-live subscribe runs, changed under the per-id lock
         volatile boolean subscribing;
-        // A cancel came while that subscribe ran
+        // A cancel came while that subscribe ran, set under the per-id lock
         volatile boolean cancelled;
-        // The subscribe returned holding the id after that cancel and cancelled it again, under the per-id lock
-        volatile boolean cancelledAgain;
-        // The cancelled record whose subscribe was still under way when this record replaced it
-        volatile @Nullable Owned replaced;
+    }
+
+    // The cancelled subscribes of an id whose wrapped subscribe(..) can have taken the id after their cancel, changed
+    // under the per-id lock. underWay counts those still in the wrapped subscribe(..), and returned says one of them
+    // returned and no later subscribe took the id since. standIn is the first of them, the record of the id while one is
+    // under way and no other record owns the id.
+    private static final class Leftovers {
+        final Owned standIn;
+        int underWay;
+        boolean returned;
+
+        Leftovers(Owned standIn) {
+            this.standIn = standIn;
+        }
     }
 
     private static final class IdLock {

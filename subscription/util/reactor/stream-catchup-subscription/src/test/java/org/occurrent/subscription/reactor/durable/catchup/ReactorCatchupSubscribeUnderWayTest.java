@@ -629,6 +629,85 @@ class ReactorCatchupSubscribeUnderWayTest {
                 () -> assertThat(later).as("what a subscribe of x once the cancels completed throws").isNull());
     }
 
+    @Test
+    void a_subscribe_the_wrapped_model_refuses_after_two_cancelled_subscribes_and_a_cancelled_catch_up_replaced_one_another_cancels_what_the_first_left() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.refusesDuplicates = true;
+        HeldReplay reader = new HeldReplay();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        HeldStart h1 = new HeldStart();
+        HeldStart h2 = new HeldStart();
+        HeldStart h4 = new HeldStart();
+        CompletableFuture<Void> s1 = new CompletableFuture<>();
+        CompletableFuture<Void> s2 = new CompletableFuture<>();
+        CompletableFuture<Void> s4 = new CompletableFuture<>();
+        daemon("s1", s1, () -> catchup.subscribe("x", FILTER, h1.startAt(), cloudEvent -> Mono.empty())).start();
+        h1.awaitInside();
+        await(returnedWithin("c1", () -> catchup.cancelSubscription("x").toFuture()), "c1");
+        daemon("s2", s2, () -> catchup.subscribe("x", FILTER, h2.startAt(), cloudEvent -> Mono.empty())).start();
+        h2.awaitInside();
+        await(returnedWithin("c2", () -> catchup.cancelSubscription("x").toFuture()), "c2");
+        catchup.subscribe("x", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        reader.awaitReading();
+        h2.release();
+        await(s2, "s2");
+        await(returnedWithin("c3", () -> catchup.cancelSubscription("x").toFuture()), "c3");
+        daemon("s4", s4, () -> catchup.subscribe("x", FILTER, h4.startAt(), cloudEvent -> Mono.empty())).start();
+        h4.awaitInside();
+        h1.release();
+        await(s1, "s1");
+        h4.release();
+        Throwable later = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()));
+
+        assertAll(
+                () -> assertThat(s4).as("what the last subscribe under way throws").failsWithin(DEADLINE).withThrowableOfType(ExecutionException.class).withCauseInstanceOf(DuplicateSubscriptionIdException.class),
+                () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly(
+                        "cancelled:x", "cancelled:x", "subscribed:x", "cancelled:x", "subscribed:x", "refused:x", "cancelled:x", "subscribed:x"),
+                () -> assertThat(later).as("what a subscribe of x once every subscribe returned throws").isNull());
+    }
+
+    @Test
+    void a_subscribe_made_as_a_cancel_completes_and_refused_by_what_a_cancelled_subscribe_took_cancels_it() {
+        WrappedModel wrapped = new WrappedModel();
+        wrapped.refusesDuplicates = true;
+        HeldReplay reader = new HeldReplay();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        HeldStart h1 = new HeldStart();
+        HeldStart h5 = new HeldStart();
+        CompletableFuture<Void> s1 = new CompletableFuture<>();
+        CompletableFuture<Void> s5 = new CompletableFuture<>();
+        daemon("s1", s1, () -> catchup.subscribe("x", FILTER, h1.startAt(), cloudEvent -> Mono.empty())).start();
+        h1.awaitInside();
+        await(returnedWithin("c1", () -> catchup.cancelSubscription("x").toFuture()), "c1");
+        catchup.subscribe("x", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        reader.awaitReading();
+        wrapped.holdsCancels = true;
+        Mono<Void> c3 = catchup.cancelSubscription("x");
+        wrapped.holdsCancels = false;
+        c3.subscribe(null, null, () -> {
+            try {
+                catchup.subscribe("x", FILTER, h5.startAt(), cloudEvent -> Mono.empty());
+                s5.complete(null);
+            } catch (Throwable t) {
+                s5.completeExceptionally(t);
+            }
+        });
+        CompletableFuture<Void> completer = new CompletableFuture<>();
+        daemon("complete", completer, () -> wrapped.completeCancel(0)).start();
+        h5.awaitInside();
+        h1.release();
+        await(s1, "s1");
+        h5.release();
+        await(completer, "completer");
+        Throwable later = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()));
+
+        assertAll(
+                () -> assertThat(s5).as("what the subscribe made as the cancel completed throws").failsWithin(DEADLINE).withThrowableOfType(ExecutionException.class).withCauseInstanceOf(DuplicateSubscriptionIdException.class),
+                () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly(
+                        "cancelled:x", "cancel-asked:x", "cancelled:x", "subscribed:x", "refused:x", "cancelled:x", "subscribed:x"),
+                () -> assertThat(later).as("what a subscribe of x once every subscribe returned throws").isNull());
+    }
+
     private static void loadClassesOfASubscribeAndACancel(ReactorStreamCatchupSubscriptionModel catchup) {
         catchup.subscribe("warm-up", FILTER, StartAt.now(), cloudEvent -> Mono.empty());
         catchup.cancelSubscription("warm-up").block(STARTUP);
