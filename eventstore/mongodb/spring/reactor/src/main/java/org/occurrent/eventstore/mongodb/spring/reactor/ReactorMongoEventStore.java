@@ -308,10 +308,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Mono<Long> consistencyToken, Mono<Long> currentPosition, ReactiveMongoOperations template, Function<Query, Query> readQueryOptions) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads,
         // the events may include it while the token does not, which only makes a later conditional append
-        // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The token read
-        // and the position read are independent, so zip them concurrently rather than sequencing them, while
-        // keeping both strictly before the event read below.
-        return Mono.zip(consistencyToken, currentPosition)
+        // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The position is
+        // read after the token, never at the same time. When the token read is the first command of a transaction,
+        // that command starts the transaction, and MongoDB fails a position read that reaches the server before it
+        // with NoSuchTransaction (error 251).
+        return consistencyToken
+                .zipWhen(__ -> currentPosition)
                 .flatMap(tokenAndHighWatermark -> {
                     long token = tokenAndHighWatermark.getT1();
                     long highWatermark = tokenAndHighWatermark.getT2();
