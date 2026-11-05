@@ -83,10 +83,11 @@ counted `PROPAGATION_REQUIRES_NEW` under a caller's transaction, and a caller's 
 as joining, because `isActualTransactionActive` covers the whole thread. Those attempts roll back their own write, so they
 lost a retry that was safe.
 
-**Ask the store whether the write survived.** A prototype that called `isConfirmed` after the failure got the retry back on
-`PROPAGATION_NOT_SUPPORTED`, `SUPPORTS` and `NEVER`, on the DCB service only, since the stream service has no such call. A
-read that fails answers `false` too, so it would run a command again whose write is stored. I didn't run that case or the
-native store.
+**Ask the store whether the write survived.** A prototype that called `isConfirmed` after the failure got the retry back
+on `PROPAGATION_NOT_SUPPORTED`, `SUPPORTS` and `NEVER`, on the DCB service only, since the stream service has no such
+call. A read that fails answers `false` too, so it would run a command again whose write is stored. I didn't run that
+case or the native store. Since then a DCB append on those propagations stays when no transaction is open around
+`execute`, as the table below shows, so the DCB service no longer has a rolled-back write there to retry.
 
 **Hold the failure inside the executor and return normally.** It keeps the code in one place, but the executor then sees
 success. An executor that opens a transaction and doesn't override `isTransactional()`, which answers `false` by default,
@@ -136,18 +137,21 @@ that matches the failure, on both stacks unless a row says otherwise. Every Spri
 | Spring, `NOT_SUPPORTED` | the caller's | catches it and commits | the commit succeeds | 0 |
 | Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none | | gets the failure | 0 on a stream, 1 on a DCB boundary |
 
-The Spring MongoDB stores set `SessionSynchronization.ALWAYS` themselves, so with no transaction reported the store still
-writes to a stream in a synchronization-based transaction that rolls back. In the last row a DCB append stays on both
-stacks. I ran that after merging main at 4485a0462, and before that merge the append rolled back too. In the last two rows a strategy that matched the failure used
-to run the command again and store one event with no exception. That retry is now withheld, so those rows are a regression
-that loses a retry rather than an event.
+The Spring MongoDB stores set `SessionSynchronization.ALWAYS` themselves, so with no transaction reported the store
+still writes to a stream in a synchronization-based transaction that rolls back. In the last row a DCB append stays on
+both stacks. With no transaction open, the DCB service reads before its executor, and the store reserves positions
+outside every transaction, so nothing binds a session before the append and the store commits it in a transaction of
+its own. I ran that after merging main at 4485a0462, and before that merge the append rolled back too. In
+the last two rows, over a stream, a strategy that matched the failure used to run the command again and store one event
+with no exception. That retry is now withheld, so those rows are a regression that loses a retry rather than an event.
 
-That lost retry costs more when a handler runs the command. A handler on a service with no transaction that calls a service
-in those rows loses its reaction. I ran that on both stacks over a stream, with the handler's service on
-`PROPAGATION_NOT_SUPPORTED`. The first command's event is stored, the handler's write rolls back, and the first `execute`
-throws. Nothing runs the handler's command again, since the first service's retry doesn't run the command again for a failure after its write and
-a synchronous subscription has no replay. On the commit before this decision the same setup stored both events and threw
-nothing. An executor that opens a transaction on the handler's service keeps the retry.
+That lost retry costs more when a handler runs the command. A handler on a service with no transaction that writes to a
+stream through a service in those rows loses its reaction. I ran that on both stacks over a stream, with the handler's
+service on `PROPAGATION_NOT_SUPPORTED`. The first command's event is stored, the handler's write rolls back, and the
+first `execute` throws. Nothing runs the handler's command again, since the first service's retry doesn't run the
+command again for a failure after its write and a synchronous subscription has no replay. On the commit before this
+decision the same setup stored both events and threw nothing. An executor that opens a transaction on the handler's
+service keeps the retry.
 
 The dispatch stops at the first failure when the attempt opened the transaction, or joined one with
 `SpringTransactionExecutor` on the default transaction manager settings, and there the handlers behind the failing one

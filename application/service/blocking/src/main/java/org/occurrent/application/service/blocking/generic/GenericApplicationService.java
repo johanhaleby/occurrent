@@ -40,7 +40,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * A generic application service that works in many scenarios. If you need more complex logic, such as transaction support, you may consider either wrapping it

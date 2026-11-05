@@ -40,7 +40,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * The reactive counterpart of the blocking {@code GenericApplicationService}. It reads a stream, applies the events to a

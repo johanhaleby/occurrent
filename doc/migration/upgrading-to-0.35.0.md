@@ -1049,21 +1049,23 @@ subscriptions behaves as before.
 
 ### What to do
 
-- If you catch nothing around `execute` because a retry used to hide a handler's failure, handle it now. What's stored by
-  then depends on your executor, its propagation and the store, so read it back before you run the command again. With
-  `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring MongoDB stores a write to a stream
-  often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or `PROPAGATION_NEVER`, and there a retry
-  that used to work is gone. A DCB append on those three propagations stays.
+- If you catch nothing around `execute` because a retry used to hide a handler's failure, handle it now. What's stored
+  by then depends on your executor, its propagation and the store, so read it back before you run the command again.
+  With `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring
+  MongoDB stores a write to a stream often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or
+  `PROPAGATION_NEVER`, and there a retry that used to work is gone. With no transaction of yours, a DCB append on those
+  three propagations stays.
   [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
   so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open
   one with another already open, override `inTransactionTellingIfOpened` too, since the default counts that as joining.
 - If a retry predicate was how a handler's work got done again, retry inside the handler, or use a transaction so the
   write and the handler commit together.
-- If a handler on a service with no transaction runs a command on a service with a Spring executor on one of those three
-  propagations, over a Spring MongoDB store, that handler can lose its reaction. The first command's events are stored, the handler's write rolls back, nothing runs the
-  handler's command again, and a synchronous subscription has no replay. Use an executor that opens a transaction on the
-  handler's service, which keeps the retry, or retry inside the handler.
+- If a handler on a service with no transaction writes to a stream through a service with a Spring executor on one of
+  those three propagations, over a Spring MongoDB store, that handler can lose its reaction. The first command's events
+  are stored, the handler's write rolls back, nothing runs the handler's command again, and a synchronous subscription
+  has no replay. Use an executor that opens a transaction on the handler's service, which keeps the retry, or retry
+  inside the handler.
 
 ## A handler failure in a joined transaction doesn't stop the other handlers
 
