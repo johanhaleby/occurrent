@@ -614,6 +614,45 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
         );
     }
 
+    @Test
+    void a_takeover_of_a_catch_up_whose_subscription_ended_that_starts_on_another_thread_while_a_subscribe_is_about_to_replace_its_record_neither_replays_through_the_old_action_nor_repositions_the_new_subscription() throws Exception {
+        // Given a catch-up that handed over, a loss of its live start whose takeover the wrapped model hasn't run yet,
+        // and a subscription the wrapped model then ended on its own
+        ReplacingOwnedHook ownedHook = ReplacingOwnedHook.installIn(catchup);
+        replayAndHandOver();
+        Checkpoint liveStartOfTheEndedCatchup = wrapped.positionOf(ID);
+        HistoryLossHandling.TakeOver lossOfTheLiveStart = (HistoryLossHandling.TakeOver) wrapped.asksTheListeners(ID, liveStartOfTheEndedCatchup);
+        wrapped.endsTheSubscriptionOnItsOwn(ID);
+        received.clear();
+        Sinks.Empty<Void> replayBlocked = reader.blockReads();
+
+        // When the wrapped model runs the takeover on its own thread after a straight to live subscribe of the id found
+        // the id free, and before that subscribe replaced the record of the catch-up
+        Thread takeover = new Thread(lossOfTheLiveStart.afterPause(), "takeover");
+        ownedHook.beforeTheNextReplace(() -> {
+            takeover.start();
+            untilDoneOrWaiting(takeover);
+        });
+        catchup.subscribe(ID, FILTER, StartAt.checkpoint(OTHER_LIVE_TOKEN), event -> Mono.empty());
+        takeover.join(10_000);
+        replayBlocked.tryEmitEmpty();
+        awaitNoReplayInFlight();
+
+        Checkpoint readsFrom = wrapped.positionOf(ID);
+        List<Checkpoint> resumedAt = List.copyOf(wrapped.resumedAt);
+        wrapped.losesTheHistoryFrom(ID, readsFrom);
+
+        // Then no replay delivers to the ended catch-up, the new subscription reads from where it was subscribed, and
+        // a loss from there pauses it for good
+        assertAll(
+                () -> assertThat(received).as("delivered to the action of the ended catch-up").isEmpty(),
+                () -> assertThat(resumedAt).as("resumed at a position by a takeover replay").isEmpty(),
+                () -> assertThat(readsFrom).as("where the new subscription reads from").isEqualTo(OTHER_LIVE_TOKEN),
+                () -> assertThat(catchupsStarted).as("catch-ups started").hasValue(1),
+                () -> assertPausedForGoodFrom(readsFrom)
+        );
+    }
+
     // Paused with the one error the catch-up logs, nothing restarted from the present, and every resume refused
     private void assertPausedForGoodFrom(Checkpoint lostFrom) {
         assertAll(
@@ -641,11 +680,13 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
         return event -> Mono.fromRunnable(() -> received.add(event.getId()));
     }
 
-    // Takes the place of the map of the subscriptions the catch-up owns and runs a hook right after the next record it
-    // replaces. That puts the hook between a subscribe replacing the record of a gone subscription and forgetting
-    // that subscription's handover, which no thread schedule reaches every time.
+    // Takes the place of the map of the subscriptions the catch-up owns and runs a hook right before or right after the
+    // next record it replaces. Before puts the hook between a subscribe finding the id free and replacing the record of
+    // the gone subscription, and after puts it between that replace and forgetting that subscription's handover. No
+    // thread schedule reaches either every time.
     @SuppressWarnings({"rawtypes", "unchecked"})
     private static final class ReplacingOwnedHook extends ConcurrentHashMap {
+        private final AtomicReference<Runnable> beforeReplace = new AtomicReference<>();
         private final AtomicReference<Runnable> afterReplace = new AtomicReference<>();
 
         static ReplacingOwnedHook installIn(ReactorStreamCatchupSubscriptionModel model) {
@@ -660,18 +701,48 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
             return hook;
         }
 
+        void beforeTheNextReplace(Runnable hook) {
+            beforeReplace.set(hook);
+        }
+
         void afterTheNextReplace(Runnable hook) {
             afterReplace.set(hook);
         }
 
         @Override
         public boolean replace(Object key, Object oldValue, Object newValue) {
+            Runnable before = beforeReplace.getAndSet(null);
+            if (before != null) {
+                before.run();
+            }
             boolean replaced = super.replace(key, oldValue, newValue);
             Runnable hook = replaced ? afterReplace.getAndSet(null) : null;
             if (hook != null) {
                 hook.run();
             }
             return replaced;
+        }
+    }
+
+    // Until thread has ended or waits, such as for a lock the calling thread holds
+    private static void untilDoneOrWaiting(Thread thread) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (thread.getState() != Thread.State.TERMINATED && thread.getState() != Thread.State.WAITING) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("Neither ended nor waiting within 10 seconds: " + thread.getName());
+            }
+            Thread.onSpinWait();
+        }
+    }
+
+    // Until no replay of the id is in flight, as when a takeover replay has handed over or none started
+    private void awaitNoReplayInFlight() throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (catchup.isCatchingUp(ID)) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("A replay of " + ID + " still in flight after 10 seconds");
+            }
+            Thread.sleep(10);
         }
     }
 
