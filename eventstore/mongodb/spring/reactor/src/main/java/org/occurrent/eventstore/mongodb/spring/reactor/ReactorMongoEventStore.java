@@ -85,6 +85,8 @@ import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.transaction.NoTransactionException;
+import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -299,6 +301,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return options.versionsRequested() ? readWithMarkerVersions(criteria, options) : readWithoutMarkerVersions(criteria, options);
     }
 
+    private static Mono<Boolean> transactionSynchronizationActive() {
+        return TransactionSynchronizationManager.forCurrentTransaction()
+                .map(TransactionSynchronizationManager::isSynchronizationActive)
+                .onErrorResume(NoTransactionException.class, __ -> Mono.just(false));
+    }
+
     private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         return readWithoutMarkerVersions(criteria, options, consistencyToken(criteria, mongoTemplate), currentPosition(), mongoTemplate, queryOptions);
     }
@@ -310,8 +318,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // the events may include it while the token does not, which only makes a later conditional append
         // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The token read
         // and the position read are independent, so zip them concurrently rather than sequencing them, while
-        // keeping both strictly before the event read below.
-        return Mono.zip(consistencyToken, currentPosition)
+        // keeping both strictly before the event read below. With transaction synchronization active both run on one
+        // session, and the second can reach MongoDB before the first has started the transaction, which it refuses with
+        // NoSuchTransaction, so there they run one after the other.
+        return transactionSynchronizationActive()
+                .flatMap(active -> active
+                        ? consistencyToken.zipWhen(token -> currentPosition)
+                        : Mono.zip(consistencyToken, currentPosition))
                 .flatMap(tokenAndHighWatermark -> {
                     long token = tokenAndHighWatermark.getT1();
                     long highWatermark = tokenAndHighWatermark.getT2();
