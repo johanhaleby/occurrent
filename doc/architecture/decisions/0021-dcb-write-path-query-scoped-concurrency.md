@@ -18,6 +18,7 @@ refuse. What an append increments for its own events is unchanged, so two
 appends of one type that run at the same time still write the same `type:` marker.
 
 Amended by [ADR 164](0164-a-spring-mongo-dcb-append-retries-a-transaction-conflict-for-about-two-minutes.md). "Contention surfaces as a retry, not a spurious command failure" holds while an append loses fewer than 240 attempts in a row on the blocking store, or 321 on the reactive one, within about two minutes of waiting. An append that loses every attempt fails with the last error.
+
 See [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) and
 [ADR 155](0155-a-catch-up-reads-its-live-start-from-the-event-store-and-refuses-to-resume-where-it-could-skip-an-event.md)
 for why a `dcbposition` isn't a safe place to resume from on MongoDB.
