@@ -55,6 +55,8 @@ other sections compile fine and behave differently, so read them first.
   This overrides a w:1 on that one write, which on the Spring and reactor stores now runs outside a transaction of yours
   too. On a set of a primary, a secondary and an arbiter with the secondary down, an append throws after
   `markerVersionsCommitTimeout`.
+- [The default transaction executors retry on a MongoDB error label](#the-default-transaction-executors-retry-on-a-mongodb-error-label).
+  A duplicate key from a write made outside the transaction is no longer retried.
 
 ### Subscriptions and catch-up
 
@@ -121,6 +123,10 @@ other sections compile fine and behave differently, so read them first.
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   `restart-on-change-stream-history-lost` no longer affects a subscription the starter runs through a catch-up
   subscription, which is every subscription by default. Compiles unchanged.
+- [A Spring Mongo event store sends a commit again when MongoDB can't say whether it succeeded](#a-spring-mongo-event-store-sends-a-commit-again-when-mongodb-cant-say-whether-it-succeeded).
+  The starters now create `CommitRetryingMongoTransactionManager` and `CommitRetryingReactiveMongoTransactionManager`,
+  and a blocking event store built by hand, or a reactive one built from a `ReactiveTransactionManager`, logs a warning
+  until it uses one. Compiles unchanged.
 - [A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`](#a-restart-follows-resumebehavior-for-startat--beginning_of_time-and-startat--now).
   On the reactive stack a restart no longer replays the history of a `BEGINNING_OF_TIME` `@StreamSubscription`, and a
   `NOW` subscription no longer misses the events written while the application was down. On the blocking stack `NOW` with
@@ -858,6 +864,51 @@ describes it.
 - **Code or an operator that deletes marker documents.** Follow the rule at the end of
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
+## The default transaction executors retry on a MongoDB error label
+
+The default `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry a transaction they opened when it
+loses a conflict. In 0.34.0 that meant any `DataIntegrityViolationException`, because Spring translates MongoDB's write
+conflict to it. That also matched a duplicate key and a validation failure, which no new transaction can get past, so
+the unit of work ran 15 times on the blocking executor and 16 on the reactive one before the error reached the caller. The 0.35.0 budget is 240 attempts, so the same
+predicate would have run it for two minutes.
+
+0.35.0 retries a `TransientDataAccessException`, or any exception with the `TransientTransactionError` label anywhere
+in its cause chain. MongoDB puts that label on a write conflict, and the driver's own `withTransaction` retries on it.
+A duplicate key and a validation failure inside the transaction now run the unit of work once and reach the caller.
+A commit that fails with the `UnknownTransactionCommitResult` label is not retried either, since the commit may have
+gone through, even when the same error also has the `TransientTransactionError` label. The 0.34.0 predicate did not
+retry it.
+
+The two executor modules now depend on `mongodb-driver-core` as an optional dependency and look for the label only when
+`com.mongodb.MongoException` is on the classpath. Without the driver you still get the executor, and it still retries a
+`TransientDataAccessException`. You add nothing.
+
+### Who is affected
+
+Two cases changed. The first retried in 0.34.0 and doesn't now. A unit of work that writes outside the transaction, for example through a
+`MongoTemplate` with `SessionSynchronization.NEVER`, can get a duplicate key that MongoDB does not label. Say it checks
+whether a document exists, a rival inserts it, and the write then fails with the duplicate. The second run saw the
+rival's document and skipped the write, so the command succeeded. In 0.35.0 it fails with the `DuplicateKeyException`
+after the first run.
+
+The second did not retry in 0.34.0 and does now. A commit that fails with the `TransientTransactionError` label reaches
+the executor as a `TransactionSystemException` with a `MongoException` cause, which 0.34.0 did not match. The executor
+now runs the unit of work again, up to three runs in all, which is safe when the transaction was rolled back, as that
+label says it was. A failover and a transaction that outlives `transactionLifetimeLimitSeconds` fail the commit this way,
+and a second run gets past both.
+The case to watch is a unit of work that catches a duplicate key from a write inside the transaction and returns normally.
+MongoDB has aborted the transaction by then, so the commit fails with the label and the executor runs the unit of work
+three times, where 0.34.0 failed once. The third failure is a `TransactionSystemException` whose message says the commit
+failed with `NoSuchTransaction` after 3 failed commits.
+
+An executor you build with a retry of your own uses that retry as given, as before, so it has no cap on failed commits.
+An executor built on a template or operator that opens no transaction has no commit to fail, so the cap never applies to it.
+
+### What to do
+
+Handle the duplicate in the unit of work only when its write is outside the transaction, and let a duplicate from a write inside the transaction reach the caller instead of catching it. Or make the write through a template that joins the transaction, so that a
+rival's insert surfaces as a labelled conflict and is retried.
+
 ## A catch-up needs the event store itself
 
 A catch-up subscription reads the point where its live subscription takes over, and every event it replays, through
@@ -1386,6 +1437,53 @@ counts is the time since that position was written. On the reactor stack a subsc
 while it matches no events only while the MongoDB subscription model reads quiet positions. When it can't, it logs a
 warning saying that a subscription that matches no event keeps the position of the last event it handled. An unnamed
 reactor `Flux` saves no position, and its position moves only when it reads an event.
+
+## A Spring Mongo event store sends a commit again when MongoDB can't say whether it succeeded
+
+MongoDB labels a commit it could not answer `UnknownTransactionCommitResult`: the commit reached the server, or may
+have, and the reply was lost. The native `MongoEventStore` sends such a commit again for up to two minutes, because it
+runs through the driver's `withTransaction`. `SpringMongoEventStore` and `ReactorMongoEventStore` ran through Spring's
+`MongoTransactionManager` and `ReactiveMongoTransactionManager`, which retry nothing, so an append that may have been
+saved was reported as a failure. A caller that sent it again could write its events twice.
+
+0.35.0 adds `CommitRetryingMongoTransactionManager` in `org.occurrent.eventstore.mongodb.spring.blocking` and
+`CommitRetryingReactiveMongoTransactionManager` in `org.occurrent.eventstore.mongodb.spring.reactor`. Each extends
+Spring's manager and sends the commit again for up to two minutes from the first attempt. It does not retry a
+top-level `MaxTimeMSExpired` error, as the driver doesn't, and neither does it retry a write concern error with that
+code, which the driver raises as the same exception.
+
+### Who is affected
+
+- With the Spring Boot starters and no `MongoTransactionManager` or `ReactiveMongoTransactionManager` bean of your own,
+  nothing to do. The starters create the new managers.
+- With a bean of your own, or an event store you wire by hand, the retry is off until you switch the manager. The blocking
+  store logs a warning when it is created, and the reactive one when `EventStoreConfig.Builder.transactionConfig(..)` is
+  called with a `ReactiveTransactionManager` that is not the new one. `transactionConfig(TransactionalOperator)` logs
+  nothing, because the operator does not expose its manager.
+
+### What to do
+
+Replace the manager and keep its other arguments. Each new class has the constructors of the one it replaces that take a
+database factory, with transaction options or with an options resolver and default options:
+
+```java
+// Before
+MongoTransactionManager transactionManager = new MongoTransactionManager(databaseFactory, transactionOptions);
+// After
+MongoTransactionManager transactionManager = new CommitRetryingMongoTransactionManager(databaseFactory, transactionOptions);
+```
+
+```java
+// Before
+ReactiveMongoTransactionManager transactionManager = new ReactiveMongoTransactionManager(databaseFactory);
+// After
+ReactiveMongoTransactionManager transactionManager = new CommitRetryingReactiveMongoTransactionManager(databaseFactory);
+```
+
+When your code starts a transaction and the event store joins it, the commit belongs to your transaction manager, so
+that one has to be the new manager for the retry to apply.
+
+An append whose commit is still unknown after two minutes fails as before, and it may or may not be saved.
 
 ## A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`
 

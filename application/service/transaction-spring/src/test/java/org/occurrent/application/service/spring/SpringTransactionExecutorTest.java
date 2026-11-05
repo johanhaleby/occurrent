@@ -16,15 +16,31 @@
 
 package org.occurrent.application.service.spring;
 
+import com.mongodb.MongoCommandException;
+import com.mongodb.MongoException;
+import com.mongodb.ServerAddress;
+import org.bson.BsonDocument;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.retry.RetryStrategy;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SpringTransactionExecutorTest {
@@ -81,10 +97,352 @@ class SpringTransactionExecutorTest {
         assertThat(transactional).isFalse();
     }
 
+    @Test
+    void the_default_executor_runs_the_action_again_when_it_fails_with_a_transient_data_access_exception() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(4);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_when_a_data_integrity_violation_carries_the_transient_transaction_error_label() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw new DataIntegrityViolationException("write conflict", labelled(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL));
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(4);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_when_the_transient_transaction_error_label_is_deeper_in_the_cause_chain() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw new IllegalStateException("handler failed", new RuntimeException(labelled(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)));
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(4);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_when_a_mongo_exception_that_spring_does_not_translate_carries_the_transient_transaction_error_label() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw labelled(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(4);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_it_fails_with_a_duplicate_key() {
+        // A duplicate key is a result of the work, not a conflict, so it carries no label and the action runs once.
+        runsOnceAndFailsWith(new DuplicateKeyException("duplicate", new MongoException(11000, "E11000 duplicate key")));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_it_fails_with_a_document_validation_error() {
+        runsOnceAndFailsWith(new DataIntegrityViolationException("validation", new MongoException(121, "Document failed validation")));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_it_fails_with_a_data_integrity_violation_that_carries_no_label() {
+        runsOnceAndFailsWith(new DataIntegrityViolationException("write conflict"));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_the_commit_result_is_unknown() {
+        // The commit may have gone through, so running the unit of work again could apply it twice.
+        runsOnceAndFailsWith(new DataIntegrityViolationException("commit", labelled(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_an_exception_that_spring_does_not_translate_has_an_unknown_commit_result() {
+        runsOnceAndFailsWith(labelled(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_a_commit_error_has_both_the_transient_and_the_unknown_commit_label() {
+        // The driver's withTransaction looks at the unknown commit label first, and so does the executor.
+        MongoException both = labelled(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+        both.addLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL);
+        runsOnceAndFailsWith(new DataIntegrityViolationException("commit", both));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_a_transient_data_access_exception_wraps_an_unknown_commit_result() {
+        runsOnceAndFailsWith(new TransientDataAccessResourceException("commit", labelled(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_a_cause_has_the_unknown_commit_label_below_one_with_the_transient_label() {
+        MongoException outer = new MongoException("outer", labelled(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL));
+        outer.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+        runsOnceAndFailsWith(new DataIntegrityViolationException("commit", outer));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_when_the_cause_chain_is_a_cycle_without_a_label() {
+        RuntimeException first = new RuntimeException("first");
+        RuntimeException second = new RuntimeException("second", first);
+        first.initCause(second);
+        runsOnceAndFailsWith(first);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_when_the_label_is_a_hundred_causes_down() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw deeplyNested(labelled(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL));
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(4);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_a_third_time_when_the_commit_fails_twice_with_the_transient_transaction_error_label() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager(noSuchTransaction(), noSuchTransaction()));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            attempts.incrementAndGet();
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(3);
+    }
+
+    @Test
+    void the_count_of_failed_commits_belongs_to_one_call_and_a_later_call_starts_from_zero() {
+        // Given
+        StubTransactionManager transactionManager = new StubTransactionManager(noSuchTransaction(), noSuchTransaction());
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(transactionManager);
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        executor.inTransaction(() -> attempts.incrementAndGet());
+        transactionManager.failNextCommits(noSuchTransaction(), noSuchTransaction());
+        executor.inTransaction(() -> attempts.incrementAndGet());
+
+        // Then
+        assertThat(attempts).hasValue(6);
+    }
+
+    @Test
+    void the_default_executor_does_not_count_a_transaction_exception_that_the_action_throws_itself() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 3) {
+                throw noSuchTransaction();
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(4);
+    }
+
+    @Test
+    void the_default_executor_stops_after_three_failed_commits_and_says_which_error_failed_the_commit() {
+        // Given
+        TransactionSystemException lastCommitFailure = noSuchTransaction();
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager(noSuchTransaction(), noSuchTransaction(), lastCommitFailure, noSuchTransaction()));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        assertThatThrownBy(() -> executor.inTransaction(() -> attempts.incrementAndGet())).isInstanceOf(TransactionSystemException.class)
+                .hasMessage("The commit failed with NoSuchTransaction (code 251) after 3 failed commits, so it was not retried again. "
+                        + "MongoDB no longer had the transaction when the commit arrived. That follows a failover, "
+                        + "a transaction that outlived transactionLifetimeLimitSeconds, or a write error such as a duplicate key "
+                        + "that the transaction body caught and swallowed.")
+                .hasCause(lastCommitFailure);
+
+        // Then
+        assertThat(attempts).hasValue(3);
+    }
+
+    @Test
+    void the_default_executor_names_only_the_error_when_a_failed_commit_is_not_no_such_transaction() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager(writeConflict(), writeConflict(), writeConflict()));
+
+        // When
+        assertThatThrownBy(() -> executor.inTransaction(() -> "unused"))
+                // Then
+                .hasMessage("The commit failed with WriteConflict (code 112) after 3 failed commits, so it was not retried again.");
+    }
+
+    @Test
+    void the_default_executor_counts_failed_commits_and_not_errors_thrown_from_the_action() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager(noSuchTransaction(), noSuchTransaction()));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() <= 5) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(8);
+    }
+
+    @Test
+    void the_default_executor_does_not_count_a_commit_that_fails_without_the_transient_label() {
+        // Given
+        TransactionSystemException unlabelled = new TransactionSystemException("commit failed", new MongoException("no label"));
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager(unlabelled));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        assertThatThrownBy(() -> executor.inTransaction(() -> attempts.incrementAndGet())).isSameAs(unlabelled);
+
+        // Then
+        assertThat(attempts).hasValue(1);
+    }
+
+    @Test
+    void a_retry_passed_to_the_constructor_is_used_as_given_and_has_no_cap_on_failed_commits() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(
+                new StubTransactionManager(noSuchTransaction(), noSuchTransaction(), noSuchTransaction(), noSuchTransaction(), noSuchTransaction()),
+                RetryStrategy.fixed(1).maxAttempts(10).retryIf(throwable -> throwable instanceof TransactionSystemException));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            attempts.incrementAndGet();
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(6);
+    }
+
+    // The callback fails the test if it runs a second time, so a retry that should not happen fails on this
+    // assertion straight away instead of running the default two minute budget out.
+    private static void runsOnceAndFailsWith(RuntimeException failure) {
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new StubTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+
+        assertThatThrownBy(() -> executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() > 1) {
+                throw new AssertionError("the action ran again after " + failure);
+            }
+            throw failure;
+        })).isSameAs(failure);
+        assertThat(attempts).hasValue(1);
+    }
+
+    private static RuntimeException deeplyNested(Throwable root) {
+        Throwable cause = root;
+        for (int depth = 0; depth < 100; depth++) {
+            cause = new RuntimeException("wrapper " + depth, cause);
+        }
+        return (RuntimeException) cause;
+    }
+
+    private static TransactionSystemException noSuchTransaction() {
+        return commitFailure(251, "NoSuchTransaction");
+    }
+
+    private static TransactionSystemException writeConflict() {
+        return commitFailure(112, "WriteConflict");
+    }
+
+    // What the real MongoTransactionManager throws when the server refuses the commit.
+    private static TransactionSystemException commitFailure(int code, String codeName) {
+        MongoCommandException failure = new MongoCommandException(new BsonDocument("ok", new BsonInt32(0))
+                .append("code", new BsonInt32(code))
+                .append("codeName", new BsonString(codeName))
+                .append("errmsg", new BsonString("commit refused")), new ServerAddress());
+        failure.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+        return new TransactionSystemException("Could not commit Mongo transaction", failure);
+    }
+
+    private static MongoException labelled(String label) {
+        MongoException exception = new MongoException("labelled");
+        exception.addLabel(label);
+        return exception;
+    }
+
     // A transaction manager with no real resource to manage: doBegin/doCommit/doRollback are no-ops, and
     // doGetTransaction hands out a fresh marker object per call so AbstractPlatformTransactionManager treats every
-    // call as a request for a new transaction rather than joining an existing one.
+    // call as a request for a new transaction rather than joining an existing one. The commit fails with each
+    // exception it was given, one per commit, and then succeeds.
     private static final class StubTransactionManager extends AbstractPlatformTransactionManager {
+
+        private final Deque<TransactionSystemException> commitFailures = new ArrayDeque<>();
+
+        StubTransactionManager(TransactionSystemException... commitFailures) {
+            failNextCommits(commitFailures);
+        }
+
+        void failNextCommits(TransactionSystemException... commitFailures) {
+            this.commitFailures.addAll(java.util.List.of(commitFailures));
+        }
 
         @Override
         protected Object doGetTransaction() {
@@ -97,6 +455,10 @@ class SpringTransactionExecutorTest {
 
         @Override
         protected void doCommit(DefaultTransactionStatus status) {
+            TransactionSystemException failure = commitFailures.poll();
+            if (failure != null) {
+                throw failure;
+            }
         }
 
         @Override
