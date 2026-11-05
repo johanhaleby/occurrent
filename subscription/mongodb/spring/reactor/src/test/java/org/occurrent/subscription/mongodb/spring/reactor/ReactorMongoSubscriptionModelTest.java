@@ -1289,7 +1289,7 @@ public class ReactorMongoSubscriptionModelTest {
             CountDownLatch actionCalled = new CountDownLatch(1);
             CountDownLatch cancelStarted = new CountDownLatch(1);
             CountDownLatch mayFinishCancel = new CountDownLatch(1);
-            // Counted on the request, which comes once the model holds the action's subscription. A pause or a cancel before that ends the run without waiting for the action's cancel
+            // Counted on the request, which retryWhen in deliver makes once it has stored the action's subscription. A pause or a cancel before that ends the run without waiting for the action's cancel
             Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.<Void>never()
                     .doOnRequest(__ -> actionCalled.countDown())
                     .doOnCancel(() -> {
@@ -1347,7 +1347,7 @@ public class ReactorMongoSubscriptionModelTest {
             CountDownLatch actionCalled = new CountDownLatch(1);
             CountDownLatch cancelStarted = new CountDownLatch(1);
             CountDownLatch mayFinishCancel = new CountDownLatch(1);
-            // Counted on the request, which comes once the model holds the action's subscription. A pause or a cancel before that ends the run without waiting for the action's cancel
+            // Counted on the request, which retryWhen in deliver makes once it has stored the action's subscription. A pause or a cancel before that ends the run without waiting for the action's cancel
             Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.<Void>never()
                     .doOnRequest(__ -> actionCalled.countDown())
                     .doOnCancel(() -> {
