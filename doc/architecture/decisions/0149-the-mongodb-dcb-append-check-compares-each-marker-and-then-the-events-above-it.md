@@ -243,7 +243,10 @@ by default, in place of any `wtimeout` on the client, the database or a Spring d
 doesn't shorten it to `markerVersionsCommitTimeout`, because the same timeout also bounds how long the driver waits to
 select a primary, which an election can need. The marker-versions read does shorten it, because a read that runs out
 only reports no versions, while an append that runs out throws. A `timeoutMS` of 0 waits forever, so there the store
-gives the update `markerVersionsCommitTimeout` as its timeout. A test on each store asserts the `wtimeout` the update
+gives the update `markerVersionsCommitTimeout` as its timeout. That also bounds the wait to select a primary, so an
+election that takes longer fails the append, which is better than an append that never returns. The timeout goes through the
+driver's `withTimeout`, which driver 5.8 marks `@Alpha`, as it does the `TransactionOptions.timeout` the marker-versions
+read already uses. A test on each store asserts the `wtimeout` the update
 sends. On a client with `timeoutMS` it asserts that the update sends no `wtimeout`, and a `maxTimeMS` above
 `markerVersionsCommitTimeout` for a `timeoutMS` of 60 seconds and at most `markerVersionsCommitTimeout` for 0. No probe
 on such a set has run since. An append that fails this way writes
@@ -275,8 +278,9 @@ bound and reports the snapshot's counter as its head. It returns the transaction
 reserved their positions after the snapshot was taken are above that head, so a read after that head once the
 transaction has committed returns them again. An append that is the transaction's first operation on the store's
 factory reserves before the snapshot, so its events are at or below the head. The counter bounds a read before the
-template's first operation in the caller's transaction. On the reactor store it also bounds that first read, because
-the store checks before the template has opened its session, and the transaction has no appends of its own yet then.
+template's first operation in the caller's transaction. On the reactor store it can also bound that first read,
+depending on whether the template has bound its session when the store checks. The transaction has no appends of its
+own yet then, so the bound loses nothing.
 This comes from reading Spring Data MongoDB 5.1.0. The probes below ran a no-op outer transaction manager in place of
 a JDBC one.
 
