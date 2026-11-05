@@ -128,7 +128,8 @@ final class NamedCatchupSupport {
     // AbstractCatchupSubscriptionModel's stopped flag.
     private volatile boolean stopped = false;
     // Set by shutdown() and never cleared, since a shut-down model cannot be started again. Refuses every named
-    // subscribe, so none replays history and then fails at the handover to a wrapped model that is shut down.
+    // subscribe, so none replays history and then fails at the handover to a wrapped model that is shut down. Refuses
+    // every pause and resume too, unless the wrapped model manages no named subscriptions.
     private volatile boolean shutdown = false;
     // Who to tell about each id's catch-up boundaries. Kept until this model shuts down, since the registration
     // outlives any one catch-up and a recorder that stopped being told would record the next one's history as
@@ -209,7 +210,8 @@ final class NamedCatchupSupport {
         }
     }
 
-    // Refused here rather than forwarded, since the wrapped model is shut down too and throws an exception of its own
+    // Refused here rather than forwarded, so what is thrown does not depend on what the wrapped model throws once it is
+    // shut down
     private void requireNotShutdown(String call, String subscriptionId) {
         if (shutdown) {
             throw new SubscriptionModelShutdownException("Cannot " + call + " subscription " + subscriptionId + " because the subscription model is shutdown.");
@@ -939,6 +941,10 @@ final class NamedCatchupSupport {
     }
 
     void pauseSubscription(String subscriptionId) {
+        // A cold-only composition knows no subscription by id, whether it is shut down or not
+        if (!managesNamedSubscriptions()) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
         requireNotShutdown("pause", subscriptionId);
         // A cancelled subscribe whose subscription the wrapped model still runs, which isRunning(..) and isPaused(..)
         // answer false for
@@ -956,13 +962,14 @@ final class NamedCatchupSupport {
                 }
             }
         }
-        if (!managesNamedSubscriptions()) {
-            throw new UnknownSubscriptionException(subscriptionId);
-        }
         named.pauseSubscription(subscriptionId);
     }
 
     Subscription resumeSubscription(String subscriptionId) {
+        // A cold-only composition knows no subscription by id, whether it is shut down or not
+        if (!managesNamedSubscriptions()) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
         requireNotShutdown("resume", subscriptionId);
         // Before anything starts, so a refused resume changes nothing
         Owned record = owned.get(subscriptionId);
@@ -999,9 +1006,6 @@ final class NamedCatchupSupport {
                 }
                 return new NamedCatchupSubscription(subscriptionId, state.started.asMono());
             }
-        }
-        if (!managesNamedSubscriptions()) {
-            throw new UnknownSubscriptionException(subscriptionId);
         }
         Subscription takenOver = takeOverOnResume(subscriptionId);
         return takenOver == null ? named.resumeSubscription(subscriptionId) : takenOver;

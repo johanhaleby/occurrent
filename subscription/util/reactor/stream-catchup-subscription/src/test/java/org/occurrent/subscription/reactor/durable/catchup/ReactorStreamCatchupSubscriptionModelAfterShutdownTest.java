@@ -103,6 +103,19 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         );
     }
 
+    @Test
+    void a_pause_or_a_resume_after_shutdown_of_a_model_wrapping_a_model_that_manages_no_named_subscriptions_throws_UnknownSubscriptionException() {
+        ReactorStreamCatchupSubscriptionModel overColdOnly = new ReactorStreamCatchupSubscriptionModel(new ColdOnly(), new ThreeEvents());
+        overColdOnly.shutdown();
+
+        assertAll(
+                () -> assertThat(catchThrowable(() -> overColdOnly.pauseSubscription("unknown"))).as("what a pause throws")
+                        .isExactlyInstanceOf(UnknownSubscriptionException.class),
+                () -> assertThat(catchThrowable(() -> overColdOnly.resumeSubscription("unknown"))).as("what a resume throws")
+                        .isExactlyInstanceOf(UnknownSubscriptionException.class)
+        );
+    }
+
     // Events e1 to e3 at positions 1 to 3
     private static final class ThreeEvents implements UnscopedPositionOrderedReader {
         @Override
@@ -124,8 +137,26 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         }
     }
 
-    // After shutdown() it throws IllegalStateException from a pause or a resume, as ReactorMongoSubscriptionModel does,
-    // and records every call it gets
+    // Offers only the plain subscribe(filter, startAt), so it manages no subscription by name
+    private static final class ColdOnly implements CheckpointAwareSubscriptionModel {
+        @Override
+        public Mono<Checkpoint> globalCheckpoint() {
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return Mono.empty();
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.empty();
+        }
+    }
+
+    // After shutdown() it throws SubscriptionModelShutdownException from a pause or a resume, as
+    // ReactorMongoSubscriptionModel does, and records every call it gets
     private static final class ShutDownLikeMongo implements CheckpointAwareSubscriptionModel, SubscriptionModel {
         private static final Checkpoint TOKEN = new StringBasedCheckpoint("token");
         private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
@@ -211,7 +242,7 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         public synchronized Subscription resumeSubscription(String subscriptionId) {
             called("resume:" + subscriptionId);
             if (shutdown) {
-                throw new IllegalStateException("ShutDownLikeMongo is shutdown");
+                throw new SubscriptionModelShutdownException("ShutDownLikeMongo is shutdown");
             }
             if (!paused.remove(subscriptionId)) {
                 throw new UnknownSubscriptionException(subscriptionId);
@@ -223,7 +254,7 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         public synchronized void pauseSubscription(String subscriptionId) {
             called("pause:" + subscriptionId);
             if (shutdown) {
-                throw new IllegalStateException("ShutDownLikeMongo is shutdown");
+                throw new SubscriptionModelShutdownException("ShutDownLikeMongo is shutdown");
             }
             if (!subscribed.contains(subscriptionId)) {
                 throw new UnknownSubscriptionException(subscriptionId);
