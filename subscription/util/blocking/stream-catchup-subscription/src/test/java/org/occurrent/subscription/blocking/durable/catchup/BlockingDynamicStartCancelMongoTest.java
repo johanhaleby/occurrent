@@ -644,7 +644,9 @@ class BlockingDynamicStartCancelMongoTest {
     private final class WaitsForCancel {
         private final AtomicBoolean asked = new AtomicBoolean();
         private final CompletableFuture<Void> cancelCompleted = new CompletableFuture<>();
-        private final AtomicBoolean cancelReturnedWhileWaiting = new AtomicBoolean();
+        // Completed by the function once it stops waiting, which on the plain MongoDB model is on its executor after the
+        // subscribe has returned
+        private final CompletableFuture<Boolean> cancelReturnedWhileWaiting = new CompletableFuture<>();
 
         StartAt startAt() {
             return StartAt.dynamic(context -> {
@@ -681,11 +683,13 @@ class BlockingDynamicStartCancelMongoTest {
             });
             try {
                 cancelCompleted.get(FUNCTION_WAITS.toMillis(), TimeUnit.MILLISECONDS);
-                cancelReturnedWhileWaiting.set(true);
+                cancelReturnedWhileWaiting.complete(true);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (ExecutionException | TimeoutException e) {
                 // assertTheCancelReturnedWhileTheFunctionWaited() decides whether the cancel returned, so the function only stops waiting
+            } finally {
+                cancelReturnedWhileWaiting.complete(false);
             }
         }
 
@@ -693,7 +697,7 @@ class BlockingDynamicStartCancelMongoTest {
         // subscribe has returned, because it waited for the subscribe, is the deadlock this guards against
         void assertTheCancelReturnedWhileTheFunctionWaited() {
             assertThat(cancelCompleted).as("the cancel made while the function waited").succeedsWithin(EVENT_DELIVERY);
-            assertThat(cancelReturnedWhileWaiting).as("the cancel returned before the function stopped waiting for it").isTrue();
+            assertThat(cancelReturnedWhileWaiting).as("the cancel returned before the function stopped waiting for it").succeedsWithin(EVENT_DELIVERY).isEqualTo(true);
         }
     }
 }
