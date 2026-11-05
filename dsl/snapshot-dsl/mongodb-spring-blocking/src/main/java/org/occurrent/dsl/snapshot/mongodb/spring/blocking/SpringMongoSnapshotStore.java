@@ -22,6 +22,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.blocking.SnapshotStore;
+import org.occurrent.dsl.snapshot.internal.SnapshotMarkerVersionsFields;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -29,14 +30,16 @@ import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
 /**
- * A {@link SnapshotStore} backed by MongoDB. Each snapshot is stored as one document in the store's collection, keyed by
- * the snapshot key, carrying the folded {@code state}, the {@code version} it was folded up to, and the
- * {@code schemaVersion}. The state is serialized with the same {@code MongoConverter} the rest of the application uses,
- * so any type Spring Data can map is supported.
+ * A {@link SnapshotStore} backed by MongoDB. Each snapshot is stored as one document in the store's collection, keyed
+ * by the snapshot key, carrying the folded {@code state}, the {@code version} it was folded up to, and the {@code
+ * schemaVersion}. A DCB snapshot stores its {@code markerVersions} and {@code highestFoldedPosition} instead of a
+ * {@code version}, and a document with marker versions but no position is treated as unreadable. The state is serialized
+ * with the same {@code MongoConverter} the rest of the application uses, so any type Spring Data can map is supported.
  *
  * @param <S> The snapshot state type.
  */
@@ -46,6 +49,8 @@ public final class SpringMongoSnapshotStore<S extends @Nullable Object> implemen
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSnapshotStore.class);
 
     private static final String VERSION = "version";
+    private static final String MARKER_VERSIONS = "markerVersions";
+    private static final String HIGHEST_FOLDED_POSITION = "highestFoldedPosition";
     private static final String SCHEMA_VERSION = "schemaVersion";
     private static final String STATE = "state";
 
@@ -74,9 +79,13 @@ public final class SpringMongoSnapshotStore<S extends @Nullable Object> implemen
             return Optional.empty();
         }
         try {
-            long version = document.getLong(VERSION);
             int schemaVersion = document.getInteger(SCHEMA_VERSION);
             S state = readState(mongoOperations.getConverter(), document.get(STATE));
+            List<?> markerVersions = document.getList(MARKER_VERSIONS, Object.class);
+            if (markerVersions != null) {
+                return Optional.of(Snapshot.atMarkerVersions(state, SnapshotMarkerVersionsFields.fromFields(markerVersions), document.getLong(HIGHEST_FOLDED_POSITION), schemaVersion));
+            }
+            long version = document.getLong(VERSION);
             return Optional.of(new Snapshot<>(state, version, schemaVersion));
         } catch (RuntimeException e) {
             // A snapshot is a discardable optimization. If a stored snapshot can no longer be read (for example
@@ -91,9 +100,13 @@ public final class SpringMongoSnapshotStore<S extends @Nullable Object> implemen
     public void save(String key, Snapshot<S> snapshot) {
         Objects.requireNonNull(key, "key cannot be null");
         Objects.requireNonNull(snapshot, "snapshot cannot be null");
-        Document document = new Document("_id", key)
-                .append(VERSION, snapshot.version())
-                .append(SCHEMA_VERSION, snapshot.schemaVersion());
+        Document document = new Document("_id", key);
+        // A snapshot with marker versions is stored without a version, so a node that reads only the version treats
+        // it as unreadable and reads in full instead of folding onto it
+        snapshot.markerVersions().ifPresentOrElse(
+                markerVersions -> document.append(MARKER_VERSIONS, SnapshotMarkerVersionsFields.toFields(markerVersions).stream().map(Document::new).toList()).append(HIGHEST_FOLDED_POSITION, snapshot.highestFoldedPosition()),
+                () -> document.append(VERSION, snapshot.version()));
+        document.append(SCHEMA_VERSION, snapshot.schemaVersion());
         S state = snapshot.state();
         if (state != null) {
             // convertToMongoType handles any mappable state, a scalar (number, string, enum) stays a scalar and a

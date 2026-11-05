@@ -289,6 +289,7 @@ public class DomainEventQueriesTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     void afterPosition_returns_domain_events_strictly_after_the_given_position_in_ascending_position_order() {
         // Given
         LocalDateTime time = LocalDateTime.now();
@@ -336,6 +337,7 @@ public class DomainEventQueriesTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     void afterPosition_throws_when_the_underlying_event_store_does_not_write_a_position() {
         // When / Then
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> queriesWithoutPosition().afterPosition(0))

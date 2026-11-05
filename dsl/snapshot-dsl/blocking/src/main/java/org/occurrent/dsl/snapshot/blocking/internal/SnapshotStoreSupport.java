@@ -24,6 +24,8 @@ import org.occurrent.dsl.snapshot.blocking.SnapshotStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
@@ -87,9 +89,37 @@ public final class SnapshotStoreSupport {
      */
     public static <S extends @Nullable Object, E> boolean maybeSaveBestEffort(SnapshotStore<S> store, String key, int schemaVersion,
                                                                               SnapshotPolicy<S, E> policy, Supplier<? extends SnapshotDecision<S, E>> decisionSupplier) {
+        return maybeSaveBestEffort(store, key, schemaVersion, policy, decisionSupplier,
+                decision -> Optional.of(new Snapshot<>(decision.newState(), decision.newVersion(), schemaVersion)));
+    }
+
+    /**
+     * Best-effort variant of {@link #maybeSave} where {@code toSnapshot} builds the snapshot to save, or returns empty to
+     * skip the save. It runs only when {@code policy} fires, inside the best-effort boundary, so a check that reads the
+     * event store before saving costs nothing on a command the policy declines.
+     *
+     * @param toSnapshot builds the snapshot for a decision the policy accepted, or returns empty to skip the save
+     * @return {@code true} if a snapshot was written
+     */
+    public static <S extends @Nullable Object, E> boolean maybeSaveBestEffort(SnapshotStore<S> store, String key, int schemaVersion,
+                                                                              SnapshotPolicy<S, E> policy, Supplier<? extends SnapshotDecision<S, E>> decisionSupplier,
+                                                                              Function<? super SnapshotDecision<S, E>, Optional<Snapshot<S>>> toSnapshot) {
+        requireNonNull(store, "store cannot be null");
+        requireNonNull(key, "key cannot be null");
+        requireNonNull(policy, "policy cannot be null");
         requireNonNull(decisionSupplier, "decisionSupplier cannot be null");
+        requireNonNull(toSnapshot, "toSnapshot cannot be null");
         try {
-            return maybeSave(store, key, schemaVersion, policy, decisionSupplier.get());
+            SnapshotDecision<S, E> decision = requireNonNull(decisionSupplier.get(), "decision cannot be null");
+            if (!policy.shouldSnapshot(decision)) {
+                return false;
+            }
+            Optional<Snapshot<S>> snapshot = toSnapshot.apply(decision);
+            if (snapshot.isEmpty()) {
+                return false;
+            }
+            store.save(key, snapshot.get());
+            return true;
         } catch (Throwable t) {
             // Throwable, since a store or policy written in Kotlin can throw a checked exception, and whatever escapes
             // here reports a committed write as failed. A swallowed interrupt is set again for the caller.
