@@ -297,6 +297,81 @@ class MongoCommonsTest {
     }
 
     @Test
+    void record_where_it_opened_replaces_a_dynamic_position_with_the_resume_token_it_opened_at() {
+        StartAt tracked = StartAt.dynamic(StartAt::now);
+        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(tracked);
+
+        boolean recorded = MongoCommons.recordWhereItOpened(new MongoCommons.OpenedAt(RESUME_TOKEN_POSITION, tracked), currentStartAt::compareAndSet);
+
+        assertThat(recorded).isTrue();
+        assertThat(currentStartAt.get()).isSameAs(RESUME_TOKEN_POSITION);
+    }
+
+    @Test
+    void record_where_it_opened_replaces_a_dynamic_position_with_the_operation_time_it_opened_at() {
+        StartAt tracked = StartAt.dynamic(StartAt::now);
+        StartAt operationTimePosition = StartAt.checkpoint(new MongoOperationTimeCheckpoint(OPERATION_TIME));
+        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(tracked);
+
+        boolean recorded = MongoCommons.recordWhereItOpened(new MongoCommons.OpenedAt(operationTimePosition, tracked), currentStartAt::compareAndSet);
+
+        assertThat(recorded).isTrue();
+        assertThat(checkpointOf(currentStartAt.get())).isEqualTo(new MongoOperationTimeCheckpoint(OPERATION_TIME));
+    }
+
+    @Test
+    void record_where_it_opened_leaves_a_position_that_is_not_dynamic_alone_without_asking_the_predicate() {
+        StartAt tracked = StartAt.checkpoint(new MongoOperationTimeCheckpoint(OPERATION_TIME));
+        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(tracked);
+        AtomicInteger asked = new AtomicInteger();
+
+        boolean recorded = MongoCommons.recordWhereItOpened(new MongoCommons.OpenedAt(RESUME_TOKEN_POSITION, tracked), (expected, update) -> {
+            asked.incrementAndGet();
+            return currentStartAt.compareAndSet(expected, update);
+        });
+
+        assertThat(recorded).isFalse();
+        assertThat(asked).hasValue(0);
+        assertThat(currentStartAt.get()).isSameAs(tracked);
+    }
+
+    @Test
+    void record_where_it_opened_records_nothing_for_an_opening_at_the_present() {
+        StartAt tracked = StartAt.dynamic(StartAt::now);
+        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(tracked);
+
+        boolean recorded = MongoCommons.recordWhereItOpened(new MongoCommons.OpenedAt(StartAt.now(), tracked), currentStartAt::compareAndSet);
+
+        assertThat(recorded).isFalse();
+        assertThat(currentStartAt.get()).isSameAs(tracked);
+    }
+
+    @Test
+    void record_where_it_opened_keeps_a_checkpoint_another_writer_set_after_it_read_the_tracked_position() {
+        StartAt tracked = StartAt.dynamic(StartAt::now);
+        StartAt writtenByAnotherThread = StartAt.checkpoint(new MongoOperationTimeCheckpoint(new BsonTimestamp(1_700_000_100, 1)));
+        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(writtenByAnotherThread);
+
+        boolean recorded = MongoCommons.recordWhereItOpened(new MongoCommons.OpenedAt(RESUME_TOKEN_POSITION, tracked), currentStartAt::compareAndSet);
+
+        assertThat(recorded).isFalse();
+        assertThat(currentStartAt.get()).isSameAs(writtenByAnotherThread);
+    }
+
+    @Test
+    void record_where_it_opened_replaces_a_position_pinned_to_an_operation_time_with_that_operation_time() {
+        StartAt tracked = MongoCommons.pinnedTo(StartAt.dynamic(StartAt::now), OPERATION_TIME);
+        StartAt operationTimePosition = StartAt.checkpoint(new MongoOperationTimeCheckpoint(OPERATION_TIME));
+        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(tracked);
+
+        boolean recorded = MongoCommons.recordWhereItOpened(new MongoCommons.OpenedAt(operationTimePosition, tracked), currentStartAt::compareAndSet);
+
+        assertThat(recorded).isTrue();
+        assertThat(currentStartAt.get().isDynamic()).isFalse();
+        assertThat(checkpointOf(currentStartAt.get())).isEqualTo(new MongoOperationTimeCheckpoint(OPERATION_TIME));
+    }
+
+    @Test
     void a_catch_up_position_keeps_its_live_start_out_of_the_fields_a_change_stream_position_is_read_from() {
         MongoOperationTimeCheckpoint liveStart = new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1));
         GlobalCheckpoint checkpoint = GlobalCheckpoint.of(42, liveStart, 7, 40);
