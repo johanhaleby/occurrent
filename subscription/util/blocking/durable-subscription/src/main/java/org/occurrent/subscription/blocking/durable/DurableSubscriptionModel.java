@@ -203,7 +203,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // on JDK 21 to 23
     private final ConcurrentMap<String, IdLock> idLocks = new ConcurrentHashMap<>();
 
-    // The subscribes whose function is asked now, before they take the lock for their id
+    // The subscribes that ask their function before they take the lock for their id, kept until they hold it
     private final Set<Asked> asking = ConcurrentHashMap.newKeySet();
 
     private static final class Asked {
@@ -415,7 +415,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
         // The caller's function runs here, with no lock held, since it can wait for a cancel of the id on another thread.
-        // A cancel made meanwhile finds asked, and then nothing reaches the wrapped model.
+        // A cancel made before this takes the lock finds asked, and then nothing reaches the wrapped model.
         Asked asked = new Asked(subscriptionId);
         asking.add(asked);
         StartAt answered = startAt;
@@ -423,8 +423,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             while (answered != null && !answered.isDefault() && answered.isDynamic()) {
                 answered = answered.get(new SubscriptionModelContext(DurableSubscriptionModel.class));
             }
-        } finally {
+        } catch (RuntimeException | Error e) {
             asking.remove(asked);
+            throw e;
         }
         StartAt askedOnce = answered;
         // Held for the rest of the method, not just the opt-out branch, so subscribe, resumeSubscription and
@@ -434,6 +435,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // reads the checkpoint or writes a first position. An evaluation that comes while this records the first
         // position waits for that write and takes its outcome, see FirstPosition.
         return underLockFor(subscriptionId, () -> {
+            asking.remove(asked);
             if (asked.cancelled) {
                 return new CancelledWhileAsked(subscriptionId);
             }

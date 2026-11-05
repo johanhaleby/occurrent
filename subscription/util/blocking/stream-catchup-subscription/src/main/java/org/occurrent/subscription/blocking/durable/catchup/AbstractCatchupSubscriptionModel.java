@@ -277,9 +277,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final String subscriptionId;
         private final Thread asker = Thread.currentThread();
         private final CompletableFuture<Void> returned = new CompletableFuture<>();
-        // Only a cancel made while the function is asked wins over the subscribe
-        private volatile boolean asking = true;
-        // Set and read under the claim of the id
+        // Set and read under the claim of the id. A cancel that marks it after the subscribe has read it changes nothing,
+        // since that cancel finds the subscription the subscribe made
         private boolean cancelled;
 
         private AskedFirst(String subscriptionId) {
@@ -414,19 +413,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     // The caller's function is asked for this model before the claim, since it can wait for a call for the id on another
-    // thread. A cancel made while it runs wins, and nothing reaches the live delegate. A pause, resume or other lifecycle
+    // thread. A cancel made before the subscribe takes the claim wins, and nothing reaches the live delegate. A pause, resume or other lifecycle
     // call for the id on another thread waits for the subscribe to return, up to LIFECYCLE_WAIT. A cancel and another
     // subscribe of the id don't wait for the function.
     private Subscription subscribeAndRemember(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         AskedFirst asked = new AskedFirst(subscriptionId);
         askedFirst.add(asked);
         try {
-            StartAt answered;
-            try {
-                answered = answeredForThisModel(startAt);
-            } finally {
-                asked.asking = false;
-            }
+            StartAt answered = answeredForThisModel(startAt);
             // Under the handover lock as well as the claim, so a handover or a failure of a replay for the id comes either
             // before the refusal is decided or after the subscription is remembered
             try (Claim ignored = claimWithoutWaitingForAsks(subscriptionId); HandoverLock alsoIgnored = lockHandover(subscriptionId)) {
@@ -2500,7 +2494,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * be deleted. False when a subscribe for the same id on this thread, made while {@code cancel} ran, is kept.
      */
     boolean cancelKeepingWhatWasSubscribedOnFailure(String subscriptionId, Runnable cancel) {
-        askedFirst.stream().filter(asked -> asked.asking && asked.subscriptionId.equals(subscriptionId)).forEach(asked -> asked.cancelled = true);
+        askedFirst.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId)).forEach(asked -> asked.cancelled = true);
         Subscribed made = subscribed.get(subscriptionId);
         CancelUnderWay underWay = new CancelUnderWay(made == null ? CompletableFuture.completedFuture(null) : made.cancelledReplayReturned());
         // Before the cancel takes the replay away, so start(true) and every resume find it all through the cancel. A
