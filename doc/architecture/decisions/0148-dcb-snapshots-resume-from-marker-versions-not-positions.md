@@ -629,12 +629,12 @@ is the order the service has without synchronous subscriptions, and these are th
   [ADR 165](0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) covers a failure after an
   append that the attempt's own transaction doesn't undo. When the condition then fails, the service's retry
   strategy by default reads and decides again. Otherwise the append goes through on the decision it already made.
-  The condition doesn't catch every append that happened since the read, for example one whose event was deleted or
-  changed by the time of the append, or one on `DcbCriteria.all()`, where the append can go through on a decision that
-  didn't see a matching event. A conflict that only the condition can see spends an attempt of the service's retry
-  strategy instead of one of the executor's. By default the service allows 5 attempts and the Spring executors 240 on
-  the blocking stack and 321 on the reactive one, so a command on a contended boundary can fail sooner, with the same
-  budget a service without synchronous subscriptions has.
+  The condition doesn't catch every append that happened since the read, for example on a replica set one whose event
+  was deleted or changed by the time of the append, or one on `DcbCriteria.all()`, where the append can go through on a
+  decision that didn't see a matching event. A conflict that only the condition can see spends an attempt of the
+  service's retry strategy instead of one of the executor's. By default the service allows 5 attempts and the Spring
+  executors 240 on the blocking stack and 321 on the reactive one, so a command on a contended boundary can fail sooner,
+  with the same budget a service without synchronous subscriptions has.
 - With no transaction open before the executor, the domain function no longer runs in the executor's transaction, and a
   decision with no new events no longer opens one.
 - The executor's conflict retry no longer covers the read, so a transient failure of the read now fails the command
