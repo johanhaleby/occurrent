@@ -436,7 +436,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * replay this starts waits on its own thread until that replay has returned. When this doesn't replay, it waits up
      * to ten seconds for that replay to return before the live delegate resumes the subscription, and throws
      * {@link IllegalStateException} without resuming it when the replay hasn't returned by then, or at once when called
-     * from inside the action. Like every other call for the subscription it runs alone, so a
+     * from inside the action. It runs alone, so a
      * {@link #pauseSubscription(String)} or {@link #cancelSubscription(String)} for the subscription that comes meanwhile
      * doesn't run until it returns, and a {@link #stop()} can be held up the same way.
      * <p>
@@ -496,7 +496,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * {@link IllegalStateException} at once and changes nothing. An action that hands the call to another thread and
      * waits for it fails once the ten seconds have passed.
      * <p>
-     * Like every other call that changes the subscription, it runs alone. A pause, resume, cancel or subscribe for the
+     * It runs alone. A pause, resume, cancel or subscribe for the
      * same id waits until it returns, for up to ten seconds, and then acts on what it left. While it runs, a subscription
      * that read as running when it began reads as running and not paused, also while it waits for the action, so a
      * caller that pauses what runs calls {@link #pauseSubscription(String)}, which pauses it once this has returned. One
@@ -550,21 +550,22 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     public void cancelSubscription(String subscriptionId) {
         // Neither mode is known ahead of time for a bare subscriptionId, so tell both inner models to drop their own
         // bookkeeping for it (a no-op on whichever one wasn't running it) and cancel the shared live delegate once.
-        try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId)) {
+        try (AbstractCatchupSubscriptionModel.Claim ignored = anyCatchupModel().claimWithoutWaitingForAsks(subscriptionId)) {
+            Runnable cancelAskedSubscribes = anyCatchupModel().askedSubscribesToCancel(subscriptionId);
             boolean nothingKept = anyCatchupModel().cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
                 presentCatchupModels().forEach(model -> model.cancelRunningCatchup(subscriptionId));
                 subscriptionModel.cancelSubscription(subscriptionId);
             });
-            if (!nothingKept) {
-                return;
+            if (nothingKept) {
+                // Position storage is shared config, not per-mode state. Either inner model's config deletes the same
+                // storage entry, so delegate to whichever is present instead of deleting twice.
+                if (streamCatchupSubscriptionModel != null) {
+                    streamCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
+                } else if (dcbCatchupSubscriptionModel != null) {
+                    dcbCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
+                }
             }
-            // Position storage is shared config, not per-mode state. Either inner model's config deletes the same
-            // storage entry, so delegate to whichever is present instead of deleting twice.
-            if (streamCatchupSubscriptionModel != null) {
-                streamCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
-            } else if (dcbCatchupSubscriptionModel != null) {
-                dcbCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
-            }
+            cancelAskedSubscribes.run();
         }
     }
 
