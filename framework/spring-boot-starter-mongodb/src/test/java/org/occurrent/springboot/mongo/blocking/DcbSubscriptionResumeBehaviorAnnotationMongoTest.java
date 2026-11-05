@@ -46,6 +46,7 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -83,6 +84,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -246,11 +248,15 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
                 leftOverBootArgs("dcb-left-over-catch-up", "beginning", "historic-1,historic-2", ""))) {
             awaitHandled(firstBoot.getBean(DcbLeftOverBeginning.class), "historic-2");
             CheckpointStorage storage = firstBoot.getBean(CheckpointStorage.class);
+            // The catch-up stores a checkpoint of its own while it replays, so one existing says nothing about the handover.
+            AtomicReference<Checkpoint> live = new AtomicReference<>();
             await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> {
                 Checkpoint stored = storage.read(id);
                 assertThat(stored).isNotNull();
+                assertThat(GlobalCheckpoint.isGlobalCheckpoint(stored) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(stored)).as("catch-up checkpoint %s", stored.asString()).isFalse();
+                live.set(stored);
             });
-            storage.save(id, GlobalCheckpoint.of(1, storage.read(id), 0, 2));
+            storage.save(id, GlobalCheckpoint.of(1, live.get(), 0, 2));
             assertThat(GlobalCheckpoint.isGlobalCheckpoint(storage.read(id))).as("catch-up checkpoint").isTrue();
         }
         try (ConfigurableApplicationContext secondBoot = SpringApplication.run(NowRestartApplication.class,
