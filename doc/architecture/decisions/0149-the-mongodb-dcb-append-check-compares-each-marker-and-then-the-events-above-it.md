@@ -279,10 +279,10 @@ reserved their positions after the snapshot was taken are above that head, so a 
 transaction has committed returns them again. On a sharded cluster, a transaction below read concern snapshot reads each
 shard at its own point in time, so an event above the head can also be another writer's, and a read after the head
 returns it again. That comes from MongoDB's documentation and wasn't probed. An append that is the transaction's first
-operation on the store's factory reserves before the snapshot, so its events are at or below the head. The counter
-bounds a read before the template's first operation in the caller's transaction. On the reactor store it can also bound
-that first read, depending on whether the template has bound its session when the store checks. The transaction has no
-appends of its own yet then, so the bound loses nothing.
+operation on the store's factory reserves before the snapshot, so its events are at or below the head. The blocking
+store reads the counter through the template before it checks, so even the first read in the caller's transaction has no
+upper bound. On the reactor store the counter can bound that first read, depending on whether the template has bound its
+session when the store checks. The transaction has no appends of its own yet then, so the bound loses nothing.
 This comes from reading Spring Data MongoDB 5.1.0. The probes below ran a no-op outer transaction manager in place of
 a JDBC one.
 
