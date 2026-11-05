@@ -29,6 +29,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import reactor.core.publisher.Flux;
@@ -480,6 +481,25 @@ class ReactorCatchupSubscribeUnderWayTest {
     }
 
     @Test
+    void a_cancelled_subscribe_that_returns_while_the_wrapped_model_moves_the_id_between_running_and_paused_cancels_it_there_again() {
+        WrappedModel wrapped = new WrappedModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        HeldStart cancelledStart = new HeldStart();
+        CompletableFuture<Void> cancelledSubscribe = new CompletableFuture<>();
+        daemon("subscribe-x", cancelledSubscribe, () -> catchup.subscribe("x", FILTER, cancelledStart.startAt(), cloudEvent -> Mono.empty())).start();
+        cancelledStart.awaitInside();
+        await(returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x did not complete");
+        wrapped.movingBetweenRunningAndPaused = true;
+
+        cancelledStart.release();
+        await(cancelledSubscribe, "The cancelled subscribe of x did not return");
+        wrapped.movingBetweenRunningAndPaused = false;
+
+        assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "subscribed:x", "cancelled:x");
+        assertThat(wrapped.subscriptionIds()).as("the ids the wrapped model holds").isEmpty();
+    }
+
+    @Test
     void a_straight_to_live_subscribe_that_the_wrapped_model_refuses_since_a_cancelled_subscribe_took_the_id_after_it_cancels_what_that_subscribe_left() {
         WrappedModel wrapped = new WrappedModel();
         wrapped.refusesDuplicates = true;
@@ -802,7 +822,7 @@ class ReactorCatchupSubscribeUnderWayTest {
     // A named subscription model that evaluates the start on the calling thread inside subscribe(..), against the class of
     // ReactorMongoSubscriptionModel, and holds the subscription once that returned. Only registersBeforeTheStart holds
     // it from before the evaluation, which is the order of ReactorMongoSubscriptionModel
-    private static final class WrappedModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
+    private static final class WrappedModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions {
         static final Checkpoint TOKEN = new StringBasedCheckpoint("token");
         final List<String> events = new CopyOnWriteArrayList<>();
         final Set<String> subscribed = ConcurrentHashMap.newKeySet();
@@ -819,6 +839,9 @@ class ReactorCatchupSubscribeUnderWayTest {
         volatile boolean registersBeforeTheStart;
         // Refuses a subscribe of an id it holds, as ReactorMongoSubscriptionModel does
         volatile boolean refusesDuplicates;
+        // isRunning(..) and isPaused(..) answer false while subscriptionIds() still lists the id, as they do when read while
+        // ReactorMongoSubscriptionModel moves the id between its running and paused maps
+        volatile boolean movingBetweenRunningAndPaused;
         // Every action each id was subscribed with, since a nested subscribe of an id adds one
         final Map<String, List<Function<CloudEvent, Mono<Void>>>> actions = new ConcurrentHashMap<>();
 
@@ -930,12 +953,17 @@ class ReactorCatchupSubscribeUnderWayTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
-            return subscribed.contains(subscriptionId) && !paused.contains(subscriptionId);
+            return !movingBetweenRunningAndPaused && subscribed.contains(subscriptionId) && !paused.contains(subscriptionId);
         }
 
         @Override
         public boolean isPaused(String subscriptionId) {
-            return paused.contains(subscriptionId);
+            return !movingBetweenRunningAndPaused && paused.contains(subscriptionId);
+        }
+
+        @Override
+        public Set<String> subscriptionIds() {
+            return Set.copyOf(subscribed);
         }
 
         @Override
