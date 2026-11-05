@@ -1371,7 +1371,8 @@ model before they take the lock.
 
 Code that subscribes through one of these models with a `StartAt.dynamic(..)` function and cancels the same id from
 another thread while the function can still be running. Code that subscribes an id a catch-up model already runs, with
-such a function, is affected too.
+such a function, is affected too, and so is code that resumes the id on `DurableSubscriptionModel` from another thread
+while the function runs.
 
 ### What changes
 
@@ -1382,6 +1383,9 @@ such a function, is affected too.
   `CatchupSubscriptionModel` already runs asks its function before it throws `DuplicateSubscriptionIdException`. In
   0.34.0 the stream or DCB catch-up threw before it asked the function. `DurableSubscriptionModel` asked the function
   first in 0.34.0 too.
+* A `resumeSubscription(id)` on `DurableSubscriptionModel` made on another thread while the function of a subscribe of
+  `id` runs waits up to 10 seconds for that subscribe and then throws `IllegalStateException`. In 0.34.0 it waited for
+  as long as the function did. Its `pauseSubscription(id)` and `stop()` don't wait for the subscribe, as in 0.34.0.
 
 ### What to do
 
@@ -1389,8 +1393,9 @@ such a function, is affected too.
   `waitUntilStarted(..)` on the `Subscription` that subscribe returns when you need to know whether it started.
 * Keep effects that must happen only for a subscribe that goes ahead out of the function, since a subscribe that then
   throws `DuplicateSubscriptionIdException` asks it too.
-* Don't wait in the function for a `pauseSubscription` or `resumeSubscription` of the same id on a catch-up model on
-  another thread. That call waits up to 10 seconds for the subscribe and then throws `IllegalStateException`.
+* Don't wait in the function for a `pauseSubscription` or `resumeSubscription` of the same id on a catch-up model, or
+  for a `resumeSubscription` on `DurableSubscriptionModel`, on another thread. That call waits up to 10 seconds for the
+  subscribe and then throws `IllegalStateException`.
 * Wait for the cancel only the first time a subscribe asks the function. A catch-up model asks it again while it holds
   the lock for the id, for the model it wraps when the subscribe goes straight to live delivery, on a resume, and on its
   replay thread during the handover to live delivery. A cancel made during one of those asks throws `IllegalStateException` after 10 seconds, or during the
