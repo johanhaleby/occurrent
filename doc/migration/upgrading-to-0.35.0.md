@@ -118,6 +118,14 @@ other sections compile fine and behave differently, so read them first.
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   `restart-on-change-stream-history-lost` no longer affects a subscription the starter runs through a catch-up
   subscription, which is every subscription by default. Compiles unchanged.
+- [A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`](#a-restart-follows-resumebehavior-for-startat--beginning_of_time-and-startat--now).
+  On the reactive stack a restart no longer replays the history of a `BEGINNING_OF_TIME` `@StreamSubscription`, and a
+  `NOW` subscription no longer misses the events written while the application was down. On the blocking stack `NOW` with
+  `SAME_AS_START_AT` starts at the present on every restart and no longer competes with the other instances, so every
+  instance is delivered every event. A reactive `NOW` subscription with the default `resumeBehavior` also asks the
+  server where the feed is each time it registers and needs the answer only when no checkpoint is stored, so when it
+  waits for its start, which is the default in `auto` subscription mode, the application does not start when no
+  checkpoint is stored and the MongoDB server cannot answer. Compiles unchanged.
 
 ### Brokers
 
@@ -935,8 +943,8 @@ starts the subscription from the annotation's start, as it starts without the be
 a subscription model reads the start, also when a node of a competing consumer takes over, and can ask more than once
 for one start, so return the same answer each time.
 
-With `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING` or an explicit position, the answer only
-moves where the replay starts. The subscription keeps no checkpoint in `CheckpointStorage` once it is live, and the
+With `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING` or an explicit position, or on `NOW`, the
+answer only moves where the subscription starts. The subscription keeps no checkpoint in `CheckpointStorage` once it is live, and the
 competing consumer model does not compete for it. A catch-up that stores checkpoints during its replay still does, and
 deletes the last one when the replay goes live.
 
@@ -1205,10 +1213,25 @@ thread that runs the code or from another thread. A subscribe of an id throws `D
 the model the catch-up wraps has completed its cancel of that id. `ReactorMongoSubscriptionModel` completes it before
 `cancelSubscription` returns.
 
-Two pieces of your code can still run while the catch-up holds a lock, so don't call the catch-up model from either. One is a `StartAt.dynamic(..)` function that answers `null` to the catch-up. The catch-up then
+A `StartAt.dynamic(..)` function that answers `null` to the catch-up can call the catch-up model too. The catch-up then
 goes straight to live and hands the function to the model it wraps, and `ReactorMongoSubscriptionModel` can call it
-again on the thread of `subscribe(..)`. The other is a `CatchupListener` given to `listenForCatchup`, which is told that a
-catch-up started from inside an operation on a map the catch-up keeps.
+again inside its own `subscribe(..)`, on the thread that called the catch-up. While that `subscribe(..)` runs, a
+subscribe of the id throws `DuplicateSubscriptionIdException` until the id is cancelled. A cancel of the id then, from
+that thread or another, goes to the wrapped model at once, and the action gets no event after it. When the wrapped
+`subscribe(..)` returns holding the id, the catch-up cancels the id there again, unless a subscribe of the id made after
+the cancel took it there. That cancel waits until no other subscribe of the id is under way. Until that second cancel
+has completed, a subscribe of the id throws
+`DuplicateSubscriptionIdException` whenever the wrapped model holds the id for the cancelled `subscribe(..)`, also after
+the first cancel has completed. When the cancel came before the wrapped model had taken the id for the cancelled
+`subscribe(..)`, the wrapped model can refuse a subscribe of the id made after the cancel with
+`DuplicateSubscriptionIdException`, since the cancelled one can take the id there first. A subscribe that replays history
+first gets that exception from `waitUntilStarted()` once the replay hands over. The catch-up then cancels the id there
+again. A wrapped model that takes the id only after it called the function makes that likely.
+`ReactorMongoSubscriptionModel` takes it before.
+
+A `CatchupListener` given to `listenForCatchup` can still run while the catch-up holds a lock, so don't call the
+catch-up model from it. The listener is told that a catch-up started from inside an operation on a map the catch-up
+keeps.
 
 ### What happens
 
@@ -1334,6 +1357,90 @@ counts is the time since that position was written. On the reactor stack a subsc
 while it matches no events only while the MongoDB subscription model reads quiet positions. When it can't, it logs a
 warning saying that a subscription that matches no event keeps the position of the last event it handled. An unnamed
 reactor `Flux` saves no position, and its position moves only when it reads an event.
+
+## A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`
+
+Some subscriptions did not start where `resumeBehavior` says on a restart. On the reactive Spring Boot starter, a
+`@StreamSubscription` ignored `resumeBehavior`. With `startAt = BEGINNING_OF_TIME` it started at position 0 on every
+restart, and with `startAt = NOW` it started at the present on every restart. A reactive `@Subscription`,
+`@DcbSubscription`, `@Projection` or `@Snapshot` with `startAt = NOW` did the same, while their replay starts already
+followed `resumeBehavior`. On the blocking starter, `startAt = NOW` with `resumeBehavior = SAME_AS_START_AT` continued
+from the checkpoint the subscription had stored, where the documentation says it starts at the present again. Both
+starters now do what the javadoc and the documentation say.
+
+### Who is affected
+
+- Every application on the reactive starter with a `@StreamSubscription` that sets `startAt` to `BEGINNING_OF_TIME` or
+  `NOW`. That includes one that sets `resumeBehavior = DEFAULT` explicitly. A `@StreamSubscription` that does not set
+  `startAt` is not affected, and neither is one that sets `resumeBehavior = SAME_AS_START_AT`, except that
+  `BEGINNING_OF_TIME` no longer stores a checkpoint.
+- Every application on the reactive starter with a `@Subscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`
+  that sets `startAt = NOW`, including one that sets `resumeBehavior = DEFAULT` explicitly. One that does not set
+  `startAt`, or sets `resumeBehavior = SAME_AS_START_AT`, is not affected.
+- Every application on the blocking starter with `startAt = NOW` and `resumeBehavior = SAME_AS_START_AT` on a
+  `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection`, `@Saga` or `@Snapshot`.
+
+### What changes
+
+On the reactive starter:
+
+- `BEGINNING_OF_TIME` with `DEFAULT` replays the history the first time. After a restart it continues from the
+  checkpoint it stored, so the handler no longer receives every event again.
+- `NOW` with `DEFAULT` starts at the present the first time. After a restart it continues from the checkpoint it
+  stored, so the handler receives the events written while the application was down. Before, it never received them.
+- `SAME_AS_START_AT` starts at `startAt` on every restart, as the documentation says. `BEGINNING_OF_TIME` with
+  `SAME_AS_START_AT` now stores no checkpoint, the way a reactive `@Subscription` already behaves.
+
+`NOW` with `SAME_AS_START_AT` still stores a checkpoint after each event, as before, and ignores it on restart. Changing
+that subscription to `DEFAULT` later continues from the checkpoint it stored.
+
+The checkpoint is the one the starter's durable subscription model stores. An application that supplies its own
+`FluxSubscriptionModel` or `Subscribable` gets no durable model from the starter. A `RegisteringSubscribable`, such as
+`SynchronousSubscriptionModel`, does not count. With its own model, the restart behaviour above is that model's: `NOW`
+with `DEFAULT` starts where its default start does, and whether `BEGINNING_OF_TIME` with `DEFAULT` continues or replays
+again depends on whether it stores a checkpoint.
+
+With the starter's durable model, `NOW` with `DEFAULT` also records where the feed is when a subscription with no stored
+checkpoint registers, the way any start from the model default does. The reactive MongoDB model reads it by asking the
+server. It asks on every restart, and ignores the answer when a checkpoint is stored. A server that cannot be asked, or
+that replies without a clock, therefore makes the model refuse the registration only when no checkpoint is stored. Such
+a subscription waits for its start by default when `occurrent.subscription.mode` is `auto`, so the application does not
+start. With `startupMode = BACKGROUND`, with mode `manual`, or on a bean built after startup,
+the refusal does not hold up startup, and the subscription is not running.
+`occurrent.subscription.start-when-no-start-position-can-be-recorded=true` does not change this for the reactive MongoDB
+model, which fails when it cannot be asked or replies without a clock. The property is described in
+[section 7 of the 0.34.0 guide](upgrading-to-0.34.0.md#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
+
+A subscription that handled an event before the upgrade normally has a checkpoint stored already, because the old start
+stored one after each event too. The first restart after the upgrade continues from it, and `startAt` is not looked at
+again for that subscription id. So changing `startAt` on an existing id has no effect until the id is new or its
+checkpoint is deleted. If the position of that checkpoint is no longer in the oplog, the subscription stops, see
+[a subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
+
+On the blocking starter, `NOW` with `SAME_AS_START_AT` starts at the present on every restart and stores no
+checkpoint, so the events written while the application was down are not delivered. Before, it delivered them once it
+had stored a checkpoint. As for any `NOW` start, an event written shortly before the subscription starts can still be
+delivered, and a `SubscriptionResumePoints` bean that answers for the subscription id still decides where it starts.
+It also no longer competes with the other instances of the application, so every instance is delivered every event, as the
+documentation says for `SAME_AS_START_AT`. A checkpoint it stored before the upgrade stays in storage and is not used.
+`NOW` with `DEFAULT` is unchanged.
+
+### What to do
+
+Nothing, if the subscription is meant to behave as the documentation describes.
+
+On the reactive starter, set `resumeBehavior = SAME_AS_START_AT` on a subscription that feeds an in-memory read model
+that has to be rebuilt on every boot. Without it the read model now starts empty and receives only the events after the
+last checkpoint. A `NOW` subscription that has to skip the events written during downtime also needs
+`SAME_AS_START_AT`.
+
+A reactive `NOW` subscription with the default `resumeBehavior` now needs the MongoDB server to answer when it
+registers with no stored checkpoint, and refuses the registration when it cannot be asked.
+
+On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription that relied on resuming from its
+checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
+written while the application was down, and runs on every instance. Delete the old checkpoint of a subscription you
+later switch to `DEFAULT`, or it resumes from that position.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
