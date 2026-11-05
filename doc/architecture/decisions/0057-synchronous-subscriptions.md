@@ -6,9 +6,9 @@ Date: 2026-07-14
 
 Accepted
 
-[ADR 165](0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) keeps a failure after a
-write away from the application service's retry unless the attempt opened the transaction, so `execute` throws
-it instead of running the command again. It also stops the dispatch at the first failing handler in a transaction the
+[ADR 165](0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) keeps the application
+service's retry from running the command again for a failure after a write unless the attempt opened the transaction,
+so `execute` throws the failure instead. It also stops the dispatch at the first failing handler in a transaction the
 attempt joined only when the executor says a failure rolls that transaction back.
 
 ## Context

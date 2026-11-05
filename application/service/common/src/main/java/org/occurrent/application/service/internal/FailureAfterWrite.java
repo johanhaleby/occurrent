@@ -22,7 +22,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Keeps a failure after a write away from the application service's retry when the attempt didn't open a transaction.
+ * Keeps the application service's retry from running the command again for a failure after a write when the attempt
+ * didn't open a transaction.
  * <p>
  * One instance per execute. The failure stays here, and only a stand-in exception passes through the transaction executor,
  * so an executor that opens a transaction without reporting it still rolls back. The service rethrows the failure once the

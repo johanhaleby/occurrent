@@ -35,9 +35,10 @@ reason itself, that a retry only works where it owns the transaction.
 
 ## Decision
 
-A failure after a successful write, in the re-read of the written events or in a handler, reaches the service's retry
-strategy only when the attempt opened a transaction, which the service takes to mean that transaction undoes the write.
-Otherwise the retry strategy doesn't run the command again, and the failure reaches the caller.
+A failure after a successful write, in the re-read of the written events or in a handler, can make the service's
+retry strategy run the command again only when the attempt opened a transaction, which the service takes to mean that
+transaction undoes the write. Otherwise the retry strategy doesn't run the command again, and the failure reaches the
+caller.
 
 - **Who says the attempt opened it.** The service runs the attempt through `inTransactionTellingIfOpened`, a new default
   method on `TransactionExecutor` and `ReactiveTransactionExecutor`, which tells the action whether this call opened the
@@ -48,7 +49,7 @@ Otherwise the retry strategy doesn't run the command again, and the failure reac
   lists where that goes wrong.
 - **What the retry strategy still sees.** A failure of the write itself, which normally means nothing was written. Whether that
   retries is up to the strategy's predicate.
-- **How the failure stays away from the retry.** One object per `execute`, or per subscription on the reactive stack, holds
+- **How the retry is kept from running the command again.** One object per `execute`, or per subscription on the reactive stack, holds
   the failure, and a private stand-in exception passes through the executor so a transaction the attempt opened still rolls back. On
   the blocking stack, whatever comes out of the executor once a failure is held is replaced by the held failure, and the
   service passes `RetryStrategy.execute` a shutdown predicate that answers `false` while a failure is held. The strategy
@@ -144,7 +145,7 @@ that loses a retry rather than an event.
 That lost retry costs more when a handler runs the command. A handler on a service with no transaction that calls a service
 in those rows loses its reaction. I ran that on both stacks over a stream, with the handler's service on
 `PROPAGATION_NOT_SUPPORTED`. The first command's event is stored, the handler's write rolls back, and the first `execute`
-throws. Nothing runs the handler's command again, since the first service's retry doesn't see a failure after its write and
+throws. Nothing runs the handler's command again, since the first service's retry doesn't run the command again for a failure after its write and
 a synchronous subscription has no replay. On the commit before this decision the same setup stored both events and threw
 nothing. An executor that opens a transaction on the handler's service keeps the retry.
 
