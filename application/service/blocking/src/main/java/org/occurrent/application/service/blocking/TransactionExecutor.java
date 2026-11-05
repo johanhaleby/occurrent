@@ -39,9 +39,10 @@ import java.util.function.Supplier;
  * retry strategy run the command again only when {@link #inTransactionTellingIfOpened(Function)} says this attempt opened
  * a transaction, which the service takes to mean that transaction undoes the write. That takes a store that joins the
  * transaction and a rollback rule that covers the failure, and the service can't check either. Otherwise the strategy
- * doesn't run the command again, since that could write its events twice, but its {@code onError} and
- * {@code onAfterRetry} listeners and its {@code mapError} still see the failure. A failure of the write itself is retried
- * as before.
+ * doesn't run the command again, since that could write its events twice, but its {@code onError} listener and its
+ * {@code mapError} still see the failure, and so does its {@code onAfterRetry} listener when the attempt was a retry. A
+ * failure of the write itself is retried as before.
+ * <p>
  * An implementation that opens a transaction and overrides neither that method nor {@link #isTransactional()} still sees
  * an exception pass through and can roll back, but the command doesn't run again. See ADR 165.
  */
@@ -103,8 +104,9 @@ public interface TransactionExecutor {
 
     /**
      * Whether a failure thrown out of this executor, while it runs in a transaction someone else opened, makes that
-     * transaction roll back, so the caller can't commit the write after catching the failure. Synchronous dispatch stops at the first
-     * handler that throws only when this call opened the transaction, or when it joined one and this answers {@code true}.
+     * transaction roll back, so the caller can't commit the write after catching the failure. Synchronous dispatch stops at
+     * the first handler that throws only when this call opened the transaction, or when it joined one and this answers
+     * {@code true}.
      * Otherwise every handler gets the event and the failures are reported together, since a synchronous subscription has
      * no replay and a handler skipped while the caller commits the write would never see the event.
      * <p>

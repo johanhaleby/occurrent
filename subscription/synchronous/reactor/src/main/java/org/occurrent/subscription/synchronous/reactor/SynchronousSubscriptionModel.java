@@ -80,7 +80,7 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     }
 
     /**
-     * Dispatch as {@link #dispatch(List)} does, told whether the caller reports a transaction.
+     * Dispatch as {@link #dispatch(List)} does, told whether the write can't commit once a handler fails.
      * <p>
      * With {@code transactional} true the first handler error stops dispatch, because the write usually rolls back and
      * the handlers behind it would only be doing work that is discarded, possibly with effects outside the datastore.
@@ -90,7 +90,8 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
      * which is why this argument exists. See the ADR 57 amendment.
      *
      * @param writtenCloudEvents The newly written cloud events.
-     * @param transactional      Whether the caller reports a transaction around the write and these handlers.
+     * @param transactional      Whether the write can't commit once a handler fails, for example because it runs in a
+     *                           transaction that a failure rolls back.
      * @return A {@link Mono} that completes when dispatch is done.
      */
     @Override

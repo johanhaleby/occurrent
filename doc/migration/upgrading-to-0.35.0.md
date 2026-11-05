@@ -918,22 +918,27 @@ You use synchronous subscriptions, and `execute` runs in a transaction the execu
 
 - `NativeMongoTransactionExecutor` with a session already bound to the thread, yours or an outer service's.
 - `SpringReactiveTransactionExecutor` in a transaction of yours, on a propagation that joins it such as `PROPAGATION_REQUIRED`.
-- An executor of your own that answers `true` from `isTransactional()` without opening the transaction itself, for
-  example one that answers a fixed `true`.
+- An executor of your own that answers `true` from `isTransactional()` before it opens its transaction, for example one
+  that answers a fixed `true`. The default `inTransactionTellingIfOpened(..)` then reports every transaction as joined,
+  also one the executor opened itself.
 
-`SpringTransactionExecutor` isn't affected unless its transaction manager has `setGlobalRollbackOnParticipationFailure(false)`.
+`SpringTransactionExecutor` isn't affected unless its transaction manager has `setGlobalRollbackOnParticipationFailure(false)`
+or isn't an `AbstractPlatformTransactionManager`.
 
 ### What changes
 
 - In a transaction the attempt joined, every handler gets the event and the failures are reported together, unless the
   executor's `rollsBackAJoinedTransactionOnFailure()` answers `true`. It's a new default method on `TransactionExecutor`
   and `ReactiveTransactionExecutor`, and it answers `false`.
-- `SpringTransactionExecutor` answers `true`, unless its transaction manager is an `AbstractPlatformTransactionManager`
-  set with `setGlobalRollbackOnParticipationFailure(false)`.
+- `SpringTransactionExecutor` answers `true` when its transaction manager is an `AbstractPlatformTransactionManager`
+  that isn't set with `setGlobalRollbackOnParticipationFailure(false)`, and `false` for any other manager.
 - In a transaction the attempt opened, the dispatch still stops at the first failure.
 
 ### What to do
 
+- If your executor opens its own transaction but answers `true` from `isTransactional()` before it does, override
+  `inTransactionTellingIfOpened(..)` to tell the action whether this call opened the transaction. The dispatch then stops
+  at the first failure in a transaction it opened, and a failure after the write reaches the retry strategy.
 - If your executor joins a transaction that a failure marks rollback-only, so the caller can't commit it, override
   `rollsBackAJoinedTransactionOnFailure()` to return `true`. The dispatch then stops at the first failure as it did in
   0.34.0, and the handlers behind it don't do work that the rollback discards.

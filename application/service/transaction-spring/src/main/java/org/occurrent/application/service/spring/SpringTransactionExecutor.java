@@ -166,13 +166,15 @@ public class SpringTransactionExecutor implements TransactionExecutor {
     }
 
     /**
-     * {@code true} unless the transaction manager is an {@code AbstractPlatformTransactionManager} set with
-     * {@code setGlobalRollbackOnParticipationFailure(false)}, which lets the caller commit a transaction after a failure in
-     * a part of it this executor joined.
+     * {@code true} when the transaction manager is an {@code AbstractPlatformTransactionManager} that marks the transaction
+     * rollback-only after a failure in a part of it this executor joined, which it does unless it's set with
+     * {@code setGlobalRollbackOnParticipationFailure(false)}. Any other manager gets the default {@code false}, since this
+     * executor can't tell what that manager does with the caller's transaction.
      */
     @Override
     public boolean rollsBackAJoinedTransactionOnFailure() {
-        return !(transactionTemplate.getTransactionManager() instanceof AbstractPlatformTransactionManager manager) || manager.isGlobalRollbackOnParticipationFailure();
+        return transactionTemplate.getTransactionManager() instanceof AbstractPlatformTransactionManager manager
+                && manager.isGlobalRollbackOnParticipationFailure();
     }
 
     @Override

@@ -219,11 +219,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                         }
                         return decision.map(it -> appendAndDispatch.apply(it, openedTransaction)).orElseGet(() -> new Attempt<>(Optional.empty(), List.of()));
                     });
-                    Throwable failure = failureAfterWrite.failureOfAttempt(null);
-                    if (failure != null) {
-                        throw FailureAfterWrite.<RuntimeException>sneakyThrow(failure);
-                    }
-                    return attempt;
+                    return failureAfterWrite.attemptOrFailure(attempt);
                 }
                 // The read and the decision run outside the transaction, since a store reports no marker versions inside one.
                 // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
@@ -235,7 +231,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
                 // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
                 // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0074.
-                return dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> appendAndDispatch.apply(decision.get(), openedTransaction)) : appendAndDispatch.apply(decision.get(), false);
+                return failureAfterWrite.attemptOrFailure(dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> appendAndDispatch.apply(decision.get(), openedTransaction)) : appendAndDispatch.apply(decision.get(), false));
             } catch (Throwable thrown) {
                 // The retry gets the failure itself, so its listeners and error mapper see it. When it's held, nothing says a
                 // transaction of this attempt undid the write, and the shutdown predicate stops the retry on it. A failure kept

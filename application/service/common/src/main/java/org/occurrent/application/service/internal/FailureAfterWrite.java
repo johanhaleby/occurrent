@@ -74,6 +74,10 @@ public final class FailureAfterWrite {
         if (standIn == null) {
             return false;
         }
+        if (thrown == standIn.getCause()) {
+            // The held failure itself, which the attempt throws again when the executor returned
+            return true;
+        }
         List<Throwable> wrappers = new ArrayList<>();
         Throwable cause = thrown;
         // At most 32 causes, since a chain of causes can be a cycle
@@ -104,14 +108,15 @@ public final class FailureAfterWrite {
     }
 
     /**
-     * What the attempt throws once the executor returned or let {@code thrown} out. A held failure comes first, then a kept
-     * one, which takes {@code thrown} as a suppressed exception, the way a try-with-resources keeps the body's failure over
-     * the close's. Without either it's {@code thrown}, or nothing when the executor returned.
+     * What the attempt throws once the executor let {@code thrown} out, or returned when {@code thrown} is {@code null}. A
+     * held failure comes first, also when an executor swallowed the stand-in and returned. Then a kept one, which takes
+     * {@code thrown} as a suppressed exception, the way a try-with-resources keeps the body's failure over the close's.
+     * Without either it's {@code thrown}, or nothing when the executor returned.
      */
     public @Nullable Throwable failureOfAttempt(@Nullable Throwable thrown) {
         Throwable kept = keptBeforeWrite;
         keptBeforeWrite = null;
-        if (thrown != null && isHeldAfter(thrown)) {
+        if (thrown == null ? isHeld() : isHeldAfter(thrown)) {
             return failure();
         }
         if (kept == null) {
@@ -121,6 +126,18 @@ public final class FailureAfterWrite {
             kept.addSuppressed(thrown);
         }
         return kept;
+    }
+
+    /**
+     * Returns {@code attempt}, which the executor returned, unless the attempt has a failure to throw. That covers a failure
+     * held while an executor swallowed the stand-in, so it still reaches the retry strategy.
+     */
+    public <T> T attemptOrFailure(T attempt) {
+        Throwable failure = failureOfAttempt(null);
+        if (failure != null) {
+            throw FailureAfterWrite.<RuntimeException>sneakyThrow(failure);
+        }
+        return attempt;
     }
 
     /**
@@ -143,8 +160,10 @@ public final class FailureAfterWrite {
             throw new IllegalStateException("No failure is held");
         }
         Throwable failure = standIn.getCause();
+        // Asked again when a strategy that ignores the shutdown predicate returns, so an exception is attached only once
+        List<Throwable> alreadySuppressed = List.of(failure.getSuppressed());
         for (Throwable suppressed : standIn.getSuppressed()) {
-            if (suppressed != failure) {
+            if (suppressed != failure && !alreadySuppressed.contains(suppressed)) {
                 failure.addSuppressed(suppressed);
             }
         }

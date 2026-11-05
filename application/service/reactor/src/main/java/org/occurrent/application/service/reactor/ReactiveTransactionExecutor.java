@@ -100,8 +100,9 @@ public interface ReactiveTransactionExecutor {
 
     /**
      * Whether a failure thrown out of this executor, while it runs in a transaction someone else opened, makes that
-     * transaction roll back, so the caller can't commit the write after catching the failure. Synchronous dispatch stops at the first
-     * handler that errors only when this call opened the transaction, or when it joined one and this answers {@code true}.
+     * transaction roll back, so the caller can't commit the write after catching the failure. Synchronous dispatch stops at
+     * the first handler that errors only when this call opened the transaction, or when it joined one and this answers
+     * {@code true}.
      * Otherwise every handler gets the event and the failures are reported together, since a synchronous subscription has
      * no replay and a handler skipped while the caller commits the write would never see the event.
      * <p>
