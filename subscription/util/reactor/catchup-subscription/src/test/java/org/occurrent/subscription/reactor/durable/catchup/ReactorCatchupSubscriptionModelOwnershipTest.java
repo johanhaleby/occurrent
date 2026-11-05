@@ -41,6 +41,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
@@ -52,9 +53,11 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -64,6 +67,7 @@ import java.util.function.Function;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Pins what {@link ReactorCatchupSubscriptionModel} does with a subscription id it did not create.
@@ -177,6 +181,29 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         assertThatCode(() -> catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.now(), __ -> Mono.empty()))
                 .as("a subscribe of the id once the wrapped model has cancelled")
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    void a_resume_during_a_shutdown_once_the_routes_are_forgotten_is_refused_and_does_not_resume_a_subscription_whose_history_was_lost() throws ReflectiveOperationException {
+        // Given a subscription routed to the agnostic model, which the wrapped model paused for good when it lost its history
+        HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
+        ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
+        Subscription replayed = catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), __ -> Mono.empty());
+        StepVerifier.create(replayed.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(10));
+        wrapped.losesTheHistoryFrom("replayed", new StringBasedCheckpoint("elsewhere"));
+
+        // When a resume comes during a shutdown, right after the dispatcher forgot its routes
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        ClearHookMap routes = new ClearHookMap(() -> thrown.set(catchThrowable(() -> catchup.resumeSubscription("replayed"))));
+        Field subscriptionOwners = ReactorCatchupSubscriptionModel.class.getDeclaredField("subscriptionOwners");
+        subscriptionOwners.setAccessible(true);
+        routes.putAll((Map<?, ?>) subscriptionOwners.get(catchup));
+        subscriptionOwners.set(catchup, routes);
+        catchup.shutdown();
+
+        // Then the resume is refused, and the wrapped model still holds the subscription paused
+        assertThat(thrown.get()).as("what the resume throws").isInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(wrapped.isPaused("replayed")).as("whether the wrapped model still holds the subscription paused").isTrue();
     }
 
     @Test
@@ -427,6 +454,22 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         @Override
         public boolean writesPosition() {
             return true;
+        }
+    }
+
+    // Runs the hook once the map is cleared
+    @SuppressWarnings("rawtypes")
+    private static final class ClearHookMap extends ConcurrentHashMap {
+        private final Runnable afterClear;
+
+        private ClearHookMap(Runnable afterClear) {
+            this.afterClear = afterClear;
+        }
+
+        @Override
+        public void clear() {
+            super.clear();
+            afterClear.run();
         }
     }
 

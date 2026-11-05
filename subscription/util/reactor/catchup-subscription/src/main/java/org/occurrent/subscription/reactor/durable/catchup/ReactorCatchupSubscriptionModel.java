@@ -440,9 +440,11 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public void shutdown() {
-        subscriptionOwners.clear();
-        // Every inner model refuses a start before any of them shuts down the wrapped model they share
+        // Every inner model refuses a start before any of them shuts down the wrapped model they share. Before the routes
+        // are forgotten too, since a call for an id with no route goes to any inner model, which would pass a resume of a
+        // subscription it does not hold to the wrapped model.
         namedSupports().forEach(NamedCatchupSupport::beginShutdown);
+        subscriptionOwners.clear();
         innerModels().forEach(SubscriptionModel::shutdown);
     }
 }
