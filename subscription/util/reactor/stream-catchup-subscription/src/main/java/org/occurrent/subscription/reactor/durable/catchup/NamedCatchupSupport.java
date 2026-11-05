@@ -139,8 +139,9 @@ final class NamedCatchupSupport {
     private final @Nullable HistoryLossReportingSubscriptions historyLossReporting;
     private final @Nullable RepositionableSubscriptions repositionable;
     private final HistoryLossListener historyLossListener = this::takeOverIfHandedOverAt;
-    // The live start of each subscription whose replay handed over last, kept until the next handover, a cancel or a
-    // shutdown, so a loss of exactly that live start is told apart from a loss after the subscription read on
+    // The live start of each subscription whose replay handed over last, kept until the next handover replaces it, or
+    // a cancel, a shutdown or a subscribe that replaces the subscription once it is gone removes it, so a loss of
+    // exactly that live start is told apart from a loss after the subscription read on
     private final ConcurrentMap<String, HandedOver> handedOver = new ConcurrentHashMap<>();
     // Each subscription this model made by name, whether it replayed or went straight to live, from its subscribe until
     // its cancel ended and the wrapped model no longer holds it, so every history loss the wrapped model reports for it
@@ -601,9 +602,8 @@ final class NamedCatchupSupport {
         if (!gone || !owned.replace(subscriptionId, existing, record)) {
             return false;
         }
-        // A loss at the live start the gone subscription handed over would otherwise replay it through its own action
-        // and resume the subscription made here at a later live start
-        handedOver.remove(subscriptionId);
+        // Forgets the handover of the subscription replaced here
+        handedOver.computeIfPresent(subscriptionId, (id, made) -> made.replay().owned() == existing ? null : made);
         return true;
     }
 
@@ -754,17 +754,18 @@ final class NamedCatchupSupport {
     }
 
     // Asked by the wrapped model on a thread that reads subscriptions, without its lock. A subscription this model
-    // didn't make is left to the wrapped model. A loss of exactly the live start the last replay handed over replays
-    // again. A loss of that live start while a takeover already runs is taken over too, so the wrapped model keeps the
-    // subscription paused, and the running takeover goes on. So is a loss of the live start a takeover handing over
-    // replaces, which that handover resumes at its own live start. Any other loss pauses the subscription for good.
+    // didn't make is left to the wrapped model. A loss of exactly the live start that the last replay of the id's
+    // current subscription handed over replays again. A loss of that live start while a takeover already runs is
+    // taken over too, so the wrapped model keeps the subscription paused, and the running takeover goes on. So is a
+    // loss of the live start a takeover handing over replaces, which that handover resumes at its own live start. Any
+    // other loss pauses the subscription for good.
     private HistoryLossHandling takeOverIfHandedOverAt(String subscriptionId, Checkpoint lostFrom) {
         Owned record = owned.get(subscriptionId);
         if (record == null) {
             return HistoryLossHandling.leaveToSubscriptionModel();
         }
         HandedOver made = handedOver.get(subscriptionId);
-        if (made != null && !shutdown) {
+        if (made != null && made.replay().owned() == record && !shutdown) {
             if (PositionCatchupPipeline.samePosition(lostFrom, made.lostLiveStart())) {
                 return HistoryLossHandling.takeOver(() -> {
                 });
@@ -813,8 +814,9 @@ final class NamedCatchupSupport {
             return null;
         }
         // Read again after the put, since cancelSubscription and shutdown drop the handover before they read the ids
-        // in flight. Either this sees it dropped, or that read finds this state and cancels it.
-        if (shutdown || handedOver.get(subscriptionId) != made) {
+        // in flight. Either this sees it dropped, or that read finds this state and cancels it. A subscribe of the id
+        // that replaced the record since made a subscription of its own, which this replay must not resume.
+        if (shutdown || handedOver.get(subscriptionId) != made || owned.get(subscriptionId) != made.replay().owned()) {
             catchingUp.remove(subscriptionId, state);
             return null;
         }
@@ -1010,7 +1012,8 @@ final class NamedCatchupSupport {
     // the subscription where it lost the history, so the takeover replay runs now instead.
     private @Nullable Subscription takeOverOnResume(String subscriptionId) {
         HandedOver made = handedOver.get(subscriptionId);
-        if (made == null || !made.takeOverAsked().get() || !named.isPaused(subscriptionId) || !made.takingOver().compareAndSet(false, true)) {
+        if (made == null || made.replay().owned() != owned.get(subscriptionId) || !made.takeOverAsked().get() || !named.isPaused(subscriptionId)
+                || !made.takingOver().compareAndSet(false, true)) {
             return null;
         }
         CatchupState taking = takeOver(subscriptionId, made);
