@@ -90,7 +90,7 @@ public final class DcbMarkerModel {
     /**
      * The operation timeout a position reservation needs on a collection whose timeout is {@code collectionTimeoutMillis},
      * or {@code null} when it needs none. A {@code timeoutMS} of 0 on the client waits forever, so it gets
-     * {@code timeout} instead. Any other {@code timeoutMS} bounds the reservation as it is, and without one the
+     * {@code timeout} instead, which then also bounds the wait to select a primary. Any other {@code timeoutMS} bounds the reservation as it is, and without one the
      * {@code wtimeout} of {@link #reservationWriteConcern} does.
      */
     public static @Nullable Long reservationTimeoutMillis(@Nullable Long collectionTimeoutMillis, Duration timeout) {

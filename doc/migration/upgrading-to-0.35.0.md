@@ -759,8 +759,8 @@ A w:1 on the client, on the database or as the server's default no longer applie
 default, the setting that also bounds the commit of a read that asks for versions. When a majority doesn't acknowledge
 the update in that time, the append throws and writes no event, and the positions it reserved stay unused. On a client
 with a `timeoutMS` above 0, where the driver sends no `wtimeout`, your `timeoutMS` bounds the update instead. A
-`timeoutMS` of 0 waits forever, so there `markerVersionsCommitTimeout` still bounds it. The rest of the append keeps
-the write concern it had.
+`timeoutMS` of 0 waits forever, so there `markerVersionsCommitTimeout` bounds the whole update, the wait to select a
+primary included. The rest of the append keeps the write concern it had.
 
 Every append waits for as long as a majority takes to replicate the update. On a set with three data-bearing members
 and no write concern configured, the update already waited for majority, so nothing changes there. On a local
@@ -780,10 +780,10 @@ committed with it. It now commits on its own, before the append writes its event
   share. An append that loses throws a `DataIntegrityViolationException` or a `TransientDataAccessException`, and your
   transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it when
   they opened it.
-- A read in your transaction reports, in `lastSequencePosition()`, the head as of the first operation in your
-  transaction's MongoDB session on the store's database factory. It also returns your transaction's own appends, and
-  those it started after that operation are at positions above that head. If you keep that position and read after it later, you get those events
-  again.
+- With transaction synchronization active, as it is by default, a read in your transaction reports, in
+  `lastSequencePosition()`, the head as of the first operation in your transaction's MongoDB session on the store's
+  database factory. It also returns your transaction's own appends, and those it started after that operation are at
+  positions above that head. If you keep that position and read after it later, you get those events again.
 - An append joins your transaction when the store's transaction manager, the one in its `EventStoreConfig`, finds a
   MongoDB transaction open on its own `MongoDatabaseFactory` instance, or when your `MongoTransactionManager` opened
   one on the template's factory instance. The Spring Boot starters build the store's manager on the

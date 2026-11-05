@@ -38,10 +38,10 @@ import static java.util.Objects.requireNonNull;
  *                             catch-up, but it is NOT a safe optimistic-concurrency boundary on its own: a store that
  *                             assigns positions before the events commit can report a head that is ahead of the data a
  *                             reader can actually see. Use {@code consistencyToken} for optimistic concurrency.
- *                             Inside a caller's transaction, {@code SpringMongoEventStore} and
- *                             {@code ReactorMongoEventStore} report the head as of the first operation in the
- *                             transaction's MongoDB session on the store's database factory, and {@code events} also
- *                             holds the transaction's own appends. Those it started after that operation are at
+ *                             Inside a caller's transaction with transaction synchronization active, as it is by
+ *                             default, {@code SpringMongoEventStore} and {@code ReactorMongoEventStore} report the head
+ *                             as of the first operation in the transaction's MongoDB session on the store's database
+ *                             factory, and {@code events} also holds the transaction's own appends. Those it started after that operation are at
  *                             positions above the head, so a read after this position, once the transaction has
  *                             committed, returns them again. An append joins the caller's transaction when the store's
  *                             transaction manager finds a MongoDB transaction open on its own database factory
