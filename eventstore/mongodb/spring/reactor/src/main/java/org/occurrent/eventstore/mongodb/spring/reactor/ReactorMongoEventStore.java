@@ -813,6 +813,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     /**
      * {@inheritDoc}
+     * <p>
+     * Inside a MongoDB transaction on this store's database factory, with transaction synchronization active, the read
+     * returns what the transaction's snapshot holds instead of stopping at the store's highest written position, so it
+     * also returns the transaction's own appends. On a sharded cluster below read concern snapshot each shard has a snapshot of its own,
+     * so such a read can also return another writer's event above the head.
      */
     @Override
     public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
