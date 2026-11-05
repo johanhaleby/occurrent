@@ -95,8 +95,7 @@ class StartPositionSupport {
             case DEFAULT -> StartAt.dynamic(ctx -> {
                 // Do not let the catch-up model run its default (replay from the beginning); delegate to the parent
                 // live subscription instead by returning null to the catch-up layer.
-                boolean isCatchupSubscription = CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                return isCatchupSubscription ? null : StartAt.subscriptionModelDefault();
+                return isCatchupLayer(ctx) ? null : StartAt.subscriptionModelDefault();
             });
             case BEGINNING -> replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), resumeBehavior);
         };
@@ -262,8 +261,7 @@ class StartPositionSupport {
                     // By default, we don't want to run the "default" behavior of the CatchupSubscriptionModel, which is to
                     // start streaming from the beginning of time. We want to instruct the CatchupSubscriptionModel to simply
                     // delegate to the parent subscription, which is what we do if we return null.
-                    boolean isCatchupSubscription = CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                    return isCatchupSubscription ? null : StartAt.subscriptionModelDefault();
+                    return isCatchupLayer(ctx) ? null : StartAt.subscriptionModelDefault();
                 });
             };
         };
@@ -280,7 +278,7 @@ class StartPositionSupport {
         }
         return StartAt.dynamic(context -> {
             @Nullable StartAt built = startAt.get(context);
-            if (built == null && !CatchupSubscriptionModel.class.isAssignableFrom(context.subscriptionModelType())) {
+            if (built == null && !isCatchupLayer(context)) {
                 return null;
             }
             @Nullable String resumePoint = resumePoints.resumePointFor(subscriptionId);
@@ -295,7 +293,7 @@ class StartPositionSupport {
         }
         return DcbStartAt.dynamic(context -> {
             @Nullable DcbStartAt built = resolve(startAt, context);
-            if (built == null) {
+            if (built == null && !isCatchupLayer(context)) {
                 return null;
             }
             @Nullable String resumePoint = resumePoints.resumePointFor(subscriptionId);

@@ -67,25 +67,26 @@ class NowStartResumeBehaviorStartAtTest {
         }
     }
 
-    static Stream<Class<?>> layersThatKeepThePosition() {
+    static Stream<Class<?>> layersThatLeaveTheStartToTheLiveModel() {
         return Stream.of(
                 DurableSubscriptionModel.class,
                 DurableSubscriptionModelSubclass.class,
                 CompetingConsumerSubscriptionModel.class,
-                CompetingConsumerSubscriptionModelSubclass.class);
+                CompetingConsumerSubscriptionModelSubclass.class,
+                CatchupSubscriptionModel.class);
     }
 
     static Stream<Class<?>> layersThatStartNow() {
-        return Stream.of(CatchupSubscriptionModel.class, SubscriptionModel.class, Object.class);
+        return Stream.of(SubscriptionModel.class, Object.class);
     }
 
     static Stream<Class<?>> allLayers() {
-        return Stream.concat(layersThatKeepThePosition(), layersThatStartNow());
+        return Stream.concat(layersThatLeaveTheStartToTheLiveModel(), layersThatStartNow());
     }
 
     @ParameterizedTest
-    @MethodSource("layersThatKeepThePosition")
-    void same_as_start_at_makes_a_now_start_answer_null_for_a_durable_or_competing_consumer_layer_and_its_subclasses(Class<?> subscriptionModelType) {
+    @MethodSource("layersThatLeaveTheStartToTheLiveModel")
+    void same_as_start_at_makes_a_now_start_answer_null_for_a_catch_up_durable_or_competing_consumer_layer_and_its_subclasses(Class<?> subscriptionModelType) {
         // Given
         StartPositionSupport support = support();
 
@@ -130,8 +131,8 @@ class NowStartResumeBehaviorStartAtTest {
     }
 
     @ParameterizedTest
-    @MethodSource("layersThatKeepThePosition")
-    void same_as_start_at_makes_a_dcb_now_start_answer_null_for_a_durable_or_competing_consumer_layer_and_its_subclasses(Class<?> subscriptionModelType) {
+    @MethodSource("layersThatLeaveTheStartToTheLiveModel")
+    void same_as_start_at_makes_a_dcb_now_start_answer_null_for_a_catch_up_durable_or_competing_consumer_layer_and_its_subclasses(Class<?> subscriptionModelType) {
         // Given
         StartPositionSupport support = support();
 
@@ -171,8 +172,8 @@ class NowStartResumeBehaviorStartAtTest {
     }
 
     @ParameterizedTest
-    @MethodSource("layersThatKeepThePosition")
-    void same_as_start_at_makes_a_stream_subscription_now_start_answer_null_for_a_durable_or_competing_consumer_layer_and_its_subclasses(Class<?> subscriptionModelType) {
+    @MethodSource("layersThatLeaveTheStartToTheLiveModel")
+    void same_as_start_at_makes_a_stream_subscription_now_start_answer_null_for_a_catch_up_durable_or_competing_consumer_layer_and_its_subclasses(Class<?> subscriptionModelType) {
         // Given
         StartPositionSupport support = support();
 
