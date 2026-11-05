@@ -309,9 +309,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads,
         // the events may include it while the token does not, which only makes a later conditional append
         // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The position is
-        // read after the token, never at the same time. When the token read is the first command of a transaction,
-        // that command starts the transaction, and MongoDB fails a position read that reaches the server before it
-        // with NoSuchTransaction (error 251).
+        // read after the token, never before it or at the same time. An append between a position read first and a
+        // token read second would be in the token and above the position the events are capped at, so a later
+        // conditional append would miss it. Two reads sent at once as the first commands of a transaction also fail
+        // when the one that doesn't start the transaction reaches MongoDB first (NoSuchTransaction, error 251).
         return consistencyToken
                 .zipWhen(__ -> currentPosition)
                 .flatMap(tokenAndHighWatermark -> {
