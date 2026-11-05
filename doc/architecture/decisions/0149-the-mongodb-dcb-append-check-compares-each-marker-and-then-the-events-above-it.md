@@ -269,18 +269,20 @@ a caller's transaction. No transaction holds the update, so the retry repeats no
 whose append lost there failed instead of being retried. It now rethrows the translated
 `DataIntegrityViolationException`, as `ReactorMongoEventStore` already did.
 
-Both stores set their template's session synchronization to `ALWAYS`. Inside any Spring transaction with
-synchronization active, a JDBC one or a MongoDB one on another database factory too, the template then runs its
-operations in a MongoDB transaction on the store's factory that commits with the caller's, so a read through it reads
-in one snapshot. Once the template is in such a transaction, which `MongoDatabaseUtils.isTransactionActive` and
+Both stores set their template's session synchronization to `ALWAYS`. Inside any Spring transaction with synchronization
+active, a JDBC one or a MongoDB one on another database factory too, the template then runs its operations in a MongoDB
+transaction on the store's factory that commits with the caller's, so a read through it reads in one snapshot on a
+replica set. Once the template is in such a transaction, which `MongoDatabaseUtils.isTransactionActive` and
 `ReactiveMongoDatabaseUtils.isTransactionActive` answer together with an active synchronization, the read has no upper
 bound and reports the snapshot's counter as its head. It returns the transaction's own appends, and the ones that
 reserved their positions after the snapshot was taken are above that head, so a read after that head once the
-transaction has committed returns them again. An append that is the transaction's first operation on the store's
-factory reserves before the snapshot, so its events are at or below the head. The counter bounds a read before the
-template's first operation in the caller's transaction. On the reactor store it can also bound that first read,
-depending on whether the template has bound its session when the store checks. The transaction has no appends of its
-own yet then, so the bound loses nothing.
+transaction has committed returns them again. On a sharded cluster, a transaction below read concern snapshot reads each
+shard at its own point in time, so an event above the head can also be another writer's, and a read after the head
+returns it again. That comes from MongoDB's documentation and wasn't probed. An append that is the transaction's first
+operation on the store's factory reserves before the snapshot, so its events are at or below the head. The counter
+bounds a read before the template's first operation in the caller's transaction. On the reactor store it can also bound
+that first read, depending on whether the template has bound its session when the store checks. The transaction has no
+appends of its own yet then, so the bound loses nothing.
 This comes from reading Spring Data MongoDB 5.1.0. The probes below ran a no-op outer transaction manager in place of
 a JDBC one.
 
