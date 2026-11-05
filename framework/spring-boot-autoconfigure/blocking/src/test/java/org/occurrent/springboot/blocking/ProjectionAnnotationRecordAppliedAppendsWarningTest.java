@@ -62,9 +62,10 @@ import static org.mockito.Mockito.withSettings;
 
 /**
  * ADR 132 decision 9's third case: {@code @Projection(recordAppliedAppends = true)} left at the default start
- * position never replays ({@code StartPositionSupport} bypasses the catch-up layer for it unconditionally), so it
- * records but never clears its own memberships on a rebuild. The registrar must warn once at startup naming the
- * projection, and must not warn when {@link StartPosition#BEGINNING} is what the projection actually declared.
+ * position never replays for a stream or an agnostic projection ({@code StartPositionSupport} bypasses the catch-up
+ * layer for it), so it records but never clears its own memberships on a rebuild. The registrar must warn once at
+ * startup naming the projection, and must not warn when {@link StartPosition#BEGINNING} is what the projection
+ * actually declared.
  * Container-free, following {@link ProjectionAnnotationRecordingPhaseSourceTest}'s mocked {@code Subscribable}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
