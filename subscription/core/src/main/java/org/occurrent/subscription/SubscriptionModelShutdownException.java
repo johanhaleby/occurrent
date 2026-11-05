@@ -28,7 +28,9 @@ package org.occurrent.subscription;
  * {@code ReactorDcbCatchupSubscriptionModel} wrapping a model that manages named subscriptions. The catch-up models
  * throw it before replaying any history. {@code ReactorMongoSubscriptionModel} and those catch-up models throw it from
  * {@code pauseSubscription} and {@code resumeSubscription} too, and so does a model that passes those calls on to
- * {@code ReactorMongoSubscriptionModel}. Other models throw what they threw before.
+ * {@code ReactorMongoSubscriptionModel}. {@code ReactorDurableSubscriptionModel} throws it from those calls when it
+ * wraps a model that manages no named subscriptions, and otherwise passes them on. Other models throw what they threw
+ * before.
  */
 public class SubscriptionModelShutdownException extends IllegalStateException {
 
