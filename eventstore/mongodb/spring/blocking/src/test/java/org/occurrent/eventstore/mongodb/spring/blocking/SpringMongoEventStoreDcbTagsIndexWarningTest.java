@@ -112,7 +112,7 @@ class SpringMongoEventStoreDcbTagsIndexWarningTest {
         databaseName = requireNonNull(connectionString.getDatabase());
         mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION).drop();
         mongoTemplate = new MongoTemplate(mongoClient, databaseName);
-        transactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
+        transactionManager = new CommitRetryingMongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
 
         logAppender = new ListAppender<>();
         logAppender.start();
@@ -550,7 +550,7 @@ class SpringMongoEventStoreDcbTagsIndexWarningTest {
     private static SpringMongoEventStore newDcbStore(MongoClient client, String database) {
         EventStoreConfig config = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(EVENT_COLLECTION)
-                .transactionConfig(new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(client, database)))
+                .transactionConfig(new CommitRetryingMongoTransactionManager(new SimpleMongoClientDatabaseFactory(client, database)))
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(DCB)
                 .build();
