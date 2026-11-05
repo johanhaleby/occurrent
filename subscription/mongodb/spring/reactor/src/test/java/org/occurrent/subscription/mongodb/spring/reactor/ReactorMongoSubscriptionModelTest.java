@@ -772,6 +772,180 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
+        void the_handle_of_a_subscribe_cancelled_while_its_dynamic_position_answers_fails_with_subscription_not_running() throws Exception {
+            // Given a dynamic position that answers an operation time the change stream can open at, once the test lets it
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint live = liveStart();
+            CountDownLatch asked = new CountDownLatch(1);
+            CountDownLatch mayAnswer = new CountDownLatch(1);
+            StartAt startAt = StartAt.dynamic(ctx -> {
+                asked.countDown();
+                try {
+                    mayAnswer.await(20, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return StartAt.checkpoint(live);
+            });
+
+            // And the subscribing thread is held where the position is asked, since the subscribe asks it on that thread
+            CompletableFuture<Subscription> subscribing = CompletableFuture.supplyAsync(() ->
+                    subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.empty()));
+            try {
+                assertThat(asked.await(10, SECONDS)).isTrue();
+
+                // When the subscription is cancelled while the position is asked, and the position answers after that
+                subscription.cancelSubscription(subscriptionId).block();
+                mayAnswer.countDown();
+                Subscription cancelled = subscribing.get(10, SECONDS);
+
+                // Then the handle fails, since nothing can start the subscription any more
+                Throwable told = catchThrowable(() -> cancelled.waitUntilStarted().block(Duration.ofSeconds(5)));
+                assertThat(told).isExactlyInstanceOf(SubscriptionNotRunningException.class);
+            } finally {
+                mayAnswer.countDown();
+            }
+        }
+
+        @Test
+        void the_handle_of_a_subscribe_in_flight_when_the_model_is_shut_down_fails_with_a_message_saying_so() throws Exception {
+            // Given a dynamic position that answers an operation time the change stream can open at, once the test lets it
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint live = liveStart();
+            CountDownLatch asked = new CountDownLatch(1);
+            CountDownLatch mayAnswer = new CountDownLatch(1);
+            StartAt startAt = StartAt.dynamic(ctx -> {
+                asked.countDown();
+                try {
+                    mayAnswer.await(20, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return StartAt.checkpoint(live);
+            });
+
+            // And the subscribing thread is held where the position is asked, since the subscribe asks it on that thread
+            CompletableFuture<Subscription> subscribing = CompletableFuture.supplyAsync(() ->
+                    subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.empty()));
+            try {
+                assertThat(asked.await(10, SECONDS)).isTrue();
+
+                // When the model is shut down while the position is asked, and the position answers after that
+                subscription.shutdown();
+                mayAnswer.countDown();
+                Subscription shutDown = subscribing.get(10, SECONDS);
+
+                // Then the handle fails with the shutdown, and not with the timeout of the wait, which is an IllegalStateException too
+                Throwable told = catchThrowable(() -> shutDown.waitUntilStarted().block(Duration.ofSeconds(5)));
+                assertThat(told).isExactlyInstanceOf(IllegalStateException.class).hasMessageContaining("shut down");
+            } finally {
+                mayAnswer.countDown();
+            }
+        }
+
+        @Test
+        void the_handle_of_a_subscribe_paused_while_its_dynamic_position_answers_a_catchup_position_does_not_complete_or_fail() throws Exception {
+            // Given a dynamic position that answers a catch-up's position, once the test lets it
+            String subscriptionId = UUID.randomUUID().toString();
+            CountDownLatch asked = new CountDownLatch(1);
+            CountDownLatch mayAnswer = new CountDownLatch(1);
+            StartAt startAt = StartAt.dynamic(ctx -> {
+                asked.countDown();
+                try {
+                    mayAnswer.await(20, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return StartAt.checkpoint(GlobalCheckpoint.of(0));
+            });
+
+            // And the subscribing thread is held where the position is asked, since the subscribe asks it on that thread
+            CompletableFuture<Subscription> subscribing = CompletableFuture.supplyAsync(() ->
+                    subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.empty()));
+            try {
+                assertThat(asked.await(10, SECONDS)).isTrue();
+
+                // When the run is paused while the position is asked, and the position answers after that, so the opening is refused
+                subscription.pauseSubscription(subscriptionId);
+                mayAnswer.countDown();
+                Subscription paused = subscribing.get(10, SECONDS);
+
+                // Then the handle neither fails nor completes, since the pause closed the run first and a resume starts it again
+                assertAll(
+                        () -> assertThat(paused.waitUntilStarted(Duration.ofSeconds(2)).block()).isFalse(),
+                        () -> assertThat(subscription.isPaused(subscriptionId)).isTrue()
+                );
+            } finally {
+                mayAnswer.countDown();
+            }
+        }
+
+        @Test
+        void a_resume_at_a_dynamic_position_answering_a_catchup_position_after_a_paused_resume_at_one_delivers_what_was_written_after_the_subscribe_of_a_subscription_that_never_opened() throws Exception {
+            // Given a subscription at the present, subscribed while the model is stopped, so it is paused and never opened
+            String subscriptionId = UUID.randomUUID().toString();
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            subscription.stop();
+            subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent)));
+            assertThat(subscription.isPaused(subscriptionId)).isTrue();
+            NameDefined written = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(written)).block();
+            // The moment of a resume is read at whole seconds, so it has to be a second later than the write to be told apart from the moment of the subscribe
+            Thread.sleep(1_100);
+
+            // And a first resume at a dynamic position answering a catch-up position, held where its position is asked
+            CountDownLatch asked = new CountDownLatch(1);
+            CountDownLatch mayAnswer = new CountDownLatch(1);
+            AtomicInteger firstAnswers = new AtomicInteger();
+            StartAt first = StartAt.dynamic(ctx -> {
+                if (firstAnswers.incrementAndGet() == 1) {
+                    asked.countDown();
+                    try {
+                        mayAnswer.await(20, SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return StartAt.checkpoint(GlobalCheckpoint.of(0));
+            });
+            CompletableFuture<Subscription> resumingFirst = CompletableFuture.supplyAsync(() -> subscription.resumeSubscription(subscriptionId, first));
+            try {
+                assertThat(asked.await(10, SECONDS)).isTrue();
+
+                // And that resume is paused while its position is asked, so its present is the moment of the resume
+                subscription.pauseSubscription(subscriptionId);
+
+                // When it is resumed again at a dynamic position answering a catch-up position, while the first position is still asked
+                Subscription resumed = subscription.resumeSubscription(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(0))));
+
+                // Then the event written after it was subscribed is delivered, as it opens at the moment it was subscribed and not at the first resume
+                assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(delivered).extracting(CloudEvent::getId).containsExactly(written.eventId()));
+            } finally {
+                mayAnswer.countDown();
+                resumingFirst.get(10, SECONDS);
+            }
+        }
+
+        @Test
+        void a_resume_at_a_dynamic_position_answering_a_catchup_position_is_refused_for_a_subscription_that_never_opened_at_one() {
+            // Given a subscription whose dynamic position answers a catch-up position, subscribed while the model is stopped, so it is paused and never asked
+            String subscriptionId = UUID.randomUUID().toString();
+            subscription.stop();
+            subscription.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(0))), cloudEvent -> Mono.empty());
+            assertThat(subscription.isPaused(subscriptionId)).isTrue();
+
+            // When it is resumed at a dynamic position answering a catch-up position
+            Subscription resumed = subscription.resumeSubscription(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(0))));
+
+            // Then there is no position it read to that the change stream can open at, so the start is refused
+            StepVerifier.create(resumed.waitUntilStarted(Duration.ofSeconds(10)))
+                    .expectError(UnsupportedStartAtException.class)
+                    .verify(Duration.ofSeconds(15));
+        }
+
+        @Test
         void a_first_answer_the_server_rejects_does_not_end_the_check_of_a_named_subscription() throws Exception {
             // Given a model that reads quiet positions, and a dynamic position whose first answer is a resume token the server rejects
             assertThat(subscription.readsQuietPositions()).isTrue();
