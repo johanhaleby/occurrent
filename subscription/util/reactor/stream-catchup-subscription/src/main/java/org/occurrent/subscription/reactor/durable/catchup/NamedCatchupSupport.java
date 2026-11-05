@@ -208,6 +208,13 @@ final class NamedCatchupSupport {
         }
     }
 
+    // Refused here rather than forwarded, since the wrapped model is shut down too and throws an exception of its own
+    private void requireNotShutdown(String call, String subscriptionId) {
+        if (shutdown) {
+            throw new SubscriptionModelShutdownException("Cannot " + call + " subscription " + subscriptionId + " because the subscription model is shutdown.");
+        }
+    }
+
     // What every named subscribe checks, run by the models before they evaluate a dynamic StartAt, so a subscribe
     // this model refuses runs none of the caller's code.
     void requireNamedAndNotShutdown() {
@@ -930,6 +937,7 @@ final class NamedCatchupSupport {
     }
 
     void pauseSubscription(String subscriptionId) {
+        requireNotShutdown("pause", subscriptionId);
         // A cancelled subscribe whose subscription the wrapped model still runs, which isRunning(..) and isPaused(..)
         // answer false for
         if (cancelledUnderWay(subscriptionId)) {
@@ -953,6 +961,7 @@ final class NamedCatchupSupport {
     }
 
     Subscription resumeSubscription(String subscriptionId) {
+        requireNotShutdown("resume", subscriptionId);
         // Before anything starts, so a refused resume changes nothing
         Owned record = owned.get(subscriptionId);
         if (record != null && record.cancelled) {

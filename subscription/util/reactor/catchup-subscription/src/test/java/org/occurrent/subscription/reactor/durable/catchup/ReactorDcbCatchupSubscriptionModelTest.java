@@ -28,13 +28,19 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorDcbCatchupSubscriptionModelTest {
@@ -104,6 +110,105 @@ class ReactorDcbCatchupSubscriptionModelTest {
         StepVerifier.create(catchup.subscribe(StreamSubscriptionFilter.filter(Filter.all()), StartAt.now()))
                 .expectError(IllegalArgumentException.class)
                 .verify();
+    }
+
+    @Test
+    void a_pause_or_a_resume_after_shutdown_throws_SubscriptionModelShutdownException() {
+        ShutDownLikeMongo wrapped = new ShutDownLikeMongo();
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(wrapped, new UnusedDcbEventStore());
+        catchup.shutdown();
+
+        Throwable pause = catchThrowable(() -> catchup.pauseSubscription("x"));
+        Throwable resume = catchThrowable(() -> catchup.resumeSubscription("x"));
+
+        assertAll(
+                () -> assertThat(pause).as("what a pause throws").isInstanceOf(SubscriptionModelShutdownException.class),
+                () -> assertThat(resume).as("what a resume throws").isInstanceOf(SubscriptionModelShutdownException.class),
+                () -> assertThat(wrapped.callsAfterShutdown).as("calls the wrapped model got after its shutdown").isEmpty()
+        );
+    }
+
+    // After shutdown() it throws IllegalStateException from a pause or a resume, as ReactorMongoSubscriptionModel does,
+    // and records every call it gets
+    private static final class ShutDownLikeMongo implements CheckpointAwareSubscriptionModel, SubscriptionModel {
+        final List<String> callsAfterShutdown = new CopyOnWriteArrayList<>();
+        private volatile boolean shutdown;
+
+        private void called(String call) {
+            if (shutdown) {
+                callsAfterShutdown.add(call);
+            }
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpoint() {
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return Mono.empty();
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.error(new AssertionError("The cold primitive must not be used"));
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            called("subscribe:" + subscriptionId);
+            throw new AssertionError("Nothing is subscribed");
+        }
+
+        @Override
+        public Mono<Void> cancelSubscription(String subscriptionId) {
+            called("cancel:" + subscriptionId);
+            return Mono.empty();
+        }
+
+        @Override
+        public void stop() {
+            called("stop");
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            called("start");
+        }
+
+        @Override
+        public void shutdown() {
+            called("shutdown");
+            shutdown = true;
+        }
+
+        @Override
+        public boolean isRunning() {
+            return !shutdown;
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            called("resume:" + subscriptionId);
+            throw shutdown ? new IllegalStateException("ShutDownLikeMongo is shutdown") : new UnknownSubscriptionException(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            called("pause:" + subscriptionId);
+            throw shutdown ? new IllegalStateException("ShutDownLikeMongo is shutdown") : new UnknownSubscriptionException(subscriptionId);
+        }
     }
 
     private static final class NoTokenSubscriptionModel implements CheckpointAwareSubscriptionModel {
