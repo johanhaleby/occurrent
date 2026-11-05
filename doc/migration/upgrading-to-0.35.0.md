@@ -1114,11 +1114,27 @@ cursor may not have opened. The handle that resume returns fails with it. See
 The function is checked until a change stream of the subscription has opened. On the blocking models that means a run
 has reported its cursor open, so an answer from an opening that a pause or a failure stopped doesn't end the check. The
 reactor model counts a driver cursor that opened for a subscription with an id. A reactor `subscribe(..)` without an id,
-and a subscription with an id when the model can't read through the driver's cursor, count a `Flux` that was subscribed
-to instead, so an answer the server rejects ends the check, and on a subscription with an id so does a pause after
-that. A position the function returns after that isn't checked. When its earlier answer was a resume token or an
-operation time and a change stream opens again before the first event, one of these checkpoints from the function
-opens at another position than that earlier answer. It can skip what the earlier answer would have delivered, or deliver what it wouldn't have.
+and a subscription with an id when the model can't read through the driver's cursor, count the first event the change
+stream reads instead.
+
+Once a change stream has opened, the model opens it again at the same position and doesn't call the function again.
+That covers a pause and a resume, an action that throws, and a failure reading the change stream before the first
+event. A reactor subscription that counts the first event takes the position the function answered when its `Flux` was
+subscribed to, and calls the function again only when the server rejects that position before an event is read. In
+0.34.0 the models called the function again at each opening before the first event, and a catch-up's checkpoint from
+that later call opened at the present and skipped the events written in between.
+
+Three cases still lose events, as they did in 0.34.0:
+
+- A resume token of another collection as the function's first answer, on the blocking models and on a reactor
+  subscription that reads through the driver's cursor. The server opens the change stream at it and rejects it only on
+  the first read after an event is written to the watched collection. The subscription keeps running and delivers
+  nothing.
+- An operation time ahead of the server's clock as the function's answer. The server opens the change stream at it, and
+  the events written before that time aren't delivered.
+- A position the server rejects only after an event is written, such as a resume token of another collection, on a
+  reactor subscription that counts the first event. The model calls the function again, and an answer that comes after
+  that event skips it.
 
 ### Who is affected
 
