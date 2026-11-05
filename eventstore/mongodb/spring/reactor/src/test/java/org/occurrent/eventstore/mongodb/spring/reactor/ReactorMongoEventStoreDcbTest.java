@@ -390,7 +390,7 @@ class ReactorMongoEventStoreDcbTest {
         List<Integer> eventsRead = new CopyOnWriteArrayList<>();
         List<Throwable> failures = new CopyOnWriteArrayList<>();
 
-        // Repeated, since two commands sent at once as the first of a transaction fail only when the one that doesn't start it arrives first
+        // Repeated, since a read that sent its two finds at once failed only when the one that doesn't start the transaction arrived first
         for (int attempt = 0; attempt < 100; attempt++) {
             caller.execute(__ -> requiresNew.transactional(eventStore.read(tags(Tag.parse("name:1")))))
                     .doOnNext(eventStream -> eventsRead.add(eventStream.events().size()))
