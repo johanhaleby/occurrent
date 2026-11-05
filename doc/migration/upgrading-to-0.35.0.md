@@ -961,8 +961,9 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   write your domain function makes is no longer part of it. The executor's conflict retry re-runs the append, the re-read
   and the dispatch, with the token of the read the decision was made on, and not the read or your domain function. A
   handler can run again on such a retry when a transaction rolled the earlier attempt back, as it could before. When the condition then fails, the service's retry strategy
-  by default reads and decides again. By default the service allows 5 attempts and the Spring executors about 15, so a
-  command on a contended boundary can fail sooner, with the same budget a service without synchronous subscriptions has.
+  by default reads and decides again. By default the service allows 5 attempts and the Spring executors 240 on the
+  blocking stack and 321 on the reactive one, so a command on a contended boundary can fail sooner, with the same
+  budget a service without synchronous subscriptions has.
 - The executor's conflict retry no longer covers that read. A transient failure of the read, such as a
   `QueryTimeoutException`, fails the command unless your retry strategy retries it. If you relied on that retry, add it to what you
   pass to `retryStrategy` on the blocking builder or `retry` on the reactive builder.

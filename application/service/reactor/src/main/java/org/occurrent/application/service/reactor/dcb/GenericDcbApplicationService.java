@@ -233,7 +233,8 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     // The append's versions are kept only when the read of the same attempt reported every marker key with the same
-    // epoch, since a marker pruned and created again in between can leave the consistency token unchanged
+    // epoch, since a marker created again in between has a new epoch, and versions under it don't describe what the
+    // read returned
     private static DcbAppendResult withCheckedVersions(DcbAppendResult appendResult, boolean versionsRequested, DcbEventStream eventStream) {
         if (appendResult.markerVersions().isEmpty()) {
             return appendResult;
