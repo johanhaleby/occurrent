@@ -316,20 +316,21 @@ class BlockingDynamicStartCancelMongoTest {
                     .untilAsserted(() -> assertThat(received).as("events that reached the cancelled subscribe").isEmpty());
         }
 
-        // Another cancel holds the claim or the lock for the id while it deletes the checkpoint. The function starts the cancel
-        // and returns once that cancel waits for the claim or the lock, and the delete goes on once the subscribe waits
-        // behind it. The cancel then gets the claim or the lock first, with the function returned and the subscribe not
-        // yet holding it
+        // The function starts another cancel, which holds the claim or the lock for the id while it deletes the checkpoint
+        // and then throws, so that cancel stops nothing. The function then starts the cancel checked here and returns
+        // once it waits for the claim or the lock, and the delete goes on once the subscribe waits behind it. The cancel
+        // then gets the claim or the lock first, with the function returned and the subscribe not yet holding it. The
+        // other call starts in the function, since a catch-up model takes the claim before it asks the function
         private Subscription subscribeWhileACancelWaitsBehindAnotherCall(List<CloudEvent> received) {
-            CompletableFuture<Void> otherCall = CompletableFuture.runAsync(() -> model.cancelSubscription(subscriptionId), otherThreads);
-            assertThat(storageThatHoldsTheFirstDelete.firstDeleteStarted).as("the other call holding the id").succeedsWithin(EVENT_DELIVERY);
-
             AtomicBoolean asked = new AtomicBoolean();
             AtomicBoolean functionReturned = new AtomicBoolean();
             AtomicReference<Thread> cancelling = new AtomicReference<>();
+            AtomicReference<CompletableFuture<Void>> otherCall = new AtomicReference<>();
             CompletableFuture<Void> cancel = new CompletableFuture<>();
             StartAt function = StartAt.dynamic(context -> {
                 if (asked.compareAndSet(false, true)) {
+                    otherCall.set(CompletableFuture.runAsync(() -> model.cancelSubscription(subscriptionId), otherThreads));
+                    await().atMost(EVENT_DELIVERY).until(storageThatHoldsTheFirstDelete.firstDeleteStarted::isDone);
                     CompletableFuture.runAsync(() -> {
                         cancelling.set(Thread.currentThread());
                         model.cancelSubscription(subscriptionId);
@@ -355,7 +356,8 @@ class BlockingDynamicStartCancelMongoTest {
             storageThatHoldsTheFirstDelete.firstDeleteMayGoOn.complete(null);
 
             assertAll(
-                    () -> assertThat(otherCall).as("the other call holding the id").succeedsWithin(EVENT_DELIVERY),
+                    () -> assertThat(otherCall.get()).as("the other call holding the id").failsWithin(EVENT_DELIVERY)
+                            .withThrowableThat().withStackTraceContaining("the first delete failed"),
                     () -> assertThat(cancel).as("the cancel made while the function ran").succeedsWithin(EVENT_DELIVERY),
                     () -> assertThat(subscribe).as("the subscribe").succeedsWithin(EVENT_DELIVERY)
             );
@@ -616,7 +618,7 @@ class BlockingDynamicStartCancelMongoTest {
 
     /**
      * Checkpoint storage whose first delete waits until the test lets it go on, so the call that deletes holds the claim
-     * or the lock for its id meanwhile. Every later delete goes on at once.
+     * or the lock for its id meanwhile, and then throws. Every later delete goes on at once.
      */
     private static final class StorageThatHoldsTheFirstDelete extends SpringMongoCheckpointStorage {
         private final AtomicBoolean deleted = new AtomicBoolean();
@@ -632,6 +634,7 @@ class BlockingDynamicStartCancelMongoTest {
             if (deleted.compareAndSet(false, true)) {
                 firstDeleteStarted.complete(null);
                 firstDeleteMayGoOn.orTimeout(30, SECONDS).join();
+                throw new IllegalStateException("the first delete failed");
             }
             super.delete(subscriptionId);
         }
