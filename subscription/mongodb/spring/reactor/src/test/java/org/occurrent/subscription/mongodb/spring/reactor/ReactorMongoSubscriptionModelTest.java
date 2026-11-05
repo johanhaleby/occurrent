@@ -730,6 +730,48 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
+        void the_handle_of_a_subscribe_paused_while_its_dynamic_position_answers_does_not_complete() throws Exception {
+            // Given a dynamic position that answers an operation time the change stream can open at, once the test lets it
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint live = liveStart();
+            CountDownLatch asked = new CountDownLatch(1);
+            CountDownLatch mayAnswer = new CountDownLatch(1);
+            StartAt startAt = StartAt.dynamic(ctx -> {
+                asked.countDown();
+                try {
+                    mayAnswer.await(20, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return StartAt.checkpoint(live);
+            });
+
+            // And the subscribing thread is held where the position is asked, since the subscribe asks it on that thread
+            CompletableFuture<Subscription> subscribing = CompletableFuture.supplyAsync(() ->
+                    subscription.subscribe(subscriptionId, startAt, cloudEvent -> Mono.empty()));
+            try {
+                assertThat(asked.await(10, SECONDS)).isTrue();
+
+                // When the run is paused while the position is asked, and the position answers after that
+                subscription.pauseSubscription(subscriptionId);
+                mayAnswer.countDown();
+                Subscription paused = subscribing.get(10, SECONDS);
+
+                // Then the handle does not complete, since the subscription is paused and has to be resumed to start
+                assertAll(
+                        () -> assertThat(paused.waitUntilStarted(Duration.ofSeconds(2)).block()).isFalse(),
+                        () -> assertThat(subscription.isPaused(subscriptionId)).isTrue()
+                );
+
+                // And the resumed subscription starts
+                Subscription resumed = subscription.resumeSubscription(subscriptionId);
+                assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            } finally {
+                mayAnswer.countDown();
+            }
+        }
+
+        @Test
         void a_first_answer_the_server_rejects_does_not_end_the_check_of_a_named_subscription() throws Exception {
             // Given a model that reads quiet positions, and a dynamic position whose first answer is a resume token the server rejects
             assertThat(subscription.readsQuietPositions()).isTrue();
