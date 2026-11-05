@@ -708,6 +708,22 @@ class ReactorCatchupSubscribeUnderWayTest {
                 () -> assertThat(later).as("what a subscribe of x once every subscribe returned throws").isNull());
     }
 
+    @Test
+    void a_cancelled_subscribe_that_returns_after_a_shutdown_returns_its_subscription() {
+        WrappedModel wrapped = new WrappedModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        HeldStart held = new HeldStart();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.empty())).start();
+        held.awaitInside();
+        await(returnedWithin("cancel-x", () -> catchup.cancelSubscription("x").toFuture()), "The cancel of x did not complete while the subscribe of x was under way");
+
+        catchup.shutdown();
+        held.release();
+
+        assertThat(subscribeOfX).as("the subscribe of x that returned after the shutdown").succeedsWithin(DEADLINE);
+    }
+
     private static void loadClassesOfASubscribeAndACancel(ReactorStreamCatchupSubscriptionModel catchup) {
         catchup.subscribe("warm-up", FILTER, StartAt.now(), cloudEvent -> Mono.empty());
         catchup.cancelSubscription("warm-up").block(STARTUP);
