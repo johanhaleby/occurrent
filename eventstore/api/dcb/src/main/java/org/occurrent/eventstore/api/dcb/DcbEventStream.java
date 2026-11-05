@@ -45,9 +45,10 @@ import static java.util.Objects.requireNonNull;
  *                             positions above the head, so a read after this position, once the transaction has
  *                             committed, returns them again. An append joins the caller's transaction when the store's
  *                             transaction manager finds a MongoDB transaction open on its own database factory
- *                             instance, or when the caller's {@code MongoTransactionManager} opened one on the
- *                             template's. Otherwise it commits in a transaction of its own, and when the caller's
- *                             transaction read before that append, its later reads don't return it.
+ *                             instance, or when the caller's {@code MongoTransactionManager} or
+ *                             {@code ReactiveMongoTransactionManager} opened one on the template's. Otherwise it
+ *                             commits in a transaction of its own, and when the caller's transaction read before that
+ *                             append, its later reads don't return it.
  * @param consistencyToken     the token a conditional append is checked against. It holds the criteria the read was
  *                             given, so pass it unchanged to
  *                             {@link DcbAppendCondition#failIfEventsMatch(DcbConsistencyToken)} and the append is

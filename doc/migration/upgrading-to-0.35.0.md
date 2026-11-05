@@ -785,13 +785,16 @@ committed with it. It now commits on its own, before the append writes its event
   database factory. It also returns your transaction's own appends, and those it started after that operation are at
   positions above that head. If you keep that position and read after it later, you get those events again.
 - An append joins your transaction when the store's transaction manager, the one in its `EventStoreConfig`, finds a
-  MongoDB transaction open on its own `MongoDatabaseFactory` instance, or when your `MongoTransactionManager` opened
-  one on the template's factory instance. The Spring Boot starters build the store's manager on the
-  `MongoDatabaseFactory` bean that Spring Boot also builds its `MongoTemplate` on. With one factory instance, the
-  append joins a transaction your `MongoTransactionManager` opened there, or one the store opened there for an earlier
-  read in your transaction. Otherwise the append commits in a MongoDB transaction of its own, so it doesn't roll back
-  with yours, and when your transaction read before it, later reads in it don't return that append. That happens, for
-  example, when the append is the first thing a JDBC transaction does on the store.
+  MongoDB transaction open on its own `MongoDatabaseFactory` instance, or when your `MongoTransactionManager` opened one
+  on the template's factory instance. The Spring Boot starters build the store's manager on the `MongoDatabaseFactory`
+  bean that Spring Boot also builds its `MongoTemplate` on. With one factory instance, the append joins a transaction
+  your `MongoTransactionManager` opened there, or one the store opened there for an earlier read in your transaction.
+  When your transaction isn't a MongoDB one on the template's factory, the MongoDB transaction the append runs in
+  commits right after yours, through transaction synchronization. A rollback of yours takes the append with it, but if
+  something fails between the two commits, yours is committed and the append isn't. Otherwise the append commits in a
+  MongoDB transaction of its own, so it doesn't roll back with yours, and when your transaction read before it, later
+  reads in it don't return that append. That happens, for example, when the append is the first thing a JDBC transaction
+  does on the store.
 
 ### What to do
 
