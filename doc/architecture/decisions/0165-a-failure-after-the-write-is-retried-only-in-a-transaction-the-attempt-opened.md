@@ -37,8 +37,7 @@ reason itself, that a retry only works where it owns the transaction.
 
 A failure after a successful write, in the re-read of the written events or in a handler, can make the service's
 retry strategy run the command again only when the attempt opened a transaction, which the service takes to mean that
-transaction undoes the write. Otherwise the retry strategy doesn't run the command again, and the failure reaches the
-caller.
+transaction undoes the write. Otherwise the retry strategy doesn't run the command again, and `execute` fails.
 
 - **Who says the attempt opened it.** The service runs the attempt through `inTransactionTellingIfOpened`, a new default
   method on `TransactionExecutor` and `ReactiveTransactionExecutor`, which tells the action whether this call opened the
