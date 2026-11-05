@@ -871,8 +871,9 @@ subscriptions behaves as before.
 - `execute` throws the original failure to the caller, and the service's retry strategy doesn't run the command again.
   On the blocking stack a strategy made by the factory methods of `RetryStrategy` still gives the failure to its
   `onError` listener and its `mapError`, and to its `onAfterRetry` listener when the attempt was a retry, as for a
-  failure its predicate doesn't match. A strategy of your own that ignores the shutdown predicate goes by its own, and
-  a run after the failure returns an empty attempt, so the failure reaches the caller after the strategy returns.
+  failure its predicate doesn't match. A strategy of your own that ignores the shutdown predicate goes by its own.
+  When it runs the command again, that run returns an empty attempt and the failure reaches the caller after the
+  strategy returns, and when it gives up, the caller gets what the strategy throws.
 - The `sideEffect` doesn't run.
 - The retry strategy can still run the command again for a failure of the write itself, and for any failure when the
   attempt opened a transaction. The
