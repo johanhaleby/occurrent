@@ -725,6 +725,87 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     @Test
+    void a_resume_during_a_shutdown_while_the_takeover_the_wrapped_model_runs_has_begun_and_not_yet_registered_its_replay_throws_SubscriptionModelShutdownException() throws InterruptedException {
+        // Given a subscription whose live start the wrapped model lost, and which it paused for a takeover
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        CountDownLatch mayRegister = new CountDownLatch(1);
+        try {
+            subscribeAndHandOver(catchup);
+            HistoryLossHandling.TakeOver lossOfTheLiveStart = (HistoryLossHandling.TakeOver) wrapped.asksTheListeners(ID, wrapped.positionOf(ID));
+            wrapped.pauseSubscription(ID);
+
+            // When the wrapped model runs the takeover on its own thread, and a shutdown begins after a resume read the
+            // handover, while that takeover has begun and not yet registered its replay
+            CountDownLatch registers = new CountDownLatch(1);
+            NamedCatchupMapHook.installIn(catchup, "catchingUp").beforeTheComputeIn("takeOver", () -> {
+                registers.countDown();
+                await(mayRegister);
+            });
+            Thread takeover = new Thread(lossOfTheLiveStart.afterPause(), "takeover");
+            takeover.start();
+            await(registers);
+            NamedCatchupMapHook.installIn(catchup, "handedOver").afterTheReadIn("takeOverOnResume", catchup.namedSubscriptions::beginShutdown);
+            Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+            int resumedWhereItWasHeld = wrapped.resumedWhereItWasHeld.get();
+            mayRegister.countDown();
+            takeover.join(10_000);
+
+            // Then the resume is refused as one of a shut-down model, and the wrapped model is not resumed where it lost
+            // the history
+            assertAll(
+                    () -> assertThat(thrown).as("what the resume throws")
+                            .isInstanceOf(SubscriptionModelShutdownException.class).hasMessage("Cannot resume subscription " + ID + " because the subscription model is shutdown."),
+                    () -> assertThat(resumedWhereItWasHeld).as("resumed where it lost the history, right after the resume").isZero(),
+                    () -> assertThat(takeover.isAlive()).as("whether the takeover still runs 10 seconds after it may register").isFalse()
+            );
+        } finally {
+            mayRegister.countDown();
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_subscription_whose_takeover_the_wrapped_model_runs_has_begun_and_not_yet_registered_its_replay_is_running_and_not_paused() throws InterruptedException {
+        // Given a subscription whose live start the wrapped model lost, and which it paused for a takeover
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        CountDownLatch mayRegister = new CountDownLatch(1);
+        try {
+            subscribeAndHandOver(catchup);
+            HistoryLossHandling.TakeOver lossOfTheLiveStart = (HistoryLossHandling.TakeOver) wrapped.asksTheListeners(ID, wrapped.positionOf(ID));
+            wrapped.pauseSubscription(ID);
+            reader.head = 4;
+
+            // When the wrapped model runs the takeover on its own thread, which has begun and not yet registered its
+            // replay
+            CountDownLatch registers = new CountDownLatch(1);
+            NamedCatchupMapHook.installIn(catchup, "catchingUp").beforeTheComputeIn("takeOver", () -> {
+                registers.countDown();
+                await(mayRegister);
+            });
+            Thread takeover = new Thread(lossOfTheLiveStart.afterPause(), "takeover");
+            takeover.start();
+            await(registers);
+            boolean running = catchup.isRunning(ID);
+            boolean paused = catchup.isPaused(ID);
+            mayRegister.countDown();
+            takeover.join(10_000);
+            awaitNoReplayInFlight(catchup);
+
+            // Then the subscription is answered for as one whose replay runs, which a resume meanwhile is refused as
+            assertAll(
+                    () -> assertThat(running).as("whether the subscription is running before the takeover registered its replay").isTrue(),
+                    () -> assertThat(paused).as("whether the subscription is paused before the takeover registered its replay").isFalse(),
+                    () -> assertThat(takeover.isAlive()).as("whether the takeover still runs 10 seconds after it may register").isFalse()
+            );
+        } finally {
+            mayRegister.countDown();
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_loss_of_the_lost_live_start_reported_again_as_the_takeover_hands_over_is_taken_over_when_the_model_restarts_from_the_present() {
         verifiesALossReportedAgainAsTheTakeoverHandsOverIsTakenOver(new LosingLiveStartModel(true));
     }

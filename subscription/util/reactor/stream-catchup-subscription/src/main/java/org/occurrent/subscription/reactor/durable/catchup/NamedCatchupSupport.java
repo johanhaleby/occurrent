@@ -966,7 +966,18 @@ final class NamedCatchupSupport {
         if (state != null) {
             return !stopped && !state.parked.get() && !state.pendingPause.get() && !state.cancelled.get();
         }
+        if (takeOverClaimed(subscriptionId)) {
+            return !stopped;
+        }
         return managesNamedSubscriptions() && named.isRunning(subscriptionId);
+    }
+
+    // A takeover of the id's lost live start has been claimed and has not registered its replay yet, while the wrapped
+    // model holds the subscription paused. Answered as for a replay in flight, which is what a resume meanwhile is
+    // refused as.
+    private boolean takeOverClaimed(String subscriptionId) {
+        HandedOver made = handedOver.get(subscriptionId);
+        return made != null && made.takingOver().get();
     }
 
     private boolean cancelledUnderWay(String subscriptionId) {
@@ -982,7 +993,7 @@ final class NamedCatchupSupport {
         if (state != null) {
             return (state.parked.get() || state.pendingPause.get()) && !state.cancelled.get();
         }
-        return managesNamedSubscriptions() && named.isPaused(subscriptionId);
+        return managesNamedSubscriptions() && !takeOverClaimed(subscriptionId) && named.isPaused(subscriptionId);
     }
 
     void pauseSubscription(String subscriptionId) {
@@ -1088,6 +1099,9 @@ final class NamedCatchupSupport {
                 return null;
             }
             if (!made.takingOver().compareAndSet(false, true)) {
+                // A takeover that a shutdown or a cancel stops runs no replay, so the resume is refused as one of a
+                // shut-down model or a cancelled subscription rather than as one of a running replay
+                refuseIfShutDownOrCancelled(subscriptionId);
                 throw new SubscriptionAlreadyRunningException(subscriptionId);
             }
             CatchupState taking = takeOver(subscriptionId, made);
