@@ -508,7 +508,7 @@ class ProjectionAnnotationRegistrar {
     //   1. The composition structurally has no catch-up layer at all (ADR 132 decision 9's third case), a known
     //      fact resolveCatchupModel's ComposedCatchupModel branch already verified, not an unobserved absence.
     //   2. NOW with resumeBehavior SAME_AS_START_AT, which is StartAt.now() on every start. On the shipped Mongo
-    //      composition a resume starts at the present although a catch-up checkpoint is in storage
+    //      composition a resume doesn't replay from a catch-up checkpoint in storage
     //      (ReactiveNowStartAtLeftOverCheckpointMongoTest). An application-supplied model that resumes from a stored
     //      position anyway is not seen here.
     // DEFAULT, and NOW with the default resumeBehavior, both start at the model default (StartPositionSupport's

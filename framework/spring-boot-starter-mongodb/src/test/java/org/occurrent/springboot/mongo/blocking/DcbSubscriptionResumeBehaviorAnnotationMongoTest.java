@@ -208,10 +208,10 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     }
 
     // Pausing and resuming is not a restart. The subscription is NOW with SAME_AS_START_AT and a catch-up checkpoint is
-    // planted while it is paused. As with a restart, the resume starts at the present, so historic-2 is not replayed
-    // before live-2.
+    // planted while it is paused. A resume does not start over from storage, so historic-2 is not replayed from the
+    // planted checkpoint before live-2.
     @Test
-    void a_dcb_subscription_with_now_and_same_as_start_at_starts_at_the_present_when_it_is_resumed_although_a_catch_up_checkpoint_was_planted_while_paused() {
+    void a_dcb_subscription_with_now_and_same_as_start_at_does_not_replay_from_a_catch_up_checkpoint_planted_while_paused_when_it_is_resumed() {
         try (ConfigurableApplicationContext context = SpringApplication.run(NowRestartApplication.class,
                 nowBootArgs("dcb-now-same-as-start-at-paused", "historic-1,historic-2", "live-1"))) {
             DcbSubscriptionNowSameAsStartAt handler = context.getBean(DcbSubscriptionNowSameAsStartAt.class);
