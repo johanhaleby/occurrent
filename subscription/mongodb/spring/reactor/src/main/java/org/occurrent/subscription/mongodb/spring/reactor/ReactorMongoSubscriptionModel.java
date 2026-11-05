@@ -1196,8 +1196,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         }
 
         // The change stream was subscribed to
+        // Not for a run a pause or a cancel closed before its change stream was subscribed to, since that subscription
+        // has to be resumed or subscribed again before it reads
         void opened() {
-            started.tryEmitEmpty();
+            if (isOpen()) {
+                started.tryEmitEmpty();
+            }
         }
 
         // Where the run last opened the change stream
