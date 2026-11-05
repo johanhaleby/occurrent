@@ -272,8 +272,9 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
         @Bean
         EventWriter eventWriter(ApplicationService<TestEvent> applicationService,
                                 @Value("${test.before-subscribe}") String beforeSubscribe,
-                                @Value("${test.after-start}") String afterStart) {
-            return new EventWriter(applicationService, beforeSubscribe, afterStart);
+                                @Value("${test.after-start}") String afterStart,
+                                MongoOperations mongoOperations) {
+            return new EventWriter(applicationService, beforeSubscribe, afterStart, mongoOperations);
         }
 
         @Bean
@@ -326,24 +327,25 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
         private final ApplicationService<TestEvent> applicationService;
         private final List<String> beforeSubscribe;
         private final List<String> afterStart;
+        private final MongoOperations mongoOperations;
 
-        EventWriter(ApplicationService<TestEvent> applicationService, String beforeSubscribe, String afterStart) {
+        EventWriter(ApplicationService<TestEvent> applicationService, String beforeSubscribe, String afterStart, MongoOperations mongoOperations) {
             this.applicationService = applicationService;
             this.beforeSubscribe = names(beforeSubscribe);
             this.afterStart = names(afterStart);
+            this.mongoOperations = mongoOperations;
         }
 
         private static List<String> names(String commaSeparated) {
             return Stream.of(commaSeparated.split(",")).filter(name -> !name.isBlank()).toList();
         }
 
-        // Subscriptions register once every singleton exists, so these are written before any of them starts. A
-        // subscription starting at the present can still receive what the same MongoClient wrote up to a second
-        // earlier, so the pause keeps them out of reach of the NOW subscribers.
+        // Subscriptions register once every singleton exists, so these are written before any of them starts. The wait
+        // ends when a NOW subscription would open after them.
         @PostConstruct
-        void writeBeforeSubscribe() throws InterruptedException {
+        void writeBeforeSubscribe() {
             beforeSubscribe.forEach(this::write);
-            Thread.sleep(1500);
+            HistoryBeforeThePresent.awaitedWith(mongoOperations);
         }
 
         @Override

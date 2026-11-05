@@ -28,17 +28,24 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.ResumeBehavior;
+import org.occurrent.annotation.Snapshot;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.dsl.projection.DcbProjection;
+import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
+import org.occurrent.dsl.snapshot.DcbSnapshotView;
+import org.occurrent.dsl.snapshot.SnapshotView;
+import org.occurrent.dsl.snapshot.blocking.SnapshotStore;
+import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -48,6 +55,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.MongoOperations;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -59,8 +67,10 @@ import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -81,8 +91,9 @@ import static org.awaitility.Awaitility.await;
  * three scenarios below can run against the same container without interfering with each other despite the fixed,
  * compile-time-constant annotation attributes forcing one subscriber class per scenario.
  * <p>
- * The {@code NOW} scenarios boot a separate application, {@link NowRestartApplication}, and cover both
- * {@link DcbSubscription} and a DCB {@link Projection}, which share the DCB start-position computation. Each boot
+ * The {@code NOW} scenarios and the {@link Snapshot} scenarios boot a separate application,
+ * {@link NowRestartApplication}. It holds a {@link DcbSubscription}, a DCB {@link Projection} and a {@link Snapshot}
+ * returning a {@code DcbSnapshotView}, which share the DCB start-position computation. Each boot
  * writes the events named by {@code test.before-subscribe} before any subscription registers and, from an
  * {@link ApplicationRunner}, the events named by {@code test.after-start}. The last of those is a marker: it is
  * written after everything else, so once an annotation has handled it, whatever it was going to handle for the events
@@ -98,8 +109,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     // the container for the context. The url is passed as a boot argument instead, and getReplicaSetUrl() reports the
     // mapped host port, so nothing has to be pinned.
     @Container
-    static final MongoDBContainer mongoDBContainer =
-            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
+    static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     @Test
     void default_resume_behavior_resumes_from_the_stored_position_after_restart_while_same_as_start_at_replays_from_the_beginning_again() {
@@ -200,6 +210,58 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         } finally {
             secondBoot.close();
         }
+    }
+
+    // A DCB snapshot folds every matching event it reads from the event store, so its saved state is the same whichever
+    // events its subscription is delivered. The registrar reads the stored snapshot once per delivery, so these tests
+    // count those reads as the deliveries.
+    @Test
+    void a_dcb_snapshot_with_now_and_default_resume_behavior_is_not_delivered_history_on_first_boot_and_is_delivered_events_written_while_down_after_restart() {
+        restartSnapshot("dcb-now-default-snapshot", DcbSnapshotNowDefault.class, 1, 2);
+    }
+
+    @Test
+    void a_dcb_snapshot_with_now_and_same_as_start_at_is_delivered_only_the_present_again_after_restart_but_still_folds_events_written_while_down() {
+        restartSnapshot("dcb-now-same-as-start-at-snapshot", DcbSnapshotNowSameAsStartAt.class, 1, 1);
+    }
+
+    @Test
+    void a_dcb_snapshot_with_beginning_and_default_resume_behavior_is_delivered_history_once_and_only_what_is_new_after_restart() {
+        restartSnapshot("dcb-beginning-default-snapshot", DcbSnapshotBeginningDefault.class, 3, 2);
+    }
+
+    @Test
+    void a_dcb_snapshot_with_beginning_and_same_as_start_at_is_delivered_the_whole_history_again_after_restart() {
+        restartSnapshot("dcb-beginning-same-as-start-at-snapshot", DcbSnapshotBeginningSameAsStartAt.class, 3, 5);
+    }
+
+    private static void restartSnapshot(String databaseName, Class<? extends DcbSnapshotHandled> handlerType,
+                                        int expectedDeliveriesFirstBoot, int expectedDeliveriesSecondBoot) {
+        ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
+                nowBootArgs(databaseName, "historic-1,historic-2", "live-1"));
+        try {
+            DcbSnapshotHandled handler = firstBoot.getBean(handlerType);
+            awaitFolded(handler, "live-1");
+            assertThat(handler.deliveries()).isEqualTo(expectedDeliveriesFirstBoot);
+        } finally {
+            firstBoot.close();
+        }
+
+        ConfigurableApplicationContext secondBoot = SpringApplication.run(NowRestartApplication.class,
+                nowBootArgs(databaseName, "while-down-1", "live-2"));
+        try {
+            DcbSnapshotHandled handler = secondBoot.getBean(handlerType);
+            awaitFolded(handler, "live-2");
+            assertThat(handler.deliveries()).isEqualTo(expectedDeliveriesSecondBoot);
+            assertThat(handler.folded()).containsExactly("historic-1", "historic-2", "live-1", "while-down-1", "live-2");
+        } finally {
+            secondBoot.close();
+        }
+    }
+
+    private static void awaitFolded(DcbSnapshotHandled handler, String marker) {
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(handler.folded()).contains(marker));
     }
 
     private static void awaitHandled(Handled handler, String marker) {
@@ -319,8 +381,9 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         @Bean
         NowEventWriter nowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter,
                                       @Value("${test.before-subscribe}") String beforeSubscribe,
-                                      @Value("${test.after-start}") String afterStart) {
-            return new NowEventWriter(dcbEventStore, cloudEventConverter, beforeSubscribe, afterStart);
+                                      @Value("${test.after-start}") String afterStart,
+                                      MongoOperations mongoOperations) {
+            return new NowEventWriter(dcbEventStore, cloudEventConverter, beforeSubscribe, afterStart, mongoOperations);
         }
 
         @Bean
@@ -341,6 +404,46 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         @Bean
         DcbProjectionNowSameAsStartAt dcbProjectionNowSameAsStartAt() {
             return new DcbProjectionNowSameAsStartAt();
+        }
+
+        @Bean
+        RecordingSnapshotStore dcbSnapshotNowDefaultStore(MongoOperations mongoOperations) {
+            return new RecordingSnapshotStore(mongoOperations, "dcb-now-snapshot-default");
+        }
+
+        @Bean
+        DcbSnapshotNowDefault dcbSnapshotNowDefault(@Qualifier("dcbSnapshotNowDefaultStore") RecordingSnapshotStore store) {
+            return new DcbSnapshotNowDefault(store);
+        }
+
+        @Bean
+        RecordingSnapshotStore dcbSnapshotNowSameAsStartAtStore(MongoOperations mongoOperations) {
+            return new RecordingSnapshotStore(mongoOperations, "dcb-now-snapshot-same");
+        }
+
+        @Bean
+        DcbSnapshotNowSameAsStartAt dcbSnapshotNowSameAsStartAt(@Qualifier("dcbSnapshotNowSameAsStartAtStore") RecordingSnapshotStore store) {
+            return new DcbSnapshotNowSameAsStartAt(store);
+        }
+
+        @Bean
+        RecordingSnapshotStore dcbSnapshotBeginningDefaultStore(MongoOperations mongoOperations) {
+            return new RecordingSnapshotStore(mongoOperations, "dcb-beginning-snapshot-default");
+        }
+
+        @Bean
+        DcbSnapshotBeginningDefault dcbSnapshotBeginningDefault(@Qualifier("dcbSnapshotBeginningDefaultStore") RecordingSnapshotStore store) {
+            return new DcbSnapshotBeginningDefault(store);
+        }
+
+        @Bean
+        RecordingSnapshotStore dcbSnapshotBeginningSameAsStartAtStore(MongoOperations mongoOperations) {
+            return new RecordingSnapshotStore(mongoOperations, "dcb-beginning-snapshot-same");
+        }
+
+        @Bean
+        DcbSnapshotBeginningSameAsStartAt dcbSnapshotBeginningSameAsStartAt(@Qualifier("dcbSnapshotBeginningSameAsStartAtStore") RecordingSnapshotStore store) {
+            return new DcbSnapshotBeginningSameAsStartAt(store);
         }
     }
 
@@ -389,21 +492,22 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         private final CloudEventConverter<TestEvent> cloudEventConverter;
         private final List<String> beforeSubscribe;
         private final List<String> afterStart;
+        private final MongoOperations mongoOperations;
 
-        NowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter, String beforeSubscribe, String afterStart) {
+        NowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter, String beforeSubscribe, String afterStart, MongoOperations mongoOperations) {
             this.dcbEventStore = dcbEventStore;
             this.cloudEventConverter = cloudEventConverter;
             this.beforeSubscribe = List.of(beforeSubscribe.split(","));
             this.afterStart = List.of(afterStart.split(","));
+            this.mongoOperations = mongoOperations;
         }
 
-        // Subscriptions register once every singleton exists, so these are written before any of them starts. A
-        // subscription starting at the present can still receive what the same MongoClient wrote up to a second
-        // earlier, so the pause keeps them out of reach of the NOW subscribers.
+        // Subscriptions register once every singleton exists, so these are written before any of them starts. The wait
+        // ends when a NOW subscription would open after them.
         @PostConstruct
-        void writeBeforeSubscribe() throws InterruptedException {
+        void writeBeforeSubscribe() {
             beforeSubscribe.forEach(this::write);
-            Thread.sleep(1500);
+            HistoryBeforeThePresent.awaitedWith(mongoOperations);
         }
 
         @Override
@@ -508,6 +612,112 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         DcbProjection<Seen, TestEvent, String> projection() {
             return recordingProjection(this::record);
         }
+    }
+
+    // --- DCB @Snapshot ---
+
+    static class DcbSnapshotNowDefault extends DcbSnapshotHandled {
+        DcbSnapshotNowDefault(RecordingSnapshotStore store) {
+            super(store);
+        }
+
+        @Snapshot(id = "dcb-now-snapshot-default", storeName = "dcbSnapshotNowDefaultStore", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.DEFAULT)
+        DcbSnapshotView<Folded, TestEvent> snapshot() {
+            return foldingSnapshot();
+        }
+    }
+
+    static class DcbSnapshotNowSameAsStartAt extends DcbSnapshotHandled {
+        DcbSnapshotNowSameAsStartAt(RecordingSnapshotStore store) {
+            super(store);
+        }
+
+        @Snapshot(id = "dcb-now-snapshot-same", storeName = "dcbSnapshotNowSameAsStartAtStore", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        DcbSnapshotView<Folded, TestEvent> snapshot() {
+            return foldingSnapshot();
+        }
+    }
+
+    static class DcbSnapshotBeginningDefault extends DcbSnapshotHandled {
+        DcbSnapshotBeginningDefault(RecordingSnapshotStore store) {
+            super(store);
+        }
+
+        @Snapshot(id = "dcb-beginning-snapshot-default", storeName = "dcbSnapshotBeginningDefaultStore", startAt = StartPosition.BEGINNING, resumeBehavior = ResumeBehavior.DEFAULT)
+        DcbSnapshotView<Folded, TestEvent> snapshot() {
+            return foldingSnapshot();
+        }
+    }
+
+    static class DcbSnapshotBeginningSameAsStartAt extends DcbSnapshotHandled {
+        DcbSnapshotBeginningSameAsStartAt(RecordingSnapshotStore store) {
+            super(store);
+        }
+
+        @Snapshot(id = "dcb-beginning-snapshot-same", storeName = "dcbSnapshotBeginningSameAsStartAtStore", startAt = StartPosition.BEGINNING, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        DcbSnapshotView<Folded, TestEvent> snapshot() {
+            return foldingSnapshot();
+        }
+    }
+
+    abstract static class DcbSnapshotHandled {
+        private final RecordingSnapshotStore store;
+
+        DcbSnapshotHandled(RecordingSnapshotStore store) {
+            this.store = store;
+        }
+
+        int deliveries() {
+            return store.deliveries();
+        }
+
+        List<String> folded() {
+            return store.folded();
+        }
+    }
+
+    // The snapshot is stored in MongoDB, so what the first boot folded is still there on the second. Only the number of
+    // reads is per boot, since each boot has its own store bean.
+    static class RecordingSnapshotStore implements SnapshotStore<Folded> {
+        private static final String KEY = DcbSnapshotKeys.canonicalKey(DcbCriteria.tags(Tag.parse("test:resume-behavior")));
+
+        private final SnapshotStore<Folded> delegate;
+        private final AtomicInteger deliveries = new AtomicInteger();
+
+        RecordingSnapshotStore(MongoOperations mongoOperations, String snapshotId) {
+            this.delegate = new SpringMongoSnapshotStore<>(mongoOperations, Folded.class, "occurrent-snapshot-" + snapshotId);
+        }
+
+        @Override
+        public Optional<org.occurrent.dsl.snapshot.Snapshot<Folded>> findLatest(String key) {
+            deliveries.incrementAndGet();
+            return delegate.findLatest(key);
+        }
+
+        @Override
+        public void save(String key, org.occurrent.dsl.snapshot.Snapshot<Folded> snapshot) {
+            delegate.save(key, snapshot);
+        }
+
+        int deliveries() {
+            return deliveries.get();
+        }
+
+        // Read from the delegate so that looking at the state is not counted as a delivery.
+        List<String> folded() {
+            return delegate.findLatest(KEY).map(snapshot -> snapshot.state().names()).orElse(List.of());
+        }
+    }
+
+    private static DcbSnapshotView<Folded, TestEvent> foldingSnapshot() {
+        return new DcbSnapshotView<>(
+                SnapshotView.<Folded, TestEvent>builder(new Folded(List.of()))
+                        .on(TestEvent.class, (state, event) -> new Folded(Stream.concat(state.names().stream(), Stream.of(event.name())).toList()))
+                        .build(),
+                DcbCriteria.tags(Tag.parse("test:resume-behavior")));
+    }
+
+    record Folded(List<String> names) {
     }
 
     private static DcbProjection<Seen, TestEvent, String> recordingProjection(Consumer<String> onEvent) {
