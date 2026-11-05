@@ -19,7 +19,6 @@ package org.occurrent.springboot.mongo.blocking;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
-import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 
 import static java.time.Duration.ofMillis;
@@ -40,17 +39,17 @@ final class HistoryBeforeThePresent {
     private HistoryBeforeThePresent() {
     }
 
-    static void awaitedWith(MongoOperations mongoOperations) {
-        BsonTimestamp lastWrite = lastWriteOn(mongoOperations);
+    static void awaitedWith(MongoTemplate mongoTemplate) {
+        BsonTimestamp lastWrite = lastWriteOn(mongoTemplate);
         await().atMost(ofSeconds(10)).pollInterval(ofMillis(50)).untilAsserted(() -> {
-            BsonTimestamp opensAt = MongoCommons.operationTimeAfter(mongoOperations.executeCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND));
+            BsonTimestamp opensAt = MongoCommons.operationTimeAfter(mongoTemplate.executeCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND));
             assertThat(opensAt).as("where a subscription at the present opens").isNotNull().isGreaterThan(lastWrite);
         });
     }
 
     // Skips the no-op entries the server writes to the oplog on its own.
-    private static BsonTimestamp lastWriteOn(MongoOperations mongoOperations) {
-        Document newestWrite = ((MongoTemplate) mongoOperations).getMongoDatabaseFactory().getMongoDatabase("local")
+    private static BsonTimestamp lastWriteOn(MongoTemplate mongoTemplate) {
+        Document newestWrite = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase("local")
                 .getCollection("oplog.rs")
                 .find(new Document("op", new Document("$ne", "n")))
                 .sort(new Document("$natural", -1))

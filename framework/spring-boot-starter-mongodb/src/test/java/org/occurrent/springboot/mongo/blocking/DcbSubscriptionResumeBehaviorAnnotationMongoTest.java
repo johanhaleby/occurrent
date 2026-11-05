@@ -67,6 +67,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -492,7 +493,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         NowEventWriter nowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter,
                                       @Value("${test.before-subscribe}") String beforeSubscribe,
                                       @Value("${test.after-start}") String afterStart,
-                                      MongoOperations mongoOperations, ObjectProvider<SubscriptionModel> subscriptionModel,
+                                      MongoTemplate mongoOperations, ObjectProvider<SubscriptionModel> subscriptionModel,
                                       ObjectProvider<DcbSnapshotBeginningDefault> beginningDefault,
                                       ObjectProvider<DcbSnapshotBeginningSameAsStartAt> beginningSameAsStartAt) {
             // A BEGINNING snapshot replays the history. An event written while it replays is delivered by the replay and can
@@ -629,10 +630,10 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         private final CloudEventConverter<TestEvent> cloudEventConverter;
         private final List<String> beforeSubscribe;
         private final List<String> afterStart;
-        private final MongoOperations mongoOperations;
+        private final MongoTemplate mongoOperations;
         private final Runnable beforeAfterStart;
 
-        NowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter, String beforeSubscribe, String afterStart, MongoOperations mongoOperations, Runnable beforeAfterStart) {
+        NowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter, String beforeSubscribe, String afterStart, MongoTemplate mongoOperations, Runnable beforeAfterStart) {
             this.beforeAfterStart = beforeAfterStart;
             this.dcbEventStore = dcbEventStore;
             this.cloudEventConverter = cloudEventConverter;

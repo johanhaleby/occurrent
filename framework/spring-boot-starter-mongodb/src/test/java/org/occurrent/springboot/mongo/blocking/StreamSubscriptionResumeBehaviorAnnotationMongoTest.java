@@ -40,7 +40,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
-import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -300,7 +300,7 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
         NowEventWriter nowEventWriter(ApplicationService<TestEvent> applicationService,
                                       @Value("${test.before-subscribe}") String beforeSubscribe,
                                       @Value("${test.after-start}") String afterStart,
-                                      MongoOperations mongoOperations) {
+                                      MongoTemplate mongoOperations) {
             return new NowEventWriter(applicationService, beforeSubscribe, afterStart, mongoOperations);
         }
 
@@ -360,9 +360,9 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
         private final ApplicationService<TestEvent> applicationService;
         private final List<String> beforeSubscribe;
         private final List<String> afterStart;
-        private final MongoOperations mongoOperations;
+        private final MongoTemplate mongoOperations;
 
-        NowEventWriter(ApplicationService<TestEvent> applicationService, String beforeSubscribe, String afterStart, MongoOperations mongoOperations) {
+        NowEventWriter(ApplicationService<TestEvent> applicationService, String beforeSubscribe, String afterStart, MongoTemplate mongoOperations) {
             this.applicationService = applicationService;
             this.beforeSubscribe = List.of(beforeSubscribe.split(","));
             this.afterStart = List.of(afterStart.split(","));

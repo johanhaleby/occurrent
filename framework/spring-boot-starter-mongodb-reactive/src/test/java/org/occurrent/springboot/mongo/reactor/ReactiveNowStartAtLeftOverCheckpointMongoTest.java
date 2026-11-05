@@ -54,6 +54,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
@@ -141,12 +142,16 @@ class ReactiveNowStartAtLeftOverCheckpointMongoTest {
                 bootArgs(databaseName, "beginning", "historic-1,historic-2", ""))) {
             awaitDelivered(firstBoot.getBean(LeftOverBeginning.class), "historic-2");
             CheckpointStorage storage = firstBoot.getBean(CheckpointStorage.class);
-            // The catch-up stores a checkpoint of its own while it replays, so wait for the one that carries the handover.
-            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                    assertThat(storage.read(LEFT_OVER_ID).blockOptional().map(Checkpoint::asString)).hasValueSatisfying(value -> assertThat(value).startsWith("position:2;")));
-            Checkpoint stored = storage.read(LEFT_OVER_ID).block();
-            Checkpoint live = GlobalCheckpoint.isGlobalCheckpoint(stored) ? GlobalCheckpoint.parse(stored).liveFrom().orElseThrow() : stored;
-            storage.save(LEFT_OVER_ID, GlobalCheckpoint.of(1, live, 0, 2)).block();
+            // Every event the catch-up replays is stored with the live start it read before the replay, so the one after
+            // historic-2 is the last of the replay and carries it.
+            AtomicReference<Checkpoint> live = new AtomicReference<>();
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> {
+                Checkpoint stored = storage.read(LEFT_OVER_ID).block();
+                assertThat(stored).isNotNull();
+                assertThat(stored.asString()).startsWith("position:2;");
+                live.set(GlobalCheckpoint.parse(stored).liveFrom().orElseThrow());
+            });
+            storage.save(LEFT_OVER_ID, GlobalCheckpoint.of(1, live.get(), 0, 2)).block();
             Checkpoint planted = storage.read(LEFT_OVER_ID).block();
             assertThat(GlobalCheckpoint.isGlobalCheckpoint(planted) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(planted)).as("catch-up checkpoint").isTrue();
         }
