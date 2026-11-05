@@ -266,7 +266,7 @@ final class NamedCatchupSupport {
         try {
             launchOrPark(state);
         } catch (RuntimeException | Error e) {
-            owned.remove(subscriptionId, record);
+            release(subscriptionId, record, delegate);
             throw e;
         }
         return new NamedCatchupSubscription(subscriptionId, state.started.asMono());
@@ -350,8 +350,7 @@ final class NamedCatchupSupport {
                         catchingUp.remove(subscriptionId, state);
                         // Only a replay that never handed over leaves no subscription behind, so a subscribe of the id replays again
                         if (takenOver == null && !state.handedOver.get()) {
-                            owned.remove(subscriptionId, replay.owned());
-                            cancelWhatTheReplacedSubscribeLeft(subscriptionId, replay.owned(), replay.delegate());
+                            release(subscriptionId, replay.owned(), replay.delegate());
                         }
                         failStart(state, subscriptionId, throwable);
                     });
@@ -465,8 +464,7 @@ final class NamedCatchupSupport {
             return delegate.subscribe(subscriptionId, liveSubscriptionFilter, startAt,
                     cloudEvent -> !record.cancelled && livePredicate.test(cloudEvent) ? action.apply(cloudEvent) : Mono.empty());
         } catch (RuntimeException | Error e) {
-            owned.remove(subscriptionId, record);
-            cancelWhatTheReplacedSubscribeLeft(subscriptionId, record, delegate);
+            release(subscriptionId, record, delegate);
             throw e;
         } finally {
             subscribeReturned(subscriptionId, record, delegate);
@@ -486,7 +484,7 @@ final class NamedCatchupSupport {
                 return false;
             }
             if (!delegate.isRunning(subscriptionId) && !delegate.isPaused(subscriptionId)) {
-                owned.remove(subscriptionId, record);
+                releaseHoldingIdLock(subscriptionId, record, delegate);
                 return false;
             }
             cancelsUnderWay.merge(subscriptionId, 1, Integer::sum);
@@ -504,28 +502,38 @@ final class NamedCatchupSupport {
         }
     }
 
-    // A subscribe that replaced a cancelled one still under way failed, which the wrapped model does when the cancelled
-    // one took the id there after the replacement. That one skipped its cancel again, since it found this record owning
-    // the id, so it is cancelled here. One still under way cancels itself once it returns.
-    private void cancelWhatTheReplacedSubscribeLeft(String subscriptionId, Owned failed, SubscriptionModel delegate) {
-        Owned replaced = failed.replaced;
-        if (replaced == null) {
-            return;
+    // Removes the record of a subscribe that failed, see releaseHoldingIdLock
+    private void release(String subscriptionId, Owned record, SubscriptionModel delegate) {
+        if (underIdLock(subscriptionId, () -> releaseHoldingIdLock(subscriptionId, record, delegate))) {
+            cancelWhatTheReplacedSubscribeLeft(subscriptionId, delegate);
         }
-        boolean cancel = underIdLock(subscriptionId, () -> {
-            if (replaced.subscribing || owned.containsKey(subscriptionId) || catchingUp.containsKey(subscriptionId)
-                    || (!delegate.isRunning(subscriptionId) && !delegate.isPaused(subscriptionId))) {
-                return false;
-            }
-            cancelsUnderWay.merge(subscriptionId, 1, Integer::sum);
-            return true;
-        });
-        if (cancel) {
-            try {
-                cancelInWrappedModel(subscriptionId, null, cancelUnderWayEnds(subscriptionId));
-            } catch (RuntimeException | Error e) {
-                log.warn("Could not cancel subscription {} in the wrapped model {}. That model may still hold the subscription.", subscriptionId, delegate.getClass().getName(), e);
-            }
+    }
+
+    // Called under the per-id lock. Removes record, and when it replaced a cancelled record whose subscribe was still
+    // under way, gives the id what that subscribe skipped while record owned the id, which is its cancel again. One
+    // still under way owns the id again and cancels it once it returns. One that has returned can have taken the id in
+    // the wrapped model, and true says the caller is to cancel the id there, with a cancel counted under way.
+    private boolean releaseHoldingIdLock(String subscriptionId, Owned record, SubscriptionModel delegate) {
+        Owned replaced = record.replaced;
+        if (!owned.remove(subscriptionId, record) || replaced == null) {
+            return false;
+        }
+        if (replaced.subscribing) {
+            owned.putIfAbsent(subscriptionId, replaced);
+            return false;
+        }
+        if (catchingUp.containsKey(subscriptionId) || (!delegate.isRunning(subscriptionId) && !delegate.isPaused(subscriptionId))) {
+            return false;
+        }
+        cancelsUnderWay.merge(subscriptionId, 1, Integer::sum);
+        return true;
+    }
+
+    private void cancelWhatTheReplacedSubscribeLeft(String subscriptionId, SubscriptionModel delegate) {
+        try {
+            cancelInWrappedModel(subscriptionId, null, cancelUnderWayEnds(subscriptionId));
+        } catch (RuntimeException | Error e) {
+            log.warn("Could not cancel subscription {} in the wrapped model {}. That model may still hold the subscription.", subscriptionId, delegate.getClass().getName(), e);
         }
     }
 
@@ -1051,12 +1059,20 @@ final class NamedCatchupSupport {
         if (record == null) {
             return;
         }
-        underIdLock(subscriptionId, () -> {
-            if (!record.subscribing && record.cancelledAgain == cancelledAgainAtCancel) {
-                owned.remove(subscriptionId, record);
+        SubscriptionModel delegate = named;
+        boolean cancel = underIdLock(subscriptionId, () -> {
+            if (record.subscribing || record.cancelledAgain != cancelledAgainAtCancel) {
+                return false;
             }
-            return null;
+            if (delegate == null) {
+                owned.remove(subscriptionId, record);
+                return false;
+            }
+            return releaseHoldingIdLock(subscriptionId, record, delegate);
         });
+        if (cancel) {
+            cancelWhatTheReplacedSubscribeLeft(subscriptionId, requireNonNull(delegate));
+        }
     }
 
     void shutdown() {
