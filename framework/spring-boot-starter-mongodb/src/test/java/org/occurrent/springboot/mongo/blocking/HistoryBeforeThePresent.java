@@ -28,12 +28,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Waits until a subscription that starts at the present would open after the last write on the server, so it can't
+ * Checks that a subscription that starts at the present would open after the last write on the server, so it can't
  * be delivered the events a test wrote before it.
  * <p>
  * A blocking change-stream subscription at the present opens one increment after the operation time of a {@code ping}
- * reply ({@link MongoCommons#operationTimeAfter(Document)}). The wait computes that position the same way and ends when
- * it is after the newest write in the oplog. It fails after 10 seconds if the position never gets there.
+ * reply ({@link MongoCommons#operationTimeAfter(Document)}). On the single-node replica set these tests use, that reply
+ * already reports the last write, so the check passes on its first try. It retries for 10 seconds before it fails.
  */
 final class HistoryBeforeThePresent {
 
