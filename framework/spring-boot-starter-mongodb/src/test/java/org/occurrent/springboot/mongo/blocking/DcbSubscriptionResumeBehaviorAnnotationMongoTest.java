@@ -18,6 +18,7 @@
 package org.occurrent.springboot.mongo.blocking;
 
 import jakarta.annotation.PostConstruct;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -34,6 +35,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.DcbSnapshotView;
@@ -44,6 +46,11 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -69,6 +76,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -88,11 +96,11 @@ import static org.awaitility.Awaitility.await;
  * context and booting a fresh one against the same durable MongoDB backing data, exactly like a real process restart.
  * <p>
  * Both boots share one MongoDB replica set but use isolated collections per scenario (see {@code bootArgs}), so the
- * three scenarios below can run against the same container without interfering with each other despite the fixed,
+ * scenarios below can run against the same container without interfering with each other despite the fixed,
  * compile-time-constant annotation attributes forcing one subscriber class per scenario.
  * <p>
  * The {@code NOW} scenarios and the {@link Snapshot} scenarios boot a separate application,
- * {@link NowRestartApplication}. It holds a {@link DcbSubscription}, a DCB {@link Projection} and a {@link Snapshot}
+ * {@link NowRestartApplication}. It holds {@link DcbSubscription}s, DCB {@link Projection}s and {@link Snapshot}s
  * returning a {@code DcbSnapshotView}, which share the DCB start-position computation. Each boot
  * writes the events named by {@code test.before-subscribe} before any subscription registers and, from an
  * {@link ApplicationRunner}, the events named by {@code test.after-start}. The last of those is a marker: it is
@@ -195,6 +203,33 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
                 List.of("live-2"));
     }
 
+    // Pausing and resuming is not a restart. The subscription is NOW with SAME_AS_START_AT and a catch-up checkpoint is
+    // planted while it is paused. As with a restart, the resume starts at the present, so historic-2 is not replayed
+    // before live-2.
+    @Test
+    void a_dcb_subscription_with_now_and_same_as_start_at_starts_at_the_present_when_it_is_resumed_although_a_catch_up_checkpoint_was_planted_while_paused() {
+        try (ConfigurableApplicationContext context = SpringApplication.run(NowRestartApplication.class,
+                nowBootArgs("dcb-now-same-as-start-at-paused", "historic-1,historic-2", "live-1"))) {
+            DcbSubscriptionNowSameAsStartAt handler = context.getBean(DcbSubscriptionNowSameAsStartAt.class);
+            awaitHandled(handler, "live-1");
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(handler.checkpointOf("live-1")).isNotNull());
+            Checkpoint live = new StringBasedCheckpoint(handler.checkpointOf("live-1"));
+            CheckpointStorage storage = context.getBean(CheckpointStorage.class);
+            SubscriptionModel subscriptionModel = context.getBean(SubscriptionModel.class);
+
+            subscriptionModel.pauseSubscription("dcb-now-sub-same");
+            await().atMost(ofSeconds(10)).pollInterval(ofMillis(50)).until(() -> subscriptionModel.isPaused("dcb-now-sub-same"));
+            storage.save("dcb-now-sub-same", GlobalCheckpoint.of(1, live, 0, 2));
+            assertThat(GlobalCheckpoint.isGlobalCheckpoint(storage.read("dcb-now-sub-same"))).as("catch-up checkpoint").isTrue();
+            subscriptionModel.resumeSubscription("dcb-now-sub-same").waitUntilStarted(ofSeconds(30));
+            append(context.getBean(DcbEventStore.class), context.getBean(CloudEventConverter.class), new TestEvent("live-2"));
+            awaitHandled(handler, "live-2");
+
+            assertThat(handler.names()).containsExactly("live-1", "live-2");
+        }
+    }
+
     private static void restartNow(String databaseName, Class<? extends Handled> handlerType,
                                    List<String> expectedFirstBoot, List<String> expectedSecondBoot) {
         ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
@@ -222,32 +257,35 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     // versions show which of them were new, so a redelivered live-1 cannot pass for while-down-1.
     @Test
     void a_dcb_snapshot_with_now_and_default_resume_behavior_is_not_delivered_history_on_first_boot_and_is_delivered_events_written_while_down_after_restart() {
-        restartSnapshot("dcb-now-default-snapshot", DcbSnapshotNowDefault.class, 1, List.of(3L), 2, List.of(4L, 5L));
+        restartSnapshot("dcb-now-default-snapshot", DcbSnapshotNowDefault.class, "dcb-now-snapshot-default", 1, List.of(3L), 2, List.of(4L, 5L));
     }
 
     @Test
     void a_dcb_snapshot_with_now_and_same_as_start_at_is_delivered_only_the_present_again_after_restart_but_still_folds_events_written_while_down() {
-        restartSnapshot("dcb-now-same-as-start-at-snapshot", DcbSnapshotNowSameAsStartAt.class, 1, List.of(3L), 1, List.of(5L));
+        restartSnapshot("dcb-now-same-as-start-at-snapshot", DcbSnapshotNowSameAsStartAt.class, null, 1, List.of(3L), 1, List.of(5L));
     }
 
     @Test
     void a_dcb_snapshot_with_beginning_and_default_resume_behavior_is_delivered_history_once_and_only_what_is_new_after_restart() {
-        restartSnapshot("dcb-beginning-default-snapshot", DcbSnapshotBeginningDefault.class, 3, List.of(1L, 2L, 3L), 2, List.of(4L, 5L));
+        restartSnapshot("dcb-beginning-default-snapshot", DcbSnapshotBeginningDefault.class, "dcb-beginning-snapshot-default", 3, List.of(1L, 2L, 3L), 2, List.of(4L, 5L));
     }
 
     @Test
     void a_dcb_snapshot_with_beginning_and_same_as_start_at_is_delivered_the_whole_history_again_after_restart() {
-        restartSnapshot("dcb-beginning-same-as-start-at-snapshot", DcbSnapshotBeginningSameAsStartAt.class, 3, List.of(1L, 2L, 3L), 5, List.of(4L, 5L));
+        restartSnapshot("dcb-beginning-same-as-start-at-snapshot", DcbSnapshotBeginningSameAsStartAt.class, null, 3, List.of(1L, 2L, 3L), 5, List.of(4L, 5L));
     }
 
     private static void restartSnapshot(String databaseName, Class<? extends DcbSnapshotHandled> handlerType,
-                                        int expectedReadsFirstBoot, List<Long> expectedSavedFirstBoot,
+                                        @Nullable String subscriptionIdThatStoresCheckpoint, int expectedReadsFirstBoot, List<Long> expectedSavedFirstBoot,
                                         int expectedReadsSecondBoot, List<Long> expectedSavedSecondBoot) {
         ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
                 nowBootArgs(databaseName, "historic-1,historic-2", "live-1"));
         try {
             DcbSnapshotHandled handler = firstBoot.getBean(handlerType);
             awaitFolded(handler, "live-1");
+            if (subscriptionIdThatStoresCheckpoint != null) {
+                awaitCheckpointed(firstBoot, subscriptionIdThatStoresCheckpoint, "live-1");
+            }
             assertDelivered(handler, expectedReadsFirstBoot, expectedSavedFirstBoot);
         } finally {
             firstBoot.close();
@@ -263,6 +301,20 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         } finally {
             secondBoot.close();
         }
+    }
+
+    // The snapshot's checkpoint is stored after its handler returned, so live-1 being folded does not mean a restart
+    // resumes after it. The SAME_AS_START_AT subscription beside it is delivered live-1 with the checkpoint of that event,
+    // which is what the snapshot's storage holds once live-1 is stored.
+    private static void awaitCheckpointed(ConfigurableApplicationContext context, String subscriptionId, String marker) {
+        DcbSubscriptionNowSameAsStartAt delivery = context.getBean(DcbSubscriptionNowSameAsStartAt.class);
+        CheckpointStorage storage = context.getBean(CheckpointStorage.class);
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> {
+            assertThat(delivery.checkpointOf(marker)).as("checkpoint %s was delivered with", marker).isNotNull();
+            Checkpoint stored = storage.read(subscriptionId);
+            assertThat(stored).as("checkpoint of %s", subscriptionId).isNotNull();
+            assertThat(stored.asString()).isEqualTo(delivery.checkpointOf(marker));
+        });
     }
 
     // Held for a second so a delivery that arrives after the marker would fail the assertion.
@@ -608,9 +660,16 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     }
 
     static class DcbSubscriptionNowSameAsStartAt extends Recording {
+        private final ConcurrentHashMap<String, String> checkpoints = new ConcurrentHashMap<>();
+
         @DcbSubscription(id = "dcb-now-sub-same", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
-        void onEvent(TestEvent event) {
+        void onEvent(TestEvent event, EventMetadata metadata) {
+            metadata.getCheckpoint().ifPresent(checkpoint -> checkpoints.put(event.name(), checkpoint));
             record(event.name());
+        }
+
+        @Nullable String checkpointOf(String name) {
+            return checkpoints.get(name);
         }
     }
 

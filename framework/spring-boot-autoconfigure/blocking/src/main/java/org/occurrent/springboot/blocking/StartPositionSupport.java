@@ -129,11 +129,12 @@ class StartPositionSupport {
     // NOW is where the subscription starts the first time. Under DEFAULT a restart continues from the stored position,
     // which a plain StartAt.now() leaves to the durable layer. Under SAME_AS_START_AT every start is NOW, so the
     // competing consumer and durable layers are told to stay out, as replayThenResumeAgnostic does for a replay start.
+    // The catch-up layer stays out too, since a resume there replays from a catch-up position found in storage
     private StartAt nowThenResume(ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case DEFAULT -> StartAt.now();
             case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                return delegatesItsStart(ctx) ? null : StartAt.now();
+                return delegatesItsStart(ctx) || isCatchupLayer(ctx) ? null : StartAt.now();
             });
         };
     }
@@ -142,9 +143,13 @@ class StartPositionSupport {
         return switch (resumeBehavior) {
             case DEFAULT -> DcbStartAt.now();
             case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> {
-                return delegatesItsStart(ctx) ? null : DcbStartAt.now();
+                return delegatesItsStart(ctx) || isCatchupLayer(ctx) ? null : DcbStartAt.now();
             });
         };
+    }
+
+    private static boolean isCatchupLayer(SubscriptionModelContext ctx) {
+        return CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
     }
 
     void applyStartupWorkarounds() {

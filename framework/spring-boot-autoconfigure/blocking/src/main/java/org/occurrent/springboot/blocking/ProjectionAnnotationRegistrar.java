@@ -441,7 +441,8 @@ class ProjectionAnnotationRegistrar {
     // projection, per the epic's doctrine that a fact about a composition comes from the owner that composed it,
     // never from a probe or an annotation-only predicate:
     //   1. NOW with resumeBehavior SAME_AS_START_AT, whose start keeps no position on Occurrent's durable and
-    //      competing consumer models. An application-supplied model of another type that keeps a position is not told
+    //      competing consumer models and bypasses the catch-up layer, so neither a restart nor a resume reads a
+    //      position a catch-up stored. An application-supplied model of another type that keeps a position is not told
     //      to opt out, and this check cannot see one. Under the default resumeBehavior a restart on the shipped
     //      composition continues from the stored checkpoint, which replays when a catch-up stored it, and this
     //      registrar cannot know which kind a later boot finds.

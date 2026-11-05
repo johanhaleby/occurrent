@@ -18,6 +18,8 @@
 package org.occurrent.springboot.mongo.blocking;
 
 import jakarta.annotation.PostConstruct;
+import org.bson.BsonTimestamp;
+import org.bson.Document;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -41,7 +43,10 @@ import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
@@ -207,38 +212,94 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
     // it, so it is delivered the event written while down but not the history again.
     @Test
     void now_with_default_resume_behavior_continues_from_the_live_checkpoint_an_earlier_beginning_start_left_in_storage() {
-        List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("now-left-over-live", storage ->
-                assertThat(CatchupTimeCheckpoint.isCatchupTimeCheckpoint(storage.read(LEFT_OVER_ID))).as("catch-up checkpoint").isFalse());
+        List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("now-left-over-live", "now", storage -> {});
 
         assertThat(handledBySecondBoot).containsExactly("while-down-1", "live-2");
     }
 
-    // A catch-up that was interrupted leaves a catch-up checkpoint. A test cannot stop a catch-up halfway, so it is
-    // written here instead. A NOW start with DEFAULT continues from it, so the history is replayed.
+    // A catch-up that was interrupted leaves a catch-up checkpoint. A test cannot stop a catch-up halfway, so the
+    // checkpoint a BEGINNING catch-up on this store stores after historic-1 is written here, with the live start the
+    // first boot left in storage. A NOW start with DEFAULT continues from it, so historic-2 is replayed once and
+    // historic-1 is not.
     @Test
     void now_with_default_resume_behavior_replays_from_the_catch_up_checkpoint_an_earlier_beginning_start_left_in_storage() {
-        List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("now-left-over-catch-up", storage -> {
-            Checkpoint live = storage.read(LEFT_OVER_ID);
-            storage.save(LEFT_OVER_ID, CatchupTimeCheckpoint.of("1970-01-01T00:00:00Z", live, "1970-01-01T00:00:00Z"));
-            assertThat(CatchupTimeCheckpoint.isCatchupTimeCheckpoint(storage.read(LEFT_OVER_ID))).as("catch-up checkpoint").isTrue();
-        });
+        List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("now-left-over-catch-up", "now",
+                NowStartAtResumeBehaviorAnnotationMongoTest::leaveCatchUpCheckpointAfterHistoric1);
 
-        // The live start the catch-up resumes from precedes the event written while down, so that event can arrive twice.
-        assertThat(handledBySecondBoot).containsSubsequence("historic-1", "historic-2", "while-down-1", "live-2");
+        // The live start precedes the event written while down, so the replay reaches it and the live feed can deliver it too.
+        assertThat(handledBySecondBoot).containsSubsequence("historic-2", "while-down-1", "live-2");
+        assertThat(handledBySecondBoot).filteredOn(name -> name.startsWith("historic")).containsExactly("historic-2");
+        assertThat(handledBySecondBoot).filteredOn(name -> name.equals("live-2")).hasSize(1);
     }
 
-    private static List<String> restartWithLeftOverCheckpoint(String databaseName, Consumer<CheckpointStorage> inspectAndLeaveBehind) {
+    // Pausing and resuming is not a restart. The subscription is NOW with SAME_AS_START_AT and a catch-up checkpoint is
+    // planted while it is paused. As with a restart, the resume starts at the present, so
+    // historic-2 is not replayed before live-2.
+    @Test
+    void now_with_same_as_start_at_starts_at_the_present_when_it_is_resumed_although_a_catch_up_checkpoint_was_planted_while_paused() {
+        try (ConfigurableApplicationContext context = SpringApplication.run(RestartApplication.class,
+                leftOverBootArgs("now-left-over-paused", "now-same-as-start-at", "historic-1,historic-2", "live-1"))) {
+            LeftOverNowSameAsStartAt handler = context.getBean(LeftOverNowSameAsStartAt.class);
+            awaitHandled(handler, "live-1");
+            CheckpointStorage storage = context.getBean(CheckpointStorage.class);
+            SubscriptionModel subscriptionModel = context.getBean(SubscriptionModel.class);
+
+            subscriptionModel.pauseSubscription(LEFT_OVER_ID);
+            await().atMost(ofSeconds(10)).pollInterval(ofMillis(50)).until(() -> subscriptionModel.isPaused(LEFT_OVER_ID));
+            storage.save(LEFT_OVER_ID, GlobalCheckpoint.of(1, liveFromTheDatabaseClock(context.getBean(MongoOperations.class)), 0, 2));
+            assertThat(isCatchupCheckpoint(storage.read(LEFT_OVER_ID))).as("catch-up checkpoint").isTrue();
+            subscriptionModel.resumeSubscription(LEFT_OVER_ID).waitUntilStarted(ofSeconds(30));
+            context.getBean(ApplicationService.class).execute("live-2", __ -> List.of(new TestEvent("live-2")));
+            awaitHandled(handler, "live-2");
+
+            assertThat(handler.names()).containsExactly("live-1", "live-2");
+        }
+    }
+
+    // With SAME_AS_START_AT the second boot gets only the event written after it started, although the same catch-up
+    // checkpoint is in storage.
+    @Test
+    void now_with_same_as_start_at_does_not_replay_from_a_catch_up_checkpoint_an_earlier_beginning_start_left_in_storage() {
+        List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("now-left-over-same", "now-same-as-start-at",
+                NowStartAtResumeBehaviorAnnotationMongoTest::leaveCatchUpCheckpointAfterHistoric1);
+
+        assertThat(handledBySecondBoot).containsExactly("live-2");
+    }
+
+    // Historic-1 is the first event written, so it is global position 1 and the live start is the one the first boot's handover stored.
+    private static void leaveCatchUpCheckpointAfterHistoric1(CheckpointStorage storage) {
+        Checkpoint live = storage.read(LEFT_OVER_ID);
+        storage.save(LEFT_OVER_ID, GlobalCheckpoint.of(1, live, 0, 2));
+        assertThat(isCatchupCheckpoint(storage.read(LEFT_OVER_ID))).as("catch-up checkpoint").isTrue();
+    }
+
+    // NOW with SAME_AS_START_AT stores no checkpoint, so the live start the planted one carries is read from the database.
+    private static Checkpoint liveFromTheDatabaseClock(MongoOperations mongoOperations) {
+        BsonTimestamp now = mongoOperations.executeCommand("{ hello: 1 }").get("$clusterTime", Document.class).get("clusterTime", BsonTimestamp.class);
+        return new StringBasedCheckpoint("{\"operationTime\": {\"$timestamp\": {\"t\": " + now.getTime() + ", \"i\": " + now.getInc() + "}}}");
+    }
+
+    private static boolean isCatchupCheckpoint(Checkpoint checkpoint) {
+        return GlobalCheckpoint.isGlobalCheckpoint(checkpoint) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(checkpoint);
+    }
+
+    private static List<String> restartWithLeftOverCheckpoint(String databaseName, String secondBootStartsAt, Consumer<CheckpointStorage> inspectAndLeaveBehind) {
         try (ConfigurableApplicationContext firstBoot = SpringApplication.run(RestartApplication.class,
                 leftOverBootArgs(databaseName, "beginning", "historic-1,historic-2", ""))) {
             awaitHandled(firstBoot.getBean(LeftOverBeginning.class), "historic-2");
             CheckpointStorage checkpointStorage = firstBoot.getBean(CheckpointStorage.class);
-            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                    assertThat(checkpointStorage.exists(LEFT_OVER_ID)).isTrue());
+            // The catch-up stores a checkpoint of its own while it replays, so one existing says nothing about the handover.
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> {
+                Checkpoint stored = checkpointStorage.read(LEFT_OVER_ID);
+                assertThat(stored).isNotNull();
+                assertThat(isCatchupCheckpoint(stored)).as("catch-up checkpoint %s", stored.asString()).isFalse();
+            });
             inspectAndLeaveBehind.accept(checkpointStorage);
         }
         try (ConfigurableApplicationContext secondBoot = SpringApplication.run(RestartApplication.class,
-                leftOverBootArgs(databaseName, "now", "while-down-1", "live-2"))) {
-            Handled handler = secondBoot.getBean(LeftOverNow.class);
+                leftOverBootArgs(databaseName, secondBootStartsAt, "while-down-1", "live-2"))) {
+            Class<? extends Handled> handlerType = secondBootStartsAt.equals("now") ? LeftOverNow.class : LeftOverNowSameAsStartAt.class;
+            Handled handler = secondBoot.getBean(handlerType);
             awaitHandled(handler, "live-2");
             return handler.names();
         }
@@ -374,6 +435,12 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
         }
 
         @Bean
+        @ConditionalOnProperty(name = "test.left-over", havingValue = "now-same-as-start-at")
+        LeftOverNowSameAsStartAt leftOverNowSameAsStartAt() {
+            return new LeftOverNowSameAsStartAt();
+        }
+
+        @Bean
         SnapshotNowDefault snapshotNowDefault(MongoOperations mongoOperations) {
             return new SnapshotNowDefault(mongoOperations);
         }
@@ -466,6 +533,13 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
 
     static class LeftOverNow extends Recording {
         @Subscription(id = LEFT_OVER_ID, startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.DEFAULT)
+        void on(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class LeftOverNowSameAsStartAt extends Recording {
+        @Subscription(id = LEFT_OVER_ID, startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
         void on(TestEvent event) {
             record(event.name());
         }
