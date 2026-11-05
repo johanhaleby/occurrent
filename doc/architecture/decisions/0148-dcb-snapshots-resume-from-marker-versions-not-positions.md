@@ -115,8 +115,8 @@ an event here.
 #### 3. Reserve the position inside the transaction
 
 If every append, DCB and stream, writes the counter inside its transaction, positions become commit order. A reader that
-sees 42 then knows that 41 either committed before it or never will. Spring's outer-transaction mode already works this
-way, since the counter update joins the caller's transaction.
+sees 42 then knows that 41 either committed before it or never will. Spring's outer-transaction mode worked this way in
+0.34.0, since the counter update joined the caller's transaction there.
 
 The cost is throughput under contention. Inside a transaction, MongoDB doesn't wait for a document another transaction
 has modified. It aborts the second transaction with a `WriteConflict`. Outside a transaction the server retries the same
@@ -980,7 +980,3 @@ live start (ADR 144) in the same causal session, with `afterClusterTime` at or a
     its majority commit waits for that point to be majority-committed. Whether the commit of a read-only transaction
     waits for majority at all, and whether the bound stops that wait, is settled by a test with a `failCommand` fail
     point.
-- On the Spring and reactor stores, a store's own transaction set to `REQUIRES_NEW` or `NOT_SUPPORTED` can leave a
-  committed event above the counter when a caller rolls back, as ADR 149's fifth assumption says. So a replay-only
-  catch-up's head can sit below a committed event until the head is the highest committed position instead of the
-  counter, or that path is closed.

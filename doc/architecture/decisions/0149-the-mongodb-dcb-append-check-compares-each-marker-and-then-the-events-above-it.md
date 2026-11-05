@@ -206,29 +206,24 @@ same hole, and the tear is a rarer path beside it. Fourth, the read returned the
 `skip` or a position bound may not return E, and in a probe a torn token from a read with `limit`, `skip` or
 `upToPosition` passed where the sum check refused it. With no tear the same read passes on the sum too, because the
 token doesn't depend on the window, as `DcbReadOptions` says. Fifth, no position reservation was lost. A store reserves
-an append's positions with an update of the counter. The native store runs the update outside any transaction, also when
-the append joins a caller's transaction. The Spring and reactor stores do when they run the transaction themselves.
-Outside a transaction the update waits for write concern majority. It takes the write concern of the database the store
-uses, which falls back to the client's, and sets `w` to majority on it, so a w:1 on either of those or as the server's
-default doesn't apply to this update, and a `wtimeout` on them does. A write concern set on a Spring template doesn't
-reach it, since the update goes to the collection. Below majority, a failover can lose that update while the append
-commits E above the counter. Every read stops at the counter, a read with `withVersions()` too, so a read can hold E's
-markers and miss
-E, and a read after that read's versions doesn't return E. A full read, and a read after versions saved before E, misses
-E until the counter reaches it. An append that reserves E's position and gets past its condition fails with
-`DuplicateCloudEventException`, whatever its boundary. A conditional append on the token that reserves another position
-can pass. In a probe it passed when a reservation below E's was lost too, and on the native store when an unrelated
-append took E's position first. With no tear the sum is equal, so the sum check passes the same append, unless a later
-event moved a marker of the criteria. The sum refuses then, and this check passes when that event doesn't match. On the
-Spring and reactor stores, the update in a caller's transaction joins it and commits with the event, so a failover can't
-lose it alone. An operation inside a transaction can't set a write concern of its own, so this path stays as it was. A
-stepdown on both stores, with that transaction at majority and at w:1, kept E and the counter together,
-or lost both when a w:1 commit was rolled back. The exception is a store whose own transaction manager uses the same
-database factory as the caller's and whose transaction is set to `REQUIRES_NEW` or `NOT_SUPPORTED`. The update joins the
-caller's transaction and E commits apart from it, so in a probe on both stores a caller's rollback left E above the
-counter with no failover. An append in a caller's transaction that reserves E's position after another append lost its
-reservation rolls its own back with the duplicate, so in a probe that set the counter by hand such appends kept failing
-at E's position until an append in the store's own transaction moved the counter. The probes of the loss itself ran
+an append's positions with an update of the counter, and every store runs that update outside any transaction, also
+when the append joins a caller's transaction. The update waits for write concern majority. It takes the write concern
+of the database the store uses, which falls back to the client's, and sets `w` to majority and `wtimeout` to
+`markerVersionsCommitTimeout` on it, so neither a w:1 nor a `wtimeout` on either of those, nor a w:1 as the server's
+default, applies to this update. A write concern set on a Spring template doesn't reach it, since the update doesn't go
+through the template. Below majority, a failover can lose that update while the append commits E above the counter.
+Every read outside a caller's transaction stops at the counter, a read with `withVersions()` too, so a read can hold
+E's markers and miss E, and a read after that read's versions doesn't return E. A full read, and a read after versions
+saved before E, misses E until the counter reaches it. An append that reserves E's position and gets past its condition
+fails with `DuplicateCloudEventException`, whatever its boundary. A conditional append on the token that reserves
+another position can pass. In a probe it passed when a reservation below E's was lost too, and on the native store when
+an unrelated append took E's position first. With no tear the sum is equal, so the sum check passes the same append,
+unless a later event moved a marker of the criteria. The sum refuses then, and this check passes when that event
+doesn't match. In 0.34.0 the update on the Spring and reactor stores joined a caller's transaction and committed with
+the event. A store whose own transaction manager used the same database factory as the caller's, with its transaction
+set to `REQUIRES_NEW` or `NOT_SUPPORTED`, committed E apart from that transaction, so a caller's rollback left E above
+the counter with no failover. Now the update commits before E's transaction starts, and a test on each Spring store
+rolls a caller's transaction back and finds the reserved position taken and no event. The probes of the loss itself ran
 before the update waited for majority, and used a stepdown, and a raw `$inc` standing in for the reservation below E's.
 All three stores lost the update at w:1 on three members, and the native store did at w:2 on five members and on a
 primary, a secondary and an arbiter with no write concern set. The Spring store did on three data-bearing members with
@@ -238,11 +233,13 @@ primary down with an append's update not yet replicated and a client at w:1, and
 the wait. No failover probe ran through a mongos.
 
 On a replica set of a primary, a secondary and an arbiter with the secondary down, a majority can't acknowledge the
-update, where appends used to complete in 6 to 18 ms. In a probe on all three stores, an append with no timeout was
-still waiting after 25 seconds and completed when the secondary came back. `wtimeoutMS=2000` and `timeoutMS=2000` on the
-connection string failed it after 2 seconds, and `socketTimeoutMS=2000` after 4. On the Spring and reactor stores a
-write concern with a `wtimeout` on the database factory failed it after 2 seconds too, and one on a template didn't, for
-the reason above. An append that fails this way writes no event, and the positions it reserved can stay unused.
+update, where appends used to complete in 6 to 18 ms. In a probe on all three stores, run before the store set a
+`wtimeout` of its own, an append with no timeout was still waiting after 25 seconds and completed when the secondary
+came back. `wtimeoutMS=2000` and `timeoutMS=2000` on the connection string failed it after 2 seconds, and
+`socketTimeoutMS=2000` after 4. The store now sets the update's `wtimeout` to `markerVersionsCommitTimeout`, 5 seconds
+by default, in place of any `wtimeout` on the client, the database or a Spring database factory. A test on each store
+asserts the `wtimeout` the update sends, and no probe on such a set has run since. An append that fails this way writes
+no event, and the positions it reserved can stay unused.
 
 ### Pruning markers
 
