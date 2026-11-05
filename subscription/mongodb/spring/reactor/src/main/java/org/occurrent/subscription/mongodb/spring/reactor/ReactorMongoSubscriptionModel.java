@@ -380,8 +380,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     private void runEnded(InternalSubscription internalSubscription, Run run, Throwable throwable) {
         String subscriptionId = internalSubscription.subscriptionId;
-        log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
+        // Closed before the log, so a pause or a cancel that comes after the failure doesn't take its start over
         boolean closedHere = run.close();
+        log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
         // A dead subscription must not count as running, or isRunning(id) would lie and the id couldn't be reused
         // without an explicit cancelSubscription(). Only while this run is still the subscription's, since a pause
         // and a resume, or a cancel and a new subscription with the same id, start a newer run. Without the monitor,
@@ -389,7 +390,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         runningSubscriptions.computeIfPresent(subscriptionId, (id, current) -> current.run == run ? null : current);
         // After the id is free, so a caller that reacts to the failure can subscribe with it again. No-op if the
         // subscription had already started, otherwise this keeps waitUntilStarted() from hanging forever. Not for a run
-        // a pause closed first, since a resume starts the subscription again, and a cancel fails the start itself
+        // a pause closed first, since a resume starts the subscription again, or a cancel or a shutdown, which fails it itself
         if (closedHere) {
             run.failedToStart(throwable);
         }
@@ -1036,8 +1037,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             }
             pausedSubscriptions.remove(subscriptionId);
         }
-        if (run != null) {
-            run.close();
+        if (run != null && run.close()) {
             run.failedToStart(new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " was cancelled before it started."));
         }
         return Mono.empty();
@@ -1066,8 +1066,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             pausedSubscriptions.clear();
         }
         runs.forEach(run -> {
-            run.close();
-            run.failedToStart(new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " was shut down before the subscription started"));
+            if (run.close()) {
+                run.failedToStart(new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " was shut down before the subscription started"));
+            }
         });
     }
 
@@ -1284,7 +1285,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             reads.update(disposable);
         }
 
-        // True for the call that closed it
+        // True for the call that closed it, which is the one that says how the start ended
         boolean close() {
             boolean wasOpen;
             synchronized (this) {
