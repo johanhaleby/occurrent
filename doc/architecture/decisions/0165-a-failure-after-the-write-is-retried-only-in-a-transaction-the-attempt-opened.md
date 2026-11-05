@@ -134,10 +134,11 @@ that matches the failure, on both stacks unless a row says otherwise. Every Spri
 | Spring, `REQUIRES_NEW` | the caller's | | the command runs again, no exception | 1 |
 | Spring, `REQUIRED` | the caller's, on another transaction manager | | the command runs again, no exception | 1 |
 | Spring, `NOT_SUPPORTED` | the caller's | catches it and commits | the commit succeeds | 0 |
-| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none | | gets the failure | 0 |
+| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none | | gets the failure | 0 on a stream, 1 on a DCB boundary |
 
 The Spring MongoDB stores set `SessionSynchronization.ALWAYS` themselves, so with no transaction reported the store still
-writes in a synchronization-based transaction that rolls back. In the last two rows a strategy that matched the failure used
+writes to a stream in a synchronization-based transaction that rolls back. In the last row a DCB append stays on both
+stacks. I ran that after merging main at 4485a0462, and before that merge the append rolled back too. In the last two rows a strategy that matched the failure used
 to run the command again and store one event with no exception. That retry is now withheld, so those rows are a regression
 that loses a retry rather than an event.
 

@@ -79,8 +79,8 @@ import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 /**
  * The executor against a real {@link SpringMongoEventStore}. A transaction it owns is undone when a synchronous handler
  * fails, so the command runs again and leaves one event and one side effect. Under {@code PROPAGATION_NOT_SUPPORTED} it
- * opens no transaction and reports none, yet the store's session synchronization is active and still rolls the write back
- * when the handler fails. A transaction the caller opened changes nothing for an executor that opens its own, on
+ * opens no transaction and reports none, yet the store's session synchronization is active and still rolls a write to a
+ * stream back when the handler fails. A DCB append stays there, and the command doesn't run again. A transaction the caller opened changes nothing for an executor that opens its own, on
  * {@code PROPAGATION_REQUIRES_NEW} or on another transaction manager. In a transaction the caller opened on the same
  * manager, a failing handler stops the handlers behind it and keeps the caller from committing, unless the manager is set
  * not to mark a transaction rollback-only after a failure in a part of it.
@@ -183,7 +183,7 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
     }
 
     @Test
-    void under_propagation_not_supported_the_store_rolls_back_the_append_of_a_failing_handler_although_the_executor_reports_no_transaction_so_the_command_is_not_run_again_on_a_dcb_boundary() {
+    void under_propagation_not_supported_the_append_of_a_failing_handler_stays_and_the_command_is_not_run_again_on_a_dcb_boundary() {
         DcbAppendConditionNotFulfilledException conflict = new DcbAppendConditionNotFulfilledException(DcbAppendCondition.failIfEventsMatch(CRITERIA), 1);
         var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
                 .tagGenerator(event -> Set.of(TAG))
@@ -195,7 +195,7 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
 
         assertThat(thrown).as("[exception reaching the caller]").isSameAs(conflict);
         assertThat(decisions.get()).as("[domain function runs]").isEqualTo(1);
-        assertThat(eventsInBoundary()).as("[events in the boundary]").isEmpty();
+        assertThat(eventsInBoundary()).as("[events in the boundary]").containsExactlyElementsOf(decidedEventIds);
     }
 
     @Test

@@ -1051,9 +1051,9 @@ subscriptions behaves as before.
 
 - If you catch nothing around `execute` because a retry used to hide a handler's failure, handle it now. What's stored by
   then depends on your executor, its propagation and the store, so read it back before you run the command again. With
-  `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring MongoDB stores the write often rolled
-  back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or `PROPAGATION_NEVER`, and there a retry that used to
-  work is gone.
+  `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring MongoDB stores a write to a stream
+  often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or `PROPAGATION_NEVER`, and there a retry
+  that used to work is gone. A DCB append on those three propagations stays.
   [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
   so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open
