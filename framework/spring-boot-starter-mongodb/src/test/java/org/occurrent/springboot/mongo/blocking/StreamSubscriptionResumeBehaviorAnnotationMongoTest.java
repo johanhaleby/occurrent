@@ -32,6 +32,9 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -45,10 +48,12 @@ import tools.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -62,10 +67,14 @@ import static org.awaitility.Awaitility.await;
  * durable MongoDB backing data, rather than pausing and resuming the same running subscription model.
  * <p>
  * A third scenario below uses only the annotation's plain defaults (no explicit {@code startAt}/{@code resumeBehavior}),
- * which is the most common real-world usage and had no restart coverage at all before this test. The {@code NOW}
- * start position is deliberately not covered here: unlike {@code DEFAULT}, its start-position computation is a
- * hard {@code StartAt.now()} on every boot with no dynamic, storage-aware wrapping, so its restart semantics are a
- * distinct question from {@code resumeBehavior} and are not covered by this matrix.
+ * which is the most common real-world usage and had no restart coverage at all before this test.
+ * <p>
+ * The {@code NOW} scenarios boot a separate application, {@link NowRestartApplication}, because they need events
+ * written while nothing is subscribed and a marker written after the subscribers are up. Each boot writes the events
+ * named by {@code test.before-subscribe} before any subscription registers and, from an {@link ApplicationRunner},
+ * the events named by {@code test.after-start}. The last of those is a marker: it is written after everything else, so
+ * once a subscriber has received it, whatever it was going to deliver for the events before it has arrived and the
+ * whole delivered list can be asserted.
  */
 @DisplayName("StreamSubscription resumeBehavior across an application restart")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -134,6 +143,54 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
         } finally {
             ctx2.close();
         }
+    }
+
+    @Test
+    void now_with_default_resume_behavior_ignores_history_on_first_boot_and_receives_events_written_while_down_after_restart() {
+        restartNow("stream-resume-now-default", NowDefaultSubscriber.class,
+                List.of("live-1"),
+                List.of("while-down-1", "live-2"));
+    }
+
+    @Test
+    void now_with_same_as_start_at_starts_at_the_present_again_after_restart_and_misses_events_written_while_down() {
+        restartNow("stream-resume-now-same-as-start-at", NowSameAsStartAtSubscriber.class,
+                List.of("live-1"),
+                List.of("live-2"));
+    }
+
+    private static <S extends RecordingSubscriber> void restartNow(String databaseName, Class<S> subscriberType,
+                                                                    List<String> expectedFirstBoot, List<String> expectedSecondBoot) {
+        ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
+                nowBootArgs(databaseName, "historic-1,historic-2", "live-1"));
+        try {
+            S subscriber = firstBoot.getBean(subscriberType);
+            awaitDelivered(subscriber, "live-1");
+            assertThat(subscriber.names()).containsExactlyElementsOf(expectedFirstBoot);
+        } finally {
+            firstBoot.close();
+        }
+
+        ConfigurableApplicationContext secondBoot = SpringApplication.run(NowRestartApplication.class,
+                nowBootArgs(databaseName, "while-down-1", "live-2"));
+        try {
+            S subscriber = secondBoot.getBean(subscriberType);
+            awaitDelivered(subscriber, "live-2");
+            assertThat(subscriber.names()).containsExactlyElementsOf(expectedSecondBoot);
+        } finally {
+            secondBoot.close();
+        }
+    }
+
+    private static void awaitDelivered(RecordingSubscriber subscriber, String marker) {
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(subscriber.names()).contains(marker));
+    }
+
+    private static String[] nowBootArgs(String databaseName, String beforeSubscribe, String afterStart) {
+        return Stream.concat(Arrays.stream(bootArgs(databaseName)), Stream.of(
+                "--test.before-subscribe=" + beforeSubscribe,
+                "--test.after-start=" + afterStart)).toArray(String[]::new);
     }
 
     private static String[] bootArgs(String databaseName) {
@@ -224,6 +281,38 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
         }
     }
 
+    @SpringBootApplication
+    @EnableOccurrent
+    static class NowRestartApplication {
+
+        @Bean
+        CloudEventTypeMapper<TestEvent> testEventCloudEventTypeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter(CloudEventTypeMapper<TestEvent> typeMapper) {
+            return newConverter(typeMapper);
+        }
+
+        @Bean
+        NowEventWriter nowEventWriter(ApplicationService<TestEvent> applicationService,
+                                      @Value("${test.before-subscribe}") String beforeSubscribe,
+                                      @Value("${test.after-start}") String afterStart) {
+            return new NowEventWriter(applicationService, beforeSubscribe, afterStart);
+        }
+
+        @Bean
+        NowDefaultSubscriber nowDefaultSubscriber() {
+            return new NowDefaultSubscriber();
+        }
+
+        @Bean
+        NowSameAsStartAtSubscriber nowSameAsStartAtSubscriber() {
+            return new NowSameAsStartAtSubscriber();
+        }
+    }
+
     private static CloudEventConverter<TestEvent> newConverter(CloudEventTypeMapper<TestEvent> typeMapper) {
         return new JacksonCloudEventConverter.Builder<TestEvent>(new ObjectMapper(), URI.create("urn:occurrent:stream-resume-behavior"))
                 .typeMapper(typeMapper)
@@ -262,6 +351,36 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
         void appendWhileDown() {
             applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("while-down-1")));
             applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("plain-while-down-1")));
+        }
+    }
+
+    static class NowEventWriter implements ApplicationRunner {
+        private final ApplicationService<TestEvent> applicationService;
+        private final List<String> beforeSubscribe;
+        private final List<String> afterStart;
+
+        NowEventWriter(ApplicationService<TestEvent> applicationService, String beforeSubscribe, String afterStart) {
+            this.applicationService = applicationService;
+            this.beforeSubscribe = List.of(beforeSubscribe.split(","));
+            this.afterStart = List.of(afterStart.split(","));
+        }
+
+        // Subscriptions register once every singleton exists, so these are written before any of them starts. A
+        // subscription starting at the present can still receive what the same MongoClient wrote up to a second
+        // earlier, so the pause keeps them out of reach of the NOW subscribers.
+        @PostConstruct
+        void writeBeforeSubscribe() throws InterruptedException {
+            beforeSubscribe.forEach(this::write);
+            Thread.sleep(1500);
+        }
+
+        @Override
+        public void run(ApplicationArguments args) {
+            afterStart.forEach(this::write);
+        }
+
+        private void write(String name) {
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent(name)));
         }
     }
 
@@ -310,6 +429,32 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
         List<TestEvent> received() {
             return received;
+        }
+    }
+
+    abstract static class RecordingSubscriber {
+        private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        void record(TestEvent event) {
+            received.add(event);
+        }
+
+        List<String> names() {
+            return received.stream().map(TestEvent::name).toList();
+        }
+    }
+
+    static class NowDefaultSubscriber extends RecordingSubscriber {
+        @StreamSubscription(id = "stream-resume-now-default", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.DEFAULT)
+        void on(TestEvent event) {
+            record(event);
+        }
+    }
+
+    static class NowSameAsStartAtSubscriber extends RecordingSubscriber {
+        @StreamSubscription(id = "stream-resume-now-same-as-start-at", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        void on(TestEvent event) {
+            record(event);
         }
     }
 

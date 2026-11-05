@@ -16,19 +16,28 @@
 
 package org.occurrent.application.service.spring;
 
+import com.mongodb.MongoCommandException;
+import com.mongodb.MongoException;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.retry.RetryStrategy;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.ClassUtils;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /**
@@ -57,22 +66,46 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * that joins an open transaction can't retry one itself, and only its owner can start a fresh one. See ADR 0074.
      * <p>
      * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
-     * stands in for exactly that retry once the store has to give it up. Every append increments one global position
-     * counter, so under concurrency the last writer can need to wait out all the others, and a smaller budget is not
-     * enough. Five attempts, borrowed from the unrelated append-condition retry, failed a six-way contention test.
+     * stands in for exactly that retry once the store has to give it up. Appends of the same type increment the same
+     * conflict marker, so under concurrency the last writer can need to wait out all the others, and a smaller budget
+     * is not enough. 240 attempts is about two minutes of waiting, like the 120 seconds a native
+     * {@code withTransaction} call gives the native store. Five attempts, borrowed from the unrelated append-condition
+     * retry, failed a six-way contention test. An executor that uses this default also schedules no retry once 120
+     * seconds have passed since the call started, so attempts that are slow themselves, for example while MongoDB has
+     * no primary, don't stretch the budget to hours. A retry passed to a constructor is used as given, this default
+     * included.
      * <p>
-     * {@link DataIntegrityViolationException} is matched as well as {@link TransientDataAccessException} because
-     * MongoDB labels a WriteConflict transient while Spring translates it to the non-transient type, so the obvious
-     * predicate would miss the most common conflict there is. A genuine integrity violation is therefore retried too,
-     * which is wasteful rather than wrong since it fails the same way every attempt.
+     * A conflict is a {@link TransientDataAccessException}, or any exception with the {@code TransientTransactionError}
+     * label that MongoDB puts on an error a fresh transaction can get past, found anywhere in its cause chain. That
+     * label is what the driver's own {@code withTransaction} retries on. The label is needed because Spring translates
+     * the most common conflict, a WriteConflict, to {@link org.springframework.dao.DataIntegrityViolationException},
+     * which is not transient. Retrying that type would retry a genuine duplicate key or validation error for two
+     * minutes, running the transaction callback again each time along with any side effect it has outside the
+     * transaction. Without the MongoDB driver on the classpath only the transient type applies.
+     * <p>
+     * A commit that fails with that label is retried at most twice, three runs in all. At the third failed commit the
+     * executor throws a {@link TransactionSystemException} that names the error and the count. An error thrown from the
+     * callback, a transaction exception included, keeps the full budget. A retry passed to a constructor is used as given and has no such cap. See ADR 0164.
+     * <p>
+     * Three things are not retried. A commit that fails with {@code UnknownTransactionCommitResult} may have gone
+     * through, so running the callback again could apply it twice. A duplicate key or validation error is a result,
+     * not a conflict. A duplicate from a write made outside any transaction has no label either, which 0.34.0 did
+     * retry.
      */
-    private static final RetryStrategy DEFAULT_CONFLICT_RETRY = RetryStrategy
+    private static final RetryStrategy.Retry DEFAULT_CONFLICT_RETRY = RetryStrategy
             .exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
-            .maxAttempts(15)
-            .retryIf(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException);
+            .maxAttempts(240)
+            .retryIf(SpringTransactionExecutor::isTransientConflict);
+
+    private static final boolean MONGO_DRIVER_PRESENT = ClassUtils.isPresent("com.mongodb.MongoException", SpringTransactionExecutor.class.getClassLoader());
+
+    private static final Duration DEFAULT_CONFLICT_DEADLINE = Duration.ofSeconds(120);
+
+    private static final int MAX_FAILED_COMMITS = 3;
 
     private final TransactionTemplate transactionTemplate;
     private final RetryStrategy conflictRetry;
+    private final boolean stopAfterDefaultDeadline;
 
     /**
      * Create an executor that runs work inside transactions managed by the supplied
@@ -91,7 +124,7 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * @param transactionTemplate The transaction template to run work through.
      */
     public SpringTransactionExecutor(TransactionTemplate transactionTemplate) {
-        this(transactionTemplate, DEFAULT_CONFLICT_RETRY);
+        this(transactionTemplate, DEFAULT_CONFLICT_RETRY, true);
     }
 
     /**
@@ -118,13 +151,21 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * @param conflictRetry       The retry policy to apply when this executor opens the transaction.
      */
     public SpringTransactionExecutor(TransactionTemplate transactionTemplate, RetryStrategy conflictRetry) {
+        this(transactionTemplate, conflictRetry, false);
+    }
+
+    private SpringTransactionExecutor(TransactionTemplate transactionTemplate, RetryStrategy conflictRetry, boolean stopAfterDefaultDeadline) {
+        this.stopAfterDefaultDeadline = stopAfterDefaultDeadline;
         this.transactionTemplate = Objects.requireNonNull(transactionTemplate, "transactionTemplate cannot be null");
         this.conflictRetry = Objects.requireNonNull(conflictRetry, "conflictRetry cannot be null");
     }
 
     /**
-     * The conflict-retry policy applied when this executor opens the transaction: 15 attempts with exponential
-     * backoff from 10ms to 500ms, matching the event store's own transient-conflict retry.
+     * The conflict-retry policy applied when this executor opens the transaction: 240 attempts in total with
+     * exponential backoff from 10ms to 500ms, about two minutes of waiting, matching the event store's own
+     * transient-conflict retry. It counts attempts only. An executor built without a retry of its own adds a
+     * 120 second deadline per call and a cap of three failed commits on top, which this policy does not include when
+     * you pass it to a constructor.
      *
      * @return The default retry policy.
      */
@@ -151,7 +192,102 @@ public class SpringTransactionExecutor implements TransactionExecutor {
             // again, so the error goes to that owner. See ADR 0074.
             return transactionTemplate.execute(status -> action.apply(status.isNewTransaction()));
         }
-        return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.apply(status.isNewTransaction())));
+        if (!stopAfterDefaultDeadline) {
+            return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.apply(status.isNewTransaction())));
+        }
+        AtomicInteger failedCommits = new AtomicInteger();
+        return DEFAULT_CONFLICT_RETRY.mapRetryPredicate(withinDeadline()).execute(() -> {
+            AtomicReference<Throwable> actionFailure = new AtomicReference<>();
+            try {
+                return transactionTemplate.execute(status -> {
+                    try {
+                        return action.apply(status.isNewTransaction());
+                    } catch (RuntimeException e) {
+                        actionFailure.set(e);
+                        throw e;
+                    }
+                });
+            } catch (TransactionSystemException e) {
+                throw e == actionFailure.get() ? e : commitFailed(e, failedCommits);
+            }
+        });
+    }
+
+    private static TransactionSystemException commitFailed(TransactionSystemException failure, AtomicInteger failedCommits) {
+        return isTransientConflict(failure) && failedCommits.incrementAndGet() >= MAX_FAILED_COMMITS
+                ? new CommitRetriesExhausted(failure, failedCommits.get())
+                : failure;
+    }
+
+    private static boolean isTransientConflict(Throwable throwable) {
+        if (throwable instanceof CommitRetriesExhausted) {
+            return false;
+        }
+        Boolean byLabel = MONGO_DRIVER_PRESENT ? MongoErrorLabels.verdict(throwable) : null;
+        return byLabel != null ? byLabel : throwable instanceof TransientDataAccessException;
+    }
+
+    /**
+     * Replaces the commit failure that used up the cap, so that the default retry stops.
+     */
+    private static final class CommitRetriesExhausted extends TransactionSystemException {
+        CommitRetriesExhausted(TransactionSystemException failure, int failedCommits) {
+            super(MongoErrorLabels.describeCommitFailure(failure, failedCommits), failure);
+        }
+    }
+
+    /**
+     * Kept in a class of its own so that {@link SpringTransactionExecutor} loads when the driver is absent.
+     * This class is not touched then.
+     */
+    private static final class MongoErrorLabels {
+        private static final int NO_SUCH_TRANSACTION = 251;
+
+        /**
+         * Names the error that failed the commit. For NoSuchTransaction it also lists the three causes, because the
+         * code alone does not tell a failover, an expired transaction and a swallowed write error apart.
+         */
+        static String describeCommitFailure(Throwable failure, int failedCommits) {
+            Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+            String error = "failed";
+            int code = 0;
+            for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
+                if (cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
+                    code = mongoException.getCode();
+                    error = "failed with " + (mongoException instanceof MongoCommandException command ? command.getErrorCodeName() + " " : "") + "(code " + code + ")";
+                    break;
+                }
+            }
+            String message = "The commit " + error + " after " + failedCommits + " failed commits, so it was not retried again.";
+            return code == NO_SUCH_TRANSACTION
+                    ? message + " MongoDB no longer had the transaction when the commit arrived. That follows a failover, a transaction that outlived transactionLifetimeLimitSeconds, or a write error such as a duplicate key that the transaction body caught and swallowed."
+                    : message;
+        }
+
+        /**
+         * What the error labels in the cause chain say, or {@code null} when they say nothing. The unknown commit result
+         * label anywhere in the chain wins over the transient label, so a commit that may have gone through is not
+         * retried. The driver's {@code withTransaction} also looks at the unknown commit result label first, but it
+         * retries the commit and not the callback, and the executor can only run the callback again.
+         */
+        static Boolean verdict(Throwable throwable) {
+            Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+            boolean transientLabel = false;
+            for (Throwable cause = throwable; cause != null && seen.add(cause); cause = cause.getCause()) {
+                if (cause instanceof MongoException mongoException) {
+                    if (mongoException.hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL)) {
+                        return false;
+                    }
+                    transientLabel |= mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+                }
+            }
+            return transientLabel ? Boolean.TRUE : null;
+        }
+    }
+
+    private static Function<Predicate<Throwable>, Predicate<Throwable>> withinDeadline() {
+        long deadlineNanos = System.nanoTime() + DEFAULT_CONFLICT_DEADLINE.toNanos();
+        return retryable -> throwable -> retryable.test(throwable) && System.nanoTime() - deadlineNanos < 0;
     }
 
     /**
