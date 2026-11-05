@@ -126,8 +126,10 @@ public interface TransactionExecutor {
     /**
      * Whether the application service may read and decide before it calls {@link #inTransaction(Supplier)}, and run only
      * the append and the synchronous dispatch in it. A DCB application service with synchronous subscriptions asks this
-     * before every attempt, since a store reports marker versions only for a read outside a transaction, and a snapshot
-     * decider saves its snapshot only at those versions.
+     * before an attempt when {@link #isTransactional()} answers {@code false}. When {@link #isTransactional()} answers
+     * {@code true} the service reads inside {@link #inTransaction(Supplier)} and doesn't ask. Reading before matters
+     * because a store reports marker versions only for a read outside a transaction, and a snapshot decider saves its
+     * snapshot only at those versions.
      * <p>
      * Answer {@code false} when a read on this thread right now can bind a resource that {@link #inTransaction(Supplier)}
      * then fails on. Spring's MongoDB template, for example, binds a session to the caller's transaction synchronization when

@@ -975,7 +975,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   pass to `retryStrategy` on the blocking builder or `retry` on the reactive builder.
 - In a Spring scope of yours that opens no transaction, on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`, the
   service reads and decides in the executor, as in 0.34.0. A read before it would bind a session to that scope, and a
-  Spring executor on `PROPAGATION_NOT_SUPPORTED` or `PROPAGATION_NEVER` fails on that session before the append.
+  Spring executor on `PROPAGATION_NEVER`, or on the blocking stack one on `PROPAGATION_NOT_SUPPORTED`, fails on that
+  session before the append.
 - An executor of your own keeps the read and the decision in its transaction, as in 0.34.0, since
   `allowsReadBeforeTransaction()` answers `false` by default. A decider on it saves no snapshot when that transaction is
   open. If your executor still works after a read that ran before `inTransaction` on the same thread, override the
@@ -1068,8 +1069,8 @@ subscriptions behaves as before.
   MongoDB stores a write to a stream often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or
   `PROPAGATION_NEVER`, and there a retry that used to work is gone. When `execute` runs outside every Spring transaction
   scope of yours, a DCB append on those three propagations stays. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or
-  `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, it rolls back as a write to a stream does. I ran that on the
-  blocking stack only.
+  `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, it rolls back as a write to a stream does when you don't
+  catch the failure inside that scope. I ran that on the blocking stack only.
   [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
   so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open

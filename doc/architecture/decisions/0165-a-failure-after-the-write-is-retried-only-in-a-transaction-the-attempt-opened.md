@@ -134,7 +134,7 @@ that matches the failure, on both stacks unless a row says otherwise. Every Spri
 | `NativeMongoTransactionExecutor` | the caller's | catches it and commits | the commit succeeds | 1 |
 | Spring, `REQUIRES_NEW` | the caller's | | the command runs again, no exception | 1 |
 | Spring, `REQUIRED` | the caller's, on another transaction manager | | the command runs again, no exception | 1 |
-| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, in a Spring scope of the caller's on `NOT_SUPPORTED` or `SUPPORTS` | | gets the failure | 0, blocking only |
+| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, in a Spring scope of the caller's on `NOT_SUPPORTED` or `SUPPORTS` | doesn't catch it | gets the failure | 0, blocking only |
 | Spring, `NOT_SUPPORTED` | the caller's | catches it and commits | the commit succeeds | 0 |
 | Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, and no Spring scope | | gets the failure | 0 on a stream, 1 on a DCB boundary |
 
@@ -145,10 +145,11 @@ its executor, and the store reserves positions outside every transaction, so not
 and the store commits it in a transaction of its own. I ran that after merging main at 4485a0462, and before that merge
 the append rolled back too. In a Spring scope of the caller's that opens no transaction, the Spring executors don't
 allow a read before them, so the DCB service reads in the executor as in 0.34.0, and a DCB append rolls back as a write
-to a stream does. I ran that row on the blocking stack only, with a retry strategy that doesn't match the handler's
-failure. In the last two rows, over a stream, a strategy that matched the failure used to run the command again and
-store one event with no exception. That retry is now withheld, so those rows are a regression that loses a retry rather
-than an event.
+to a stream does. I ran that row on the blocking stack only, with a retry strategy that matches the handler's failure
+and with one that doesn't, and both decided once and stored nothing. A caller that catches the failure and lets its
+scope complete may keep the append, and I didn't run that. In the last two rows, over a stream, a strategy that matched
+the failure used to run the command again and store one event with no exception. That retry is now withheld, so those
+rows are a regression that loses a retry rather than an event.
 
 That lost retry costs more when a handler runs the command. A handler on a service with no transaction that writes to a
 stream through a service in those rows loses its reaction. I ran that on both stacks over a stream, with the handler's

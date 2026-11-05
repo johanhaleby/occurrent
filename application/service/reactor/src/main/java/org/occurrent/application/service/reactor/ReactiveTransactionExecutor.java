@@ -120,8 +120,10 @@ public interface ReactiveTransactionExecutor {
     /**
      * Whether the application service may read and decide before it subscribes to {@link #inTransaction(Supplier)}, and
      * run only the append and the synchronous dispatch in it. A DCB application service with synchronous subscriptions
-     * asks this before every attempt, since a store reports marker versions only for a read outside a transaction, and a
-     * snapshot decider saves its snapshot only at those versions.
+     * asks this and {@link #isTransactional()} before every attempt. When {@link #isTransactional()} emits {@code true} the
+     * service reads inside {@link #inTransaction(Supplier)}, whatever this emits. Reading before matters because a store
+     * reports marker versions only for a read outside a transaction, and a snapshot decider saves its snapshot only at
+     * those versions.
      * <p>
      * Emit {@code false} when a read in this subscriber context can bind a resource that {@link #inTransaction(Supplier)}
      * then fails on. Spring's reactive MongoDB template, for example, binds a session to a transaction context in the
