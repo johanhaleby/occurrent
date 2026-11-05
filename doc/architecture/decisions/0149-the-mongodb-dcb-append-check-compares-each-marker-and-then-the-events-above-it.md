@@ -284,10 +284,13 @@ own yet then, so the bound loses nothing.
 This comes from reading Spring Data MongoDB 5.1.0. The probes below ran a no-op outer transaction manager in place of
 a JDBC one.
 
-An append runs in the store's own transaction manager, and it joins the caller's transaction when that is a MongoDB
-transaction on the template's database factory. In other setups, what happens depends on which factory instance each
-transaction manager and the template use. A probe on the blocking store ran each layout below with the append first and
-with a read first, and rolled the caller's transaction back.
+An append runs in the store's own transaction manager, and it joins the caller's transaction when that is a
+Spring-managed MongoDB transaction on the template's database factory and the store's `TransactionTemplate` or
+`TransactionalOperator` keeps the default propagation, `REQUIRED`. With `REQUIRES_NEW` there, a probe on both stores
+showed the append staying after the caller's transaction rolled back. A probe on the blocking store showed that a
+MongoDB transaction started on a `ClientSession` without Spring isn't joined either. In other setups, what happens
+depends on which factory instance each transaction manager and the template use. A probe on the blocking store ran each
+layout below with the append first and with a read first, and rolled the caller's transaction back.
 
 - The caller's manager and the store's on one factory, the template on another. The append rolled back.
 - The caller's manager on the template's factory, the store's on another. The append rolled back.
@@ -296,13 +299,14 @@ with a read first, and rolled the caller's transaction back.
   read first it rolled back.
 
 A read after the append inside the caller's transaction returned it in every case except the third with a read first. An
-earlier probe on both stores showed the third layout committing the append on its own. The reactor store's cases weren't
-probed. In the first layout, and in the fourth with a read first, the append ran in a second MongoDB transaction on the
-template's factory, which `MongoDatabaseUtils` commits after the caller's through transaction synchronization. A failure
-between the two commits keeps the caller's work and loses the append. That comes from reading Spring Data MongoDB 5.1.0,
-not from a probe. 0.34.0 has the same window. At `occurrent-0.34.0` the Spring and reactor stores already ran the append
-through the store's transaction manager, with the template's session synchronization set to `ALWAYS`, so 0.35.0 doesn't
-change it.
+earlier probe on both stores showed the third layout committing the append on its own. On the reactor store, a probe ran
+the caller's manager on the template's factory with the store's manager on that factory and on another one, and the
+append rolled back each time. The first, third and fourth layouts weren't probed there. In the first layout, and in the
+fourth with a read first, the append ran in a second MongoDB transaction on the template's factory, which
+`MongoDatabaseUtils` commits after the caller's through transaction synchronization. A failure between the two commits
+keeps the caller's work and loses the append. That comes from reading Spring Data MongoDB 5.1.0, not from a probe.
+0.34.0 has the same window. At `occurrent-0.34.0` the Spring and reactor stores already ran the append through the
+store's transaction manager, with the template's session synchronization set to `ALWAYS`, so 0.35.0 doesn't change it.
 
 Whether a caller owns the transaction is a different question, since the store's own transaction manager may join a
 caller's transaction on another factory. Both stores answer it by any active Spring transaction, the blocking store
