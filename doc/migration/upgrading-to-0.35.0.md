@@ -1362,8 +1362,10 @@ later switch to `DEFAULT`, or it resumes from that position.
 
 In 0.34.0 the blocking `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel`, `CatchupSubscriptionModel` and
 `DurableSubscriptionModel` asked a `StartAt.dynamic(..)` function while they held the lock for the subscription id, and
-`cancelSubscription` for that id waited for the lock. A function that waited for a cancel of its own id on another
-thread made both calls wait for each other forever. These models now ask the function before they take the lock.
+`cancelSubscription` for that id waited for the lock. When the function waited for a cancel of its own id on another
+thread, that cancel threw `IllegalStateException` after 10 seconds on the catch-up models, and on
+`DurableSubscriptionModel` it waited for as long as the function did. These models now ask the function before they
+take the lock.
 
 ### Who is affected
 
