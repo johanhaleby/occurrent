@@ -175,6 +175,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // subscription. A cycle through it has to pass through a wait for an action, which LIFECYCLE_WAIT bounds, and so
     // does one through any other caller.
     private final ConcurrentMap<String, ClaimLock> lifecycleClaims;
+    // The subscribes whose function is asked before they take the claim, shared by every child of the same dispatcher
+    private final Set<AskedFirst> askedFirst;
     // The ids a resume at a given position runs for that read as running when it took their claim, so they keep reading
     // as running and not paused until it returns, also while it holds a replay in the way. The subscription runs once
     // it returns, and a caller that saw it paused meanwhile would leave a pause undone, as a competing consumer that
@@ -243,6 +245,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.cancelsUnderWay = sharedState.cancelsUnderWay;
         this.cancelsStarted = sharedState.cancelsStarted;
         this.handedOver = sharedState.handedOver;
+        this.askedFirst = sharedState.askedFirst;
         HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.addHistoryLossListener(historyLossListener));
     }
 
@@ -265,6 +268,22 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final ConcurrentMap<String, CancelUnderWay> cancelsUnderWay = new ConcurrentHashMap<>();
         private final AtomicLong cancelsStarted = new AtomicLong();
         private final ConcurrentMap<String, HandedOver> handedOver = new ConcurrentHashMap<>();
+        private final Set<AskedFirst> askedFirst = ConcurrentHashMap.newKeySet();
+    }
+
+    // A subscribe whose function is asked before it takes the claim, from the ask until the subscribe returns
+    private static final class AskedFirst {
+        private final String subscriptionId;
+        private final Thread asker = Thread.currentThread();
+        private final CompletableFuture<Void> returned = new CompletableFuture<>();
+        // Only a cancel made while the function is asked wins over the subscribe
+        private volatile boolean asking = true;
+        // Set and read under the claim of the id
+        private boolean cancelled;
+
+        private AskedFirst(String subscriptionId) {
+            this.subscriptionId = subscriptionId;
+        }
     }
 
     /**
@@ -393,24 +412,53 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         return subscribeAndRemember(subscriptionId, filter, startAt, action, true);
     }
 
-    // Under the handover lock as well as the claim, so a handover or a failure of a replay for the id comes either before
-    // the refusal is decided or after the subscription is remembered.
+    // The caller's function is asked for this model before the claim, since it can wait for a call for the id on another
+    // thread. A cancel made while it runs wins, and nothing reaches the live delegate. Any other call for the id on another
+    // thread waits until the subscribe returns, as it waits for its claim.
     private Subscription subscribeAndRemember(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
-        try (Claim ignored = claim(subscriptionId); HandoverLock alsoIgnored = lockHandover(subscriptionId)) {
-            if (isInUse(subscriptionId)) {
-                throw new DuplicateSubscriptionIdException(subscriptionId);
-            }
-            // Before the live delegate opens, since it can report a loss from another thread before subscribe returns
-            Subscribed made = new Subscribed(this, filter, startAt, action);
-            Subscribed before = subscribed.put(subscriptionId, made);
+        AskedFirst asked = new AskedFirst(subscriptionId);
+        askedFirst.add(asked);
+        try {
+            StartAt answered;
             try {
-                return subscribe(subscriptionId, filter, startAt, action, holdPaused);
-            } catch (RuntimeException | Error e) {
-                // Puts back the record this one replaced, of a subscription no longer in use, as before the subscribe
-                subscribed.compute(subscriptionId, (id, now) -> now == made ? before : now);
-                throw e;
+                answered = answeredForThisModel(startAt);
+            } finally {
+                asked.asking = false;
             }
+            // Under the handover lock as well as the claim, so a handover or a failure of a replay for the id comes either
+            // before the refusal is decided or after the subscription is remembered
+            try (Claim ignored = claimWithoutWaitingForAsks(subscriptionId); HandoverLock alsoIgnored = lockHandover(subscriptionId)) {
+                if (asked.cancelled) {
+                    return new CancelledSubscription(subscriptionId);
+                }
+                if (isInUse(subscriptionId)) {
+                    throw new DuplicateSubscriptionIdException(subscriptionId);
+                }
+                // Before the live delegate opens, since it can report a loss from another thread before subscribe returns
+                Subscribed made = new Subscribed(this, filter, startAt, action);
+                Subscribed before = subscribed.put(subscriptionId, made);
+                try {
+                    return subscribe(subscriptionId, filter, answered, action, holdPaused);
+                } catch (RuntimeException | Error e) {
+                    // Puts back the record this one replaced, of a subscription no longer in use, as before the subscribe
+                    subscribed.compute(subscriptionId, (id, now) -> now == made ? before : now);
+                    throw e;
+                }
+            }
+        } finally {
+            askedFirst.remove(asked);
+            asked.returned.complete(null);
         }
+    }
+
+    // Answers what the function answered here when this model asks again, and asks it afresh for any other model, so the
+    // live delegate and a model it wraps still get their own answer
+    private StartAt answeredForThisModel(StartAt startAt) {
+        if (!startAt.isDynamic()) {
+            return startAt;
+        }
+        StartAt answer = startAt.get(generateSubscriptionModelContext());
+        return StartAt.dynamic(context -> context.subscriptionModelType() == subscriptionModelContextType ? answer : startAt.get(context));
     }
 
     // Running or paused means a replay for the id reads history, hands over, waits to run again or is held, or the live
@@ -1817,8 +1865,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * A call from inside the subscriber's action, on the thread of a replay for {@code subscriptionId}, doesn't wait.
      * It goes ahead when no other call holds the claim, and throws {@link IllegalStateException} at once when one does,
      * since that call can be waiting for the action to return. Any other call waits at most {@link #LIFECYCLE_WAIT},
-     * and then logs at {@code ERROR} and throws {@link IllegalStateException}. An interrupt doesn't end the wait, and is
-     * set again once the claim is taken or the wait is over.
+     * and then logs at {@code ERROR} and throws {@link IllegalStateException}. That wait includes a subscribe for the id
+     * on another thread whose start-position function is still being asked, since the subscribe asks it before it takes
+     * the claim, so a function that waits for such a call fails that call after {@link #LIFECYCLE_WAIT}. A cancel doesn't
+     * wait for the function, see {@link #cancelSubscription(String)}. An interrupt doesn't end the wait, and is set again
+     * once the claim is taken or the wait is over.
      * <p>
      * The caller changes nothing for the id once the claim fails. {@code whatChanged} says what it did before it asked
      * for the claim, which the log and the exception repeat. That is nothing, apart from a {@link #stop()}, which has
@@ -1826,8 +1877,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@code start(true)}, which has started this model.
      */
     Claim claim(String subscriptionId, String whatChanged) {
+        return claim(subscriptionId, whatChanged, true);
+    }
+
+    // For a cancel, which wins over a subscribe whose function is asked, and for that subscribe itself
+    Claim claimWithoutWaitingForAsks(String subscriptionId) {
+        return claim(subscriptionId, NOTHING_CHANGED, false);
+    }
+
+    private Claim claim(String subscriptionId, String whatChanged, boolean afterAsks) {
         ReentrantLock claim = useClaimLock(subscriptionId);
         try {
+            long waitingSince = System.nanoTime();
             if (claim.isHeldByCurrentThread()) {
                 claim.lock();
             } else if (replaysOnTheCallingThread(subscriptionId)) {
@@ -1835,7 +1896,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     throw new IllegalStateException("Cannot change subscription " + subscriptionId + " from inside its own action while its catch-up replay runs and another call for it is under way,"
                             + " because that call can be waiting for the action to return. Change it from another thread. " + whatChanged);
                 }
-            } else if (!tryLockWithin(claim, LIFECYCLE_WAIT)) {
+            } else if ((afterAsks && !asksOnOtherThreadsReturnWithin(subscriptionId, LIFECYCLE_WAIT))
+                    || !tryLockWithin(claim, LIFECYCLE_WAIT.minusNanos(System.nanoTime() - waitingSince))) {
                 log.error("A call for subscription {} waited {} ms for another call for it to return, and gives up. {}", subscriptionId, LIFECYCLE_WAIT.toMillis(), whatChanged);
                 throw new IllegalStateException("Cannot change subscription " + subscriptionId + ", because another call for it didn't return within " + LIFECYCLE_WAIT.toMillis()
                         + " ms. " + whatChanged);
@@ -1878,6 +1940,17 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // Removes the claim's entry once no thread holds it or waits for it
     private void releaseClaimLock(String subscriptionId) {
         lifecycleClaims.computeIfPresent(subscriptionId, (id, used) -> --used.users == 0 ? null : used);
+    }
+
+    // Whether every subscribe for the id whose function another thread asks before the claim returns within timeout. The
+    // asking thread itself goes ahead, as it did when the function was asked under the claim.
+    private boolean asksOnOtherThreadsReturnWithin(String subscriptionId, Duration timeout) {
+        Thread current = Thread.currentThread();
+        CompletableFuture<?>[] asks = askedFirst.stream()
+                .filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current)
+                .map(asked -> asked.returned)
+                .toArray(CompletableFuture[]::new);
+        return asks.length == 0 || completesWithin(CompletableFuture.allOf(asks), timeout);
     }
 
     // ReentrantLock.tryLock(timeout) that an interrupt doesn't end. The interrupt is set again once the wait is over.
@@ -2394,12 +2467,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Cancels the catch-up of {@code subscriptionId} and the subscription in the live delegate, and deletes its stored
      * position. Returns without waiting for a replay that is in the subscriber's action, which stores nothing more once
-     * it returns. While this runs, {@link #start(boolean) start(true)} doesn't let the live delegate resume the
-     * subscription itself.
+     * it returns. It doesn't wait for a subscribe of the id whose start-position function is still being asked either.
+     * That subscribe subscribes nothing, and the subscription it returns never starts. While this runs,
+     * {@link #start(boolean) start(true)} doesn't let the live delegate resume the subscription itself.
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
-        try (Claim ignored = claim(subscriptionId)) {
+        try (Claim ignored = claimWithoutWaitingForAsks(subscriptionId)) {
             boolean nothingKept = cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
                 cancelRunningCatchup(subscriptionId);
                 subscriptionModel.cancelSubscription(subscriptionId);
@@ -2424,6 +2498,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * be deleted. False when a subscribe for the same id on this thread, made while {@code cancel} ran, is kept.
      */
     boolean cancelKeepingWhatWasSubscribedOnFailure(String subscriptionId, Runnable cancel) {
+        askedFirst.stream().filter(asked -> asked.asking && asked.subscriptionId.equals(subscriptionId)).forEach(asked -> asked.cancelled = true);
         Subscribed made = subscribed.get(subscriptionId);
         CancelUnderWay underWay = new CancelUnderWay(made == null ? CompletableFuture.completedFuture(null) : made.cancelledReplayReturned());
         // Before the cancel takes the replay away, so start(true) and every resume find it all through the cancel. A

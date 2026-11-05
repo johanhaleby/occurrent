@@ -203,6 +203,27 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // on JDK 21 to 23
     private final ConcurrentMap<String, IdLock> idLocks = new ConcurrentHashMap<>();
 
+    // The subscribes whose function is asked now, before they take the lock for their id
+    private final Set<Asked> asking = ConcurrentHashMap.newKeySet();
+
+    private static final class Asked {
+        private final String subscriptionId;
+        // Set and read under the lock for the id
+        private boolean cancelled;
+
+        private Asked(String subscriptionId) {
+            this.subscriptionId = subscriptionId;
+        }
+    }
+
+    // What a subscribe cancelled while its function was asked returns. It never started and nothing will start it
+    private record CancelledWhileAsked(String id) implements Subscription {
+        @Override
+        public boolean waitUntilStarted(Duration timeout) {
+            return false;
+        }
+    }
+
     private <T> T underLockFor(String subscriptionId, Supplier<T> call) {
         IdLock idLock = idLocks.compute(subscriptionId, (__, held) -> held == null ? new IdLock() : held.oneMoreCaller());
         try {
@@ -393,17 +414,33 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
-        // Held for the whole method, not just the opt-out branch, so subscribe, resumeSubscription and
+        // The caller's function runs here, with no lock held, since it can wait for a cancel of the id on another thread.
+        // A cancel made meanwhile finds asked, and then nothing reaches the wrapped model.
+        Asked asked = new Asked(subscriptionId);
+        asking.add(asked);
+        StartAt answered = startAt;
+        try {
+            while (answered != null && !answered.isDefault() && answered.isDynamic()) {
+                answered = answered.get(new SubscriptionModelContext(DurableSubscriptionModel.class));
+            }
+        } finally {
+            asking.remove(asked);
+        }
+        StartAt askedOnce = answered;
+        // Held for the rest of the method, not just the opt-out branch, so subscribe, resumeSubscription and
         // cancelSubscription for the same id stay serialized against notCheckpointedSubscriptions (see the field
         // comment above). The blocking MongoDB models evaluate the returned StartAt on their executor each time
         // they open a change stream, outside this lock, so a cancelSubscription can run while a later evaluation
         // reads the checkpoint or writes a first position. An evaluation that comes while this records the first
         // position waits for that write and takes its outcome, see FirstPosition.
         return underLockFor(subscriptionId, () -> {
+            if (asked.cancelled) {
+                return new CancelledWhileAsked(subscriptionId);
+            }
             stopUntrackedRegistrations(subscriptionId);
             CheckpointRegistration registration = new CheckpointRegistration();
             AtomicReference<@Nullable FirstPosition> firstPositionToRecord = new AtomicReference<>();
-            StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt, registration, firstPositionToRecord::set);
+            StartAt startAtToUse = askedOnce == null ? null : generateStartAtPositionFrom(subscriptionId, askedOnce, registration, firstPositionToRecord::set);
             if (startAtToUse == null) {
                 // Not allowed to start, delegate to the wrapped subscription instead. Whether it was already
                 // marked is captured before marking it, so a duplicate attempt against an already-active,
@@ -692,7 +729,6 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // recorded or adopted, and before any evaluation returns it. It learns at most once for each subscribe, and never
     // for a refused one or for a StartAt of the caller's own. An evaluation that records a first position outside the
     // settled outcome writes it through the registration, so once the registration has stopped writing, it is refused
-    @Nullable
     private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt, CheckpointRegistration registration,
                                                 Consumer<FirstPosition> firstPositionToRecord) {
         final StartAt startAtToUse;
@@ -722,13 +758,6 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 firstPosition.positionStored();
                 return StartAt.checkpoint(checkpoint);
             });
-        } else if (originalStartAt.isDynamic()) {
-            var subscriptionModelContext = new SubscriptionModelContext(DurableSubscriptionModel.class);
-            var nextStartAt = originalStartAt.get(subscriptionModelContext);
-            if (nextStartAt != null) {
-                return generateStartAtPositionFrom(subscriptionId, nextStartAt, registration, firstPositionToRecord);
-            }
-            return null;
         } else {
             startAtToUse = originalStartAt;
         }
@@ -920,12 +949,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * It also stops the checkpoint writes of every subscription the wrapped model may still hold after a
      * {@code subscribe(..)} of the id threw, before it deletes the checkpoint. An action of such a subscription that
      * returns after this call has returned writes no checkpoint, and an evaluation of its start position records none.
+     * <p>
+     * It doesn't wait for a subscribe of the id whose start-position function is still being asked. That subscribe
+     * subscribes nothing in the wrapped model, and the subscription it returns never starts.
      *
      * @param subscriptionId The subscription id to cancel
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
         runUnderLockFor(subscriptionId, () -> {
+            asking.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId)).forEach(asked -> asked.cancelled = true);
             subscriptionModel.cancelSubscription(subscriptionId);
             // The wrapped model doesn't wait for an action that is running, so its checkpoint is written before the
             // registrations are cancelled below or not at all. The untracked ones stop before anything is deleted

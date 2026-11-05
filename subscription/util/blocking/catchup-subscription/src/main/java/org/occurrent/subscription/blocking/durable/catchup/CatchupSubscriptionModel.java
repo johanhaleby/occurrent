@@ -550,7 +550,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     public void cancelSubscription(String subscriptionId) {
         // Neither mode is known ahead of time for a bare subscriptionId, so tell both inner models to drop their own
         // bookkeeping for it (a no-op on whichever one wasn't running it) and cancel the shared live delegate once.
-        try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId)) {
+        try (AbstractCatchupSubscriptionModel.Claim ignored = anyCatchupModel().claimWithoutWaitingForAsks(subscriptionId)) {
             boolean nothingKept = anyCatchupModel().cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
                 presentCatchupModels().forEach(model -> model.cancelRunningCatchup(subscriptionId));
                 subscriptionModel.cancelSubscription(subscriptionId);

@@ -23,7 +23,7 @@ import java.time.Duration;
 
 /**
  * A {@link Subscription} handle for a catch-up that was cancelled or shut down before it could hand over to the
- * live delegate. {@link #waitUntilStarted(Duration)} answers {@code false}, since this subscription never started and
+ * live delegate, or for a subscribe cancelled while its start-position function was asked. {@link #waitUntilStarted(Duration)} answers {@code false}, since this subscription never started and
  * nothing will start it.
  */
 @NullMarked
