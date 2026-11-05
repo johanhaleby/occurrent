@@ -468,6 +468,30 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
+    void the_flux_asks_its_dynamic_position_again_when_the_server_cannot_read_the_first_answer_after_a_failed_read_opened_it_again() {
+        // Given a dynamic position whose first answer is a token of another collection, which the server accepts as the stream opens and can't find once it reads an event, and a live checkpoint after, and a first read of the change stream that fails
+        Checkpoint live = liveCheckpoint();
+        Checkpoint ofAnotherCollection = tokenOfAnotherCollection();
+        AtomicInteger answers = new AtomicInteger();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.checkpoint(ofAnotherCollection) : StartAt.checkpoint(live));
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", 2));
+        NameDefined written = nameDefined();
+
+        // When the flux is subscribed to, and an event is written once the first read has failed and the flux has opened again
+        StepVerifier.create(subscriptionModel.subscribe(startAt))
+                .then(() -> {
+                    await().atMost(10, SECONDS).until(() -> !commands.failed("getMore").isEmpty());
+                    write(written);
+                })
+
+                // Then the position is asked again once the server can't read the first answer, the second answer opens the stream and the event is delivered
+                .expectNextMatches(cloudEvent -> cloudEvent.getId().equals(written.eventId()))
+                .thenCancel()
+                .verify(Duration.ofSeconds(15));
+        assertThat(answers).hasValue(2);
+    }
+
+    @Test
     void a_dynamic_position_answering_a_catchup_position_is_refused_when_the_model_falls_back_to_the_change_stream_of_spring_while_it_subscribes() {
         // Given a model whose driver cursor turns out unreadable on the first subscription, and a dynamic position that answers the present first and a global checkpoint when it is asked again
         subscriptionModel.shutdown();
