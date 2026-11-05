@@ -538,7 +538,9 @@ final class NamedCatchupSupport {
     // none is under way and no live record owns the id, true says the caller is to cancel the id in the wrapped model,
     // counted under way, when a cancelled subscribe returned since the last such cancel and the wrapped model holds the
     // id. A cancelled record is forgotten once no cancel is under way and the wrapped model no longer holds the id, so
-    // isRunning(..) answers false while the wrapped model runs a subscription whose action no longer gets events.
+    // isRunning(..) answers false while the wrapped model runs what that subscribe left. A later subscribe of the id
+    // still inside the wrapped model puts a live record meanwhile, and isRunning(..) then answers what the wrapped model
+    // runs under the id.
     private boolean settleHoldingIdLock(String subscriptionId) {
         Leftovers left = leftovers.get(subscriptionId);
         if (left != null && left.underWay > 0) {

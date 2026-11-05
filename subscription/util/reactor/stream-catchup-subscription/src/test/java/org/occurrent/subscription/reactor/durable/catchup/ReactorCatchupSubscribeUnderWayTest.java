@@ -472,6 +472,32 @@ class ReactorCatchupSubscribeUnderWayTest {
     }
 
     @Test
+    void a_cancel_that_throws_while_the_subscribe_of_x_is_under_way_still_leaves_its_action_without_events_and_cancels_x_again_once_it_returns() {
+        WrappedModel wrapped = new WrappedModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedReader());
+        HeldStart held = new HeldStart();
+        List<String> reached = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> subscribeOfX = new CompletableFuture<>();
+        daemon("subscribe-x", subscribeOfX, () -> catchup.subscribe("x", FILTER, held.startAt(), cloudEvent -> Mono.fromRunnable(() -> reached.add(cloudEvent.getId())))).start();
+        held.awaitInside();
+        // Only the first cancel throws
+        wrapped.failCancelsFromNowOn();
+        wrapped.beforeNextCancel.set(() -> wrapped.beforeNextCancel.set(wrapped::succeedCancels));
+
+        Throwable cancel = failureOf(() -> catchup.cancelSubscription("x"));
+        held.release();
+        await(subscribeOfX, "The subscribe of x did not return");
+        wrapped.deliver("x", anEvent("e1"));
+        Throwable later = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()));
+
+        assertAll(
+                () -> assertThat(cancel).as("what the cancel threw").isInstanceOf(IllegalStateException.class),
+                () -> assertThat(reached).as("events that reached the action of the cancelled subscribe").isEmpty(),
+                () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("subscribed:x", "cancelled:x", "subscribed:x"),
+                () -> assertThat(later).as("what a subscribe of x once the subscribe returned throws").isNull());
+    }
+
+    @Test
     void the_action_of_a_subscribe_cancelled_while_under_way_gets_no_event_while_a_nested_subscribe_of_the_id_gets_them() {
         WrappedModel wrapped = new WrappedModel();
         wrapped.registersBeforeTheStart = true;
@@ -684,10 +710,10 @@ class ReactorCatchupSubscribeUnderWayTest {
         h1.release();
         await(s1, "s1");
         h4.release();
+        assertThat(s4).as("what the last subscribe under way throws").failsWithin(DEADLINE).withThrowableOfType(ExecutionException.class).withCauseInstanceOf(DuplicateSubscriptionIdException.class);
         Throwable later = failureOf(() -> catchup.subscribe("x", FILTER, StartAt.now(), cloudEvent -> Mono.empty()));
 
         assertAll(
-                () -> assertThat(s4).as("what the last subscribe under way throws").failsWithin(DEADLINE).withThrowableOfType(ExecutionException.class).withCauseInstanceOf(DuplicateSubscriptionIdException.class),
                 () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly(
                         "cancelled:x", "cancelled:x", "subscribed:x", "cancelled:x", "subscribed:x", "refused:x", "cancelled:x", "subscribed:x"),
                 () -> assertThat(later).as("what a subscribe of x once every subscribe returned throws").isNull());
