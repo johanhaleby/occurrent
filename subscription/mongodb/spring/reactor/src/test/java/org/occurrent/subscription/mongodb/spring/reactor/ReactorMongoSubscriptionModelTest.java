@@ -895,6 +895,45 @@ public class ReactorMongoSubscriptionModelTest {
         }
 
         @Test
+        void a_resume_at_a_global_checkpoint_delivers_what_was_written_while_the_subscription_was_paused() throws Exception {
+            assertWhatWasWrittenWhilePausedIsDeliveredAfterAResumeAt(StartAt.checkpoint(GlobalCheckpoint.of(5, liveStart(), 0, 7)));
+        }
+
+        @Test
+        void a_resume_at_a_dynamic_position_answering_a_global_checkpoint_delivers_what_was_written_while_the_subscription_was_paused() throws Exception {
+            StartAt catchup = StartAt.checkpoint(GlobalCheckpoint.of(5, liveStart(), 0, 7));
+            assertWhatWasWrittenWhilePausedIsDeliveredAfterAResumeAt(StartAt.dynamic(ctx -> catchup));
+        }
+
+        @Test
+        void a_resume_at_a_dynamic_position_answering_a_catchup_time_checkpoint_delivers_what_was_written_while_the_subscription_was_paused() throws Exception {
+            StartAt catchup = StartAt.checkpoint(catchupTimeCheckpoint());
+            assertWhatWasWrittenWhilePausedIsDeliveredAfterAResumeAt(StartAt.dynamic(ctx -> catchup));
+        }
+
+        @Test
+        void a_resume_at_a_dynamic_position_answering_a_catchup_position_delivers_what_was_written_after_the_subscribe_of_a_subscription_that_never_opened() throws Exception {
+            // Given a subscription at the present, subscribed while the model is stopped, so it is paused and never opened
+            String subscriptionId = UUID.randomUUID().toString();
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            subscription.stop();
+            subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent)));
+            assertThat(subscription.isPaused(subscriptionId)).isTrue();
+            NameDefined written = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(written)).block();
+            // The moment of the resume is read at whole seconds, so it has to be a second later than the write to be told apart from the moment of the subscribe
+            Thread.sleep(1_100);
+
+            // When it is resumed at a dynamic position answering a catch-up position
+            Subscription resumed = subscription.resumeSubscription(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(0))));
+
+            // Then the event written after it was subscribed is delivered, as it opens at the moment it was subscribed and not at the resume
+            assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(delivered).extracting(CloudEvent::getId).containsExactly(written.eventId()));
+        }
+
+        @Test
         void an_action_that_fails_with_the_refusal_type_on_a_delivering_subscription_is_delivered_the_event_again() {
             assertTheEventIsDeliveredAgainAfterTheActionFailsWith(new UnsupportedStartAtException(StartAt.now(), "failed by the action"));
         }
@@ -1065,6 +1104,33 @@ public class ReactorMongoSubscriptionModelTest {
                     sawTheIdFreed = !super.isRunning(subscriptionId);
                 }
             }
+        }
+
+        private void assertWhatWasWrittenWhilePausedIsDeliveredAfterAResumeAt(StartAt resumeAt) throws InterruptedException {
+            // Given a started subscription that delivered an event and is then paused
+            String subscriptionId = UUID.randomUUID().toString();
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            Subscription started = subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent)));
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined first = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(first)).block();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(delivered).extracting(CloudEvent::getId).containsExactly(first.eventId()));
+            subscription.pauseSubscription(subscriptionId);
+            NameWasChanged second = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+            mongoEventStore.write("1", 1, serialize(second)).block();
+            // The moment of the resume is read at whole seconds, so it has to be a second later than the write for an
+            // opening at that moment to skip it
+            Thread.sleep(1_100);
+
+            // When it is resumed at the position
+            Subscription resumed = subscription.resumeSubscription(subscriptionId, resumeAt);
+
+            // Then the event written while it was paused is delivered, and the one it had read is not delivered again
+            assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10)).block()).isTrue();
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(delivered).extracting(CloudEvent::getId).containsExactly(first.eventId(), second.eventId()));
         }
 
         private void assertNamedSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint) {
