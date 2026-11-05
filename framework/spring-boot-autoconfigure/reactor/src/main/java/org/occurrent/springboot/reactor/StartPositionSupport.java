@@ -106,25 +106,44 @@ class StartPositionSupport {
         }
         if (beginningOfTimeStart) {
             // Map BEGINNING_OF_TIME to position 0, which the reactive stream catch-up model replays before going live.
-            return StartAt.checkpoint(GlobalCheckpoint.of(0));
+            return replayThenResumeAgnostic(subscription.id(), StartAt.checkpoint(GlobalCheckpoint.of(0)), subscription.resumeBehavior());
         }
         return switch (subscription.startAt()) {
-            case NOW -> StartAt.now();
+            case NOW -> nowThenResume(subscription.resumeBehavior());
             // DEFAULT resumes from the durably stored position, falling back to the subscription model default on first start.
             case DEFAULT -> StartAt.subscriptionModelDefault();
             case BEGINNING_OF_TIME -> throw new IllegalStateException("Unreachable: BEGINNING_OF_TIME handled above");
         };
     }
 
+    // NOW is where the subscription starts the first time. Under DEFAULT a restart continues from the stored position
+    // instead, so an event written while the application was down is not skipped. The model default does that, and it
+    // records the position of the first start, which a plain StartAt.now() would not. Under SAME_AS_START_AT every start
+    // is NOW.
+    private StartAt nowThenResume(ResumeBehavior resumeBehavior) {
+        return switch (resumeBehavior) {
+            case SAME_AS_START_AT -> StartAt.now();
+            case DEFAULT -> StartAt.subscriptionModelDefault();
+        };
+    }
+
+    // The DCB counterpart of nowThenResume.
+    private DcbStartAt dcbNowThenResume(ResumeBehavior resumeBehavior) {
+        return switch (resumeBehavior) {
+            case SAME_AS_START_AT -> DcbStartAt.now();
+            case DEFAULT -> DcbStartAt.subscriptionModelDefault();
+        };
+    }
+
     // Build the neutral StartAt over the unified global position. BEGINNING replays from global position 0,
-    // startAtGlobalPosition replays after a specific position, both applying the same replay-then-resume logic. NOW and
-    // DEFAULT go straight to live.
+    // startAtGlobalPosition replays after a specific position, both applying the same replay-then-resume logic. NOW
+    // starts through nowThenResume, so under DEFAULT it resumes like the model default does.
     StartAt generateAgnosticStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtGlobalPosition, ResumeBehavior resumeBehavior) {
         if (startAtGlobalPosition >= 0) {
             return replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(startAtGlobalPosition)), resumeBehavior);
         }
         return switch (startPosition) {
-            case NOW -> StartAt.now();
+            case NOW -> nowThenResume(resumeBehavior);
             case DEFAULT -> StartAt.subscriptionModelDefault();
             case BEGINNING -> replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), resumeBehavior);
         };
@@ -158,7 +177,7 @@ class StartPositionSupport {
             return replayThenResume(subscriptionId, DcbStartAt.afterPosition(startAtDcbPosition), resumeBehavior);
         }
         return switch (startPosition) {
-            case NOW -> DcbStartAt.now();
+            case NOW -> dcbNowThenResume(resumeBehavior);
             case DEFAULT -> DcbStartAt.subscriptionModelDefault();
             case BEGINNING -> replayThenResume(subscriptionId, DcbStartAt.beginning(), resumeBehavior);
         };

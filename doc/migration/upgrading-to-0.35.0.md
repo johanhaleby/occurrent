@@ -53,6 +53,12 @@ other sections compile fine and behave differently, so read them first.
   `DcbEventStore` of your own usually does.
 - [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, sharing a type
   with a criteria item that has tags is no longer a reason for a condition to refuse.
+- [An append on MongoDB waits for majority on its position reservation](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation).
+  This overrides a w:1 on that one write, which on the Spring and reactor stores now runs outside a transaction of yours
+  too. On a set of a primary, a secondary and an arbiter with the secondary down, an append throws after
+  `markerVersionsCommitTimeout`.
+- [The default transaction executors retry on a MongoDB error label](#the-default-transaction-executors-retry-on-a-mongodb-error-label).
+  A duplicate key from a write made outside the transaction is no longer retried.
 
 ### Subscriptions and catch-up
 
@@ -97,6 +103,8 @@ other sections compile fine and behave differently, so read them first.
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   Every subscription a catch-up subscription runs on MongoDB, which in Spring Boot is every subscription by default.
   Compiles unchanged.
+- [A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs](#a-blocking-cancel-doesnt-wait-for-a-subscribe-whose-startatdynamic-function-runs).
+  A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 
@@ -120,6 +128,14 @@ other sections compile fine and behave differently, so read them first.
 - [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
   `restart-on-change-stream-history-lost` no longer affects a subscription the starter runs through a catch-up
   subscription, which is every subscription by default. Compiles unchanged.
+- [A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`](#a-restart-follows-resumebehavior-for-startat--beginning_of_time-and-startat--now).
+  On the reactive stack a restart no longer replays the history of a `BEGINNING_OF_TIME` `@StreamSubscription`, and a
+  `NOW` subscription no longer misses the events written while the application was down. On the blocking stack `NOW` with
+  `SAME_AS_START_AT` starts at the present on every restart and no longer competes with the other instances, so every
+  instance is delivered every event. A reactive `NOW` subscription with the default `resumeBehavior` also asks the
+  server where the feed is each time it registers and needs the answer only when no checkpoint is stored, so when it
+  waits for its start, which is the default in `auto` subscription mode, the application does not start when no
+  checkpoint is stored and the MongoDB server cannot answer. Compiles unchanged.
 
 ### Brokers
 
@@ -570,8 +586,9 @@ What is new:
   each marker of the criteria, read at the same point in time as the events. It reports them only for a full forward
   read, with no limit, skip or position bound, and criteria other than `MatchAll`.
 - A conditional append with a consistency token reports the same in `DcbAppendResult.markerVersions()`.
-- `read(criteria, DcbReadOptions.afterVersions(saved))` returns every matching event appended after `saved`, including
-  one that committed late below a position an earlier read saw. When the store can't compare `saved` with its own
+- `read(criteria, DcbReadOptions.afterVersions(saved))` returns the matching events appended after `saved`, including
+  one that committed late below a position an earlier read saw. A failover can make it miss an event, as [What else a
+  token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. When the store can't compare `saved` with its own
   markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
   full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
   always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
@@ -597,7 +614,9 @@ What changes on MongoDB without you doing anything:
 The upgrade needs no manual step, provided nothing replaces the document of an event a 0.35 node wrote. That rules out
 a 0.34 node's `updateEvent`, a 0.34 tool, or your own code replacing event documents, during a rolling upgrade, after a
 rollback to 0.34 followed by a new upgrade, and from a tool that shares the event collection. Such an event loses its
-`mv` and is no longer returned by `afterVersions(..)`. A full read still returns it. A store built on
+`mv` and is no longer returned by `afterVersions(..)`. A full read still returns it. On a replica set, if that event
+matches an append condition and was committed after the condition's read, the append no longer fails, though it should.
+Replacing an event document isn't supported, and no setting turns this off. A store built on
 `MongoTemplate.withSession(..)` or `ReactiveMongoTemplate.withSession(..)` doesn't support reading versions.
 
 Three things break, and two of them are compile errors.
@@ -655,15 +674,16 @@ stacks, so it isn't affected on a store that returns the criteria it was given.
 - **A `DcbEventStore` decorator that rewrites criteria**, adding a tenant tag for example, and passes the inner store's
   token through. It compiles, but the token holds the rewritten criteria, so a condition on the caller's criteria throws
   `IllegalArgumentException`. In `read`, return
-  `new DcbEventStream(inner.events(), inner.lastSequencePosition(), DcbConsistencyToken.of(criteria, innerToken.version()), inner.markerVersions())`,
+  `new DcbEventStream(inner.events(), inner.lastSequencePosition(), DcbConsistencyToken.of(criteria, innerToken.version(), innerToken.markers()), inner.markerVersions())`,
   since the three-argument constructor sets `markerVersions` to empty. Those versions hold the rewritten criteria's
   markers, the added tag's included, so pass them back to the inner store unchanged with the rewritten criteria. A store
   reports no versions for `all()`, on a read or on a conditional append, and throws `DcbSnapshotInvalidException` on a
   read of `all()` with `afterVersions`. So when `all()` becomes a tag, use the three-argument constructor on that read,
   drop the versions from that append's result, and throw on that read yourself. In `append`, rewrite the criteria the
   same way, and give the inner store a condition with
-  `DcbConsistencyToken.of(rewrittenCriteria, token.version())`. On MongoDB the added tag then counts in the check like
-  any other tag, so appending any event with that tag can make the check refuse, whether or not the event matches.
+  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`. On a sharded cluster the added tag then
+  counts in the check like any other tag, so appending any event with that tag makes the check refuse, whether or not
+  the event matches.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
   condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
   deprecation warning, and `wholeStoreLock(token)` and `new DcbAppendCondition(criteria, Optional.of(token))` compile
@@ -709,6 +729,93 @@ needs the criteria the read was given, and a recipe can't tell from the call sit
 `failIfEventsMatch(criteria, token)` to `failIfEventsMatch(token)` would compile too, but a condition that used other
 criteria than its read would then append on the read's criteria instead of throwing.
 
+### What else a token holds on MongoDB
+
+On MongoDB, a token also holds what the read saw of each marker. On a replica set, an event a 0.35.0 node appended that
+doesn't match a condition's criteria no longer fails it, so you'll see fewer `DcbAppendConditionNotFulfilledException`s
+on a busy tag. A condition can still fail with no matching event, for example after a marker was deleted, when a
+0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written. On anything else, such as a
+sharded cluster, this doesn't apply, and any event that moves a marker of the criteria still fails it.
+
+A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
+Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
+`withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction.
+On any deployment, a read whose events are behind its token can do this, for
+example when a read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A
+token also doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a
+matching event the read left out. 0.34.0 has the gap this paragraph describes too, except that it refused the append
+when the read caught only some of the event's markers, or when a later event moved a marker of the criteria, even one
+that didn't match. On 0.34.0 a failover can cause it as well, when it loses a position reservation made below majority.
+So can a rollback of your transaction on the Spring and reactor stores, when the store's own transaction manager uses
+the same database factory as yours and its transaction is set to `REQUIRES_NEW` or `NOT_SUPPORTED`. The event then
+commits above the last reserved position. 0.35.0 reserves positions outside every transaction and waits for majority on
+the reservation, as [the next section](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation) says.
+
+If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
+finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
+read concern snapshot. Earlier versions said pruning during quiescence was harmless. It isn't, because a token can be
+held across the prune.
+
+A `DcbEventStore` of your own needs no change, and `DcbConsistencyToken.of(criteria, version)` keeps working for it.
+A MongoDB store throws `IllegalArgumentException` for a token built that way.
+
+## An append on MongoDB waits for majority on its position reservation
+
+An append on a MongoDB event store reserves its positions with an update of a counter. That update now runs outside
+every transaction, one of yours included, and waits for write concern majority, whatever write concern you configured.
+A failover could lose an update made below majority while the append's event committed above the counter, and reads
+then missed the event.
+
+### What changes
+
+A w:1 on the client, on the database or as the server's default no longer applies to this update, and neither does a
+`wtimeout` you configured. The update waits for majority for at most `markerVersionsCommitTimeout`, 5 seconds by
+default, the setting that also bounds the commit of a read that asks for versions. When a majority doesn't acknowledge
+the update in that time, the append throws and writes no event, and the positions it reserved stay unused. On a client
+with a `timeoutMS` above 0, where the driver sends no `wtimeout`, your `timeoutMS` bounds the update instead. A
+`timeoutMS` of 0 waits forever, so there `markerVersionsCommitTimeout` bounds the whole update, the wait to select a
+primary included. The rest of the append keeps the write concern it had.
+
+Every append waits for as long as a majority takes to replicate the update. On MongoDB 5.0 or later, on a set without an
+arbiter and with no write concern configured, the update already waited for majority. What changes there, unless your
+client sets a `timeoutMS` above 0, is that a wait that used to have no limit now fails the append after
+`markerVersionsCommitTimeout`. On a local three-member set at w:1, a single writer's latency stayed within the noise
+between runs. With 8 writers, throughput went from about 990 to 1030 appends a second on the native store, 1050 to 875
+on the Spring store and 990 to 670 on the reactor store. These appends ran outside a transaction, and all members ran on
+one host, so the numbers show no network. Across a network, expect each append to wait about one more round trip to a
+secondary.
+
+### Inside a transaction of yours
+
+On the Spring and reactor stores, the update used to join a transaction already open when the append started, and
+committed with it. It now commits on its own, before the append writes its event.
+
+- After a rollback of your transaction, the reserved positions stay unused. Positions already have gaps, so nothing that
+  reads them has to change.
+- Two appends in transactions of yours no longer conflict on the counter, only on a marker or a partition stream they
+  share. An append that loses throws a `DataIntegrityViolationException` or a `TransientDataAccessException`, and your
+  transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it when
+  they opened it.
+- On a replica set, with transaction synchronization active, as it is by default, a read in your transaction reports, in
+  `lastSequencePosition()`, the head as of the first operation in your transaction's MongoDB session on the store's
+  database factory. It also returns your transaction's own appends, and those it started after that operation are at
+  positions above that head. If you keep that position and read after it later, you get those events again. On a sharded
+  cluster, unless your transaction reads at read concern snapshot, the shards aren't guaranteed to be read from one
+  snapshot, so the head and the events can come from different points in time.
+- An append joins your transaction when that's a Spring-managed MongoDB transaction on the template's database
+  factory, and the `TransactionTemplate` or `TransactionalOperator` you give the store, if any, keeps the default
+  propagation, `REQUIRED`.
+  [ADR 149](../architecture/decisions/0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md)
+  lists what happens in other setups.
+
+### What to do
+
+On a replica set of a primary, a secondary and an arbiter with the secondary down, a majority can't acknowledge the
+update. In a probe on all three stores, appends there used to complete in 6 to 18 ms. The store now bounds the update
+by `markerVersionsCommitTimeout`, so such an append throws after 5 seconds by default. To wait longer or
+shorter, set `markerVersionsCommitTimeout` in the store's `EventStoreConfig`. On a client with a `timeoutMS` above 0
+that setting doesn't bound the update, and the client's `timeoutMS` does.
+
 ## Criteria with tags conflict on their tags
 
 On the MongoDB stores, the check of a conditional append with a token reads only the tag markers of an item with tags,
@@ -717,16 +824,19 @@ refuse. Such an item also no longer adds its type markers to what a conditional 
 Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
-example. The MongoDB stores can still refuse an append the in-memory store accepts, for example after an event that has
-only one of the criteria's tags. With a token, an item without tags is checked against its type markers as before. The change is the
-first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
+example. On a sharded cluster the MongoDB stores can still refuse an append the in-memory store accepts, for example
+after an event of another type that has one of the criteria's tags. On a replica set that event no longer refuses
+it, as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. With a token, an item without
+tags still reads its type markers. The change is the first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
 [ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
 describes it.
 
 ### What stays the same
 
 - A conditional append on criteria with tags is still refused when an event that matches them committed after the
-  read, unless the markers were pruned in between ([#1300](https://github.com/johanhaleby/occurrent/issues/1300)).
+  read. On a replica set the check reads the events as they are when the append runs, so an event deleted by then, or
+  changed so that it no longer matches, may not fail it. A read can also miss such an event and let the append through,
+  as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says.
 - Every append still increments a marker for each type and each tag of its events, so two appends of one type still
   can't commit at the same time on MongoDB, whatever their tags.
 - This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the
@@ -749,15 +859,61 @@ describes it.
 - **A `DcbEventStore` of your own** that checks conditions on markers, as the MongoDB stores do. The TCK reads
   `type("X").tags(a)`, appends an `X` tagged only `b`, and then appends with the read's token. That append has to
   succeed, so a store that still reads the type marker for an item with tags fails the case.
+- **Code that switches over the TCK's `DcbAppendConditionModel`.** The enum gains `MARKERS_THEN_EVENTS`, which the
+  fixtures of the MongoDB stores declare, so a `switch` that lists every case and has no `default` stops compiling until
+  it handles the new one. A fixture that returns `EXACT_CRITERIA` or `TAG_MARKER` still compiles.
 - **Code that saved a token value.** For an item with both types and tags, a 0.34.0 token value is a sum over its tag
   and type markers, and 0.35.0 no longer counts the type markers of that item. An old value can then let an append through
   that should have been refused. Read again instead, as
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
   says.
-- **Code or an operator that prunes markers.** For an item with both types and tags, a token no longer counts the type
-  markers, so a prune between the read and the append can let through a conflicting append that 0.34.0 refused, until
-  [#1300](https://github.com/johanhaleby/occurrent/issues/1300) is fixed. Prune only when no command holds a token it
-  can still append with.
+- **Code or an operator that deletes marker documents.** Follow the rule at the end of
+  [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
+
+## The default transaction executors retry on a MongoDB error label
+
+The default `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry a transaction they opened when it
+loses a conflict. In 0.34.0 that meant any `DataIntegrityViolationException`, because Spring translates MongoDB's write
+conflict to it. That also matched a duplicate key and a validation failure, which no new transaction can get past, so
+the unit of work ran 15 times on the blocking executor and 16 on the reactive one before the error reached the caller. The 0.35.0 budget is 240 attempts, so the same
+predicate would have run it for two minutes.
+
+0.35.0 retries a `TransientDataAccessException`, or any exception with the `TransientTransactionError` label anywhere
+in its cause chain. MongoDB puts that label on a write conflict, and the driver's own `withTransaction` retries on it.
+A duplicate key and a validation failure inside the transaction now run the unit of work once and reach the caller.
+A commit that fails with the `UnknownTransactionCommitResult` label is not retried either, since the commit may have
+gone through, even when the same error also has the `TransientTransactionError` label. The 0.34.0 predicate did not
+retry it.
+
+The two executor modules now depend on `mongodb-driver-core` as an optional dependency and look for the label only when
+`com.mongodb.MongoException` is on the classpath. Without the driver you still get the executor, and it still retries a
+`TransientDataAccessException`. You add nothing.
+
+### Who is affected
+
+Two cases changed. The first retried in 0.34.0 and doesn't now. A unit of work that writes outside the transaction, for example through a
+`MongoTemplate` with `SessionSynchronization.NEVER`, can get a duplicate key that MongoDB does not label. Say it checks
+whether a document exists, a rival inserts it, and the write then fails with the duplicate. The second run saw the
+rival's document and skipped the write, so the command succeeded. In 0.35.0 it fails with the `DuplicateKeyException`
+after the first run.
+
+The second did not retry in 0.34.0 and does now. A commit that fails with the `TransientTransactionError` label reaches
+the executor as a `TransactionSystemException` with a `MongoException` cause, which 0.34.0 did not match. The executor
+now runs the unit of work again, up to three runs in all, which is safe when the transaction was rolled back, as that
+label says it was. A failover and a transaction that outlives `transactionLifetimeLimitSeconds` fail the commit this way,
+and a second run gets past both.
+The case to watch is a unit of work that catches a duplicate key from a write inside the transaction and returns normally.
+MongoDB has aborted the transaction by then, so the commit fails with the label and the executor runs the unit of work
+three times, where 0.34.0 failed once. The third failure is a `TransactionSystemException` whose message says the commit
+failed with `NoSuchTransaction` after 3 failed commits.
+
+An executor you build with a retry of your own uses that retry as given, as before, so it has no cap on failed commits.
+An executor built on a template or operator that opens no transaction has no commit to fail, so the cap never applies to it.
+
+### What to do
+
+Handle the duplicate in the unit of work only when its write is outside the transaction, and let a duplicate from a write inside the transaction reach the caller instead of catching it. Or make the write through a template that joins the transaction, so that a
+rival's insert surfaces as a labelled conflict and is retried.
 
 ## DCB snapshots resume from marker versions
 
@@ -1056,8 +1212,8 @@ starts the subscription from the annotation's start, as it starts without the be
 a subscription model reads the start, also when a node of a competing consumer takes over, and can ask more than once
 for one start, so return the same answer each time.
 
-With `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING` or an explicit position, the answer only
-moves where the replay starts. The subscription keeps no checkpoint in `CheckpointStorage` once it is live, and the
+With `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING` or an explicit position, or on `NOW`, the
+answer only moves where the subscription starts. The subscription keeps no checkpoint in `CheckpointStorage` once it is live, and the
 competing consumer model does not compete for it. A catch-up that stores checkpoints during its replay still does, and
 deletes the last one when the replay goes live.
 
@@ -1261,10 +1417,25 @@ thread that runs the code or from another thread. A subscribe of an id throws `D
 the model the catch-up wraps has completed its cancel of that id. `ReactorMongoSubscriptionModel` completes it before
 `cancelSubscription` returns.
 
-Two pieces of your code can still run while the catch-up holds a lock, so don't call the catch-up model from either. One is a `StartAt.dynamic(..)` function that answers `null` to the catch-up. The catch-up then
+A `StartAt.dynamic(..)` function that answers `null` to the catch-up can call the catch-up model too. The catch-up then
 goes straight to live and hands the function to the model it wraps, and `ReactorMongoSubscriptionModel` can call it
-again on the thread of `subscribe(..)`. The other is a `CatchupListener` given to `listenForCatchup`, which is told that a
-catch-up started from inside an operation on a map the catch-up keeps.
+again inside its own `subscribe(..)`, on the thread that called the catch-up. While that `subscribe(..)` runs, a
+subscribe of the id throws `DuplicateSubscriptionIdException` until the id is cancelled. A cancel of the id then, from
+that thread or another, goes to the wrapped model at once, and the action gets no event after it. When the wrapped
+`subscribe(..)` returns holding the id, the catch-up cancels the id there again, unless a subscribe of the id made after
+the cancel took it there. That cancel waits until no other subscribe of the id is under way. Until that second cancel
+has completed, a subscribe of the id throws
+`DuplicateSubscriptionIdException` whenever the wrapped model holds the id for the cancelled `subscribe(..)`, also after
+the first cancel has completed. When the cancel came before the wrapped model had taken the id for the cancelled
+`subscribe(..)`, the wrapped model can refuse a subscribe of the id made after the cancel with
+`DuplicateSubscriptionIdException`, since the cancelled one can take the id there first. A subscribe that replays history
+first gets that exception from `waitUntilStarted()` once the replay hands over. The catch-up then cancels the id there
+again. A wrapped model that takes the id only after it called the function makes that likely.
+`ReactorMongoSubscriptionModel` takes it before.
+
+A `CatchupListener` given to `listenForCatchup` can still run while the catch-up holds a lock, so don't call the
+catch-up model from it. The listener is told that a catch-up started from inside an operation on a map the catch-up
+keeps.
 
 ### What happens
 
@@ -1390,6 +1561,151 @@ counts is the time since that position was written. On the reactor stack a subsc
 while it matches no events only while the MongoDB subscription model reads quiet positions. When it can't, it logs a
 warning saying that a subscription that matches no event keeps the position of the last event it handled. An unnamed
 reactor `Flux` saves no position, and its position moves only when it reads an event.
+
+## A restart follows `resumeBehavior` for `startAt = BEGINNING_OF_TIME` and `startAt = NOW`
+
+Some subscriptions did not start where `resumeBehavior` says on a restart. On the reactive Spring Boot starter, a
+`@StreamSubscription` ignored `resumeBehavior`. With `startAt = BEGINNING_OF_TIME` it started at position 0 on every
+restart, and with `startAt = NOW` it started at the present on every restart. A reactive `@Subscription`,
+`@DcbSubscription`, `@Projection` or `@Snapshot` with `startAt = NOW` did the same, while their replay starts already
+followed `resumeBehavior`. On the blocking starter, `startAt = NOW` with `resumeBehavior = SAME_AS_START_AT` continued
+from the checkpoint the subscription had stored, where the documentation says it starts at the present again. Both
+starters now do what the javadoc and the documentation say.
+
+### Who is affected
+
+- Every application on the reactive starter with a `@StreamSubscription` that sets `startAt` to `BEGINNING_OF_TIME` or
+  `NOW`. That includes one that sets `resumeBehavior = DEFAULT` explicitly. A `@StreamSubscription` that does not set
+  `startAt` is not affected, and neither is one that sets `resumeBehavior = SAME_AS_START_AT`, except that
+  `BEGINNING_OF_TIME` no longer stores a checkpoint.
+- Every application on the reactive starter with a `@Subscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`
+  that sets `startAt = NOW`, including one that sets `resumeBehavior = DEFAULT` explicitly. One that does not set
+  `startAt`, or sets `resumeBehavior = SAME_AS_START_AT`, is not affected.
+- Every application on the blocking starter with `startAt = NOW` and `resumeBehavior = SAME_AS_START_AT` on a
+  `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection`, `@Saga` or `@Snapshot`.
+
+### What changes
+
+On the reactive starter:
+
+- `BEGINNING_OF_TIME` with `DEFAULT` replays the history the first time. After a restart it continues from the
+  checkpoint it stored, so the handler no longer receives every event again.
+- `NOW` with `DEFAULT` starts at the present the first time. After a restart it continues from the checkpoint it
+  stored, so the handler receives the events written while the application was down. Before, it never received them.
+- `SAME_AS_START_AT` starts at `startAt` on every restart, as the documentation says. `BEGINNING_OF_TIME` with
+  `SAME_AS_START_AT` now stores no checkpoint, the way a reactive `@Subscription` already behaves.
+
+`NOW` with `SAME_AS_START_AT` still stores a checkpoint after each event, as before, and ignores it on restart. Changing
+that subscription to `DEFAULT` later continues from the checkpoint it stored.
+
+The checkpoint is the one the starter's durable subscription model stores. An application that supplies its own
+`FluxSubscriptionModel` or `Subscribable` gets no durable model from the starter. A `RegisteringSubscribable`, such as
+`SynchronousSubscriptionModel`, does not count. With its own model, the restart behaviour above is that model's: `NOW`
+with `DEFAULT` starts where its default start does, and whether `BEGINNING_OF_TIME` with `DEFAULT` continues or replays
+again depends on whether it stores a checkpoint.
+
+With the starter's durable model, `NOW` with `DEFAULT` also records where the feed is when a subscription with no stored
+checkpoint registers, the way any start from the model default does. The reactive MongoDB model reads it by asking the
+server. It asks on every restart, and ignores the answer when a checkpoint is stored. A server that cannot be asked, or
+that replies without a clock, therefore makes the model refuse the registration only when no checkpoint is stored. Such
+a subscription waits for its start by default when `occurrent.subscription.mode` is `auto`, so the application does not
+start. With `startupMode = BACKGROUND`, with mode `manual`, or on a bean built after startup,
+the refusal does not hold up startup, and the subscription is not running.
+`occurrent.subscription.start-when-no-start-position-can-be-recorded=true` does not change this for the reactive MongoDB
+model, which fails when it cannot be asked or replies without a clock. The property is described in
+[section 7 of the 0.34.0 guide](upgrading-to-0.34.0.md#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
+
+A subscription that handled an event before the upgrade normally has a checkpoint stored already, because the old start
+stored one after each event too. The first restart after the upgrade continues from it, and `startAt` is not looked at
+again for that subscription id. So changing `startAt` on an existing id has no effect until the id is new or its
+checkpoint is deleted. If the position of that checkpoint is no longer in the oplog, the subscription stops, see
+[a subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
+
+On the blocking starter, `NOW` with `SAME_AS_START_AT` starts at the present on every restart and stores no
+checkpoint, so the events written while the application was down are not delivered. Before, it delivered them once it
+had stored a checkpoint. As for any `NOW` start, an event written shortly before the subscription starts can still be
+delivered, and a `SubscriptionResumePoints` bean that answers for the subscription id still decides where it starts.
+It also no longer competes with the other instances of the application, so every instance is delivered every event, as the
+documentation says for `SAME_AS_START_AT`. A checkpoint it stored before the upgrade stays in storage and is not used.
+`NOW` with `DEFAULT` is unchanged.
+
+### What to do
+
+Nothing, if the subscription is meant to behave as the documentation describes.
+
+On the reactive starter, set `resumeBehavior = SAME_AS_START_AT` on a subscription that feeds an in-memory read model
+that has to be rebuilt on every boot. Without it the read model now starts empty and receives only the events after the
+last checkpoint. A `NOW` subscription that has to skip the events written during downtime also needs
+`SAME_AS_START_AT`.
+
+A reactive `NOW` subscription with the default `resumeBehavior` now needs the MongoDB server to answer when it
+registers with no stored checkpoint, and refuses the registration when it cannot be asked.
+
+On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription that relied on resuming from its
+checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
+written while the application was down, and runs on every instance. Delete the old checkpoint of a subscription you
+later switch to `DEFAULT`, or it resumes from that position.
+
+## A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs
+
+In 0.34.0 the blocking `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel`, `CatchupSubscriptionModel` and
+`DurableSubscriptionModel` asked a `StartAt.dynamic(..)` function while they held the lock for the subscription id, and
+`cancelSubscription` for that id waited for the lock. When the function waited for a cancel of its own id on another
+thread, that cancel threw `IllegalStateException` after 10 seconds on the catch-up models, and on
+`DurableSubscriptionModel` it waited for as long as the function did. These models now ask the function for their own
+model with no lock for the id held.
+
+### Who is affected
+
+Code that subscribes through one of these models with a `StartAt.dynamic(..)` function and cancels the same id from
+another thread while the function can still be running. Code that subscribes the same id from two threads at once with
+such a function is affected too, and so is code that resumes the id on `DurableSubscriptionModel` from another thread
+while the function runs.
+
+### What changes
+
+* A `cancelSubscription(id)` made on another thread while the function of a subscribe of `id` runs returns without
+  waiting for that subscribe. The subscribe returns once the function has, subscribes nothing, and the `Subscription` it
+  returns answers `false` from `waitUntilStarted(..)`. A cancel the function makes on the subscribing thread doesn't
+  stop the subscribe, as in 0.34.0, and neither does a cancel that throws.
+* Two subscribes of the same id made at once on `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or
+  `CatchupSubscriptionModel` can both ask their function before either has registered. The one that is refused throws
+  `DuplicateSubscriptionIdException` once its function has returned. Until then a `pauseSubscription(id)` or
+  `resumeSubscription(id)` on another thread waits for it for up to 10 seconds, and then throws
+  `IllegalStateException`. A subscribe of an id these models already run throws before it asks the function, as in 0.34.0.
+  A `CatchupSubscriptionModel` with both catch-ups still asks the function first to pick the catch-up model, as in
+  0.34.0.
+* A subscribe on one of these catch-up models waits for the lock for the id before it asks the function, as in 0.34.0,
+  and throws `IllegalStateException` when another call for the id holds that lock for longer than 10 seconds. It waits
+  for that lock again once the function has returned, and can throw the same way then.
+* `DurableSubscriptionModel` asks the function before the model it wraps throws `DuplicateSubscriptionIdException`, as
+  in 0.34.0. A `cancelSubscription(id)` made on another thread while that function runs now cancels the subscription
+  that runs, and the duplicate then returns a `Subscription` that never starts instead of throwing. A
+  `resumeSubscription(id)` of the subscription that runs waits for that function, as the next bullet says.
+* A `resumeSubscription(id)` or the new `resumeSubscription(id, startAt)` on `DurableSubscriptionModel` made on another
+  thread while the function of a subscribe of `id` runs still waits for that subscribe, but throws
+  `IllegalStateException` when the function doesn't return within 10 seconds. In 0.34.0 `resumeSubscription(id)` waited
+  for as long as the function did. Its `pauseSubscription(id)` and `stop()` don't wait for the subscribe, as in 0.34.0.
+
+### What to do
+
+* Don't read a returned `cancelSubscription(id)` as a sign that a subscribe of `id` on another thread has returned. Call
+  `waitUntilStarted(..)` on the `Subscription` that subscribe returns when you need to know whether it started.
+* Keep effects that must happen only for a subscribe that goes ahead out of the function, since a subscribe that then
+  throws `DuplicateSubscriptionIdException` or `IllegalStateException` asks it too.
+* Don't wait in the function for a `pauseSubscription` or `resumeSubscription` of the same id on a catch-up model, or
+  for a `resumeSubscription` on `DurableSubscriptionModel`, on another thread. That call throws `IllegalStateException`
+  when the function doesn't return within 10 seconds.
+* Wait for the cancel only the first time a subscribe asks the function. A catch-up model asks it again while it holds
+  the lock for the id on a resume, on its replay thread during the handover to live delivery, and for the model it
+  wraps when that model is another wrapper such as `DurableSubscriptionModel` and the subscribe goes straight to live
+  delivery. A cancel made during one of those asks throws `IllegalStateException` after 10 seconds, or during the
+  handover waits for as long as the function does.
+* A `CatchupSubscriptionModel` with both a stream and a DCB catch-up asks the function first to choose between them for
+  a subscribe with no filter, or with a filter that is not a stream, DCB or agnostic one. A cancel made during that ask
+  returns, and the subscribe still goes ahead.
+
+The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 

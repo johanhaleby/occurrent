@@ -340,7 +340,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 return new DcbEventStream(applySelection(matchingEvents, options), highWatermark, DcbConsistencyToken.of(criteria, highWatermark));
             }
             Set<String> markerKeys = DcbMarkerVersionsSupport.queryMarkerKeys(criteria);
-            Map<String, DcbMarkerVersionsSupport.ObservedMarker> observed = observedMarkers(markerKeys);
+            Map<String, DcbConsistencyToken.MarkerObservation> observed = observedMarkers(markerKeys);
             if (afterVersions.isPresent()) {
                 DcbMarkerVersionsSupport.requireResumable(criteria, afterVersions.get(), observed);
                 matchingEvents = matchingEvents.stream().filter(event -> appendedAfter(event, criteria, afterVersions.get())).toList();
@@ -351,12 +351,12 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     // Call while holding the "state" monitor
-    private Map<String, DcbMarkerVersionsSupport.ObservedMarker> observedMarkers(Set<String> markerKeys) {
-        Map<String, DcbMarkerVersionsSupport.ObservedMarker> observed = new HashMap<>();
+    private Map<String, DcbConsistencyToken.MarkerObservation> observedMarkers(Set<String> markerKeys) {
+        Map<String, DcbConsistencyToken.MarkerObservation> observed = new HashMap<>();
         for (String key : markerKeys) {
             Long version = markerVersions.get(key);
             if (version != null) {
-                observed.put(key, new DcbMarkerVersionsSupport.ObservedMarker(markerEpochs.get(key), version, 0));
+                observed.put(key, new DcbConsistencyToken.MarkerObservation(markerEpochs.get(key), version, 0));
             }
         }
         return observed;

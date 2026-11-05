@@ -91,7 +91,7 @@ class StartPositionSupport {
             return replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(startAtGlobalPosition)), resumeBehavior);
         }
         return switch (startPosition) {
-            case NOW -> StartAt.now();
+            case NOW -> nowThenResume(resumeBehavior);
             case DEFAULT -> StartAt.dynamic(ctx -> {
                 // Do not let the catch-up model run its default (replay from the beginning); delegate to the parent
                 // live subscription instead by returning null to the catch-up layer.
@@ -102,6 +102,14 @@ class StartPositionSupport {
         };
     }
 
+    // The competing consumer layer lets the instances compete and the durable layer stores and reads a position. A
+    // subscription that starts at the same place on every boot must do neither, so these layers are told to delegate
+    // to the parent model.
+    private static boolean delegatesItsStart(SubscriptionModelContext ctx) {
+        Class<?> type = ctx.subscriptionModelType();
+        return CompetingConsumerSubscriptionModel.class.isAssignableFrom(type) || DurableSubscriptionModel.class.isAssignableFrom(type);
+    }
+
     // Replay from replayStart, then on later restarts either resume from the stored position (DEFAULT) or replay again
     // (SAME_AS_START_AT). SAME_AS_START_AT also disables the competing consumer and durable position storage by
     // delegating to the parent subscription model for those layers, so an in-memory read model rebuilt on every boot
@@ -109,13 +117,32 @@ class StartPositionSupport {
     private StartAt replayThenResumeAgnostic(String subscriptionId, StartAt replayStart, ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                return isCompetingConsumerSubscription || isDurableSubscription ? null : replayStart;
+                return delegatesItsStart(ctx) ? null : replayStart;
             });
             case DEFAULT -> StartAt.dynamic(ctx -> {
                 CheckpointStorage checkpointStorage = applicationContext.getBean(CheckpointStorage.class);
                 return checkpointStorage.exists(subscriptionId) ? StartAt.subscriptionModelDefault() : replayStart;
+            });
+        };
+    }
+
+    // NOW is where the subscription starts the first time. Under DEFAULT a restart continues from the stored position,
+    // which a plain StartAt.now() leaves to the durable layer. Under SAME_AS_START_AT every start is NOW, so the
+    // competing consumer and durable layers are told to stay out, as replayThenResumeAgnostic does for a replay start.
+    private StartAt nowThenResume(ResumeBehavior resumeBehavior) {
+        return switch (resumeBehavior) {
+            case DEFAULT -> StartAt.now();
+            case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
+                return delegatesItsStart(ctx) ? null : StartAt.now();
+            });
+        };
+    }
+
+    private DcbStartAt dcbNowThenResume(ResumeBehavior resumeBehavior) {
+        return switch (resumeBehavior) {
+            case DEFAULT -> DcbStartAt.now();
+            case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> {
+                return delegatesItsStart(ctx) ? null : DcbStartAt.now();
             });
         };
     }
@@ -142,7 +169,7 @@ class StartPositionSupport {
             return replayThenResume(subscriptionId, DcbStartAt.afterPosition(startAtDcbPosition), resumeBehavior);
         }
         return switch (startPosition) {
-            case NOW -> DcbStartAt.now();
+            case NOW -> dcbNowThenResume(resumeBehavior);
             case DEFAULT -> DcbStartAt.subscriptionModelDefault();
             case BEGINNING -> replayThenResume(subscriptionId, DcbStartAt.beginning(), resumeBehavior);
         };
@@ -155,9 +182,7 @@ class StartPositionSupport {
     private DcbStartAt replayThenResume(String subscriptionId, DcbStartAt replayStart, ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> {
-                boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                return isCompetingConsumerSubscription || isDurableSubscription ? null : replayStart;
+                return delegatesItsStart(ctx) ? null : replayStart;
             });
             case DEFAULT -> DcbStartAt.dynamic(ctx -> {
                 CheckpointStorage checkpointStorage = applicationContext.getBean(CheckpointStorage.class);
@@ -174,23 +199,12 @@ class StartPositionSupport {
         return switch (startPositionToUse) {
             case StartPositionToUse.StartAtISO8601 iso8601 -> switch (resumeBehavior) {
                 case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                    boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                    if (isCompetingConsumerSubscription) {
-                        // Since we now know that we always start AND resume from the beginning of time for this subscription,
-                        // we don't want the competing consumer to kick in. This is because the subscription will be in-memory only.
+                    if (delegatesItsStart(ctx)) {
+                        // The subscription always starts and resumes at the same place, so it is in-memory only. The competing
+                        // consumer must not kick in and the durable model has no position to store, so both delegate to the parent.
                         return null;
                     }
-
-                    boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                    if (isDurableSubscription) {
-                        // Since we now know that we always start AND resume from the specified iso8601 for this subscription,
-                        // we don't need to store the position in a durable storage, because we will always stream all events
-                        // each time the subscription restarts anyway. Thus, we return null to instruct the DurableSubscriptionModel
-                        // to simply delegate to the parent subscription.
-                        return null;
-                    } else {
-                        return StartAt.checkpoint(TimeBasedCheckpoint.from(iso8601.offsetDateTime()));
-                    }
+                    return StartAt.checkpoint(TimeBasedCheckpoint.from(iso8601.offsetDateTime()));
                 });
                 case DEFAULT -> StartAt.dynamic(() -> {
                     // Here we want to start the given IS8601 date/time the first time the subscription is started,
@@ -215,23 +229,12 @@ class StartPositionSupport {
             case StartPositionToUse.StartAtStartPosition startAtStartPosition -> switch (startAtStartPosition.startPosition) {
                 case BEGINNING_OF_TIME -> switch (resumeBehavior) {
                     case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                        boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                        if (isCompetingConsumerSubscription) {
-                            // Since we now know that we always start AND resume from the beginning of time for this subscription,
-                            // we don't want the competing consumer to kick in. This is because the subscription will be in-memory only.
+                        if (delegatesItsStart(ctx)) {
+                            // The subscription always starts and resumes at the same place, so it is in-memory only. The competing
+                            // consumer must not kick in and the durable model has no position to store, so both delegate to the parent.
                             return null;
                         }
-
-                        boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                        if (isDurableSubscription) {
-                            // Since we now know that we always start AND resume from the beginning of time for this subscription,
-                            // we don't need to store the position in a durable storage, because we will always stream all events
-                            // each time the subscription restarts anyway. Thus, we return null to instruct the DurableSubscriptionModel
-                            // to simply delegate to the parent subscription.
-                            return null;
-                        } else {
-                            return StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime());
-                        }
+                        return StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime());
                     });
                     case DEFAULT -> {
                         // Here we want to start the beginning of time the first time the subscription is started,
@@ -249,7 +252,7 @@ class StartPositionSupport {
                         }
                     }
                 };
-                case NOW -> StartAt.now();
+                case NOW -> nowThenResume(resumeBehavior);
                 case DEFAULT -> StartAt.dynamic(ctx -> {
                     // By default, we don't want to run the "default" behavior of the CatchupSubscriptionModel, which is to
                     // start streaming from the beginning of time. We want to instruct the CatchupSubscriptionModel to simply
