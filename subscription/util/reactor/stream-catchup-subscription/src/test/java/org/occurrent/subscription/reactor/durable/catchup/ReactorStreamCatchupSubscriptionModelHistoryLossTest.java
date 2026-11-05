@@ -37,6 +37,7 @@ import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
@@ -48,9 +49,11 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -506,6 +509,31 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     @Test
+    void a_resume_that_a_shutdown_overtakes_after_it_read_the_handover_whose_takeover_was_asked_for_throws_SubscriptionModelShutdownException_and_does_not_resume_the_wrapped_model_where_it_lost_the_history() {
+        // Given a subscription whose live start the wrapped model lost, and which it paused for a takeover it hasn't run yet
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            wrapped.asksTheListeners(ID, wrapped.positionOf(ID));
+            wrapped.pauseSubscription(ID);
+
+            // When a shutdown sets its flag right after a resume read the handover
+            NamedCatchupMapHook.installIn(catchup, "handedOver").afterTheReadIn("takeOverOnResume", catchup.namedSubscriptions::beginShutdown);
+            Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+            // Then the resume is refused, and the wrapped model is not resumed where it lost the history
+            assertAll(
+                    () -> assertThat(thrown).as("what the resume throws")
+                            .isInstanceOf(SubscriptionModelShutdownException.class).hasMessage("Cannot resume subscription " + ID + " because the subscription model is shutdown."),
+                    () -> assertThat(wrapped.resumedWhereItWasHeld).as("resumed where it lost the history").hasValue(0)
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_loss_of_the_lost_live_start_reported_again_as_the_takeover_hands_over_is_taken_over_when_the_model_restarts_from_the_present() {
         verifiesALossReportedAgainAsTheTakeoverHandsOverIsTakenOver(new LosingLiveStartModel(true));
     }
@@ -642,6 +670,60 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
     private static CloudEvent liveEvent(String id, long position) {
         return OccurrentCloudEventExtension.withPosition(CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("type").build(), position);
+    }
+
+    // Takes the place of a map of the catch-up and runs a hook once, right after the first read of it that a given method
+    // of the catch-up makes itself. That puts the hook between a call reading the map and acting on what it read, which
+    // no thread schedule reaches every time.
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static final class NamedCatchupMapHook extends ConcurrentHashMap {
+        private final AtomicReference<@Nullable String> readIn = new AtomicReference<>();
+        private final AtomicReference<@Nullable Runnable> afterRead = new AtomicReference<>();
+
+        static NamedCatchupMapHook installIn(ReactorStreamCatchupSubscriptionModel model, String fieldName) {
+            NamedCatchupMapHook hook = new NamedCatchupMapHook();
+            try {
+                Field field = NamedCatchupSupport.class.getDeclaredField(fieldName);
+                field.setAccessible(true);
+                hook.putAll((Map) field.get(model.namedSubscriptions));
+                field.set(model.namedSubscriptions, hook);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+            return hook;
+        }
+
+        void afterTheReadIn(String method, Runnable hook) {
+            readIn.set(method);
+            afterRead.set(hook);
+        }
+
+        @Override
+        public Object get(Object key) {
+            Object value = super.get(key);
+            runOnceIfCalledFrom(readIn, afterRead);
+            return value;
+        }
+
+        private static void runOnceIfCalledFrom(AtomicReference<@Nullable String> method, AtomicReference<@Nullable Runnable> hook) {
+            String name = method.get();
+            if (name == null || hook.get() == null || !calledFrom(name)) {
+                return;
+            }
+            Runnable run = hook.getAndSet(null);
+            if (run != null) {
+                method.set(null);
+                run.run();
+            }
+        }
+
+        private static boolean calledFrom(String method) {
+            return StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE).walk(frames -> frames
+                    .filter(frame -> frame.getDeclaringClass() == NamedCatchupSupport.class)
+                    .findFirst()
+                    .map(frame -> frame.getMethodName().equals(method) || frame.getMethodName().startsWith("lambda$" + method + "$"))
+                    .orElse(false));
+        }
     }
 
     // Events at positions 1 to head, where a read can be blocked or failed
