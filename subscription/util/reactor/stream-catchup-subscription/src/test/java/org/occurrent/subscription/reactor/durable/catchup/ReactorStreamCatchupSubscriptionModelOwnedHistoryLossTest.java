@@ -43,8 +43,10 @@ import org.slf4j.helpers.MessageFormatter;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -589,6 +591,29 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
         assertPausedForGoodFrom(liveStartOfTheEndedCatchup);
     }
 
+    @Test
+    void a_takeover_replay_of_a_catch_up_whose_subscription_ended_that_starts_while_a_subscribe_replaces_its_record_replays_nothing_through_the_old_action() {
+        // Given a catch-up that handed over, a loss of its live start whose takeover the wrapped model hasn't run yet,
+        // and a subscription the wrapped model then ended on its own
+        ReplacingOwnedHook ownedHook = ReplacingOwnedHook.installIn(catchup);
+        replayAndHandOver();
+        Checkpoint liveStartOfTheEndedCatchup = wrapped.positionOf(ID);
+        HistoryLossHandling.TakeOver lossOfTheLiveStart = (HistoryLossHandling.TakeOver) wrapped.asksTheListeners(ID, liveStartOfTheEndedCatchup);
+        wrapped.endsTheSubscriptionOnItsOwn(ID);
+        received.clear();
+
+        // When the takeover starts right after a straight to live subscribe of the id replaced the record of the catch-up
+        ownedHook.afterTheNextReplace(lossOfTheLiveStart.afterPause());
+        catchup.subscribe(ID, FILTER, StartAt.checkpoint(liveStartOfTheEndedCatchup), event -> Mono.empty());
+
+        // Then no replay starts through the ended catch-up, and the new subscription isn't resumed at a later position
+        assertAll(
+                () -> assertThat(received).as("delivered to the action of the ended catch-up").isEmpty(),
+                () -> assertThat(catchupsStarted).as("catch-ups started").hasValue(1),
+                () -> assertThat(wrapped.resumedAt).as("resumed at a position by a takeover replay").isEmpty()
+        );
+    }
+
     // Paused with the one error the catch-up logs, nothing restarted from the present, and every resume refused
     private void assertPausedForGoodFrom(Checkpoint lostFrom) {
         assertAll(
@@ -614,6 +639,40 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
 
     private Function<CloudEvent, Mono<Void>> action() {
         return event -> Mono.fromRunnable(() -> received.add(event.getId()));
+    }
+
+    // Takes the place of the map of the subscriptions the catch-up owns and runs a hook right after the next record it
+    // replaces. That puts the hook between a subscribe replacing the record of a gone subscription and forgetting
+    // that subscription's handover, which no thread schedule reaches every time.
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static final class ReplacingOwnedHook extends ConcurrentHashMap {
+        private final AtomicReference<Runnable> afterReplace = new AtomicReference<>();
+
+        static ReplacingOwnedHook installIn(ReactorStreamCatchupSubscriptionModel model) {
+            ReplacingOwnedHook hook = new ReplacingOwnedHook();
+            try {
+                Field owned = NamedCatchupSupport.class.getDeclaredField("owned");
+                owned.setAccessible(true);
+                owned.set(model.namedSubscriptions, hook);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+            return hook;
+        }
+
+        void afterTheNextReplace(Runnable hook) {
+            afterReplace.set(hook);
+        }
+
+        @Override
+        public boolean replace(Object key, Object oldValue, Object newValue) {
+            boolean replaced = super.replace(key, oldValue, newValue);
+            Runnable hook = replaced ? afterReplace.getAndSet(null) : null;
+            if (hook != null) {
+                hook.run();
+            }
+            return replaced;
+        }
     }
 
     private static void await(CountDownLatch latch) {
