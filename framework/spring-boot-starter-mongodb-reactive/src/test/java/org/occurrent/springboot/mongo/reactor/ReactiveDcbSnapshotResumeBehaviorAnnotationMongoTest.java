@@ -23,12 +23,14 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.Snapshot;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.DcbSnapshotView;
 import org.occurrent.dsl.snapshot.SnapshotView;
@@ -40,8 +42,14 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.springboot.mongo.reactor.ApplicationRestart.EventWriter;
 import org.occurrent.springboot.mongo.reactor.ApplicationRestart.Recorder;
+import org.occurrent.springboot.mongo.reactor.ApplicationRestart.RecordingSubscriber;
 import org.occurrent.springboot.mongo.reactor.ApplicationRestart.TestEvent;
+import org.occurrent.springboot.reactor.ComposedCatchupModel;
+import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
+import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
+import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -57,9 +65,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
+import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.occurrent.springboot.mongo.reactor.ApplicationRestart.FirstBootEnds.WHEN_THE_MARKER_IS_CHECKPOINTED;
 import static org.occurrent.springboot.mongo.reactor.ApplicationRestart.FirstBootEnds.WHEN_THE_MARKER_IS_DELIVERED;
 
 /**
@@ -72,8 +82,12 @@ import static org.occurrent.springboot.mongo.reactor.ApplicationRestart.FirstBoo
  * registrar read the stored snapshot, which it does once per delivered event. The other is the versions it saved, which
  * are the positions of the delivered events that were not already folded. A redelivery is read but not saved.
  * <p>
- * {@code BEGINNING} with {@code DEFAULT} is left out because after a restart it is delivered the first boot's last live
- * event again.
+ * A snapshot's checkpoint is stored after its handler returned, so a first boot that stores one is closed once the
+ * stored checkpoint is the one a {@link DeliveryWitness} beside the snapshot was delivered {@code live-1} with.
+ * <p>
+ * {@code BEGINNING} with {@code DEFAULT} is left out because after a restart it is delivered one event more than the
+ * ones it had not folded. Its stored checkpoint has position 3 at the first boot's close, but the live start in it is
+ * from before {@code live-1}.
  */
 @DisplayName("Reactive DCB Snapshot startAt and resumeBehavior across an application restart")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -93,23 +107,23 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
     // versions show which of them were new, so a redelivered live-1 cannot pass for while-down-1.
     @Test
     void a_dcb_snapshot_with_now_and_default_resume_behavior_is_not_delivered_history_on_first_boot_and_is_delivered_events_written_while_down_after_restart() {
-        restart("reactive-dcb-snapshot-now-default", DcbSnapshotNowDefault.class, 1, List.of(3L), 2, List.of(4L, 5L));
+        restart("reactive-dcb-snapshot-now-default", DcbSnapshotNowDefault.class, true, 1, List.of(3L), 2, List.of(4L, 5L));
     }
 
     @Test
     void a_dcb_snapshot_with_now_and_same_as_start_at_is_delivered_only_the_present_again_after_restart_but_still_folds_events_written_while_down() {
-        restart("reactive-dcb-snapshot-now-same", DcbSnapshotNowSameAsStartAt.class, 1, List.of(3L), 1, List.of(5L));
+        restart("reactive-dcb-snapshot-now-same", DcbSnapshotNowSameAsStartAt.class, false, 1, List.of(3L), 1, List.of(5L));
     }
 
     @Test
     void a_dcb_snapshot_with_beginning_and_same_as_start_at_is_delivered_the_whole_history_again_after_restart() {
-        restart("reactive-dcb-snapshot-beginning-same", DcbSnapshotBeginningSameAsStartAt.class, 3, List.of(1L, 2L, 3L), 5, List.of(4L, 5L));
+        restart("reactive-dcb-snapshot-beginning-same", DcbSnapshotBeginningSameAsStartAt.class, false, 3, List.of(1L, 2L, 3L), 5, List.of(4L, 5L));
     }
 
     private static void restart(String snapshotId, Class<? extends SnapshotRecorder> recorderType,
-                                int expectedReadsFirstBoot, List<Long> expectedSavedFirstBoot,
+                                boolean storesCheckpoint, int expectedReadsFirstBoot, List<Long> expectedSavedFirstBoot,
                                 int expectedReadsSecondBoot, List<Long> expectedSavedSecondBoot) {
-        APPLICATION.run(snapshotId, recorderType, WHEN_THE_MARKER_IS_DELIVERED,
+        APPLICATION.run(snapshotId, recorderType, storesCheckpoint ? WHEN_THE_MARKER_IS_CHECKPOINTED : WHEN_THE_MARKER_IS_DELIVERED,
                 List.of("historic-1", "historic-2", "live-1"),
                 EVERYTHING_WRITTEN,
                 (context, marker) -> {
@@ -140,8 +154,26 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
         @Bean
         EventWriter eventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> converter,
                                 @Value("${test.before-subscribe}") String beforeSubscribe,
-                                @Value("${test.after-start}") String afterStart) {
-            return new EventWriter(name -> append(dcbEventStore, converter, new TestEvent(name)), beforeSubscribe, afterStart);
+                                @Value("${test.after-start}") String afterStart,
+                                ObjectProvider<DcbSnapshotBeginningSameAsStartAt> replaying,
+                                ObjectProvider<ComposedCatchupModel> composedCatchupModel,
+                                ObjectProvider<FluxSubscriptionModel> subscriptionModel) {
+            // The BEGINNING snapshot replays the history on every boot. An event written while that replay still runs
+            // is delivered by the replay and by the live feed, so the marker is written once the replay is over.
+            Runnable replayIsOver = () -> {
+                String lastHistory = List.of(beforeSubscribe.split(",")).getLast();
+                ReplayAwareSubscriptions replayAware = composedCatchupModel.getObject().catchupModelFor((SubscriptionModelCapability) subscriptionModel.getObject()).orElseThrow();
+                await().atMost(ofSeconds(30)).pollInterval(ofMillis(50)).untilAsserted(() -> {
+                    assertThat(replaying.getObject().names()).contains(lastHistory);
+                    assertThat(replayAware.isCatchingUp("reactive-dcb-snapshot-beginning-same")).isFalse();
+                });
+            };
+            return new EventWriter(name -> append(dcbEventStore, converter, new TestEvent(name)), beforeSubscribe, afterStart, replayIsOver);
+        }
+
+        @Bean
+        DeliveryWitness deliveryWitness() {
+            return new DeliveryWitness();
         }
 
         @Bean
@@ -150,8 +182,8 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
         }
 
         @Bean
-        DcbSnapshotNowDefault dcbSnapshotNowDefault(@Qualifier("dcbSnapshotNowDefaultStore") CountingSnapshotStore store) {
-            return new DcbSnapshotNowDefault(store);
+        DcbSnapshotNowDefault dcbSnapshotNowDefault(@Qualifier("dcbSnapshotNowDefaultStore") CountingSnapshotStore store, DeliveryWitness witness) {
+            return new DcbSnapshotNowDefault(store, witness);
         }
 
         @Bean
@@ -160,8 +192,8 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
         }
 
         @Bean
-        DcbSnapshotNowSameAsStartAt dcbSnapshotNowSameAsStartAt(@Qualifier("dcbSnapshotNowSameAsStartAtStore") CountingSnapshotStore store) {
-            return new DcbSnapshotNowSameAsStartAt(store);
+        DcbSnapshotNowSameAsStartAt dcbSnapshotNowSameAsStartAt(@Qualifier("dcbSnapshotNowSameAsStartAtStore") CountingSnapshotStore store, DeliveryWitness witness) {
+            return new DcbSnapshotNowSameAsStartAt(store, witness);
         }
 
         @Bean
@@ -170,8 +202,8 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
         }
 
         @Bean
-        DcbSnapshotBeginningSameAsStartAt dcbSnapshotBeginningSameAsStartAt(@Qualifier("dcbSnapshotBeginningSameAsStartAtStore") CountingSnapshotStore store) {
-            return new DcbSnapshotBeginningSameAsStartAt(store);
+        DcbSnapshotBeginningSameAsStartAt dcbSnapshotBeginningSameAsStartAt(@Qualifier("dcbSnapshotBeginningSameAsStartAtStore") CountingSnapshotStore store, DeliveryWitness witness) {
+            return new DcbSnapshotBeginningSameAsStartAt(store, witness);
         }
     }
 
@@ -184,8 +216,8 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
     }
 
     static class DcbSnapshotNowDefault extends SnapshotRecorder {
-        DcbSnapshotNowDefault(CountingSnapshotStore store) {
-            super(store);
+        DcbSnapshotNowDefault(CountingSnapshotStore store, DeliveryWitness witness) {
+            super(store, witness);
         }
 
         @Snapshot(id = "reactive-dcb-snapshot-now-default", storeName = "dcbSnapshotNowDefaultStore", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.DEFAULT)
@@ -195,8 +227,8 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
     }
 
     static class DcbSnapshotNowSameAsStartAt extends SnapshotRecorder {
-        DcbSnapshotNowSameAsStartAt(CountingSnapshotStore store) {
-            super(store);
+        DcbSnapshotNowSameAsStartAt(CountingSnapshotStore store, DeliveryWitness witness) {
+            super(store, witness);
         }
 
         @Snapshot(id = "reactive-dcb-snapshot-now-same", storeName = "dcbSnapshotNowSameAsStartAtStore", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
@@ -206,8 +238,8 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
     }
 
     static class DcbSnapshotBeginningSameAsStartAt extends SnapshotRecorder {
-        DcbSnapshotBeginningSameAsStartAt(CountingSnapshotStore store) {
-            super(store);
+        DcbSnapshotBeginningSameAsStartAt(CountingSnapshotStore store, DeliveryWitness witness) {
+            super(store, witness);
         }
 
         @Snapshot(id = "reactive-dcb-snapshot-beginning-same", storeName = "dcbSnapshotBeginningSameAsStartAtStore", startAt = StartPosition.BEGINNING, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
@@ -216,12 +248,22 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
         }
     }
 
+    // Delivered every event written while it runs, with the checkpoint of each, which a snapshot is not given.
+    static class DeliveryWitness extends RecordingSubscriber {
+        @DcbSubscription(id = "reactive-dcb-snapshot-witness", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        Mono<Void> on(TestEvent event, EventMetadata metadata) {
+            return record(event, metadata);
+        }
+    }
+
     // The snapshot is stored in MongoDB, so the names it folded on the first boot are still there on the second.
     abstract static class SnapshotRecorder implements Recorder {
         final CountingSnapshotStore store;
+        private final DeliveryWitness witness;
 
-        SnapshotRecorder(CountingSnapshotStore store) {
+        SnapshotRecorder(CountingSnapshotStore store, DeliveryWitness witness) {
             this.store = store;
+            this.witness = witness;
         }
 
         @Override
@@ -231,7 +273,7 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
 
         @Override
         public @Nullable String checkpointOf(String name) {
-            return null;
+            return witness.checkpointOf(name);
         }
     }
 
