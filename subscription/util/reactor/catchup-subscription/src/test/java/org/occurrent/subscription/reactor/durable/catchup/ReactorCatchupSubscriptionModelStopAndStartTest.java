@@ -110,8 +110,8 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
         catchup.stop();
         catchup.shutdown();
 
-        assertThatThrownBy(() -> catchup.pauseSubscription("s")).as("what a pause throws").isInstanceOf(SubscriptionModelShutdownException.class);
-        assertThatThrownBy(() -> catchup.resumeSubscription("s")).as("what a resume throws").isInstanceOf(SubscriptionModelShutdownException.class);
+        assertThatThrownBy(() -> catchup.pauseSubscription("s")).as("what a pause throws").isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+        assertThatThrownBy(() -> catchup.resumeSubscription("s")).as("what a resume throws").isExactlyInstanceOf(SubscriptionModelShutdownException.class);
         assertThat(wrapped.startCalls).as("starts of the wrapped model").isEmpty();
     }
 
