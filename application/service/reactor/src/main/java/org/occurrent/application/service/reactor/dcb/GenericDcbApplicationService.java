@@ -143,7 +143,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             // Given true only when the executor opened the transaction the read runs in and the read is its first operation
             Function<Boolean, Mono<Decision<E>>> readAndDecide = firstOperationOfTransaction -> Mono.defer(() -> readOptions == null
                             ? eventStore.read(criteria)
-                            : eventStore.read(criteria, firstOperationOfTransaction && readOptions.versionsRequested() ? readOptions.asFirstOperationOfTransaction() : readOptions))
+                            : eventStore.read(criteria, dispatchSynchronously ? inExecutor(readOptions, firstOperationOfTransaction) : readOptions))
                     .doOnNext(eventStream -> refuseEventBelowFoldedPosition(criteria, options, eventStream))
                     .onErrorMap(DcbSnapshotInvalidException.class, refused -> refused.beforeAppend(functionThatCallsDomainModel))
                     .flatMap(eventStream -> {
@@ -215,6 +215,15 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     @SuppressWarnings("removal")
+    // A read in the executor tells the store that a caller saves at versions only after confirming an append, and whether
+    // the read is the first operation of a transaction the executor opened
+    private static DcbReadOptions inExecutor(DcbReadOptions readOptions, boolean firstOperationOfTransaction) {
+        if (!readOptions.versionsRequested()) {
+            return readOptions;
+        }
+        return firstOperationOfTransaction ? readOptions.asFirstOperationOfTransaction() : readOptions.confirmingAppendBeforeSaving();
+    }
+
     private static @Nullable DcbReadOptions readOptions(DcbExecuteOptions<?> options) {
         @Nullable Long fromPosition = options.fromPosition();
         @Nullable DcbMarkerVersions fromVersions = options.fromVersions();

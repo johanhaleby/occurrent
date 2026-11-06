@@ -157,7 +157,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 if (readOptions == null) {
                     eventStream = eventStore.read(criteria);
                 } else {
-                    eventStream = eventStore.read(criteria, firstOperationOfTransaction && readOptions.versionsRequested() ? readOptions.asFirstOperationOfTransaction() : readOptions);
+                    eventStream = eventStore.read(criteria, dispatchSynchronously ? inExecutor(readOptions, firstOperationOfTransaction) : readOptions);
                 }
                 refuseEventBelowFoldedPosition(criteria, options, eventStream);
             } catch (DcbSnapshotInvalidException refused) {
@@ -281,6 +281,15 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     @SuppressWarnings("removal")
+    // A read in the executor tells the store that a caller saves at versions only after confirming an append, and whether
+    // the read is the first operation of a transaction the executor opened
+    private static DcbReadOptions inExecutor(DcbReadOptions readOptions, boolean firstOperationOfTransaction) {
+        if (!readOptions.versionsRequested()) {
+            return readOptions;
+        }
+        return firstOperationOfTransaction ? readOptions.asFirstOperationOfTransaction() : readOptions.confirmingAppendBeforeSaving();
+    }
+
     private static @Nullable DcbReadOptions readOptions(DcbExecuteOptions<?> options) {
         @Nullable Long fromPosition = options.fromPosition();
         @Nullable DcbMarkerVersions fromVersions = options.fromVersions();

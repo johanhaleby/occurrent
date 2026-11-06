@@ -453,32 +453,6 @@ class NativeMongoTransactionExecutorTest {
         }
     }
 
-    // ------------------------------------------------------------------------------------------------------------
-    // allowsReadBeforeTransaction
-    // ------------------------------------------------------------------------------------------------------------
-
-    @Test
-    void allowsReadBeforeTransaction_is_true_with_no_session_bound_to_the_thread() {
-        assertThat(transactionExecutor.allowsReadBeforeTransaction()).isTrue();
-    }
-
-    @Test
-    void allowsReadBeforeTransaction_is_false_inside_inTransaction() {
-        assertThat(transactionExecutor.inTransaction(transactionExecutor::allowsReadBeforeTransaction)).isFalse();
-    }
-
-    @Test
-    void allowsReadBeforeTransaction_is_false_for_a_session_a_caller_bound_to_the_thread() {
-        try (ClientSession session = mongoClient.startSession()) {
-            ClientSessionHolder.set(session);
-            try {
-                assertThat(transactionExecutor.allowsReadBeforeTransaction()).isFalse();
-            } finally {
-                ClientSessionHolder.remove();
-            }
-        }
-    }
-
     private DcbApplicationService<NameDefined> dcbApplicationService(SynchronousSubscriptionModel subscriptions) {
         TagGenerator<NameDefined> tagGenerator = event -> Set.of(Tag.parse("name:" + event.name()));
         return GenericDcbApplicationService.<NameDefined>builder(eventStore, converter)

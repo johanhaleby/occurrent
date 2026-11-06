@@ -173,42 +173,42 @@ class DcbReadOptionsTest {
 
         @Test
         void rejects_an_after_position_bound() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.afterPosition(5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.afterPosition(5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false, false))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Reading after marker versions cannot be combined with a position bound");
         }
 
         @Test
         void rejects_an_up_to_position_bound() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.upToPosition(5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.upToPosition(5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false, false))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Reading after marker versions cannot be combined with a position bound");
         }
 
         @Test
         void rejects_a_position_range_with_both_bounds() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.between(1, 5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.between(1, 5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false, false))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Reading after marker versions cannot be combined with a position bound");
         }
 
         @Test
         void rejects_an_after_position_bound_of_zero() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.afterPosition(0), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.afterPosition(0), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false, false))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Reading after marker versions cannot be combined with a position bound");
         }
 
         @Test
         void rejects_not_asking_for_versions() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.fromBeginning(), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), false, Optional.of(SAVED), false))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.fromBeginning(), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), false, Optional.of(SAVED), false, false))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Reading after marker versions requires the read to ask for versions");
         }
 
         @Test
         void rejects_null_after_versions_in_the_canonical_constructor() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.fromBeginning(), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, null, false))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.fromBeginning(), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, null, false, false))
                     .isExactlyInstanceOf(NullPointerException.class)
                     .hasMessage("After versions cannot be null");
         }
@@ -216,6 +216,59 @@ class DcbReadOptionsTest {
         private void assertResumesAfterSaved(DcbReadOptions options) {
             assertThat(options.versionsRequested()).isTrue();
             assertThat(options.afterVersions()).contains(SAVED);
+        }
+    }
+
+    @Nested
+    @DisplayName("a read whose caller confirms an append before saving")
+    class AReadWhoseCallerConfirmsAnAppendBeforeSaving {
+
+        @Test
+        void is_not_marked_by_default() {
+            DcbReadOptions options = DcbReadOptions.fromBeginning().withVersions();
+
+            assertThat(options.confirmsAppendBeforeSaving()).isFalse();
+            assertThat(options.firstOperationOfTransaction()).isFalse();
+        }
+
+        @Test
+        void asks_for_versions_when_it_is_marked() {
+            DcbReadOptions options = DcbReadOptions.fromBeginning().confirmingAppendBeforeSaving();
+
+            assertThat(options.versionsRequested()).isTrue();
+            assertThat(options.confirmsAppendBeforeSaving()).isTrue();
+            assertThat(options.firstOperationOfTransaction()).isFalse();
+        }
+
+        @Test
+        void is_marked_as_well_when_it_is_the_first_operation_of_a_transaction() {
+            DcbReadOptions options = DcbReadOptions.afterVersions(SAVED).asFirstOperationOfTransaction();
+
+            assertThat(options.confirmsAppendBeforeSaving()).isTrue();
+            assertThat(options.firstOperationOfTransaction()).isTrue();
+            assertThat(options.afterVersions()).contains(SAVED);
+        }
+
+        @Test
+        void keeps_both_marks_through_the_other_copies() {
+            DcbReadOptions options = DcbReadOptions.fromBeginning().asFirstOperationOfTransaction().withVersions().forwards();
+
+            assertThat(options.confirmsAppendBeforeSaving()).isTrue();
+            assertThat(options.firstOperationOfTransaction()).isTrue();
+        }
+
+        @Test
+        void rejects_the_mark_on_a_read_that_does_not_ask_for_versions() {
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.fromBeginning(), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), false, Optional.empty(), true, false))
+                    .isExactlyInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("A read whose caller confirms an append before saving must ask for versions");
+        }
+
+        @Test
+        void rejects_a_first_operation_of_a_transaction_without_the_mark() {
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.fromBeginning(), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.empty(), false, true))
+                    .isExactlyInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("A read as the first operation of a transaction must come from a caller that confirms an append before saving");
         }
     }
 }

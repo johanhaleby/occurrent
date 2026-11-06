@@ -374,9 +374,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a reactive transaction
     // it reports no versions, since the transaction's own increments may still abort and a later append would reuse
     // them, unless the caller says the read is the transaction's first operation and the store runs on a replica set.
-    // Then it reads in that transaction, and a failure fails the read so the transaction's owner can retry. A failure
-    // outside a transaction reports no versions instead of failing the read. A read after versions can't fall back to a
-    // full read without double-applying events, so it is refused in both cases.
+    // Then it reads in that transaction. With synchronization active, no transaction and no session bound yet, a caller
+    // that confirms an append before saving gets the read through the template on a replica set, which binds a session
+    // transaction the read is the first operation of, so an append in the synchronization joins it. In those two cases a
+    // failure fails the read so the transaction's owner can retry. Otherwise a failure reports no versions instead of
+    // failing the read. A read after versions can't fall back to a full read without double-applying events, so it is
+    // refused in both cases.
     private Mono<DcbEventStream> readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -397,23 +400,36 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 }
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
             }
-            Mono<DcbEventStream> ownTransaction = Mono.usingWhen(
-                    mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build())
-                            .onErrorMap(RuntimeException.class, e -> new MarkerVersionsReadFailure("start session", e)),
-                    clientSession -> Mono.defer(() -> {
-                        clientSession.startTransaction(markerVersionsTransactionOptions);
-                        return readMarkerVersionsWith(mongoTemplate.withSession(clientSession), criteria, options);
-                    }).onErrorMap(e -> e instanceof RuntimeException && !(e instanceof DcbSnapshotInvalidException), e -> new MarkerVersionsReadFailure("read", e))
-                            // A failed commit leaves the session in the committed state, so closing it sends no abort
-                            .flatMap(eventStream -> Mono.from(clientSession.commitTransaction())
-                                    .onErrorMap(RuntimeException.class, e -> new MarkerVersionsReadFailure("commit", e))
-                                    .thenReturn(eventStream)),
-                    // Closing the session aborts a read-only transaction that is still open
-                    clientSession -> Mono.fromRunnable(clientSession::close),
-                    (clientSession, error) -> Mono.fromRunnable(clientSession::close),
-                    clientSession -> Mono.fromRunnable(clientSession::close));
-            return ownTransaction.onErrorResume(MarkerVersionsReadFailure.class, failure -> markerVersionsReadFailed(criteria, options, failure.phase, requireNonNull(failure.getCause())));
+            return (options.confirmsAppendBeforeSaving() && runsOnReplicaSet ? synchronizationWithoutSession() : Mono.just(false))
+                    .flatMap(bindsSession -> bindsSession ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options));
         });
+    }
+
+    private Mono<DcbEventStream> readInOwnTransaction(DcbCriteria criteria, DcbReadOptions options) {
+        Mono<DcbEventStream> ownTransaction = Mono.usingWhen(
+                mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build())
+                        .onErrorMap(RuntimeException.class, e -> new MarkerVersionsReadFailure("start session", e)),
+                clientSession -> Mono.defer(() -> {
+                    clientSession.startTransaction(markerVersionsTransactionOptions);
+                    return readMarkerVersionsWith(mongoTemplate.withSession(clientSession), criteria, options);
+                }).onErrorMap(e -> e instanceof RuntimeException && !(e instanceof DcbSnapshotInvalidException), e -> new MarkerVersionsReadFailure("read", e))
+                        // A failed commit leaves the session in the committed state, so closing it sends no abort
+                        .flatMap(eventStream -> Mono.from(clientSession.commitTransaction())
+                                .onErrorMap(RuntimeException.class, e -> new MarkerVersionsReadFailure("commit", e))
+                                .thenReturn(eventStream)),
+                // Closing the session aborts a read-only transaction that is still open
+                clientSession -> Mono.fromRunnable(clientSession::close),
+                (clientSession, error) -> Mono.fromRunnable(clientSession::close),
+                clientSession -> Mono.fromRunnable(clientSession::close));
+        return ownTransaction.onErrorResume(MarkerVersionsReadFailure.class, failure -> markerVersionsReadFailed(criteria, options, failure.phase, requireNonNull(failure.getCause())));
+    }
+
+    // Synchronization is active with no transaction and no session bound for this store's database yet
+    private Mono<Boolean> synchronizationWithoutSession() {
+        return TransactionSynchronizationManager.forCurrentTransaction()
+                .map(synchronization -> synchronization.isSynchronizationActive() && !synchronization.isActualTransactionActive()
+                        && !synchronization.hasResource(mongoTemplate.getMongoDatabaseFactory()))
+                .onErrorResume(NoTransactionException.class, e -> Mono.just(false));
     }
 
     private Mono<DcbEventStream> readMarkerVersionsWith(ReactiveMongoOperations template, DcbCriteria criteria, DcbReadOptions options) {

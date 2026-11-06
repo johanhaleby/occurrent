@@ -418,7 +418,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
             transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
 
-            assertThat(store.readOptions).as("[read options]").singleElement().satisfies(options -> assertAll(
+            assertThat(store.readOptions).as("[read options]").first().satisfies(options -> assertAll(
                     () -> assertThat(options).as("options passed").isPresent(),
                     () -> assertThat(options.orElseThrow().firstOperationOfTransaction()).as("first operation of the transaction").isTrue(),
                     () -> assertThat(options.orElseThrow().versionsRequested()).as("versions requested").isTrue()));
@@ -430,7 +430,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
             transactionalService(store, new TracingExecutor(trace).joiningATransactionTheCallerOpened(), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
 
-            assertThat(store.readOptions).as("[read options]").singleElement().satisfies(options -> assertAll(
+            assertThat(store.readOptions).as("[read options]").first().satisfies(options -> assertAll(
                     () -> assertThat(options).as("options passed").isPresent(),
                     () -> assertThat(options.orElseThrow().firstOperationOfTransaction()).as("first operation of the transaction").isFalse(),
                     () -> assertThat(options.orElseThrow().versionsRequested()).as("versions requested").isTrue()));
@@ -442,7 +442,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
             transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, events -> decide());
 
-            assertThat(store.readOptions).as("[read options]").containsExactly(Optional.empty());
+            assertThat(store.readOptions).as("[read options]").noneMatch(options -> options.map(DcbReadOptions::firstOperationOfTransaction).orElse(false));
         }
 
         @Test

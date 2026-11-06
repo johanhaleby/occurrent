@@ -45,14 +45,17 @@ import static java.util.Objects.requireNonNull;
  * @param afterVersions optional marker versions to resume after, see {@link #afterVersions(DcbMarkerVersions)}. When
  *                      present, {@code versionsRequested} must be {@code true} and the position range must have neither
  *                      bound.
+ * @param confirmsAppendBeforeSaving whether the caller saves no snapshot at the versions this read reports, and saves
+ *                      at an append's versions only after confirming that append, see {@link #confirmingAppendBeforeSaving()}.
+ *                      When {@code true}, {@code versionsRequested} must be {@code true}.
  * @param firstOperationOfTransaction whether the caller opened the transaction the read runs in and nothing has run in
- *                      it yet, see {@link #asFirstOperationOfTransaction()}. When {@code true}, {@code versionsRequested}
- *                      must be {@code true}.
+ *                      it yet, see {@link #asFirstOperationOfTransaction()}. When {@code true},
+ *                      {@code confirmsAppendBeforeSaving} must be {@code true}.
  */
 @NullMarked
 public record DcbReadOptions(PositionRange positionRange, Direction direction, int skip, OptionalInt limit,
                              boolean versionsRequested, Optional<DcbMarkerVersions> afterVersions,
-                             boolean firstOperationOfTransaction) {
+                             boolean confirmsAppendBeforeSaving, boolean firstOperationOfTransaction) {
 
     /**
      * Selects which end of the matching events to start from before applying skip and limit. The returned events stay
@@ -88,8 +91,11 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
                 throw new IllegalArgumentException("Reading after marker versions cannot be combined with a position bound");
             }
         }
-        if (firstOperationOfTransaction && !versionsRequested) {
-            throw new IllegalArgumentException("A read as the first operation of a transaction must ask for versions");
+        if (confirmsAppendBeforeSaving && !versionsRequested) {
+            throw new IllegalArgumentException("A read whose caller confirms an append before saving must ask for versions");
+        }
+        if (firstOperationOfTransaction && !confirmsAppendBeforeSaving) {
+            throw new IllegalArgumentException("A read as the first operation of a transaction must come from a caller that confirms an append before saving");
         }
     }
 
@@ -98,7 +104,7 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * {@code limit}, without asking for marker versions.
      */
     public DcbReadOptions(PositionRange positionRange, Direction direction, int skip, OptionalInt limit) {
-        this(positionRange, direction, skip, limit, false, Optional.empty(), false);
+        this(positionRange, direction, skip, limit, false, Optional.empty(), false, false);
     }
 
     /**
@@ -136,7 +142,7 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * (see {@link Direction#BACKWARD}). The returned events are always in ascending position order regardless.
      */
     public DcbReadOptions backwards() {
-        return new DcbReadOptions(positionRange, Direction.BACKWARD, skip, limit, versionsRequested, afterVersions, firstOperationOfTransaction);
+        return new DcbReadOptions(positionRange, Direction.BACKWARD, skip, limit, versionsRequested, afterVersions, confirmsAppendBeforeSaving, firstOperationOfTransaction);
     }
 
     /**
@@ -144,21 +150,21 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * (see {@link Direction#FORWARD}). The returned events are always in ascending position order regardless.
      */
     public DcbReadOptions forwards() {
-        return new DcbReadOptions(positionRange, Direction.FORWARD, skip, limit, versionsRequested, afterVersions, firstOperationOfTransaction);
+        return new DcbReadOptions(positionRange, Direction.FORWARD, skip, limit, versionsRequested, afterVersions, confirmsAppendBeforeSaving, firstOperationOfTransaction);
     }
 
     /**
      * Returns a copy of these options that skips {@code count} matching events from the selected end.
      */
     public DcbReadOptions skip(int count) {
-        return new DcbReadOptions(positionRange, direction, count, limit, versionsRequested, afterVersions, firstOperationOfTransaction);
+        return new DcbReadOptions(positionRange, direction, count, limit, versionsRequested, afterVersions, confirmsAppendBeforeSaving, firstOperationOfTransaction);
     }
 
     /**
      * Returns a copy of these options capped to at most {@code max} matching events.
      */
     public DcbReadOptions limit(int max) {
-        return new DcbReadOptions(positionRange, direction, skip, OptionalInt.of(max), versionsRequested, afterVersions, firstOperationOfTransaction);
+        return new DcbReadOptions(positionRange, direction, skip, OptionalInt.of(max), versionsRequested, afterVersions, confirmsAppendBeforeSaving, firstOperationOfTransaction);
     }
 
     /**
@@ -173,12 +179,28 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * the same path as before.
      */
     public DcbReadOptions withVersions() {
-        return new DcbReadOptions(positionRange, direction, skip, limit, true, afterVersions, firstOperationOfTransaction);
+        return new DcbReadOptions(positionRange, direction, skip, limit, true, afterVersions, confirmsAppendBeforeSaving, firstOperationOfTransaction);
     }
 
     /**
      * Returns a copy of these options that asks for marker versions, as {@link #withVersions()} does, and tells the store
-     * the read is the first operation of the transaction it runs in. A MongoDB store reports no versions for a read in a
+     * that you save no snapshot at the versions this read reports, and save at an append's versions only after
+     * {@link DcbAppendConfirmation} confirms that append. A Spring MongoDB store on a replica set then reads in a session
+     * transaction of Spring's transaction synchronization when one is active, no transaction is, and no session is bound
+     * for its database yet. The read is that transaction's first operation, and an append in the same synchronization
+     * then commits or rolls back with it. Without this, the store reads on a session of its own there.
+     * <p>
+     * The versions of such a read come from a transaction that hasn't committed when the read returns, so a write they
+     * count can still roll back. The DCB application services set it on every read that asks for versions when they
+     * dispatch synchronously.
+     */
+    public DcbReadOptions confirmingAppendBeforeSaving() {
+        return new DcbReadOptions(positionRange, direction, skip, limit, true, afterVersions, true, firstOperationOfTransaction);
+    }
+
+    /**
+     * Returns a copy of these options that asks for marker versions, as {@link #withVersions()} does, and tells the store
+     * the read is the first operation of the transaction it runs in. It implies {@link #confirmingAppendBeforeSaving()}. A MongoDB store reports no versions for a read in a
      * transaction, since the transaction's own writes may still abort, unless this is set. With it set, a MongoDB store on
      * a replica set reads the markers, the head and the events in that transaction and reports versions from them.
      * <p>
@@ -188,7 +210,7 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * transaction.
      */
     public DcbReadOptions asFirstOperationOfTransaction() {
-        return new DcbReadOptions(positionRange, direction, skip, limit, true, afterVersions, true);
+        return new DcbReadOptions(positionRange, direction, skip, limit, true, afterVersions, true, true);
     }
 
     /**
@@ -244,7 +266,7 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      */
     public static DcbReadOptions afterVersions(DcbMarkerVersions markerVersions) {
         requireNonNull(markerVersions, "Marker versions cannot be null");
-        return new DcbReadOptions(PositionRange.fromBeginning(), Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(markerVersions), false);
+        return new DcbReadOptions(PositionRange.fromBeginning(), Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(markerVersions), false, false);
     }
 
 }

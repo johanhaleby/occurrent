@@ -333,9 +333,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a Spring-managed
     // transaction it reports no versions, since the transaction's own increments may still abort and a later append
     // would reuse them, unless the caller says the read is the transaction's first operation and the store runs on a
-    // replica set. Then it reads in that transaction, and a failure fails the read so the transaction's owner can retry.
-    // A failure outside a transaction reports no versions instead of failing the read. A read after versions can't fall
-    // back to a full read without double-applying events, so it is refused in both cases.
+    // replica set. Then it reads in that transaction. With synchronization active, no transaction and no session bound
+    // yet, a caller that confirms an append before saving gets the read through the template on a replica set, which
+    // binds a session transaction the read is the first operation of, so an append in the synchronization joins it.
+    // In those two cases a failure fails the read so the transaction's owner can retry. Otherwise a failure reports no
+    // versions instead of failing the read. A read after versions can't fall back to a full read without
+    // double-applying events, so it is refused in both cases.
     private DcbEventStream readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -354,6 +357,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 return readMarkerVersionsWith(mongoTemplate, criteria, options);
             }
             return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
+        }
+        if (options.confirmsAppendBeforeSaving() && runsOnReplicaSet && TransactionSynchronizationManager.isSynchronizationActive()
+                && TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) == null) {
+            return readMarkerVersionsWith(mongoTemplate, criteria, options);
         }
 
         final ClientSession clientSession;
