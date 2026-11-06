@@ -129,11 +129,12 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * A DCB read that asks for marker versions runs in a read-only snapshot transaction of its own, on a session from the
  * template's {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory}, bounded by
  * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a reactive transaction the subscriber
- * context carries, or with a session bound to its synchronization, it reports no marker versions, since that
- * transaction's writes may still abort, and a read after marker versions is refused. {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} can say the read is the first
+ * context carries it reports no marker versions, since that transaction's writes may still abort, and a read after
+ * marker versions is refused. {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} can say the read is the first
  * operation of the transaction, or that the caller confirms an append before saving. On a replica set the store then
  * reads the versions in that transaction, or in the session transaction the read binds when synchronization is active
- * with no session bound yet. The store answers {@link DcbAppendConfirmation} with a
+ * with no session bound yet. With a session already bound there, a read that confirms an append reports no versions.
+ * The store answers {@link DcbAppendConfirmation} with a
  * majority read on the primary from {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory#getMongoDatabase()},
  * which joins no session. A store built on a template from {@link ReactiveMongoTemplate#withSession(ClientSession)}
  * isn't supported for DCB snapshot deciders.
@@ -377,13 +378,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // commits it once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a reactive
     // transaction it reports no versions, since the transaction's own increments may still abort and a later append would
     // reuse them, unless the caller says the read is the transaction's first operation and the store runs on a replica
-    // set. Then it reads in that transaction. With synchronization active and no transaction, a session already bound may
-    // hold writes that abort later, so the read goes through it and reports no versions. With no session bound yet, a
-    // caller that confirms an append before saving gets the read through the template on a replica set, which binds a
-    // session transaction the read is the first operation of, so an append in the synchronization joins it. Where it reads
+    // set. Then it reads in that transaction. With synchronization active and no transaction, a caller that confirms an append
+    // before saving reads through a session already bound, which may hold writes that abort later, and gets no versions.
+    // With no session bound yet it reads through the template on a replica set, which binds a session transaction the
+    // read is the first operation of, so an append in the synchronization joins it. Where it reads
     // versions in a transaction it doesn't own, a failure fails the read so the transaction's owner can retry. Otherwise a
     // failure reports no versions instead of failing the read. A read after versions can't fall back to a full read
-    // without double-applying events, so it is refused wherever the store reports no versions.
+    // without double-applying events, so markerVersionsUnavailable refuses it.
     private Mono<DcbEventStream> readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -404,11 +405,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 }
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
             }
+            if (!options.confirmsAppendBeforeSaving()) {
+                return readInOwnTransaction(criteria, options);
+            }
             return synchronization().flatMap(synchronization -> switch (synchronization) {
                 case SESSION_BOUND -> markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
-                case NO_SESSION -> options.confirmsAppendBeforeSaving() && runsOnReplicaSet
-                        ? readMarkerVersionsWith(mongoTemplate, criteria, options)
-                        : readInOwnTransaction(criteria, options);
+                case NO_SESSION -> runsOnReplicaSet ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
                 case INACTIVE -> readInOwnTransaction(criteria, options);
             });
         });
@@ -751,7 +753,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     /**
      * Applies the retry spec only when this store owns the transaction. When one is already active, or a session bound
-     * to the synchronization holds one, the operator joins it, a conflict aborts it, and every further attempt fails on
+     * for this store's database holds one, the operator joins it, a conflict aborts it, and every further attempt fails on
      * its first read with {@code NoSuchTransaction}, so retrying could never commit. Route every retry of a transaction
      * on the write path through here so the ownership check cannot be forgotten. See ADR 0074.
      */
@@ -761,8 +763,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private Mono<Boolean> joinsATransaction() {
         return TransactionSynchronizationManager.forCurrentTransaction()
-                .map(synchronization -> synchronization.isActualTransactionActive()
-                        || (synchronization.isSynchronizationActive() && synchronization.hasResource(mongoTemplate.getMongoDatabaseFactory())))
+                .map(synchronization -> synchronization.isActualTransactionActive() || synchronization.hasResource(mongoTemplate.getMongoDatabaseFactory()))
                 .onErrorResume(NoTransactionException.class, e -> Mono.just(false));
     }
 

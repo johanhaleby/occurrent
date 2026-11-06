@@ -128,12 +128,12 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * <p>
  * A DCB read that asks for marker versions runs in a read-only snapshot transaction of its own, on a session from the
  * template's {@link org.springframework.data.mongodb.MongoDatabaseFactory}, bounded by
- * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a Spring-managed transaction, or with a
- * session bound to transaction synchronization, it reports no marker versions, since that transaction's writes may
- * still abort, and a read after marker versions is refused. {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} can say the read is the first
- * operation of the transaction, or that the caller confirms an append before saving. On a replica set the store then
- * reads the versions in that transaction, or in the session transaction the read binds when synchronization is active
- * with no session bound yet. The store answers {@link DcbAppendConfirmation} with a majority read on the primary from
+ * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a Spring-managed transaction it reports
+ * no marker versions, since that transaction's writes may still abort, and a read after marker versions is refused.
+ * {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} can say the read is the first operation of the transaction,
+ * or that the caller confirms an append before saving. On a replica set the store then reads the versions in that
+ * transaction, or in the session transaction the read binds when synchronization is active with no session bound yet.
+ * With a session already bound there, a read that confirms an append reports no versions. The store answers {@link DcbAppendConfirmation} with a majority read on the primary from
  * {@link org.springframework.data.mongodb.MongoDatabaseFactory#getMongoDatabase()}, which joins no session. A store
  * built on a template from {@link MongoTemplate#withSession(ClientSession)} isn't supported for DCB snapshot deciders.
  */
@@ -336,13 +336,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // it once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a Spring-managed
     // transaction it reports no versions, since the transaction's own increments may still abort and a later append would
     // reuse them, unless the caller says the read is the transaction's first operation and the store runs on a replica
-    // set. Then it reads in that transaction. With synchronization active and no transaction, a session already bound may
-    // hold writes that abort later, so the read goes through it and reports no versions. With no session bound yet, a
-    // caller that confirms an append before saving gets the read through the template on a replica set, which binds a
-    // session transaction the read is the first operation of, so an append in the synchronization joins it. Where it reads
+    // set. Then it reads in that transaction. With synchronization active and no transaction, a caller that confirms an append
+    // before saving reads through a session already bound, which may hold writes that abort later, and gets no versions.
+    // With no session bound yet it reads through the template on a replica set, which binds a session transaction the
+    // read is the first operation of, so an append in the synchronization joins it. Where it reads
     // versions in a transaction it doesn't own, a failure fails the read so the transaction's owner can retry. Otherwise a
     // failure reports no versions instead of failing the read. A read after versions can't fall back to a full read
-    // without double-applying events, so it is refused wherever the store reports no versions.
+    // without double-applying events, so markerVersionsUnavailable refuses it.
     private DcbEventStream readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -362,11 +362,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             }
             return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
         }
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+        if (options.confirmsAppendBeforeSaving() && TransactionSynchronizationManager.isSynchronizationActive()) {
             if (TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) != null) {
                 return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
             }
-            if (options.confirmsAppendBeforeSaving() && runsOnReplicaSet) {
+            if (runsOnReplicaSet) {
                 return readMarkerVersionsWith(mongoTemplate, criteria, options);
             }
         }
@@ -773,15 +773,15 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     /**
      * Runs the action, applying the retry strategy only when this store owns the transaction. When one is already
-     * active, or a session bound to the synchronization holds one, the template joins it, a conflict aborts it, and
-     * every further attempt fails on its first read with {@code NoSuchTransaction}, so retrying could never commit.
+     * active, or a session bound for this store's database holds one, the template joins it, a conflict aborts it,
+     * and every further attempt fails on its first read with {@code NoSuchTransaction}, so retrying could never commit.
      * Every retry of a transaction on the write path goes through here, the DCB append and the stream {@code write}
      * condition retry, so neither can be written without the check. The position counter's cold-start retry runs
      * outside any transaction and doesn't need it. See ADR 0074.
      */
     private <T> T retryOnlyWhenThisStoreOwnsTheTransaction(RetryStrategy retry, Supplier<T> action) {
         boolean joinsATransaction = TransactionSynchronizationManager.isActualTransactionActive()
-                || (TransactionSynchronizationManager.isSynchronizationActive() && TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) != null);
+                || TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) != null;
         return joinsATransaction ? action.get() : retry.execute(action);
     }
 
