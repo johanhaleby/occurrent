@@ -167,10 +167,11 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * hand-over because the wrapped model holds a subscription of the id already, a pause or a resume made meanwhile goes
  * to that subscription instead, and a stop or a start reached the wrapped model anyway. A refusal of the wrapped model,
  * an unsupported filter or a duplicate id for example, a read for the subscription-model default that fails and a start
- * position that cannot be recorded each fail {@link Subscription#waitUntilStarted()} of the subscription {@code subscribe(..)} returned, with an {@code
- * ERROR} logged. The start position is recorded only once the wrapped model has taken the subscribe, so a subscribe it
- * refuses stores nothing for the id. A cancel of the id or a {@link #shutdown()} ends the wait, and a read for one id
- * does not hold up another id. While the read has not answered, a {@code WARN} is logged every 10 seconds.
+ * position that cannot be recorded each fail {@link Subscription#waitUntilStarted()} of the subscription
+ * {@code subscribe(..)} returned, with an {@code ERROR} logged. The start position is recorded only once the wrapped
+ * model has taken the subscribe, so a subscribe it refuses stores nothing for the id. A cancel of the id or a
+ * {@link #shutdown()} ends the wait, and a read for one id does not hold up another id. While the read has not
+ * answered, a {@code WARN} is logged every 10 seconds.
  * <p>
  * The hand-over also waits until each cancel, pause or resume that this model sent the wrapped model for the id has
  * ended, since the wrapped model takes such a call by id and would apply it to the subscription handed over. While it
@@ -182,14 +183,14 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * handed over until a cancel of the id or a shutdown ends the wait.
  * <p>
  * A subscribe from the subscription-model default, or from a dynamic start position that answers {@link StartAt#now()},
- * throws {@link DuplicateSubscriptionIdException} at the call when the
- * wrapped model reports the id, from {@link IntrospectableSubscriptions#subscriptionIds()} where it lists its ids and
- * from {@code isRunning(..)} or {@code isPaused(..)} where it doesn't. It throws there too while another subscribe of
- * the id waits to be handed over or is being handed over, while this model starts a subscription of the id in the
- * wrapped model again, and while a call this model sent the wrapped model for the id is under way. A duplicate the
- * check at the call misses fails {@link Subscription#waitUntilStarted()} instead, once it is refused at the hand-over.
- * A wrapped model that doesn't list its ids can answer {@code false} from both for a subscription it moves between
- * running and paused, and then the check misses a subscription that this model handed over to it earlier.
+ * throws {@link DuplicateSubscriptionIdException} at the call when the wrapped model reports the id, from
+ * {@link IntrospectableSubscriptions#subscriptionIds()} where it lists its ids and from {@code isRunning(..)} or
+ * {@code isPaused(..)} where it doesn't. It throws there too while another subscribe of the id waits to be handed over
+ * or is being handed over, while this model starts a subscription of the id in the wrapped model again, and while a
+ * call this model sent the wrapped model for the id is under way. A duplicate the check at the call misses fails
+ * {@link Subscription#waitUntilStarted()} instead, once it is refused at the hand-over. A wrapped model that doesn't
+ * list its ids can answer {@code false} from both for a subscription it moves between running and paused, and then the
+ * check misses a subscription that this model handed over to it earlier.
  * <p>
  * Where this model hands subscriptions to a wrapped model that manages named subscriptions, every {@code subscribe(..)}
  * asks that model whether it holds the id, whatever the start position. When asking the wrapped model whether it holds
@@ -234,16 +235,16 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * not answer. A subscribe on a running model asks storage first and asks the wrapped model where its feed is only
  * when storage holds nothing.
  * <p>
- * A {@link StartAt#dynamic(java.util.function.Supplier) dynamic} start position may answer the model default too,
- * and which of the two it answers decides whether the registration is refused. When the wrapped model manages named
- * subscriptions of its own, the function is asked where {@link #subscribe(String, SubscriptionFilter, StartAt, Function)}
- * is called and what it throws comes out of that call. When it answers the model default or {@link StartAt#now()}, the
- * subscription is handed over once the read answers, as described above, and a refusal fails the handle that call
- * returned. When this model drives
- * the cold primitive itself the function is resolved only once the subscription actually starts. A registration made
-  * while running starts immediately, so the refusal comes out on the handle
- * {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} itself returns. One made while stopped leaves
- * that handle waiting instead, and the refusal comes out later, when {@link #start(boolean)} or
+ * A {@link StartAt#dynamic(java.util.function.Supplier) dynamic} start position may answer the model default too, and
+ * which of the two it answers decides whether the registration is refused. When the wrapped model manages named
+ * subscriptions of its own, the function is asked where
+ * {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} is called and what it throws comes out of that
+ * call. When it answers the model default or {@link StartAt#now()}, the subscription is handed over once the read
+ * answers, as described above, and a refusal fails the handle that call returned. When this model drives the cold
+ * primitive itself the function is resolved only once the subscription actually starts. A registration made while
+ * running starts immediately, so the refusal comes out on the handle
+ * {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} itself returns. One made while stopped leaves that
+ * handle waiting instead, and the refusal comes out later, when {@link #start(boolean)} or
  * {@link #resumeSubscription(String)} starts the subscription. It ends the wait of that handle, and of the handle
  * {@link #resumeSubscription(String)} returns when that call started it.
  * <p>
