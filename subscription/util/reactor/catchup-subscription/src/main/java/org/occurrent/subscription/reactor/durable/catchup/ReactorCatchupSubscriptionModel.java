@@ -396,11 +396,11 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     /**
      * Passes the cancel to the inner catch-up model that holds the subscription, see
      * {@link ReactorStreamCatchupSubscriptionModel#cancelSubscription(String)}. Until a cancel of
-     * {@code subscriptionId} through this model has completed, and every other cancel of that id through this model has
+     * {@code subscriptionId} through this model has ended, and every other cancel of that id through this model has
      * completed or failed, a subscribe of that id through this model throws {@link DuplicateSubscriptionIdException},
-     * and the other calls for that id reach that inner model. After a cancel that throws or fails they still reach it,
-     * since that inner model can still hold the subscription. That holds also when nothing subscribes to the
-     * {@code Mono}.
+     * and the other calls for that id reach that inner model. A cancel ends when it completes. A cancel that throws or
+     * fails ends only when, as it throws or fails, that inner model has no replay of the subscription in flight and the
+     * wrapped model no longer holds the subscription. That holds also when nothing subscribes to the {@code Mono}.
      */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
@@ -415,18 +415,26 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         try {
             cancelled = route.owner.cancelSubscription(subscriptionId);
         } catch (RuntimeException | Error e) {
-            // Kept, so later calls still reach the owner after a cancel it refuses
-            cancelEnds(subscriptionId, route, false);
+            cancelRefused(subscriptionId, route);
             throw e;
         }
-        // Kept after a cancel that fails too, since the owner still holds the subscription then
-        Mono<Void> ended = cancelled.doOnSuccess(unused -> cancelEnds(subscriptionId, route, true)).doOnError(failure -> cancelEnds(subscriptionId, route, false)).cache();
+        Mono<Void> ended = cancelled.doOnSuccess(unused -> cancelEnds(subscriptionId, route, true)).doOnError(failure -> cancelRefused(subscriptionId, route)).cache();
         // Subscribed here so the route is forgotten even when nothing subscribes to what this returns. The owner logs
         // a cancel that fails.
         ended.subscribe(unused -> {
         }, failure -> {
         });
         return ended;
+    }
+
+    // A cancel that throws or fails keeps the route while the owner still holds the id, so later calls still reach the
+    // owner, and otherwise counts as a cancel that ended
+    private void cancelRefused(String subscriptionId, Route route) {
+        cancelEnds(subscriptionId, route, !namedSupportOf(route.owner).holds(subscriptionId));
+    }
+
+    private static NamedCatchupSupport namedSupportOf(SubscriptionModel innerModel) {
+        return innerModel instanceof ReactorDcbCatchupSubscriptionModel dcb ? dcb.namedSubscriptions : ((ReactorStreamCatchupSubscriptionModel) innerModel).namedSubscriptions;
     }
 
     // Forgets the route once no cancel of it is under way and one of them has ended

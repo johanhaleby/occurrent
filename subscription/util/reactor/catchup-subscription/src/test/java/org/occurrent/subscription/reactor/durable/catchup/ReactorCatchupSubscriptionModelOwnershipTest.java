@@ -182,6 +182,24 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
     }
 
     @Test
+    void a_subscribe_after_a_cancel_whose_mono_fails_once_the_wrapped_model_dropped_the_subscription_is_not_refused() {
+        HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
+        ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
+        Subscription replayed = catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), __ -> Mono.empty());
+        StepVerifier.create(replayed.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(10));
+
+        // The wrapped model drops the subscription as it cancels it, and the cancel then fails
+        wrapped.dropsTheSubscriptionAndFailsTheCancel(new IllegalArgumentException("failed by the wrapped model"));
+        assertThatThrownBy(() -> catchup.cancelSubscription("replayed").block(Duration.ofSeconds(10)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("failed by the wrapped model");
+
+        assertThatCode(() -> catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.now(), __ -> Mono.empty()))
+                .as("a subscribe of the id the wrapped model no longer holds")
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void a_history_loss_reported_while_the_wrapped_model_still_cancels_keeps_the_resume_refused() {
         HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
         ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
@@ -335,6 +353,7 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
         private volatile @Nullable RuntimeException cancelRefusal;
         private volatile Mono<Void> cancelEnds = Mono.empty();
+        private volatile boolean dropsTheSubscriptionOnCancel;
 
         void refusesTheCancel(RuntimeException refusal) {
             cancelRefusal = refusal;
@@ -342,6 +361,12 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
 
         // A cancel from here on fails with failure and keeps the subscription
         void failsTheCancel(RuntimeException failure) {
+            cancelEnds = Mono.error(failure);
+        }
+
+        // A cancel from here on removes the subscription before it returns, and its Mono then fails with failure
+        void dropsTheSubscriptionAndFailsTheCancel(RuntimeException failure) {
+            dropsTheSubscriptionOnCancel = true;
             cancelEnds = Mono.error(failure);
         }
 
@@ -450,6 +475,10 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
             RuntimeException refusal = cancelRefusal;
             if (refusal != null) {
                 throw refusal;
+            }
+            if (dropsTheSubscriptionOnCancel) {
+                subscribed.remove(subscriptionId);
+                paused.remove(subscriptionId);
             }
             return cancelEnds.then(Mono.fromRunnable(() -> {
                 subscribed.remove(subscriptionId);
