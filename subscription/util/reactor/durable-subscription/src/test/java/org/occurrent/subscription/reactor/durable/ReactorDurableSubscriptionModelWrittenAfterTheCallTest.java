@@ -811,7 +811,7 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     /**
      * The first reads of where the feed was fail, each after a moment, for a subscription from StartAt.now(). A failed
      * read is forgotten, and each retry reads once more, so the subscription starts after one read for each failure and
-     * one that answers, with one warning for each retry.
+     * one that answers. Each failed read logs one warning, numbered by the reads that failed.
      */
     @Test
     void a_read_of_where_the_feed_was_that_fails_is_read_again_once_for_each_retry() {
@@ -830,7 +830,7 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             // Then
             assertThat(startEnded).as("how waiting for the start of the subscription ended").isNull();
             assertThat(feed.reads.get()).as("reads of where the feed was").isEqualTo(failingReads + 1);
-            assertThat(retryWarnings(logged)).as("warnings logged for a retry of the read").isEqualTo(failingReads);
+            assertThat(failedReadWarnings(logged)).as("warnings logged for a failed read").containsExactly(failedRead(1), failedRead(2));
         } finally {
             model.shutdown();
         }
@@ -1029,6 +1029,15 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     private static long retryWarnings(LoggedByTheModel logged) {
         return logged.at(Level.WARN).stream().filter(message -> message.startsWith("Could not read where the feed was when subscription " + SUBSCRIPTION_ID + " asked to start from the present, on attempt")).count();
+    }
+
+    private static List<String> failedReadWarnings(LoggedByTheModel logged) {
+        return logged.at(Level.WARN).stream().filter(message -> message.startsWith("Could not read where the feed")).toList();
+    }
+
+    private static String failedRead(int attempt) {
+        return "Could not read where the feed was when subscription " + SUBSCRIPTION_ID + " asked to start from the present, on attempt " + attempt
+               + ". It is read again before the subscription opens its feed.";
     }
 
     private static String stillWaiting(String subscriptionId) {

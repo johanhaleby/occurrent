@@ -760,8 +760,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         if (resolveFrom.isNow()) {
             PresentRead presentRead = new PresentRead(subscriptionId);
             presentRead.readAsOf(present);
+            // The read logs its own failure, see PresentRead
             presentRead.readAhead().subscribe(unused -> {
-            }, failure -> log.warn("Could not read where the feed was when subscription {} asked to start from the present. It is read again before the subscription is handed to the wrapped model.", subscriptionId, failure));
+            }, failure -> {
+            });
             readAtTheCall = present;
             nowFrom = presentRead;
             endTheRead = presentRead::end;
@@ -1628,7 +1630,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // call, read again after each failure. An empty read refuses the subscribe with dynamicNowAnsweredNothing, unless
     // startWhenNoStartPositionCanBeRecorded hands over now as it is. A cancel of the id or a shutdown ends the wait.
     private Mono<StartAt> fromThePresent(String subscriptionId, PositionWriter writer, PresentRead present, StartAt now) {
-        Mono<Checkpoint> read = untilPresentIsRead(subscriptionId, present).flatMap(Mono::justOrEmpty);
+        Mono<Checkpoint> read = untilPresentIsRead(present).flatMap(Mono::justOrEmpty);
         return untilEnded(writer, positionOfTheWrappedModel(read, () -> dynamicNowAnsweredNothing(subscriptionId))
                 .map(StartAt::checkpoint)
                 .defaultIfEmpty(now));
@@ -1713,24 +1715,20 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private PresentRead readPresent(String subscriptionId) {
         PresentRead present = new PresentRead(subscriptionId);
         present.readAsOf(asOfNow());
+        // The read logs its own failure, see PresentRead
         present.readAhead().subscribe(unused -> {
-        }, throwable -> log.warn("Could not read where the feed is for subscription {}, which starts from the present. It is read again when the subscription starts.", subscriptionId, throwable));
+        }, failure -> {
+        });
         return present;
     }
 
-    // present until it answers, read again after each failure with a delay that about doubles, logged at WARN. A read
-    // that is slow to answer is waited for, with a WARN while this waits, see PresentRead. Disposing what subscribed to
-    // this ends the wait, its warnings and its retries after a failure, but not a read that runs, which only
-    // PresentRead.end() cancels.
-    private Mono<Optional<Checkpoint>> untilPresentIsRead(String subscriptionId, PresentRead present) {
+    // present until it answers, read again after each failure with a delay that about doubles. Each failed read logs
+    // its WARN, and a read that is slow to answer is waited for with a WARN while this waits, see PresentRead.
+    // Disposing what subscribed to this ends the wait, its warnings and its retries after a failure, but not a read
+    // that runs, which only PresentRead.end() cancels.
+    private Mono<Optional<Checkpoint>> untilPresentIsRead(PresentRead present) {
         return present.answer()
-                .retryWhen(Retry.from(retries -> retries.concatMap(retry -> {
-            Throwable failure = retry.failure();
-            long failedAttempts = retry.totalRetries() + 1;
-            log.warn("Could not read where the feed was when subscription {} asked to start from the present, on attempt {}. Trying again. The subscription opens its feed once this read answers.",
-                    subscriptionId, failedAttempts, failure);
-            return Mono.delay(retryAfter(failedAttempts));
-        })));
+                .retryWhen(Retry.from(retries -> retries.concatMap(retry -> Mono.delay(retryAfter(retry.totalRetries() + 1)))));
     }
 
     // waiting, failed once a cancel of the id overtakes the subscribe of writer or this model is shut down
@@ -2217,7 +2215,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         } else if (startAt.isNow() && present != null) {
             // An empty answer means the wrapped model cannot tell where its feed was, and the feed then opens where it
             // is, as it did before this model read the moment at the call
-            return untilPresentIsRead(subscriptionId, present).map(read -> read.map(StartAt::checkpoint).orElse(startAt));
+            return untilPresentIsRead(present).map(read -> read.map(StartAt::checkpoint).orElse(startAt));
         }
         return Mono.just(startAt);
     }
@@ -4202,7 +4200,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // Where the feed was at one moment, for one subscription that may start from StartAt.now(). Everything that waits
     // for it shares one read, so the wrapped model is asked at most once at a time, and the answer is kept once it
-    // arrives. A read that fails is forgotten, so the next answer() reads again. A WARN is logged every
+    // arrives. A read that fails is forgotten, so the next answer() reads again. Each read that fails logs one WARN
+    // here, numbered by the reads that failed, however many wait for it. A WARN is also logged every
     // STILL_WAITING_FOR_A_POSITION_READ_EVERY while something waits for the read through answer(), and not while only
     // readAhead() started it. Disposing what waits does not cancel the read, so a resume after a pause or a stop waits
     // for the same read. Only end() cancels it, which is called once the subscription itself has ended.
@@ -4214,6 +4213,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         private Sinks.@Nullable One<Optional<Checkpoint>> inFlight;
         private @Nullable Disposable reading;
         private boolean ended;
+        private long failedReads;
 
         private PresentRead(String subscriptionId) {
             this.subscriptionId = subscriptionId;
@@ -4282,10 +4282,14 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                         }
                         started.tryEmitValue(answer);
                     }, failure -> {
+                        final long attempt;
                         synchronized (this) {
                             inFlight = null;
                             reading = null;
+                            attempt = ++failedReads;
                         }
+                        log.warn("Could not read where the feed was when subscription {} asked to start from the present, on attempt {}. It is read again before the subscription opens its feed.",
+                                subscriptionId, attempt, failure);
                         started.tryEmitError(failure);
                     });
             final boolean endedMeanwhile;

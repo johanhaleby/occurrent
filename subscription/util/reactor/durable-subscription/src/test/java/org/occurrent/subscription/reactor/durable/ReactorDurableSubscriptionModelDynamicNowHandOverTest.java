@@ -203,8 +203,7 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
         assertThat(notStarted).as("how waiting for the start ended").isNull();
         await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered once the subscription started").contains(writtenAfter));
         assertThat(delivered).as("events delivered").containsExactly(writtenWhileTheFunctionRan.get(), writtenAfter);
-        assertThat(logged.at(Level.WARN)).as("warnings logged").anySatisfy(message -> assertThat(message)
-                .startsWith("Could not read where the feed was when subscription " + SUBSCRIPTION_ID + " asked to start from the present"));
+        assertThat(failedReadWarnings()).as("warnings logged for a failed read").containsExactly(failedRead(1), failedRead(2));
         assertThat(logged.at(Level.ERROR)).as("errors logged").isEmpty();
     }
 
@@ -358,6 +357,15 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
             storage.releaseDelete.complete(null);
             waits.shutdown();
         }
+    }
+
+    private List<String> failedReadWarnings() {
+        return logged.at(Level.WARN).stream().filter(message -> message.startsWith("Could not read where the feed")).toList();
+    }
+
+    private static String failedRead(int attempt) {
+        return "Could not read where the feed was when subscription " + SUBSCRIPTION_ID + " asked to start from the present, on attempt " + attempt
+               + ". It is read again before the subscription opens its feed.";
     }
 
     private static StartAt dynamicNow() {
