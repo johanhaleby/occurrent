@@ -653,6 +653,27 @@ public class NativeMongoSubscriptionModelTest {
         }
 
         @Test
+        void start_throws_the_refusals_of_the_subscriptions_it_resumes_without_adding_to_what_their_handles_throw() {
+            // Given two subscriptions of a stopped model, whose dynamic positions answer a global checkpoint
+            subscriptionModel.stop();
+            StartAt answered = StartAt.checkpoint(GlobalCheckpoint.of(0));
+            List<Subscription> handles = Stream.generate(() -> subscriptionModel.subscribe(UUID.randomUUID().toString(), StartAt.dynamic(ctx -> answered), __ -> {
+            })).limit(2).toList();
+
+            // When
+            Throwable thrown = catchThrowable(subscriptionModel::start);
+
+            // Then start throws one refusal with the other suppressed, and neither handle throws it with anything suppressed
+            assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class);
+            assertThat(thrown.getSuppressed()).hasSize(1);
+            for (Subscription handle : handles) {
+                Throwable fromHandle = catchThrowable(() -> handle.waitUntilStarted(Duration.ZERO));
+                assertThat(fromHandle).isExactlyInstanceOf(UnsupportedStartAtException.class);
+                assertThat(fromHandle.getSuppressed()).isEmpty();
+            }
+        }
+
+        @Test
         void start_leaves_out_a_subscription_that_resuming_an_earlier_one_already_resumed() {
             // Given a subclass whose first resume also resumes every other paused subscription
             AtomicBoolean firstResume = new AtomicBoolean(true);
@@ -1198,7 +1219,7 @@ public class NativeMongoSubscriptionModelTest {
             // When
             Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
 
-            // Then both handles throw the one refusal
+            // Then both handles throw the one refusal, each in an exception of its own
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                     assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
             Throwable fromPaused = catchThrowable(() -> paused.waitUntilStarted(Duration.ofMillis(200)));
@@ -1208,7 +1229,8 @@ public class NativeMongoSubscriptionModelTest {
                     .hasMessageContaining("\"" + checkpoint.asString() + "\"");
             assertAll(
                     () -> assertThat(((UnsupportedStartAtException) fromPaused).startAt()).isSameAs(answered),
-                    () -> assertThat(fromResumed).isSameAs(fromPaused),
+                    () -> assertThat(fromResumed).isNotSameAs(fromPaused),
+                    () -> assertThat(fromResumed.getCause()).isSameAs(fromPaused.getCause()),
                     () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
                     () -> assertThat(refused).isEmpty()
             );
