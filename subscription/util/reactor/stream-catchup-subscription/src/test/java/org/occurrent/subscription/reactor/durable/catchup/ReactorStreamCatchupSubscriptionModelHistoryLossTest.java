@@ -858,6 +858,83 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     @Test
+    void a_resume_after_a_cancel_the_wrapped_model_refuses_of_a_subscription_whose_takeover_replay_failed_replays_again_instead_of_resuming_the_wrapped_model_where_it_lost_the_history() {
+        verifiesAResumeAfterARefusedCancelReplaysAgain((wrapped, catchup) -> {
+            IllegalStateException refusal = new IllegalStateException("the wrapped model refuses the cancel");
+            wrapped.nextCancelThrows = refusal;
+            return catchThrowable(() -> catchup.cancelSubscription(ID));
+        });
+    }
+
+    @Test
+    void a_resume_after_a_cancel_whose_mono_from_the_wrapped_model_fails_of_a_subscription_whose_takeover_replay_failed_replays_again_instead_of_resuming_the_wrapped_model_where_it_lost_the_history() {
+        verifiesAResumeAfterARefusedCancelReplaysAgain((wrapped, catchup) -> {
+            wrapped.cancelCompletesWhen = Mono.error(new IllegalStateException("the wrapped model fails the cancel"));
+            return catchThrowable(() -> catchup.cancelSubscription(ID).block(Duration.ofSeconds(5)));
+        });
+    }
+
+    @Test
+    void a_live_event_after_a_resume_that_follows_a_refused_cancel_of_a_running_takeover_is_delivered() throws InterruptedException {
+        // Given a subscription whose live start the wrapped model lost, and whose takeover replay runs
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            reader.head = 4;
+            Sinks.Empty<Void> replayBlocked = reader.blockReads();
+            wrapped.opensAndLosesTheLiveStart();
+
+            // When a cancel of it is refused, it is resumed, and the wrapped model then gives its action an event
+            wrapped.nextCancelThrows = new IllegalStateException("the wrapped model refuses the cancel");
+            Throwable cancelFailure = catchThrowable(() -> catchup.cancelSubscription(ID));
+            replayBlocked.tryEmitEmpty();
+            Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+            awaitNoReplayInFlight(catchup);
+            wrapped.actionOf(ID).apply(liveEvent("e5", 5)).subscribe();
+
+            // Then the takeover the resume runs delivers the event written in the gap, and the caller's action is given the
+            // event at once
+            assertAll(
+                    () -> assertThat(cancelFailure).as("what the cancel threw").isInstanceOf(IllegalStateException.class),
+                    () -> assertThat(thrown).as("what the resume throws").isNull(),
+                    () -> assertThat(received).as("what the subscription received").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4", "e5")
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    private void verifiesAResumeAfterARefusedCancelReplaysAgain(BiFunction<LosingLiveStartModel, ReactorStreamCatchupSubscriptionModel, Throwable> refusedCancel) {
+        // Given a subscription whose live start the wrapped model lost, and whose takeover replay failed, so the wrapped
+        // model holds it paused
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            reader.head = 4;
+            reader.failReads(new IllegalStateException("the event store is down"));
+            wrapped.opensAndLosesTheLiveStart();
+            reader.readsAgain();
+
+            // When a cancel of it is refused, and it is resumed
+            Throwable cancelFailure = refusedCancel.apply(wrapped, catchup);
+            Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+            // Then the resume runs the takeover again, which delivers the event written in the gap, and the wrapped model is
+            // not resumed where it lost the history
+            assertAll(
+                    () -> assertThat(cancelFailure).as("what the cancel failed with").isInstanceOf(IllegalStateException.class),
+                    () -> assertThat(thrown).as("what the resume throws").isNull(),
+                    () -> assertThat(received).as("the history again, now with the event written in the gap").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4"),
+                    () -> assertThat(wrapped.resumedWhereItWasHeld).as("resumed where it lost the history").hasValue(0)
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_loss_of_the_lost_live_start_reported_again_as_the_takeover_hands_over_is_taken_over_when_the_model_restarts_from_the_present() {
         verifiesALossReportedAgainAsTheTakeoverHandsOverIsTakenOver(new LosingLiveStartModel(true));
     }
