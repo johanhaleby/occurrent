@@ -1654,10 +1654,20 @@ A `ReactorDurableSubscriptionModel` over a model that manages named subscription
 can answer empty, with a subscription whose `StartAt.dynamic(..)` function answers `StartAt.now()`. That includes a
 subscribe that waits for a checkpoint that a cancel of the id deleted to be written back.
 
+A wrapped model of your own that breaks the contract of `CheckpointAwareSubscriptionModel.globalCheckpointAsOfNow()`
+is affected too:
+
+* When it throws a `RuntimeException` instead of returning a `Mono`, `waitUntilStarted()` now fails with what it threw.
+* When the `Mono` it returns fails on every read, the subscription never starts, and a `WARN` is logged for each
+  failed read.
+
+In 0.34.0 the subscription started in both cases, unless the subscribe waited for such a write back.
+
 `ReactorMongoSubscriptionModel` isn't affected. It fails the read when MongoDB gives no position and never answers
-empty, so the subscription reads again until MongoDB answers. Neither is the Spring Boot starter, whose
-`ReactorDurableSubscriptionModel` asks `ReactorMongoSubscriptionModel`, directly or through a
-`ReactorCatchupSubscriptionModel`.
+empty, so the subscription reads again until MongoDB answers. It doesn't throw from `globalCheckpointAsOfNow()`, and
+when its read fails, the same request to MongoDB failed the subscription's opening at the present in 0.34.0 too.
+Neither is the Spring Boot starter, whose `ReactorDurableSubscriptionModel` asks `ReactorMongoSubscriptionModel`,
+directly or through a `ReactorCatchupSubscriptionModel`.
 
 ### What to do
 
@@ -1674,6 +1684,11 @@ read answers nothing.
 
 Otherwise, let the subscribe fail and subscribe the id again once the wrapped model can answer. The id is free once
 `waitUntilStarted()` has failed, so you don't need to call `cancelSubscription(..)` first.
+
+The setting doesn't start a subscription over a model that throws, or whose `Mono` fails on every read. Make such a
+model fail the `Mono` it returns instead of throwing, and complete it empty when it can't work out the position at
+all, which is the answer the contract has for a problem it can't resolve. The setting then starts the subscription
+as 0.34.0 did.
 
 ### Why there is no recipe
 
