@@ -134,7 +134,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * and on a replica set the store then reads the versions in that transaction. It can also say the caller confirms an
  * append before saving. With synchronization active, no transaction and no session bound yet, the store on a replica
  * set then reads the versions in the session transaction the read binds. With a session already bound, such a read
- * reports no versions. The store answers {@link DcbAppendConfirmation} with a majority read on the primary from
+ * reports no versions, and a read after marker versions is refused. The store answers {@link DcbAppendConfirmation}
+ * with a majority read on the primary from
  * {@link org.springframework.data.mongodb.MongoDatabaseFactory#getMongoDatabase()}, which joins no session. A store
  * built on a template from {@link MongoTemplate#withSession(ClientSession)} isn't supported for DCB snapshot deciders.
  */

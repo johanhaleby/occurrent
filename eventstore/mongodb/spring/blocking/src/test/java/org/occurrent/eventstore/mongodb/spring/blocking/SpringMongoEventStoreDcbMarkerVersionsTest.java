@@ -550,7 +550,7 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
-    void reads_a_versioned_read_without_the_confirmation_mark_on_a_session_of_its_own_and_binds_no_session_to_the_synchronization() {
+    void reads_a_versioned_read_without_the_confirmation_mark_without_binding_a_session_to_the_synchronization() {
         eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
         AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
         AtomicReference<Set<Object>> boundAfterRead = new AtomicReference<>();
