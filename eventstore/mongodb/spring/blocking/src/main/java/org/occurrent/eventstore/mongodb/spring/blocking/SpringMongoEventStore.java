@@ -384,7 +384,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             DcbEventStream eventStream = null;
             try {
                 clientSession.startTransaction(markerVersionsTransactionOptions);
-                eventStream = readMarkerVersionsWith(mongoTemplate.withSession(clientSession), criteria, options);
+                MongoTemplate sessionTemplate = mongoTemplate.withSession(clientSession);
+                // Under ALWAYS an active synchronization would bind another session to the read, in a transaction at the default read concern
+                sessionTemplate.setSessionSynchronization(NEVER);
+                eventStream = readMarkerVersionsWith(sessionTemplate, criteria, options);
             } catch (DcbSnapshotInvalidException e) {
                 // Closing the session aborts the read-only transaction
                 throw e;

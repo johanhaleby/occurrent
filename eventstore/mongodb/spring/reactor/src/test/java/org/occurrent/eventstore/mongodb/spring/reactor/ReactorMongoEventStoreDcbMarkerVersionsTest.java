@@ -53,6 +53,8 @@ import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.reactive.TransactionSynchronization;
+import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.testcontainers.junit.jupiter.Container;
@@ -532,6 +534,22 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
 
         assertThat(withoutMark.get().markerVersions()).as("versions from a read-only transaction of the store's own").isNotEmpty();
         assertThat(withoutMark.get().events()).as("a read outside the bound session misses its append").extracting(CloudEvent::getId).containsExactly("before");
+    }
+
+    @Test
+    void reads_a_versioned_read_without_the_confirmation_mark_on_a_session_of_its_own_and_binds_no_session_to_the_synchronization() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+        AtomicReference<List<TransactionSynchronization>> registeredAfterRead = new AtomicReference<>();
+
+        inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions())
+                .doOnNext(withoutMark::set)
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(TransactionSynchronizationManager::getSynchronizations))
+                .doOnNext(registeredAfterRead::set))
+                .block();
+
+        assertThat(withoutMark.get().markerVersions()).isNotEmpty();
+        assertThat(registeredAfterRead.get()).as("synchronizations registered for a session bound by the read").isEmpty();
     }
 
     @Test

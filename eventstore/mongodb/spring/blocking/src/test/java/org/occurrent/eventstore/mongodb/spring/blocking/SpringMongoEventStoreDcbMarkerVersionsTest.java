@@ -54,6 +54,7 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -66,6 +67,7 @@ import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -545,6 +547,21 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
 
         assertThat(withoutMark.get().markerVersions()).as("versions from a read-only transaction of the store's own").isNotEmpty();
         assertThat(withoutMark.get().events()).as("a read outside the bound session misses its append").extracting(CloudEvent::getId).containsExactly("before");
+    }
+
+    @Test
+    void reads_a_versioned_read_without_the_confirmation_mark_on_a_session_of_its_own_and_binds_no_session_to_the_synchronization() {
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+        AtomicReference<Set<Object>> boundAfterRead = new AtomicReference<>();
+
+        inScopeWithoutTransaction(() -> {
+            withoutMark.set(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()));
+            boundAfterRead.set(Set.copyOf(TransactionSynchronizationManager.getResourceMap().keySet()));
+        });
+
+        assertThat(withoutMark.get().markerVersions()).isNotEmpty();
+        assertThat(boundAfterRead.get()).as("resources bound to the synchronization after the read").isEmpty();
     }
 
     @Test

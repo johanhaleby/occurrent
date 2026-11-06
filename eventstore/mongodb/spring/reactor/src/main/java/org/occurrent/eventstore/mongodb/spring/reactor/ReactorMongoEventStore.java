@@ -423,7 +423,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         .onErrorMap(RuntimeException.class, e -> new MarkerVersionsReadFailure("start session", e)),
                 clientSession -> Mono.defer(() -> {
                     clientSession.startTransaction(markerVersionsTransactionOptions);
-                    return readMarkerVersionsWith(mongoTemplate.withSession(clientSession), criteria, options);
+                    ReactiveMongoOperations template = mongoTemplate.withSession(clientSession);
+                    if (!(template instanceof ReactiveMongoTemplate sessionTemplate)) {
+                        throw new IllegalStateException("The session-bound template is a " + template.getClass().getName() + " and not a ReactiveMongoTemplate, so the read can't be kept on its own session.");
+                    }
+                    // Under ALWAYS an active synchronization would bind another session to the read, in a transaction at the default read concern
+                    sessionTemplate.setSessionSynchronization(NEVER);
+                    return readMarkerVersionsWith(sessionTemplate, criteria, options);
                 }).onErrorMap(e -> e instanceof RuntimeException && !(e instanceof DcbSnapshotInvalidException), e -> new MarkerVersionsReadFailure("read", e))
                         // A failed commit leaves the session in the committed state, so closing it sends no abort
                         .flatMap(eventStream -> Mono.from(clientSession.commitTransaction())

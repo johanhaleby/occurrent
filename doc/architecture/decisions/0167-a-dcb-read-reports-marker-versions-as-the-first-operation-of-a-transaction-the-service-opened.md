@@ -76,7 +76,7 @@ the caller's opens no transaction, so the service doesn't set `firstOperationOfT
 synchronization. An append in the same synchronization joins it, and the synchronization commits or rolls it back
 when the executor returns. A plain command has read that way since 0.34.0, so a failing handler undoes its append.
 
-A read with versions ran on a session of the store's own and bound nothing, so the append committed on its own and a
+A read with versions ran on a session of the store's own, so the append committed on its own and a
 failing handler couldn't undo it. Now the Spring stores read through the template when `confirmsAppendBeforeSaving` is
 set, synchronization is active, no transaction is, no session is bound for the store's database factory yet, and the
 store runs on a replica set. The read is then the first operation of the session transaction it binds, and it reports
