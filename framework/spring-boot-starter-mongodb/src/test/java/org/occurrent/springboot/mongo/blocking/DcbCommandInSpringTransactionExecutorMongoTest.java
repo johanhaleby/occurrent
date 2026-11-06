@@ -75,11 +75,10 @@ import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
- * A DCB command that asks for no marker versions reads and decides inside the transaction a {@code SpringTransactionExecutor}
- * opens for synchronous subscriptions, as it did in 0.34.0. A write the domain function makes then rolls back with that
- * transaction, and the executor can run the command again after a transient read failure.
+ * A DCB command that asks for no marker versions reads and decides inside a {@code SpringTransactionExecutor} with
+ * synchronous subscriptions, as in 0.34.0.
  */
-@DisplayName("A DCB command in a Spring transaction executor's transaction")
+@DisplayName("A DCB command inside a Spring transaction executor")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Testcontainers
 @Timeout(120)

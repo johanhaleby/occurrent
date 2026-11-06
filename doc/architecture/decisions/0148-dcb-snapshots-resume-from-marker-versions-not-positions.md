@@ -650,8 +650,7 @@ and these are the consequences:
 On the blocking service a command that asks for no marker versions reads and decides inside the executor, as in
 0.34.0, since it has no versions to lose there. With no caller scope, reading first cost such a command two
 things. A write its domain function made before it threw stayed stored, and a transient failure of the read failed the
-command where the executor had run it again. In a caller's scope on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`
-the write stayed stored too. I ran these on a Spring MongoDB store with the executor on `PROPAGATION_REQUIRED`. With
+command where the executor had run it again. I ran these on a Spring MongoDB store with the executor on `PROPAGATION_REQUIRED`. With
 the read in the executor and the failure passed through it, the write rolled back and the command stored its event. The reactive service still reads first for every command.
 
 `GenericApplicationService`, the stream service, still reads and decides in the transaction, since a stream snapshot
@@ -691,10 +690,10 @@ in the executor, so it gets versions only when the executor opens no transaction
 
 On the blocking service a failure of the read or the decision goes around the executor when `isTransactional()`
 answers `true` both before the service enters it and when the failure happens, and `inTransactionTellingIfOpened` says
-the attempt didn't open its transaction. So it can't mark a transaction the caller owns rollback-only, and a caller that catches it and continues
-commits. The service holds it inside the executor's action, returns normally, and throws it after the executor has
+the attempt didn't open its transaction. So it can't mark a transaction the caller owns rollback-only, and a caller that catches a failure of the domain
+function and continues commits. The service holds it inside the executor's action, returns normally, and throws it after the executor has
 returned, an `Error` as well. Without that hold the caller's commit threw `UnexpectedRollbackException`. Otherwise the
-failure goes through the executor, which rolls back a transaction it opened. An executor of your own that keeps the
+failure goes through the executor. An executor of your own that keeps the
 default of `inTransactionTellingIfOpened` and opens a transaction while `isTransactional()` already answers `true`
 reports joining it, so the failure is held there and the executor can commit a write the domain function made before
 it threw. The reactive service lets the failure through the

@@ -218,7 +218,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                             decision = readAndDecide.apply(openedTransaction);
                         } catch (Throwable failure) {
                             // Throwable, since a domain function in Kotlin can throw a checked exception
-                            if (openedTransaction || !transactionalBefore || !transactionExecutor.isTransactional()) {
+                            if (openedTransaction || !transactionalBefore || !isTransactionalInside(failure)) {
                                 throw FailureAfterWrite.<RuntimeException>sneakyThrow(failure);
                             }
                             // Going around the executor keeps the failure from marking a transaction it joined rollback-only
@@ -259,6 +259,18 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     public boolean isAppendConfirmed(DcbAppendResult appendResult) {
         Objects.requireNonNull(appendResult, "appendResult cannot be null");
         return eventStore instanceof DcbAppendConfirmation confirmation && confirmation.isConfirmed(appendResult);
+    }
+
+    // The domain failure reaches the caller even when asking the executor fails too
+    private boolean isTransactionalInside(Throwable failure) {
+        try {
+            return transactionExecutor.isTransactional();
+        } catch (Throwable askFailure) {
+            if (askFailure != failure) {
+                failure.addSuppressed(askFailure);
+            }
+            return false;
+        }
     }
 
     private static void refuseEventBelowFoldedPosition(DcbCriteria criteria, DcbExecuteOptions<?> options, DcbEventStream eventStream) {

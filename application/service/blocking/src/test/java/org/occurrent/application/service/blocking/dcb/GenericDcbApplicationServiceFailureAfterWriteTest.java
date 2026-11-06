@@ -515,6 +515,24 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
     }
 
     @Test
+    void a_domain_failure_before_the_append_reaches_the_caller_with_the_failure_to_read_the_transaction_inside_suppressed() {
+        RuntimeException domainFailure = new IllegalStateException("domain failed");
+        JoinsAndFailsToReportInside executor = new JoinsAndFailsToReportInside();
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new RecordingDispatcher())
+                .transactionExecutor(executor)
+                .build();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(CRITERIA, events -> {
+            throw domainFailure;
+        }));
+
+        assertThat(thrown).as("[exception reaching the caller]").isSameAs(domainFailure);
+        assertThat(thrown.getSuppressed()).as("[exceptions suppressed by the failure]").containsExactly(executor.failure);
+    }
+
+    @Test
     void a_handler_failure_after_the_append_reaches_the_retry_strategy_and_the_caller_without_running_the_command_again_when_the_executor_swallows_it() {
         RuntimeException failure = new IllegalStateException("handler failed");
         var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
@@ -824,6 +842,30 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
                 throw failure;
             }
             return false;
+        }
+    }
+
+    // Stand-in for an executor that runs in a transaction the caller opened and fails to report it inside the action
+    private static final class JoinsAndFailsToReportInside implements TransactionExecutor {
+        final RuntimeException failure = new IllegalStateException("transaction state unavailable");
+        private boolean inside;
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            inside = true;
+            try {
+                return action.get();
+            } finally {
+                inside = false;
+            }
+        }
+
+        @Override
+        public boolean isTransactional() {
+            if (inside) {
+                throw failure;
+            }
+            return true;
         }
     }
 
