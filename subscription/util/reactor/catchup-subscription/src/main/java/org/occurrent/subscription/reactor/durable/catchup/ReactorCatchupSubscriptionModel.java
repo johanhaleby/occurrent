@@ -229,8 +229,8 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
-        // Before route(..), which can evaluate a dynamic StartAt. shutdown() shuts this inner model down first.
-        (streamCatchupSubscriptionModel != null ? streamCatchupSubscriptionModel.namedSubscriptions : requireNonNull(dcbCatchupSubscriptionModel).namedSubscriptions).requireNamedAndNotShutdown();
+        // Before route(..), which can evaluate a dynamic StartAt
+        namedSupports().forEach(NamedCatchupSupport::requireNamedAndNotShutdown);
         SubscriptionModel routed = (SubscriptionModel) route(subscriptionId, filter, startAt);
         // Claim the owner slot before subscribing, so a life-cycle call racing the subscribe reaches the model that
         // owns the replay before that model has registered the replay itself; roll the claim back if the subscribe
@@ -367,7 +367,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     // Resuming one subscription starts a stopped model without resuming the others, as the life-cycle contract says.
     // Started here rather than by the owner, which would start only its own inner model and keep a subscription routed
-    // to another one paused.
+    // to another one paused. An inner model that was shut down starts nothing, and the owner refuses the resume.
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         SubscriptionModel owner = ownerOf(subscriptionId);
@@ -378,9 +378,14 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     }
 
     private boolean anyInnerModelStopped() {
-        return streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.namedSubscriptions.isStopped()
-                || dcbCatchupSubscriptionModel != null && dcbCatchupSubscriptionModel.namedSubscriptions.isStopped()
-                || agnosticCatchupSubscriptionModel != null && agnosticCatchupSubscriptionModel.namedSubscriptions.isStopped();
+        return namedSupports().anyMatch(NamedCatchupSupport::isStopped);
+    }
+
+    private Stream<NamedCatchupSupport> namedSupports() {
+        return Stream.of(streamCatchupSubscriptionModel != null ? streamCatchupSubscriptionModel.namedSubscriptions : null,
+                        dcbCatchupSubscriptionModel != null ? dcbCatchupSubscriptionModel.namedSubscriptions : null,
+                        agnosticCatchupSubscriptionModel != null ? agnosticCatchupSubscriptionModel.namedSubscriptions : null)
+                .filter(Objects::nonNull);
     }
 
     @Override
@@ -390,10 +395,12 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     /**
      * Passes the cancel to the inner catch-up model that holds the subscription, see
-     * {@link ReactorStreamCatchupSubscriptionModel#cancelSubscription(String)}. Until the {@code Mono} this returns has
-     * completed or failed, and every other cancel of {@code subscriptionId} through this model has too, a subscribe of
-     * that id through this model throws {@link DuplicateSubscriptionIdException}, and the other calls for that id reach
-     * that inner model. That holds also when nothing subscribes to the {@code Mono}.
+     * {@link ReactorStreamCatchupSubscriptionModel#cancelSubscription(String)}. Until a cancel of
+     * {@code subscriptionId} through this model has completed, and every other cancel of that id through this model has
+     * completed or failed, a subscribe of that id through this model throws {@link DuplicateSubscriptionIdException},
+     * and the other calls for that id reach that inner model. After a cancel that throws or fails they still reach it,
+     * since that inner model can still hold the subscription. That holds also when nothing subscribes to the
+     * {@code Mono}.
      */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
@@ -412,7 +419,8 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
             cancelEnds(subscriptionId, route, false);
             throw e;
         }
-        Mono<Void> ended = cancelled.doOnTerminate(() -> cancelEnds(subscriptionId, route, true)).cache();
+        // Kept after a cancel that fails too, since the owner still holds the subscription then
+        Mono<Void> ended = cancelled.doOnSuccess(unused -> cancelEnds(subscriptionId, route, true)).doOnError(failure -> cancelEnds(subscriptionId, route, false)).cache();
         // Subscribed here so the route is forgotten even when nothing subscribes to what this returns. The owner logs
         // a cancel that fails.
         ended.subscribe(unused -> {
@@ -435,6 +443,10 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public void shutdown() {
+        // Every inner model refuses a start before any of them shuts down the wrapped model they share. Before the routes
+        // are forgotten too, since a call for an id with no route goes to any inner model, which would pass a resume of a
+        // subscription it does not hold to the wrapped model.
+        namedSupports().forEach(NamedCatchupSupport::beginShutdown);
         subscriptionOwners.clear();
         innerModels().forEach(SubscriptionModel::shutdown);
     }
