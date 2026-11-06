@@ -1057,12 +1057,9 @@ subscriptions behaves as before.
   With `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring
   MongoDB stores a write to a stream often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or
   `PROPAGATION_NEVER`, and there a retry that used to work is gone. When `execute` runs outside every Spring transaction
-  scope of yours, a DCB append on those three propagations stays on the reactive service, and on the blocking service
-  for a command that asks for marker versions, as a snapshot decider's does. On `PROPAGATION_NOT_SUPPORTED` the append of any other
-  `execute` on the blocking service rolls back as a write to a stream does. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or
-  `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, the append of a plain `execute` rolls back too when you don't
-  catch the failure inside that scope. A snapshot decider's append can stay there, unless `resumeFromMarkerVersions` is
-  off on the store, the criteria matches every event (`DcbCriteria.all()`), or the read of the versions failed.
+  scope of yours, a DCB append on `PROPAGATION_NOT_SUPPORTED` rolls back as a write to a stream does, a snapshot
+  decider's included. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`, which opens
+  no transaction, the append of a plain `execute` rolls back too when you don't catch the failure inside that scope.
   [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
   so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open
