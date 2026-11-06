@@ -612,6 +612,12 @@ class SnapshotDcbDeciderApplicationServiceTest {
                 }
                 return result;
             }
+
+            @Override
+            public boolean allowsReadBeforeTransaction() {
+                // The read and the decision run before this executor, so its refusal comes after a committed append
+                return true;
+            }
         };
         SynchronousEventDispatcher dispatcherWithoutEffect = new SynchronousEventDispatcher() {
             @Override
