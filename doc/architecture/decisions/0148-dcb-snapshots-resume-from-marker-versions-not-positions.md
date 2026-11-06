@@ -688,14 +688,14 @@ service passes it to the synchronous subscriptions as whether the write is in on
 in the executor, so it gets versions only when the executor opens no transaction.
 
 On the blocking service a failure of the read or the decision goes around the executor when `isTransactional()`
-answered `true` before the service entered it, so it can't mark a transaction the caller owns rollback-only, and a
-caller that catches a failure of the domain function and continues commits. The service holds it inside the
+answered `true` before the service entered it, so it can't mark a transaction the caller owns rollback-only. The
+service holds it inside the
 executor's action, returns normally, and throws it after the executor has returned, an `Error` as well. Without that
 hold the caller's commit threw `UnexpectedRollbackException`. When `isTransactional()` answered `false`, the failure
 goes through the executor, which rolls back a transaction it opened. An executor that answered `true` but runs the
 action outside every transaction of the caller's gets the failure held too, and a write the domain function made before
-it threw can then commit. That is `NativeMongoTransactionExecutor`, whose `isTransactional()` answers `true` at every
-call, and a Spring executor on `PROPAGATION_REQUIRES_NEW` or `PROPAGATION_NOT_SUPPORTED` in a caller's transaction. The reactive service lets the failure through the
+it threw can then commit. That is `NativeMongoTransactionExecutor` with no `ClientSession` bound on the thread, whose `isTransactional()`
+answers `true` at every call, and a Spring executor on `PROPAGATION_REQUIRES_NEW` or `PROPAGATION_NOT_SUPPORTED` in a caller's transaction. The reactive service lets the failure through the
 executor. `GenericReactiveTransaction.isRollbackOnly()` in spring-tx 7.0.9 reads only its own flag, so a participant
 can't stop the caller's commit, and with and without a hold the caller's transaction committed on a Spring MongoDB store.
 I ran no other reactive executor.
