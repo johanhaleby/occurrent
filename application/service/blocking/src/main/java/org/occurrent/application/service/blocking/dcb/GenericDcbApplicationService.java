@@ -180,8 +180,6 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
             if (dispatchSynchronously && (!versionsRequested || transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
-                // A command asking for marker versions reads here only
-                // in an open transaction the executor can leave for the append, or when the executor doesn't allow a read before it.
                 boolean joinsATransaction = transactionExecutor.isTransactional();
                 AtomicReference<@Nullable Throwable> failedBeforeAppend = new AtomicReference<>();
                 Tuple<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransaction(() -> {

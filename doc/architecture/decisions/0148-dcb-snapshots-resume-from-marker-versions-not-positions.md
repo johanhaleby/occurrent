@@ -649,8 +649,7 @@ and these are the consequences:
 On the blocking service a command that asks for no marker versions reads and decides in the executor's transaction, as
 in 0.34.0, since it has no versions to lose there. With no caller scope, reading first cost such a command two
 things. A write its domain function made before it threw stayed stored, and a transient failure of the read failed the
-command where the executor had run it again. In a caller's scope on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`
-the write stayed stored too. I ran these on a Spring MongoDB store with the executor on `PROPAGATION_REQUIRED`. With
+command where the executor had run it again. I ran these on a Spring MongoDB store with the executor on `PROPAGATION_REQUIRED`. With
 the read in the executor and the failure passed through it, the write rolled back and the command stored its event. The reactive service still reads first for every command.
 
 `GenericApplicationService`, the stream service, still reads and decides in the transaction, since a stream snapshot
@@ -690,13 +689,13 @@ in the executor, so it gets versions only when the executor opens no transaction
 
 On the blocking service a failure of the read or the decision goes around the executor when `isTransactional()`
 answered `true` before the service entered it, so it can't mark a transaction the caller owns rollback-only, and a
-caller that catches it and continues commits. The service holds it inside the
+caller that catches a failure of the domain function and continues commits. The service holds it inside the
 executor's action, returns normally, and throws it after the executor has returned, an `Error` as well. Without that
 hold the caller's commit threw `UnexpectedRollbackException`. When `isTransactional()` answered `false`, the failure
-goes through the executor, which rolls back a transaction it opened. An executor that answered `true` and still opens a
-transaction gets the failure held too, and can commit a write the domain function made in that transaction before it threw. That is
-`NativeMongoTransactionExecutor`, whose `isTransactional()` answers `true` at every call, and a Spring executor on
-`PROPAGATION_REQUIRES_NEW` in a caller's transaction. The reactive service lets the failure through the
+goes through the executor, which rolls back a transaction it opened. An executor that answered `true` but runs the
+action outside every transaction of the caller's gets the failure held too, and a write the domain function made before
+it threw can then commit. That is `NativeMongoTransactionExecutor`, whose `isTransactional()` answers `true` at every
+call, and a Spring executor on `PROPAGATION_REQUIRES_NEW` or `PROPAGATION_NOT_SUPPORTED` in a caller's transaction. The reactive service lets the failure through the
 executor. `GenericReactiveTransaction.isRollbackOnly()` in spring-tx 7.0.9 reads only its own flag, so a participant
 can't stop the caller's commit, and with and without a hold the caller's transaction committed on a Spring MongoDB store.
 I ran no other reactive executor.
