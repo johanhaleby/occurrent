@@ -360,7 +360,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         void an_executor_that_does_not_allow_a_read_before_it_gets_the_read_and_the_domain_function_inside_its_transaction() {
             var store = new TracingStore(trace);
 
-            transactionalService(store, new TracingExecutor(trace).notAllowingAReadBeforeIt(), dispatcher).execute(CRITERIA, events -> decide());
+            transactionalService(store, new TracingExecutor(trace).notAllowingAReadBeforeIt(), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
 
             assertThat(trace).containsExactly("begin", "read", "decide", "append", "read", "dispatch", "commit");
         }

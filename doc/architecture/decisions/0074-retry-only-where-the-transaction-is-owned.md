@@ -8,7 +8,7 @@ Accepted. Amended by [ADR 149](0149-the-mongodb-dcb-append-check-compares-each-m
 on what an append in a caller's transaction conflicts on, which exception the blocking store throws for a write
 conflict, how the Spring stores tell a caller's transaction, and that the counter update retries inside one.
 
-[ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) moves the DCB service's read and decision of a command that asks for marker versions, and on the reactive service of every command, out of a `TransactionExecutor` that allows a read before it and answers `false` from `isTransactional()`, so with synchronous subscriptions only the append, the re-read and the dispatch run through it. The decision below still holds.
+[ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) moves the DCB service's read and decision of a command that asks for marker versions, and on the reactive service of every command, out of a transaction executor that allows a read before it and answers `false` from `isTransactional()`, so with synchronous subscriptions only the append, the re-read and the dispatch run through it. The decision below still holds.
 
 ## Context
 
