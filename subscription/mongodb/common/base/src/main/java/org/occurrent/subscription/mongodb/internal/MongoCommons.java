@@ -555,9 +555,9 @@ public class MongoCommons {
      * change stream opens.
      * <p>
      * An answer after that isn't checked. Once a change stream has opened, the subscription model records the position it opened
-     * at with {@link #recordWhereItOpened(OpenedAt, BiPredicate)} and doesn't ask the function again. It asks again only after a
-     * stream opened at the present without an operation time to record, and a catch-up answer then opens at the present
-     * as well.
+     * at with {@link #recordWhereItOpened(OpenedAt, BiPredicate)} and doesn't ask the function again. A blocking one asks
+     * again only after a stream opened at the present without an operation time to record, and a catch-up answer then
+     * opens at the present as well. The reactor one stops a subscription it can't find an operation time to open at.
      *
      * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
      * @param opened         Whether a change stream of the subscription has opened, as the subscription model counts it
