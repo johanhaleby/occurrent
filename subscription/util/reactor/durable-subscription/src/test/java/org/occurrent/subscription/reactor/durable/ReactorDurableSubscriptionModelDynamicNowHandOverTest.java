@@ -64,6 +64,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -213,12 +214,13 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
         assertThat(logged.at(Level.ERROR)).as("errors logged").isEmpty();
     }
 
-    @Test
-    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_the_start_at_once_with_what_it_threw_and_leaves_the_id_free() {
+    @ParameterizedTest
+    @ValueSource(strings = {"runtime exception", "error", "checked exception"})
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_the_start_at_once_with_what_it_threw_and_leaves_the_id_free(String kind) {
         // Given
-        IllegalStateException threw = new IllegalStateException(ASKING_THREW);
+        Throwable threw = ThrownAtTheCall.of(kind, ASKING_THREW);
         feed.presentRead = atTheCall -> {
-            throw threw;
+            throw ThrownAtTheCall.undeclared(threw);
         };
 
         // When
@@ -341,6 +343,91 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
 
             waits.subscribe(SUBSCRIPTION_ID, null, dynamicNow(), cloudEvent -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
             assertThat(feed.subscribedIds).as("subscriptions the wrapped model took once the id was subscribed again").containsExactly(SUBSCRIPTION_ID);
+        } finally {
+            storage.releaseDelete.complete(null);
+            waits.shutdown();
+        }
+    }
+
+    // The subscribe takes over the delete of the cancel, and gives it back once its start fails, so the checkpoint the
+    // cancel deleted is not where a later subscribe from the model default starts
+    @ParameterizedTest
+    @ValueSource(strings = {"runtime exception", "error", "checked exception"})
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_lets_the_delete_of_a_cancel_go_ahead_once_it_failed_a_subscribe_that_waited_for_that_delete(String kind) {
+        // Given
+        HeldDeleteStorage storage = new HeldDeleteStorage();
+        ReactorDurableSubscriptionModel waits = new ReactorDurableSubscriptionModel(feed, storage);
+        Throwable threw = ThrownAtTheCall.of(kind, ASKING_THREW);
+        feed.presentRead = atTheCall -> {
+            throw ThrownAtTheCall.undeclared(threw);
+        };
+        AtomicReference<Subscription> subscribed = new AtomicReference<>();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+
+        try {
+            Throwable atTheCall = catchThrowable(() -> subscribed.set(subscribedWhileACancelDeletes(waits, storage, dynamicNow(), cloudEvent -> Mono.empty())));
+            feed.presentRead = Mono::just;
+
+            // When
+            storage.releaseDelete.complete(null);
+
+            // Then
+            Throwable startEnded = catchThrowable(() -> subscribed.get().waitUntilStarted().toFuture().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT))
+                    .as("the checkpoint stored once the delete of the cancel was released").isNull());
+            long writtenBefore = feed.write();
+            waits.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(delivered)).waitUntilStarted().block(TIMEOUT);
+            long writtenAfter = feed.write();
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered to a subscribe from the model default made after that").contains(writtenAfter));
+            assertThat(delivered).as("events delivered to a subscribe from the model default made after that, with " + writtenBefore + " written before it")
+                    .containsExactly(writtenAfter);
+            assertThat(atTheCall).as("what the subscribe that waited for the delete threw at the call").isNull();
+            assertThat(startEnded).as("how waiting for the start of the subscribe that waited for the delete ended")
+                    .isInstanceOf(ExecutionException.class).hasCauseReference(threw);
+        } finally {
+            storage.releaseDelete.complete(null);
+            waits.shutdown();
+        }
+    }
+
+    // The subscribe takes over the delete of the cancel and starts from the checkpoint that delete was removing, which
+    // needs no read of where the feed is
+    @ParameterizedTest
+    @ValueSource(strings = {"runtime exception", "error", "checked exception"})
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_starts_a_subscribe_from_the_model_default_from_the_checkpoint_of_a_cancel_whose_delete_it_waited_for(String kind) {
+        // Given
+        HeldDeleteStorage storage = new HeldDeleteStorage();
+        ReactorDurableSubscriptionModel waits = new ReactorDurableSubscriptionModel(feed, storage);
+        Throwable threw = ThrownAtTheCall.of(kind, ASKING_THREW);
+        feed.presentRead = atTheCall -> {
+            throw ThrownAtTheCall.undeclared(threw);
+        };
+        AtomicReference<Subscription> subscribed = new AtomicReference<>();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        List<Long> deliveredAgain = new CopyOnWriteArrayList<>();
+
+        try {
+            Throwable atTheCall = catchThrowable(() -> subscribed.set(subscribedWhileACancelDeletes(waits, storage, StartAt.subscriptionModelDefault(), action(delivered))));
+            feed.presentRead = Mono::just;
+            long writtenWhileTheDeleteWasHeld = feed.write();
+
+            // When
+            storage.releaseDelete.complete(null);
+
+            // Then
+            assertThat(atTheCall).as("what the subscribe that waited for the delete threw at the call").isNull();
+            assertThat(subscribed.get().waitUntilStarted().toFuture()).as("waiting for the start of the subscribe that waited for the delete")
+                    .succeedsWithin(TIMEOUT);
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered to the subscribe that waited for the delete")
+                    .containsExactly(writtenWhileTheDeleteWasHeld));
+
+            waits.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
+            long writtenBefore = feed.write();
+            waits.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(deliveredAgain)).waitUntilStarted().block(TIMEOUT);
+            long writtenAfter = feed.write();
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(deliveredAgain).as("events delivered to a subscribe from the model default after a cancel").contains(writtenAfter));
+            assertThat(deliveredAgain).as("events delivered to a subscribe from the model default after a cancel, with " + writtenBefore + " written before it")
+                    .containsExactly(writtenAfter);
         } finally {
             storage.releaseDelete.complete(null);
             waits.shutdown();

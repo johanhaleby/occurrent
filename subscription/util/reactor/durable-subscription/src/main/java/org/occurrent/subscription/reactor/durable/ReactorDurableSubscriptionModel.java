@@ -1698,17 +1698,19 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // Where the wrapped model's feed is at this call, as globalCheckpointAsOfNow() answers it. Taken here and read only
     // when subscribed to, so a read that answers late, or is subscribed to late, still answers for this moment, as
     // globalCheckpointAsOfNow() requires of the wrapped model. What the call throws fails each subscriber of read.
+    // Every Throwable is caught, an Error or a checked exception thrown from Kotlin too. A subscribe calls this after it
+    // took the delete of a cancel over, and a throw from here would skip giving that delete back.
     private Moment asOfNow() {
         try {
             return new Moment(subscription.globalCheckpointAsOfNow(), null);
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
             return new Moment(Mono.error(e), e);
         }
     }
 
     // What asOfNow() took. threw is what globalCheckpointAsOfNow() threw instead of returning a Mono, which no read
     // again can answer, since the wrapped model never took the moment.
-    private record Moment(Mono<Checkpoint> read, @Nullable RuntimeException threw) {
+    private record Moment(Mono<Checkpoint> read, @Nullable Throwable threw) {
     }
 
     // Where the feed was at moment, for a subscription that starts from StartAt.now(), so each start and resume
@@ -4211,7 +4213,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         private final String subscriptionId;
         // Each read and changed under the monitor of this read
         private @Nullable Mono<Checkpoint> moment;
-        private @Nullable RuntimeException threwAtTheCall;
+        private @Nullable Throwable threwAtTheCall;
         private @Nullable Optional<Checkpoint> answered;
         private Sinks.@Nullable One<Optional<Checkpoint>> inFlight;
         private @Nullable Disposable reading;
