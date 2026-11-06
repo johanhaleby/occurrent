@@ -987,7 +987,7 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - In a transaction you own, the service still reads and decides in the executor, so what such a command sees doesn't
   change, also on `PROPAGATION_REQUIRES_NEW` and `PROPAGATION_NOT_SUPPORTED`. On a blocking service an exception from
   your domain function no longer marks that transaction rollback-only when the executor joins it and its
-  `isTransactional()` answers `true` there, so if you catch it and continue, that transaction commits.
+  `isTransactional()` answers `true` there.
 
 ### Stored snapshots
 
