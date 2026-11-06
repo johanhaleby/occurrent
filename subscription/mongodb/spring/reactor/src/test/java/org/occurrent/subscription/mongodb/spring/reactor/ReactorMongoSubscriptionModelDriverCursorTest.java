@@ -23,6 +23,8 @@ import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoCommandException;
+import com.mongodb.ServerAddress;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import com.mongodb.reactivestreams.client.ChangeStreamPublisher;
 import com.mongodb.reactivestreams.client.MongoClient;
@@ -31,9 +33,12 @@ import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonDocument;
+import org.bson.BsonDocumentReader;
+import org.bson.BsonInt32;
 import org.bson.BsonString;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
+import org.bson.codecs.DecoderContext;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -66,6 +71,8 @@ import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
+import org.springframework.data.mongodb.core.ChangeStreamEvent;
+import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.transaction.ReactiveTransactionManager;
@@ -423,6 +430,61 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
+    void a_run_that_was_paused_while_its_dynamic_position_answered_leaves_the_resumed_run_to_ask_again_when_the_server_cannot_find_its_answer() throws InterruptedException {
+        // Given a model that has fallen back to the change stream of Spring
+        useTheChangeStreamOfSpring();
+
+        // When it is paused and resumed while the first answer waits, so the resumed run opens at the token of the other
+        // collection, and the first answer is let go on the run the pause closed
+        PausedWhileItAnswered paused = pauseWhileTheFirstAnswerWaits(() -> {
+        });
+
+        // Then the resumed run asks the position again once the server can't find the token, and the event is delivered
+        assertThat(paused.answers()).hasValue(3);
+        assertThat(paused.delivered()).containsExactly(paused.written().eventId());
+    }
+
+    @Test
+    void a_run_a_pause_closed_before_its_change_stream_failed_leaves_the_opening_the_resumed_run_recorded_to_be_given_back() throws InterruptedException {
+        // Given a run a pause closes while its dynamic position answers, whose change stream then fails with code 280 as
+        // it opens, before the subscribe that started the run has returned
+        AtomicReference<Flux<ChangeStreamEvent<Document>>> nextChangeStream = new AtomicReference<>();
+        useTheChangeStreamOfSpring(nextChangeStream);
+
+        // When the resumed run has opened at a token the server can't find once it reads an event
+        Flux<ChangeStreamEvent<Document>> failing = Flux.error(new MongoCommandException(
+                new BsonDocument("ok", new BsonInt32(0)).append("code", new BsonInt32(280)).append("errmsg", new BsonString("cannot open")), new ServerAddress()));
+        PausedWhileItAnswered paused = pauseWhileTheFirstAnswerWaits(() -> nextChangeStream.set(failing));
+        assertThat(nextChangeStream).as("the paused run opened its change stream").hasNullValue();
+
+        // Then the resumed run gives its opening back once the server can't find the token, asks the position again, and
+        // the event is delivered
+        assertThat(paused.answers()).hasValue(3);
+        assertThat(paused.delivered()).containsExactly(paused.written().eventId());
+    }
+
+    @Test
+    void a_run_a_pause_closed_before_its_change_stream_read_a_document_leaves_the_opening_the_resumed_run_recorded_to_be_given_back() throws InterruptedException {
+        // Given a run a pause closes while its dynamic position answers, whose change stream then reads a document as it
+        // opens, before the subscribe that started the run has returned
+        AtomicReference<Flux<ChangeStreamEvent<Document>>> nextChangeStream = new AtomicReference<>();
+        useTheChangeStreamOfSpring(nextChangeStream);
+        BsonDocument drop = new BsonDocument("_id", resumeTokenOf(tokenOfAnotherCollection())).append("operationType", new BsonString("drop"));
+        ChangeStreamDocument<Document> dropped = ChangeStreamDocument.createCodec(Document.class, MongoClientSettings.getDefaultCodecRegistry())
+                .decode(new BsonDocumentReader(drop), DecoderContext.builder().build());
+        ChangeStreamEvent<Document> read = new ChangeStreamEvent<>(dropped, Document.class, new ReactiveMongoTemplate(mongoClient, databaseName).getConverter());
+
+        // When the resumed run has opened at a token the server can't find once it reads an event
+        PausedWhileItAnswered paused = pauseWhileTheFirstAnswerWaits(() -> nextChangeStream.set(Flux.concat(Flux.just(read), Flux.never())));
+        assertThat(nextChangeStream).as("the paused run opened its change stream").hasNullValue();
+
+        // Then the resumed run gives its opening back once the server can't find the token, asks the position again, and
+        // the event is delivered
+        assertThat(paused.answers()).hasValue(3);
+        assertThat(paused.delivered()).containsExactly(paused.written().eventId());
+    }
+
+    @Test
     void the_flux_opened_again_before_it_read_a_document_opens_where_its_dynamic_position_first_answered() {
         // Given a dynamic position that answers a live checkpoint first and a global checkpoint after, and a first read of the change stream that fails
         Checkpoint live = liveCheckpoint();
@@ -670,10 +732,21 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     // The model opens its change stream on the collection this template hands out, and a publisher that
     // isn't the driver's own has no cursor to read the resume token from
     private ReactiveMongoTemplate templateWithoutBatchCursors() {
+        return templateWithoutBatchCursors(new AtomicReference<>());
+    }
+
+    private ReactiveMongoTemplate templateWithoutBatchCursors(AtomicReference<Flux<ChangeStreamEvent<Document>>> nextChangeStream) {
         return new ReactiveMongoTemplate(subscriberClient, databaseName) {
             @Override
             public Mono<MongoCollection<Document>> getCollection(String collectionName) {
                 return super.getCollection(collectionName).map(ReactorMongoSubscriptionModelDriverCursorTest::collectionWithoutBatchCursors);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> Flux<ChangeStreamEvent<T>> changeStream(String database, String collectionName, ChangeStreamOptions options, Class<T> targetType) {
+                Flux<ChangeStreamEvent<Document>> instead = nextChangeStream.getAndSet(null);
+                return instead == null ? super.changeStream(database, collectionName, options, targetType) : (Flux<ChangeStreamEvent<T>>) (Flux<?>) instead;
             }
         };
     }
@@ -713,10 +786,66 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
 
     // The first subscription finds out that the driver's cursor can't be read, and the model reads through Spring's changeStream from then on
     private void useTheChangeStreamOfSpring() {
+        useTheChangeStreamOfSpring(new AtomicReference<>());
+    }
+
+    // The next change stream the model opens is the one nextChangeStream holds when it holds one
+    private void useTheChangeStreamOfSpring(AtomicReference<Flux<ChangeStreamEvent<Document>>> nextChangeStream) {
         subscriptionModel.shutdown();
-        subscriptionModel = modelOver(templateWithoutBatchCursors(), configuration());
+        subscriptionModel = modelOver(templateWithoutBatchCursors(nextChangeStream), configuration());
         waitUntilStarted(subscriptionModel.subscribe("first-to-fall-back", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.empty()));
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions").isFalse());
+    }
+
+    private record PausedWhileItAnswered(AtomicInteger answers, List<String> delivered, NameDefined written) {
+    }
+
+    // Subscribes at a dynamic position whose first answer waits until the subscription has been paused and resumed and is
+    // then a live checkpoint, whose second answer, the resumed run's, is a token of another collection, which the server
+    // accepts as the stream opens and can't find once it reads an event, and whose answers after that are the live
+    // checkpoint. beforeTheFirstAnswerIsLetGo runs after the resume, and an event is written once the subscribe that
+    // started the run the pause closed has returned
+    private PausedWhileItAnswered pauseWhileTheFirstAnswerWaits(Runnable beforeTheFirstAnswerIsLetGo) throws InterruptedException {
+        Checkpoint live = liveCheckpoint();
+        Checkpoint ofAnotherCollection = tokenOfAnotherCollection();
+        AtomicInteger answers = new AtomicInteger();
+        CountDownLatch firstAnswerAsked = new CountDownLatch(1);
+        CountDownLatch letFirstAnswerGo = new CountDownLatch(1);
+        StartAt startAt = StartAt.dynamic(ctx -> {
+            int answer = answers.incrementAndGet();
+            if (answer == 1) {
+                firstAnswerAsked.countDown();
+                try {
+                    // Bounded, so a failure before the test lets it go doesn't leave the subscriber thread blocked
+                    letFirstAnswerGo.await(30, SECONDS);
+                } catch (InterruptedException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+            return answer == 2 ? StartAt.checkpoint(ofAnotherCollection) : StartAt.checkpoint(live);
+        });
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch eventDelivered = new CountDownLatch(1);
+        AtomicReference<Throwable> subscribeFailure = new AtomicReference<>();
+        Thread subscriber = new Thread(() -> subscriptionModel.subscribe("paused-while-it-answered", startAt, event -> Mono.fromRunnable(() -> {
+            delivered.add(event.getId());
+            eventDelivered.countDown();
+        })));
+        subscriber.setUncaughtExceptionHandler((thread, throwable) -> subscribeFailure.set(throwable));
+        subscriber.start();
+        assertThat(firstAnswerAsked.await(10, SECONDS)).isTrue();
+        subscriptionModel.pauseSubscription("paused-while-it-answered");
+        waitUntilStarted(subscriptionModel.resumeSubscription("paused-while-it-answered"));
+        beforeTheFirstAnswerIsLetGo.run();
+        letFirstAnswerGo.countDown();
+        subscriber.join(SECONDS.toMillis(10));
+        assertThat(subscriber.isAlive()).isFalse();
+        assertThat(subscribeFailure).hasNullValue();
+        NameDefined written = nameDefined();
+        write(written);
+        // The wait doesn't fail on its own, so the assertions of the test say what went wrong
+        eventDelivered.await(15, SECONDS);
+        return new PausedWhileItAnswered(answers, delivered, written);
     }
 
     private static void waitUntilStarted(Subscription subscription) {

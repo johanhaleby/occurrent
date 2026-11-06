@@ -1178,7 +1178,7 @@ public class SpringMongoSubscriptionModelTest {
             // When
             Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
 
-            // Then both handles throw the one refusal
+            // Then both handles throw the one refusal, each in an exception of its own
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                     assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
             Throwable fromPaused = catchThrowable(() -> paused.waitUntilStarted(Duration.ofMillis(200)));
@@ -1188,7 +1188,9 @@ public class SpringMongoSubscriptionModelTest {
                     .hasMessageContaining("\"" + checkpoint.asString() + "\"");
             assertAll(
                     () -> assertThat(((UnsupportedStartAtException) fromPaused).startAt()).isSameAs(answered),
-                    () -> assertThat(fromResumed).isSameAs(fromPaused),
+                    () -> assertThat(fromResumed).isNotSameAs(fromPaused),
+                    () -> assertThat(fromPaused.getCause()).isExactlyInstanceOf(UnsupportedStartAtException.class),
+                    () -> assertThat(fromResumed.getCause()).isSameAs(fromPaused.getCause()),
                     () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
                     () -> assertThat(refused).isEmpty()
             );

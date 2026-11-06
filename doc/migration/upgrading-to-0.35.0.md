@@ -1117,17 +1117,24 @@ reactor model counts a driver cursor that opened for a subscription with an id. 
 and a subscription with an id when the model can't read through the driver's cursor, count the first document the
 change stream reads instead.
 
-Once a change stream has opened, the model opens it again at the same position and doesn't call the function again.
+Once a change stream has opened, the model opens it again at the same position and doesn't call the function again,
+unless, on the blocking models, it opened at the present and MongoDB's reply had no operation time to record.
 That covers a pause and a resume, an action that throws, and a failure reading the change stream before the first
 event. A reactor subscription that counts the first document takes the position the function answered when its `Flux`
 was subscribed to. It gives that position back to the function only when the change stream fails before it reads a
-document with error code 9, 280 or 286, the codes the server rejects a start position with, so the next opening calls
-the function again. That holds also when a pause or another failure
-opened the change stream again at that position first. In 0.34.0 the models could call the function again at an opening
+document with error code 9, 280 or 286, the codes the server rejects a start position with. That holds also when a
+pause or another failure opened the change stream again at that position first. After a 9 or a 280 the model opens the
+change stream again, and that opening calls the function again. After a 286 a subscription with an id first asks the
+listeners added with `addHistoryLossListener`, with the checkpoint the change stream opened at. One of them can take the
+subscription over. When one throws, the model logs it and opens the change stream again after its backoff, which calls
+the function again and asks the listeners again if the history is still lost. Otherwise, with
+`restartSubscriptionsOnChangeStreamHistoryLost(true)` the model restarts the subscription at the present without
+calling the function, and with the default the subscription fails. A `Flux` from `subscribeFailingOnHistoryLoss`
+fails with a `HistoryLostException` that names that checkpoint, whatever the configuration. In 0.34.0 the models could call the function again at an opening
 before the first event, and a catch-up's checkpoint from
 that later call opened at the present and skipped the events written in between.
 
-Three cases still lose events, as they did in 0.34.0:
+Four cases still lose events, as they did in 0.34.0:
 
 - A resume token of another collection as the function's first answer, on the blocking models and on a reactor
   subscription that reads through the driver's cursor. The server opens the change stream at it and rejects it only on
@@ -1138,6 +1145,10 @@ Three cases still lose events, as they did in 0.34.0:
 - A position the server rejects only after an event is written, such as a resume token of another collection, on a
   reactor subscription that counts the first document. The model calls the function again, and an answer that comes
   after that event skips it.
+- On the blocking models, a change stream that opened at the present with no operation time in MongoDB's reply, which a
+  replica set's reply normally has. Nothing records where it opened, so an opening before the subscription has delivered
+  an event can call the function again, and a catch-up's checkpoint it answers then opens at the present and skips the
+  events written in between.
 
 ### Who is affected
 

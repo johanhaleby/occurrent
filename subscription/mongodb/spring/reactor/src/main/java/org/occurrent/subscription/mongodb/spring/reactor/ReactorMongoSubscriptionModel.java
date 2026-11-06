@@ -268,7 +268,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             AtomicReference<StartAt> currentStartAt = new AtomicReference<>(MongoCommons.refusingCatchupPositionUntilOpened(startAt, null, opened::get));
             AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
             AtomicReference<@Nullable OpenedAt> openedAt = new AtomicReference<>();
-            return changeStream(filter, currentStartAt, presentAt, new AtomicReference<>(), currentStartAt::compareAndSet, openedAt::set, readPosition -> {
+            return changeStream(filter, currentStartAt, presentAt, new AtomicReference<>(), Runnable::run, currentStartAt::compareAndSet, openedAt::set, readPosition -> {
                 opened.set(true);
                 currentStartAt.set(readPosition);
             }, () -> {
@@ -297,7 +297,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
             // Only while the Flux hasn't moved off startAt, so a loss after it has read on is handled as subscribe handles it
             Predicate<Throwable> startLost = throwable -> start != null && isChangeStreamHistoryLost(throwable) && currentStartAt.get() == subscribedAt;
-            return changeStream(filter, currentStartAt, presentAt, new AtomicReference<>(), currentStartAt::compareAndSet, __ -> {
+            return changeStream(filter, currentStartAt, presentAt, new AtomicReference<>(), Runnable::run, currentStartAt::compareAndSet, __ -> {
             }, readPosition -> {
                 opened.set(true);
                 currentStartAt.set(readPosition);
@@ -416,7 +416,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
         // concatMap can buffer several documents ahead of a slow action, so the position moves only once the action's
         // Mono has completed, and a pause, a cancel or a restart delivers again at most the event in hand
-        return changeStream(internalSubscription.filter, currentStartAt, internalSubscription.presentAt, internalSubscription.recordedUntilRead, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned), run::openedAt, __ -> internalSubscription.changeStreamOpened(run), run::opened)
+        return changeStream(internalSubscription.filter, currentStartAt, internalSubscription.presentAt, internalSubscription.recordedUntilRead, run::whileOpen, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned), run::openedAt, __ -> internalSubscription.changeStreamOpened(run), run::opened)
                 .concatMap(cloudEvent -> run.step(() -> deliver(internalSubscription, run, cloudEvent)));
     }
 
@@ -533,18 +533,20 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     // A subscribe here doesn't say whether the server accepted the position, so where a dynamic position opens is
     // recorded as the stream opens and given back on an error cannotOpenAt matches before a document is read.
     // recordedUntilRead holds that opening across the subscription's runs and retries, since the rejection can come
-    // after a pause or another failure has opened the stream again at the recorded position
+    // after a pause or another failure has opened the stream again at the recorded position. whileOpen records, gives
+    // back and clears the opening only while the run is open, so a run a pause has closed doesn't touch it and the run
+    // after it can still give it back
     private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt,
-                                          AtomicReference<@Nullable OpenedAt> recordedUntilRead, BiPredicate<StartAt, StartAt> recordOpeningPosition,
+                                          AtomicReference<@Nullable OpenedAt> recordedUntilRead, Consumer<Runnable> whileOpen, BiPredicate<StartAt, StartAt> recordOpeningPosition,
                                           Consumer<OpenedAt> opened, Consumer<StartAt> onDocumentRead, Runnable onSubscribe) {
         SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
         return openingPosition(currentStartAt, presentAt, recordOpeningPosition, openedAt -> {
             opened.accept(openedAt);
-            // On a run a pause has closed, recordOpeningPosition answers true without moving the position, so there is
-            // nothing to give back
-            if (MongoCommons.recordWhereItOpened(openedAt, recordOpeningPosition) && currentStartAt.get() == openedAt.openingPosition()) {
-                recordedUntilRead.set(openedAt);
-            }
+            whileOpen.accept(() -> {
+                if (MongoCommons.recordWhereItOpened(openedAt, recordOpeningPosition) && currentStartAt.get() == openedAt.openingPosition()) {
+                    recordedUntilRead.set(openedAt);
+                }
+            });
         }).<CloudEvent>flatMapMany(openingPosition -> {
             // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
             // and that includes an operation stamped at exactly the given time.
@@ -567,20 +569,27 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                         MongoResumeTokenCheckpoint checkpoint = new MongoResumeTokenCheckpoint(requireNonNull(raw.getResumeToken()));
                         // Advances the tracked position for every document received, even ones that don't
                         // deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel, so
-                        // a resubscribe resumes gap-free.
-                        onDocumentRead.accept(StartAt.checkpoint(checkpoint));
-                        recordedUntilRead.set(null);
+                        // a resubscribe resumes gap-free. In one hold of the run's lock with the clear, so a pause
+                        // can't leave the opening recorded after the read counted the run as opened.
+                        whileOpen.accept(() -> {
+                            onDocumentRead.accept(StartAt.checkpoint(checkpoint));
+                            recordedUntilRead.set(null);
+                        });
                         return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                                 .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, checkpoint))
                                 .map(Mono::just)
                                 .orElse(Mono.empty());
                     });
         }).doOnError(throwable -> {
-            OpenedAt recorded = cannotOpenAt(throwable) ? recordedUntilRead.getAndSet(null) : null;
-            if (recorded != null && recordOpeningPosition.test(recorded.openingPosition(), recorded.tracked())) {
-                // Puts back the opening that tracked the dynamic position, since a later opening at the recorded position
-                // replaced it, and lostFrom would then name no checkpoint
-                opened.accept(recorded);
+            if (cannotOpenAt(throwable)) {
+                whileOpen.accept(() -> {
+                    OpenedAt recorded = recordedUntilRead.getAndSet(null);
+                    if (recorded != null && recordOpeningPosition.test(recorded.openingPosition(), recorded.tracked())) {
+                        // Puts back the opening that tracked the dynamic position, since a later opening at the recorded
+                        // position replaced it, and lostFrom would then name no checkpoint
+                        opened.accept(recorded);
+                    }
+                });
             }
         });
     }
@@ -818,9 +827,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     /**
      * Adds a listener that is asked what to do with a subscription with an id that can't resume, because the oplog no
      * longer reaches back to the position it opens at. It is asked before the model restarts the subscription from
-     * the present or ends it, as {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. A subscription
-     * whose position is dynamic, or is {@link StartAt#now()} and hasn't been resolved to a moment yet, doesn't get the
-     * listeners asked.
+     * the present or ends it, as {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. The listeners are
+     * asked only when there is a checkpoint to name as where the history is lost from. That is the checkpoint the
+     * subscription holds, or, while it still holds the position its change stream opened from, the checkpoint the
+     * change stream opened at, so a dynamic position gets them asked too.
      */
     @Override
     public void addHistoryLossListener(HistoryLossListener listener) {
@@ -1240,8 +1250,14 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * run is open, and the position moves only while the run is open or a step is under way. The run has ended once it
      * is closed and no step is under way, and the next run for the subscription reads nothing before that.
      * <p>
-     * The monitor of the run is held while its own fields change, and while the subscription records where the driver
-     * cursor opened and ends the check of a dynamic position. No code of the caller runs while it's held.
+     * The monitor of the run is held while {@code open}, {@code stepsUnderWay} and {@code hasEnded} change, and while
+     * {@code move} and {@code compareAndMove} set the position of the subscription. {@code changeStreamOpened} of the
+     * subscription also holds it from the check that the run is open until it has recorded where the run opened, so a
+     * pause closes the run before that or after it. {@code whileOpen} holds it while a change stream records, gives
+     * back or clears its opening, and while a read records where the run opened and clears the opening, for the same
+     * reason. {@code openedAt} is volatile and set without it, and {@code reads} is a swap that needs none. No code of
+     * the caller runs while it's held, apart from the {@code asString()} of a {@code Checkpoint} class of its own that
+     * a dynamic position answered, which recording where the run opened reads.
      */
     static final class Run {
         private final Sinks.Empty<Void> started = Sinks.empty();
@@ -1262,6 +1278,15 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
         synchronized boolean isOpen() {
             return open;
+        }
+
+        // Runs the change while holding the monitor, and only while the run is open
+        void whileOpen(Runnable change) {
+            synchronized (this) {
+                if (open) {
+                    change.run();
+                }
+            }
         }
 
         // The change stream was subscribed to

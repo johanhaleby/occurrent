@@ -1153,11 +1153,19 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
+    // A new exception for every handle that throws the refusal, with the refusal as its cause. start(true) adds the
+    // failures after the first to it as suppressed, and those would otherwise show up in what every other handle throws
+    private static UnsupportedStartAtException copyOf(UnsupportedStartAtException refusal) {
+        UnsupportedStartAtException copy = new UnsupportedStartAtException(refusal.startAt(), requireNonNull(refusal.getMessage()));
+        copy.initCause(refusal);
+        return copy;
+    }
+
     // The answer of the handle subscribe returns. The first run to report it opened or to record a failure decides it,
     // in one step.
     private static final class FirstStart {
         final CountDownLatch latch = new CountDownLatch(1);
-        private final AtomicReference<@Nullable Optional<RuntimeException>> outcome = new AtomicReference<>();
+        private final AtomicReference<@Nullable Optional<UnsupportedStartAtException>> outcome = new AtomicReference<>();
 
         // A run that recorded a failure releases the waiters itself, once the id is free
         void started() {
@@ -1166,17 +1174,17 @@ public final class ChangeStreamSubscriptions {
             }
         }
 
-        void recordFailure(RuntimeException failure) {
+        void recordFailure(UnsupportedStartAtException failure) {
             outcome.compareAndSet(null, Optional.of(failure));
         }
 
         @Nullable RuntimeException failure() {
-            Optional<RuntimeException> decided = outcome.get();
-            return decided == null ? null : decided.orElse(null);
+            Optional<UnsupportedStartAtException> decided = outcome.get();
+            return decided == null ? null : decided.map(ChangeStreamSubscriptions::copyOf).orElse(null);
         }
 
         boolean hasStarted() {
-            Optional<RuntimeException> decided = outcome.get();
+            Optional<UnsupportedStartAtException> decided = outcome.get();
             return decided != null && decided.isEmpty();
         }
     }
@@ -1191,7 +1199,7 @@ public final class ChangeStreamSubscriptions {
         private final List<Bson> pipeline;
         final CountDownLatch startedLatch = new CountDownLatch(1);
         // Set before startedLatch is released, when this run failed for good instead of opening its change stream
-        private volatile @Nullable RuntimeException startFailure;
+        private volatile @Nullable UnsupportedStartAtException startFailure;
         // Shared by every run of the subscription
         final FirstStart firstStart;
         private final CountDownLatch stoppedRestartingLatch = new CountDownLatch(1);
@@ -1321,7 +1329,7 @@ public final class ChangeStreamSubscriptions {
 
         // Only for a run that is still in the map, so a pause or a resume can't come after it. A handle that has already
         // answered it started keeps that answer.
-        void recordFailureToStart(RuntimeException failure) {
+        void recordFailureToStart(UnsupportedStartAtException failure) {
             if (startedLatch.getCount() > 0) {
                 startFailure = failure;
             }
@@ -1338,7 +1346,8 @@ public final class ChangeStreamSubscriptions {
         }
 
         @Nullable RuntimeException startFailure() {
-            return startFailure;
+            UnsupportedStartAtException failure = startFailure;
+            return failure == null ? null : copyOf(failure);
         }
 
         void stopped() {
