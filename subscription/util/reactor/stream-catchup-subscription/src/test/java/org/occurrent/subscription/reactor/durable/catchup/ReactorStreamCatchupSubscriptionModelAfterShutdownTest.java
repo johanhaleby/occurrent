@@ -194,7 +194,7 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         model.subscribe("parked", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
 
         // The shutdown sets its flag and hasn't cancelled the catch-up yet
-        hook.afterTheReadIn("resumeSubscription", model.namedSubscriptions::beginShutdown);
+        hook.afterTheReadIn("resumeHoldingIdLock", model.namedSubscriptions::beginShutdown);
         Throwable thrown = catchThrowable(() -> model.resumeSubscription("parked"));
         model.shutdown();
 

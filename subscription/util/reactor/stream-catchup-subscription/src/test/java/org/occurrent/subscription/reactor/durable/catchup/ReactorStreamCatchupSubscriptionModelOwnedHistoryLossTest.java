@@ -593,9 +593,10 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
 
     // No wrapped model can run the takeover between own(..) replacing the record and forgetting the handover, since
     // own(..) calls no code of the wrapped model between the two. The hook runs it there, while the handover of the
-    // ended catch-up is still in place, so only the check of the record refuses the takeover.
+    // ended catch-up is still in place. The catch-up registered the takeover when it answered the loss, and the
+    // subscribe cancelled it before own(..), so the takeover runs nothing.
     @Test
-    void a_takeover_run_on_the_subscribing_thread_between_a_subscribe_replacing_the_record_of_a_catch_up_whose_subscription_ended_and_forgetting_its_handover_is_refused_by_the_record_check_and_replays_nothing_through_the_old_action() {
+    void a_takeover_run_on_the_subscribing_thread_between_a_subscribe_replacing_the_record_of_a_catch_up_whose_subscription_ended_and_forgetting_its_handover_replays_nothing_through_the_old_action() {
         // Given a catch-up that handed over, a loss of its live start whose takeover the wrapped model hasn't run yet,
         // and a subscription the wrapped model then ended on its own
         ReplacingOwnedHook ownedHook = ReplacingOwnedHook.installIn(catchup);
@@ -655,6 +656,32 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
                 () -> assertThat(readsFrom).as("where the new subscription reads from").isEqualTo(OTHER_LIVE_TOKEN),
                 () -> assertThat(catchupsStarted).as("catch-ups started").hasValue(1),
                 () -> assertPausedForGoodFrom(readsFrom)
+        );
+    }
+
+    @Test
+    void a_subscribe_with_catch_up_of_an_id_whose_subscription_ended_with_a_takeover_the_wrapped_model_has_not_run_replays_to_the_new_action_and_the_takeover_then_runs_nothing() {
+        // Given a catch-up that handed over, a loss of its live start whose takeover the wrapped model hasn't run yet,
+        // and a subscription the wrapped model then ended on its own
+        replayAndHandOver();
+        Checkpoint liveStartOfTheEndedCatchup = wrapped.positionOf(ID);
+        HistoryLossHandling.TakeOver lossOfTheLiveStart = (HistoryLossHandling.TakeOver) wrapped.asksTheListeners(ID, liveStartOfTheEndedCatchup);
+        wrapped.endsTheSubscriptionOnItsOwn(ID);
+        received.clear();
+        List<String> receivedByTheNewSubscription = new CopyOnWriteArrayList<>();
+
+        // When the id is subscribed again with a catch-up, and the wrapped model then runs the takeover
+        Throwable thrown = catchThrowable(() -> catchup.subscribe(ID, FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), event -> Mono.fromRunnable(() -> receivedByTheNewSubscription.add(event.getId())))
+                .waitUntilStarted().block(Duration.ofSeconds(5)));
+        lossOfTheLiveStart.afterPause().run();
+
+        // Then the subscribe replays the history to the new action, and the takeover replays nothing
+        assertAll(
+                () -> assertThat(thrown).as("what the subscribe throws").isNull(),
+                () -> assertThat(receivedByTheNewSubscription).as("delivered to the action of the new subscription").containsExactly("e1", "e2", "e3"),
+                () -> assertThat(received).as("delivered to the action of the ended catch-up").isEmpty(),
+                () -> assertThat(catchupsStarted).as("catch-ups started, the first replay and the new one").hasValue(2),
+                () -> assertThat(wrapped.resumedAt).as("resumed at a position by a takeover replay").isEmpty()
         );
     }
 
