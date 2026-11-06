@@ -80,11 +80,11 @@ A read with versions ran on a session of the store's own and bound nothing, so t
 failing handler couldn't undo it. Now the Spring stores read through the template when `confirmsAppendBeforeSaving` is
 set, synchronization is active, no transaction is, no session is bound for the store's database factory yet, and the
 store runs on a replica set. The read is then the first operation of the session transaction it binds, and it reports
-versions from it. When a session is already bound, for example by an earlier read in the same scope, the store reads
+versions from it. When a session is already bound, for example by an earlier read in the same scope, such a read goes
 through that session and reports no versions, as it does inside a transaction. A read on a session of its own wouldn't
 see that session's writes, and an append checked against its token could fail its condition on them.
 
-With no session bound, a read without `confirmsAppendBeforeSaving` keeps ADR 148's path in that scope. That covers the `@Snapshot` view and a
+A read without `confirmsAppendBeforeSaving` keeps ADR 148's path in that scope. That covers the `@Snapshot` view and a
 read of the caller's in a method on `PROPAGATION_SUPPORTS`. Their versions come from a read-only transaction committed
 at majority, and they may save at them. Versions from the session transaction come from a transaction that hasn't
 committed when the read returns, at the session's default read concern.
@@ -96,7 +96,7 @@ session stays bound until that scope ends, as after a plain command, and a `Mong
 database factory counts it as an existing transaction there.
 
 The Spring stores retry a write only in a transaction they own. A session bound for their database factory counts as
-one they don't, so an append in it that conflicts fails at once instead of being retried in the transaction the
+one they don't, so a DCB append in it that conflicts fails at once instead of being retried in the transaction the
 conflict aborted.
 
 ### Why the versions are safe to save

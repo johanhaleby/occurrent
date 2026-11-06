@@ -67,11 +67,13 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Filters.eq;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -518,6 +520,19 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
+    void reads_a_versioned_read_without_the_confirmation_mark_in_a_transaction_of_its_own_where_a_session_is_already_bound() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+
+        inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving())
+                .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .doOnNext(withoutMark::set))
+                .block();
+
+        assertThat(withoutMark.get().markerVersions()).as("versions from a read-only transaction of the store's own").isNotEmpty();
+    }
+
+    @Test
     void fails_an_append_that_conflicts_in_a_session_bound_in_a_scope_without_a_transaction_at_once_instead_of_retrying_until_the_deadline() {
         append("before", DEPOSITED, ACCOUNT_A);
         DcbReadOptions confirming = DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving();
@@ -529,6 +544,8 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
                         .then(eventStore.append(List.of(taggedEvent("in scope", DEPOSITED, ACCOUNT_A)), failIfEventsMatch(BOUNDARY_A, read.consistencyToken()))))));
 
         assertThat(thrown).as("the append in the bound session conflicts with the concurrent one").isNotNull();
+        assertThat(Stream.iterate(thrown, Objects::nonNull, Throwable::getCause)).as("a transient conflict, not a condition failure, in the cause chain")
+                .anySatisfy(cause -> assertThat(cause).isInstanceOfSatisfying(MongoException.class, e -> assertThat(e.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)).isTrue()));
         assertThat(Duration.ofNanos(System.nanoTime() - startedAt)).as("a retry in an aborted transaction runs until its deadline").isLessThan(Duration.ofSeconds(30));
         assertThat(eventStore.read(BOUNDARY_A).block().events()).extracting(CloudEvent::getId).containsExactly("before", "concurrent");
     }

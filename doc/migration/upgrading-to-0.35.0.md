@@ -971,11 +971,11 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   handler undoes the append.
 - In a Spring scope of yours with no transaction, on an executor that opens none, that session transaction commits
   when your scope ends, after `execute` returns, so a decider there saves no snapshot. When a session is already bound
-  there, the store reads through it and reports no versions, since its writes may still abort. The session stays
+  there, the decider's read goes through it and reports no versions, since its writes may still abort. The session stays
   bound until your scope ends, as after a plain `execute`, and a `MongoTransactionManager` over the same database
   counts it as an existing transaction there.
-- A Spring MongoDB store no longer retries a write in a session bound to the synchronization. A conflict fails it at
-  once, as in your transaction, instead of a retry in the transaction the conflict aborted.
+- A Spring MongoDB store no longer retries a DCB append in a session bound to the synchronization. A conflict fails it
+  at once, as in your transaction, instead of a retry in the transaction the conflict aborted.
 - `DcbReadOptions.confirmingAppendBeforeSaving()` and `asFirstOperationOfTransaction()` say something about the caller
   that the store can't check. Set them on a read of your own only when you keep the contract their javadoc states.
 - In a transaction you own, on a blocking service, an exception from your domain function no longer marks that
