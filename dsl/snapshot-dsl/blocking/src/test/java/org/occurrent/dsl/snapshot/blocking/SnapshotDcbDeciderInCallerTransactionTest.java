@@ -364,7 +364,8 @@ class SnapshotDcbDeciderInCallerTransactionTest {
         assertAll(
                 () -> assertThat(thrown).as("what execute threw").isNull(),
                 () -> assertThat(eventStore.read(criteria()).events()).as("events stored").hasSize(2),
-                () -> assertThat(seenBySubscription).as("events the subscription saw").hasSize(1)
+                () -> assertThat(seenBySubscription).as("events the subscription saw").hasSize(1),
+                () -> assertThat(snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria()))).as("the snapshot saved, which needs the retried read to report versions").isPresent()
         );
     }
 
@@ -380,7 +381,7 @@ class SnapshotDcbDeciderInCallerTransactionTest {
         Throwable thrown = catchThrowable(() -> notSupportingTransactions.execute(new Add("first"), decider));
 
         assertAll(
-                () -> assertThat(thrown).as("what execute threw").hasRootCause(failure),
+                () -> assertThat(thrown).as("what execute threw").isSameAs(failure),
                 () -> assertThat(eventStore.read(criteria()).events()).as("events stored").hasSize(1)
         );
     }

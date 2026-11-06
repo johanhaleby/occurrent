@@ -27,7 +27,7 @@ when the command asks for marker versions, which a snapshot decider's always doe
 no longer pays:
 
 - A write the domain function makes before it throws stays stored, since no transaction holds it.
-- A transient failure of the read fails the command, since the executor's retry doesn't cover it.
+- A transient failure of the read doesn't get the executor's retry.
 - On an executor that opens no transaction, a handler that fails doesn't undo the append. The read runs on a session of
   the store's own and binds nothing, so the append commits on its own.
 
@@ -138,19 +138,21 @@ transaction the executor joined.
 
 - `DcbReadOptionsTest` covers what sets each component, that `firstOperationOfTransaction` implies
   `confirmsAppendBeforeSaving`, that the withers keep them, and that each is refused without what it needs.
-- Each Spring MongoDB store's marker-version test gets a read with `firstOperationOfTransaction` as the first operation
-  of a transaction the test opens. It reports versions, and a read after them returns only the newer events.
-- Each Spring store gets a test that this read runs in the transaction. The test appends in a transaction it opens and
-  then reads with the option, and the read returns the uncommitted event. That breaks the option's contract on purpose,
-  to show the store doesn't read on a session of its own.
+- The marker-version test of the native, the Spring and the reactor MongoDB store gets a read with
+  `firstOperationOfTransaction` as the first operation of a transaction the test opens. It reports versions, and a read
+  after them returns only the newer events.
+- Each of those stores gets a test that this read runs in the transaction. The test appends in a transaction it opens
+  and then reads with the option, and the versions count the append's marker increment, which a read on a session of
+  the store's own doesn't see. That breaks the option's contract on purpose.
 - Each Spring store gets a test for the scope with synchronization and no transaction. A read with
   `confirmsAppendBeforeSaving` reports versions, and an append after it in the scope is gone when the scope throws. A
   read without it reports versions too, and the append stays.
 - `SnapshotDcbDeciderInCallerTransactionTest` and its reactive twin keep the caller's transaction cases. Their case where
   the executor owns the transaction asserts the snapshot is saved with the read in the transaction.
-- One test per gap, on both stacks over a Spring MongoDB store, for a snapshot decider. A write of the domain function
-  rolls back, a transient read failure gets the executor's retry, and a failing handler on `PROPAGATION_NOT_SUPPORTED`
-  undoes the append.
+- One test per gap over a Spring MongoDB store, for a snapshot decider. On the blocking stack a write of the domain
+  function rolls back. On both stacks a transient read failure gets the executor's retry and the snapshot is saved, and
+  a failing handler on `PROPAGATION_NOT_SUPPORTED` undoes the append. The reactive service's domain function is
+  synchronous, so the first gap has no reactive test.
 
 ## Consequences
 
