@@ -810,9 +810,11 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     /**
      * Adds a listener that is asked what to do with a subscription with an id that can't resume, because the oplog no
      * longer reaches back to the position it opens at. It is asked before the model restarts the subscription from
-     * the present or ends it, as {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. A subscription
-     * whose position is dynamic, or is {@link StartAt#now()} and hasn't been resolved to a moment yet, doesn't get the
-     * listeners asked.
+     * the present or ends it, as {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. The listeners are
+     * asked only when there is a checkpoint to name as where the history is lost from. That is the checkpoint the
+     * subscription holds, or, while it still holds the position its change stream opened from, the checkpoint the
+     * change stream opened at, so a dynamic position gets them asked too. A change stream opened at the present without
+     * an operation time has no checkpoint, so the listeners aren't asked for it.
      */
     @Override
     public void addHistoryLossListener(HistoryLossListener listener) {
@@ -1171,8 +1173,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * run is open, and the position moves only while the run is open or a step is under way. The run has ended once it
      * is closed and no step is under way, and the next run for the subscription reads nothing before that.
      * <p>
-     * The monitor of the run is held while its own fields change, and while the subscription records where the driver
-     * cursor opened and ends the check of a dynamic position. No code of the caller runs while it's held.
+     * The monitor of the run is held while {@code open}, {@code stepsUnderWay} and {@code hasEnded} change, and while
+     * {@code move} and {@code compareAndMove} set the position of the subscription. {@code openedAt} is volatile and set
+     * without it, and {@code reads} is a swap that needs none. No code of the caller runs while it's held.
      */
     static final class Run {
         private final Sinks.Empty<Void> started = Sinks.empty();

@@ -423,6 +423,54 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
+    void a_run_that_was_paused_while_its_dynamic_position_answered_leaves_the_resumed_run_to_ask_again_when_the_server_cannot_find_its_answer() throws InterruptedException {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position whose first answer waits
+        // until it is let go and is then a live checkpoint, whose second answer is a token of another collection, which the
+        // server accepts as the stream opens and can't find once it reads an event, and whose answers after that are the live checkpoint
+        useTheChangeStreamOfSpring();
+        Checkpoint live = liveCheckpoint();
+        Checkpoint ofAnotherCollection = tokenOfAnotherCollection();
+        AtomicInteger answers = new AtomicInteger();
+        CountDownLatch firstAnswerAsked = new CountDownLatch(1);
+        CountDownLatch letFirstAnswerGo = new CountDownLatch(1);
+        StartAt startAt = StartAt.dynamic(ctx -> {
+            int answer = answers.incrementAndGet();
+            if (answer == 1) {
+                firstAnswerAsked.countDown();
+                try {
+                    letFirstAnswerGo.await();
+                } catch (InterruptedException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+            return answer == 2 ? StartAt.checkpoint(ofAnotherCollection) : StartAt.checkpoint(live);
+        });
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch eventDelivered = new CountDownLatch(1);
+        Thread subscriber = new Thread(() -> subscriptionModel.subscribe("paused-while-it-answered", startAt, event -> Mono.fromRunnable(() -> {
+            delivered.add(event.getId());
+            eventDelivered.countDown();
+        })));
+        subscriber.start();
+        assertThat(firstAnswerAsked.await(10, SECONDS)).isTrue();
+
+        // When it is paused and resumed while the first answer waits, so the resumed run opens at the token of the other
+        // collection, the first answer is let go on the run the pause closed, and an event is written
+        subscriptionModel.pauseSubscription("paused-while-it-answered");
+        waitUntilStarted(subscriptionModel.resumeSubscription("paused-while-it-answered"));
+        letFirstAnswerGo.countDown();
+        subscriber.join(SECONDS.toMillis(10));
+        NameDefined written = nameDefined();
+        write(written);
+
+        // Then the resumed run asks the position again once the server can't find the token, and the event is delivered.
+        // The wait doesn't fail on its own, so the assertions say what went wrong
+        eventDelivered.await(15, SECONDS);
+        assertThat(answers).hasValue(3);
+        assertThat(delivered).containsExactly(written.eventId());
+    }
+
+    @Test
     void the_flux_opened_again_before_it_read_a_document_opens_where_its_dynamic_position_first_answered() {
         // Given a dynamic position that answers a live checkpoint first and a global checkpoint after, and a first read of the change stream that fails
         Checkpoint live = liveCheckpoint();

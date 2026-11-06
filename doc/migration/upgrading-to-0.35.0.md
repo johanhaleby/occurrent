@@ -1121,9 +1121,14 @@ Once a change stream has opened, the model opens it again at the same position a
 That covers a pause and a resume, an action that throws, and a failure reading the change stream before the first
 event. A reactor subscription that counts the first document takes the position the function answered when its `Flux`
 was subscribed to. It gives that position back to the function only when the change stream fails before it reads a
-document with error code 9, 280 or 286, the codes the server rejects a start position with, so the next opening calls
-the function again. That holds also when a pause or another failure
-opened the change stream again at that position first. In 0.34.0 the models could call the function again at an opening
+document with error code 9, 280 or 286, the codes the server rejects a start position with. That holds also when a
+pause or another failure opened the change stream again at that position first. After a 9 or a 280 the model opens the
+change stream again, and that opening calls the function again. After a 286 it doesn't open at the position again. A
+subscription with an id first asks the listeners added with `addHistoryLossListener`, with the checkpoint the change
+stream opened at, and one of them can take the subscription over. Otherwise, with
+`restartSubscriptionsOnChangeStreamHistoryLost(true)` the model restarts the subscription at the present without
+calling the function, and with the default the subscription fails. A `Flux` from `subscribeFailingOnHistoryLoss`
+fails with a `HistoryLostException` that names that checkpoint, whatever the configuration. In 0.34.0 the models could call the function again at an opening
 before the first event, and a catch-up's checkpoint from
 that later call opened at the present and skipped the events written in between.
 
