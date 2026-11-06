@@ -19,6 +19,7 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
+import org.occurrent.eventstore.mongodb.spring.blocking.CommitRetryingMongoTransactionManager
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore
 import org.occurrent.example.domain.uno.Event
@@ -66,7 +67,7 @@ class Bootstrap {
     }
 
     @Bean
-    fun transactionManager(dbFactory: MongoDatabaseFactory) = MongoTransactionManager(dbFactory)
+    fun transactionManager(dbFactory: MongoDatabaseFactory) = CommitRetryingMongoTransactionManager(dbFactory)
 
     @Bean
     fun eventStore(template: MongoTemplate, transactionManager: MongoTransactionManager): SpringMongoEventStore {

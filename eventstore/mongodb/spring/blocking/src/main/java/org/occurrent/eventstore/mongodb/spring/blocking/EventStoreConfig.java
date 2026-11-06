@@ -399,6 +399,12 @@ public class EventStoreConfig {
          * How long the read-only transaction that reports marker versions may run and take to commit. Defaults to
          * 5 seconds. A read that doesn't commit within it reports no marker versions. The transaction never uses the
          * {@link Builder#transactionConfig(TransactionTemplate) transaction template} configured for writes.
+         * <p>
+         * It also bounds how long an append waits for a majority to acknowledge its position reservation. An append
+         * that isn't acknowledged within it throws and writes no event. On a client with a {@code timeoutMS} above
+         * 0, where the driver sends no {@code wtimeout}, the client's timeout bounds that wait instead. A
+         * {@code timeoutMS} of 0 waits forever, so there this timeout bounds the whole reservation, the wait to select a
+         * primary included.
          *
          * @param markerVersionsCommitTimeout at least 1 millisecond
          * @return The same {@code Builder} instance.
