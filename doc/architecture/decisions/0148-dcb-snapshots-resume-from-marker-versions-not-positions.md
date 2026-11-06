@@ -690,8 +690,7 @@ in the executor, so it gets versions only when the executor opens no transaction
 
 On the blocking service a failure of the read or the decision goes around the executor when `isTransactional()`
 answers `true` both before the service enters it and when the failure happens, and `inTransactionTellingIfOpened` says
-the attempt didn't open its transaction. So it can't mark a transaction the caller owns rollback-only, and a caller that catches a failure of the domain
-function and continues commits. The service holds it inside the executor's action, returns normally, and throws it after the executor has
+the attempt didn't open its transaction. So it can't mark a transaction the caller owns rollback-only. The service holds it inside the executor's action, returns normally, and throws it after the executor has
 returned, an `Error` as well. Without that hold the caller's commit threw `UnexpectedRollbackException`. Otherwise the
 failure goes through the executor. An executor of your own that keeps the
 default of `inTransactionTellingIfOpened` and opens a transaction while `isTransactional()` already answers `true`
