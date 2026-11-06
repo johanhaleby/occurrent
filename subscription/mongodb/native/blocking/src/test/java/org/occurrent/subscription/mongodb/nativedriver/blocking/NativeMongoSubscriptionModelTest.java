@@ -668,8 +668,10 @@ public class NativeMongoSubscriptionModelTest {
             assertThat(thrown.getSuppressed()).hasSize(1);
             for (Subscription handle : handles) {
                 Throwable fromHandle = catchThrowable(() -> handle.waitUntilStarted(Duration.ZERO));
-                assertThat(fromHandle).isExactlyInstanceOf(UnsupportedStartAtException.class);
+                assertThat(fromHandle).isExactlyInstanceOf(UnsupportedStartAtException.class).isNotSameAs(thrown);
                 assertThat(fromHandle.getSuppressed()).isEmpty();
+                assertThat(fromHandle.getCause()).isExactlyInstanceOf(UnsupportedStartAtException.class).isNotSameAs(thrown);
+                assertThat(fromHandle.getCause().getSuppressed()).isEmpty();
             }
         }
 
@@ -1230,6 +1232,7 @@ public class NativeMongoSubscriptionModelTest {
             assertAll(
                     () -> assertThat(((UnsupportedStartAtException) fromPaused).startAt()).isSameAs(answered),
                     () -> assertThat(fromResumed).isNotSameAs(fromPaused),
+                    () -> assertThat(fromPaused.getCause()).isExactlyInstanceOf(UnsupportedStartAtException.class),
                     () -> assertThat(fromResumed.getCause()).isSameAs(fromPaused.getCause()),
                     () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
                     () -> assertThat(refused).isEmpty()

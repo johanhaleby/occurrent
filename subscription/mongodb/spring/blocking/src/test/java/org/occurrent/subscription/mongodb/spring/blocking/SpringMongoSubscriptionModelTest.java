@@ -1189,6 +1189,7 @@ public class SpringMongoSubscriptionModelTest {
             assertAll(
                     () -> assertThat(((UnsupportedStartAtException) fromPaused).startAt()).isSameAs(answered),
                     () -> assertThat(fromResumed).isNotSameAs(fromPaused),
+                    () -> assertThat(fromPaused.getCause()).isExactlyInstanceOf(UnsupportedStartAtException.class),
                     () -> assertThat(fromResumed.getCause()).isSameAs(fromPaused.getCause()),
                     () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
                     () -> assertThat(refused).isEmpty()
