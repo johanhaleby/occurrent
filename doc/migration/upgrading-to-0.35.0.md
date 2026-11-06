@@ -969,8 +969,7 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   and the dispatch, with the token of the read the decision was made on, and not the read or your domain function. A
   handler can run again on such a retry when a transaction rolled the earlier attempt back, as it could before. When the condition then fails, the service's retry strategy
   by default reads and decides again. By default the service allows 5 attempts and the Spring executors 240 on the
-  blocking stack and 321 on the reactive one, and `NativeMongoTransactionExecutor` retries for up to 120 seconds, the
-  limit of the driver's `withTransaction`, so a command on a contended boundary can fail sooner, with the same
+  blocking stack and 321 on the reactive one, so a command on a contended boundary can fail sooner, with the same
   budget a service without synchronous subscriptions has.
 - The executor's conflict retry no longer covers that read. A transient failure of the read, such as a
   `QueryTimeoutException`, fails the command unless your retry strategy retries it. If you relied on that retry, add it to what you
@@ -1059,8 +1058,7 @@ subscriptions behaves as before.
   `inTransactionTellingIfOpened` still sees an exception pass through and can roll back, but the command no longer runs again. A rollback rule keyed on the
   handler's exception type sees a different exception now.
 - `NativeMongoTransactionExecutor.isTransactional()` answers whether the session bound to the thread has a transaction in
-  force, where it used to answer `true` always. With no session bound, a DCB application service with synchronous
-  subscriptions over it now reads and decides before it, so your domain function no longer runs in its transaction.
+  force, where it used to answer `true` always.
 
 ### What to do
 
@@ -1071,8 +1069,8 @@ subscriptions behaves as before.
   `PROPAGATION_NEVER`, and there a retry that used to work is gone. When `execute` runs outside every Spring transaction
   scope of yours, a DCB append on those three propagations stays. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or
   `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, the append of a plain `execute` rolls back as a write to a
-  stream does when you don't catch the failure inside that scope. An append whose read asks for marker versions and
-  gets them, as a snapshot decider's does, stays. ADR 165 says when the store answers that read without them.
+  stream does when you don't catch the failure inside that scope. A snapshot decider's append
+  can stay there, and ADR 165 says when.
   [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
   so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open

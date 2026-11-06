@@ -136,7 +136,7 @@ that matches the failure, on both stacks unless a row says otherwise. Every Spri
 | `NativeMongoTransactionExecutor` | the caller's | catches it and commits | the commit succeeds | 1 |
 | Spring, `REQUIRES_NEW` | the caller's | | the command runs again, no exception | 1 |
 | Spring, `REQUIRED` | the caller's, on another transaction manager | | the command runs again, no exception | 1 |
-| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, in a Spring scope of the caller's on `NOT_SUPPORTED` or `SUPPORTS` | doesn't catch it | gets the failure | 0, and 1 for a snapshot decider |
+| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, in a Spring scope of the caller's on `NOT_SUPPORTED` or `SUPPORTS` | doesn't catch it | gets the failure | 0, and can be 1 for a snapshot decider |
 | Spring, `NOT_SUPPORTED` | the caller's | catches it and commits | the commit succeeds | 0 |
 | Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, and no Spring scope | | gets the failure | 0 on a stream, 1 on a DCB boundary |
 
@@ -148,9 +148,8 @@ and the store commits it in a transaction of its own. I ran that after merging m
 the append rolled back too. In a Spring scope of the caller's that opens no transaction, the Spring executors don't
 allow a read before them, so the DCB service reads in the executor as in 0.34.0, and the append of a plain `execute`
 rolls back as a write to a stream does. A read that asks for versions, as a snapshot decider's does, runs on a session
-of the store's own and binds nothing, and its append stays as in the last row. The store answers such a read without
-versions when `resumeFromMarkerVersions` is off, when the criteria matches every event, or after the read of the
-versions failed, and that read binds a session as a plain `execute`'s does. I ran that row on both stacks with a retry strategy that
+of the store's own and binds nothing, and its append stays as in the last row, unless the store falls back to
+`readWithoutMarkerVersions`, whose read binds a session as a plain `execute`'s does. I ran that row on both stacks with a retry strategy that
 matches the handler's failure, and on the blocking stack also with one that doesn't, and every command was decided once.
 A caller that catches the failure and lets its scope complete may keep the append, and I didn't run that. In the last
 two rows, over a stream, a strategy that matched the failure used to run the command again and store one event with no
