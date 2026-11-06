@@ -1146,8 +1146,9 @@ Four cases still lose events, as they did in 0.34.0:
   reactor subscription that counts the first document. The model calls the function again, and an answer that comes
   after that event skips it.
 - A change stream that opened at the present with no operation time in MongoDB's reply, which a replica set's reply
-  normally has. Nothing records where it opened, so the next opening calls the function again, and a catch-up's
-  checkpoint it answers then opens at the present and skips the events written in between.
+  normally has. Nothing records where it opened, so an opening before the subscription has delivered an event can call
+  the function again, and a catch-up's checkpoint it answers then opens at the present and skips the events written in
+  between.
 
 ### Who is affected
 
