@@ -860,6 +860,8 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             assertThat(startEnded).as("how waiting for the start of the subscription ended").isInstanceOf(ExecutionException.class).hasCauseReference(threw);
             assertThat(feed.reads.get()).as("reads of where the feed was").isZero();
             assertThat(failedReadWarnings(logged)).as("warnings logged for a failed read").isEmpty();
+            assertThat(logged.at(Level.WARN)).as("warnings logged that nothing read where the feed was")
+                    .noneMatch(message -> message.startsWith("The wrapped model"));
 
             feed.throwsAtTheCall = null;
             Throwable startAgainEnded = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, startFromNow(dynamic), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT));
@@ -984,6 +986,49 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             assertThat(startEnded).as("how waiting for the start of the subscription ended").isInstanceOf(ExecutionException.class).hasCauseReference(threw);
         } finally {
             storage.releaseDelete.countDown();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * The wrapped model throws an Error when asked where its feed is, for a subscription that starts without reading
+     * that position. Such a subscription starts from the checkpoint stored for it, from a checkpoint of its own, from a
+     * dynamic start position that answers a checkpoint, or from StartAt.now() handed to the wrapped model as it is. It
+     * starts, and each call that threw is logged at WARN with what it threw. Where this model drives the feed, a
+     * dynamic start position asks once at the subscribe and once at its first start.
+     */
+    @ParameterizedTest
+    @CsvSource({"false, default, 1", "false, dynamic, 2", "true, default, 1", "true, checkpoint, 1", "true, now, 1", "true, dynamic, 1"})
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_for_a_subscription_that_never_reads_it_logs_what_it_threw_at_warn(
+            boolean handsOver, String startAt, int callsThatThrew) {
+        // Given
+        Feed feed = handsOver ? new NamedFeed(true) : new Feed();
+        Throwable threw = ThrownAtTheCall.of("error", POSITION_READ_FAILED);
+        feed.throwsAtTheCall = threw;
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        storage.save(SUBSCRIPTION_ID, checkpoint(0)).block(TIMEOUT);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        StartAt from = switch (startAt) {
+            case "default" -> StartAt.subscriptionModelDefault();
+            case "checkpoint" -> StartAt.checkpoint(checkpoint(0));
+            case "now" -> StartAt.now();
+            case "dynamic" -> StartAt.dynamic(() -> StartAt.checkpoint(checkpoint(0)));
+            default -> throw new IllegalArgumentException(startAt);
+        };
+        String unread = "The wrapped model " + feed.getClass().getName() + " threw when asked where its feed was for subscription " + SUBSCRIPTION_ID
+                        + ". Nothing reads that position, so this is the only report of what it threw.";
+        AtomicReference<Subscription> subscription = new AtomicReference<>();
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            Throwable atTheCall = catchThrowable(() -> subscription.set(model.subscribe(SUBSCRIPTION_ID, null, from, __ -> Mono.empty())));
+
+            // Then
+            assertThat(atTheCall).as("what the subscribe threw at the call").isNull();
+            assertThat(subscription.get().waitUntilStarted().toFuture()).as("waiting for the start of the subscription").succeedsWithin(TIMEOUT);
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(logged.thrownWith(unread)).as("what was logged with each warning that nothing read where the feed was")
+                    .hasSize(callsThatThrew).containsOnly(threw));
+        } finally {
             model.shutdown();
         }
     }
