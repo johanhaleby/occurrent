@@ -233,6 +233,43 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
     }
 
     @Test
+    void a_read_that_keeps_failing_keeps_the_start_waiting_with_a_warning_for_each_attempt_until_a_cancel_ends_it() {
+        // Given
+        HeldDelays delays = new HeldDelays();
+        Schedulers.Snapshot schedulers = Schedulers.setFactoryWithSnapshot(delays);
+
+        try {
+            AtomicInteger reads = new AtomicInteger();
+            feed.presentRead = atTheCall -> Mono.defer(() -> {
+                reads.incrementAndGet();
+                return Mono.error(new IllegalStateException(READ_FAILED));
+            });
+            CompletableFuture<Void> started = subscribeFromADynamicNow().join().waitUntilStarted().toFuture();
+            await().atMost(TIMEOUT).until(() -> delays.waiting() == 1 || started.isDone());
+            // Each retry let go reads again, the read fails, and the next retry then waits
+            for (int retry = 0; retry < 3; retry++) {
+                delays.letGo();
+                await().atMost(TIMEOUT).until(() -> delays.waiting() == 1 || started.isDone());
+            }
+            boolean endedWhileTheReadFailed = started.isDone();
+            List<String> warnings = failedReadWarnings();
+
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
+
+            // Then
+            assertThat(endedWhileTheReadFailed).as("waiting for the start ended while the read kept failing").isFalse();
+            // The read at the call and the one the hand-over asks for before the first retry, then one for each retry
+            assertThat(reads).as("reads of where the feed was").hasValue(5);
+            assertThat(warnings).as("warnings logged for a failed read").containsExactly(failedRead(1), failedRead(2), failedRead(3), failedRead(4), failedRead(5));
+            assertThat(started).as("waiting for the start once cancelled").failsWithin(RETURNS_AT_ONCE).withThrowableThat().isInstanceOf(CancellationException.class);
+            assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").isEmpty();
+        } finally {
+            Schedulers.resetFrom(schedulers);
+        }
+    }
+
+    @Test
     void a_refusal_of_the_wrapped_model_fails_the_start_instead_of_the_call_and_is_logged_as_an_error() {
         // Given
         feed.refusal = new IllegalArgumentException(REFUSED);
