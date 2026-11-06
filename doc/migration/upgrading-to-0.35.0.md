@@ -1686,9 +1686,9 @@ Otherwise, let the subscribe fail and subscribe the id again once the wrapped mo
 `waitUntilStarted()` has failed, so you don't need to call `cancelSubscription(..)` first.
 
 The setting doesn't start a subscription over a model that throws, or whose `Mono` fails on every read. Make such a
-model fail the `Mono` it returns instead of throwing, and complete it empty when it can't work out the position at
-all, which is the answer the contract has for a problem it can't resolve. The setting then starts the subscription
-as 0.34.0 did.
+model return a `Mono` instead of throwing, and fail it only for a problem that a read again can resolve. When the
+model can't work out the position, complete the `Mono` empty, which is the answer the contract has for a problem it
+can't resolve. The setting then starts the subscription as 0.34.0 did.
 
 ### Why there is no recipe
 
