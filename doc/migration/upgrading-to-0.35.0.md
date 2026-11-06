@@ -1642,10 +1642,11 @@ returned fails with an `IllegalStateException`, and an `ERROR` is logged. In 0.3
 wherever the feed had reached when the wrapped model got it, and skipped what was written before that.
 
 A read that fails is read again, with a `WARN` for each failed read, and the subscription waits without starting until a
-read answers or a cancel of the id or a `shutdown()` ends the wait. The wait before the next read starts between 100 and
-150 milliseconds and about doubles with each failure, up to 5 seconds, which it can reach from the seventh failure on.
-When `globalCheckpointAsOfNow()` throws instead of returning a `Mono`, nothing is read again, and `waitUntilStarted()`
-fails at once with what it threw.
+read answers or a cancel of the id or a `shutdown()` ends the wait. When the read has failed before the hand-over to
+the wrapped model waits for it, the hand-over reads again at once. After each failed read that the hand-over waited
+for, it waits before it reads again. The first wait is between 100 and 150 milliseconds, and the waits about double
+from there, up to 5 seconds, which the seventh wait is the first that can reach. When `globalCheckpointAsOfNow()`
+throws instead of returning a `Mono`, nothing is read, and `waitUntilStarted()` fails with what it threw.
 
 ### Who is affected
 

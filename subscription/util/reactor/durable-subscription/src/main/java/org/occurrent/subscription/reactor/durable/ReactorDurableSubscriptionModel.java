@@ -154,13 +154,14 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * checkpoint from storage. That read is taken before the function runs, so the subscription delivers what was written
  * while the function ran. A read that fails is read again, with a {@code WARN} for each failed read, and the
  * subscription waits without starting until a read answers or a cancel of the id or a {@link #shutdown()} ends the
- * wait. The wait before the next read starts between 100 and 150 milliseconds and about doubles with each failure, up
- * to 5 seconds, which it can reach from the seventh failure on. When {@code globalCheckpointAsOfNow()} throws instead
- * of returning a {@code Mono}, nothing is read again, {@link Subscription#waitUntilStarted()} fails at once with what
- * it threw, and the id is free to subscribe again. A read that answers nothing fails
- * {@link Subscription#waitUntilStarted()}, as described below, since the hand-over comes after the call returned and
- * starting from {@link StartAt#now()} there would skip what was written in between. Each of these holds for a subscribe
- * that waits for a checkpoint that a cancel of the id read to delete to be written back too. With
+ * wait. When the read has failed before the hand-over waits for it, the hand-over reads again at once. After each
+ * failed read that the hand-over waited for, it waits before it reads again. The first wait is between 100 and 150
+ * milliseconds, and the waits about double from there, up to 5 seconds, which the seventh wait is the first that can
+ * reach. When {@code globalCheckpointAsOfNow()} throws instead of returning a {@code Mono}, nothing is read,
+ * {@link Subscription#waitUntilStarted()} fails with what it threw, and the id is free to subscribe again. A read that
+ * answers nothing fails {@link Subscription#waitUntilStarted()}, as described below, since the hand-over comes after
+ * the call returned and starting from {@link StartAt#now()} there would skip what was written in between. Each of these
+ * holds for a subscribe that waits for a checkpoint that a cancel of the id read to delete to be written back too. With
  * {@link ReactorDurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)}, a read that answers
  * nothing hands the subscription over at {@link StartAt#now()} instead, and the subscription skips what was written
  * before the hand-over.
@@ -211,18 +212,22 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * before it started, delivers what was written after the subscribe once it starts. A dynamic start position that
  * answers {@link StartAt#now()} begins from such a read of the call that first starts the subscription. When that read
  * answers nothing, the subscription opens its feed at {@link StartAt#now()} each time it starts, as in 0.33.0. When it
- * fails, it is read again, with a {@code WARN} for each failed read, after a wait that starts between 100 and 150
- * milliseconds and about doubles with each failure, up to 5 seconds. The subscription keeps trying until the read
- * answers or the subscription is cancelled, paused, stopped or shut down. When {@code globalCheckpointAsOfNow()} throws
- * instead of returning a {@code Mono}, nothing is read again, {@link Subscription#waitUntilStarted()} fails at once
- * with what it threw, and the id is free to subscribe again. A read that is slow to answer is waited for however long
- * it takes, with a {@code WARN} every 10 seconds while the subscription waits, and so is the read for a subscription
- * from the subscription-model default. A subscription from {@link StartAt#now()} has at most one such read running,
- * which every start and resume of it waits for instead of asking again. A cancel of the subscription or a
- * {@link #shutdown()} cancels the read, and a pause or a stop does not. A subscription whose read never answers does
- * not start, and holds up neither a call nor another subscription. A dynamic start position on a stopped model is asked
- * only once the model is started, and when it answers the subscription-model default, the subscription starts from
- * where the feed was at the subscribe, since the subscribe reads that in case it does.
+ * fails, it is read again, with a {@code WARN} for each failed read. Until a read answers, a start or a resume waits
+ * for the read that runs, or starts one at once when none runs. After each failed read that it waited for, it waits
+ * before it reads again. The first wait is between 100 and 150 milliseconds, and the waits about double from there, up
+ * to 5 seconds, which the seventh wait is the first that can reach. The subscription keeps trying until the read
+ * answers or the subscription is cancelled, paused, stopped or shut down, and the next start or resume begins again
+ * from the first wait. When {@code globalCheckpointAsOfNow()} throws instead of returning a {@code Mono}, nothing is
+ * read, and {@link Subscription#waitUntilStarted()} fails with what it threw when the subscription starts, which for
+ * one registered on a stopped model is once the model is started. The id is then free to subscribe again. A read that
+ * is slow to answer is waited for however long it takes, with a {@code WARN} every 10 seconds while the subscription
+ * waits, and so is the read for a subscription from the subscription-model default. A subscription from
+ * {@link StartAt#now()} has at most one such read running, which every start and resume of it waits for instead of
+ * asking again. A cancel of the subscription or a {@link #shutdown()} cancels the read, and a pause or a stop does not.
+ * A subscription whose read never answers does not start, and holds up neither a call nor another subscription. A
+ * dynamic start position on a stopped model is asked only once the model is started, and when it answers the
+ * subscription-model default, the subscription starts from where the feed was at the subscribe, since the subscribe
+ * reads that in case it does.
  * <p>
  * The refusal is signalled on {@link Subscription#waitUntilStarted()}. When the wrapped model manages named
  * subscriptions of its own, that is the handle {@code subscribe(..)} returned, with an {@code ERROR} logged. When this

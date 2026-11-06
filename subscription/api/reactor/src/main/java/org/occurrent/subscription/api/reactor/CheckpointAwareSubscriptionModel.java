@@ -58,9 +58,14 @@ public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel,
      * The answer may be earlier than the call, so a subscription started from it can also receive some events written
      * just before the call. When an implementation can't work out the position at the call, it fails the {@code Mono}
      * rather than answer with a later position. The failure gives no position, and it may be transient, so a caller can
-     * subscribe to the same {@code Mono} again to read the position at the call once more.
-     * {@code ReactorDurableSubscriptionModel} does so after each failure, and fails the start of the subscription at
-     * once when this method throws instead of returning a {@code Mono}.
+     * subscribe to the same {@code Mono} again to read the position at the call once more. An implementation should
+     * not cache a failure in the returned {@code Mono}, since each read again would then get that same failure back.
+     * {@code ReactorDurableSubscriptionModel} reads again after each failure where it reads the position for a
+     * subscription from {@code StartAt.now()}, or from a {@code StartAt.dynamic(..)} function that answers
+     * {@code StartAt.now()}. Where it reads the position for such a subscription and this method throws instead of
+     * returning a {@code Mono}, it fails the start of the subscription with what was thrown. A read for the
+     * subscription-model default is not made again, and a failure of it fails the start of a subscription from that
+     * default that has no checkpoint stored.
      * <p>
      * An implementation that answers with a later position, for example by returning {@link #globalCheckpoint()} where
      * that works out where the feed is only when it runs, makes {@code ReactorDurableSubscriptionModel} skip the events
