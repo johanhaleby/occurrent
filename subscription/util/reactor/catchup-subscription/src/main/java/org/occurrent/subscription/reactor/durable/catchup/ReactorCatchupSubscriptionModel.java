@@ -395,10 +395,12 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     /**
      * Passes the cancel to the inner catch-up model that holds the subscription, see
-     * {@link ReactorStreamCatchupSubscriptionModel#cancelSubscription(String)}. Until the {@code Mono} this returns has
-     * completed or failed, and every other cancel of {@code subscriptionId} through this model has too, a subscribe of
-     * that id through this model throws {@link DuplicateSubscriptionIdException}, and the other calls for that id reach
-     * that inner model. That holds also when nothing subscribes to the {@code Mono}.
+     * {@link ReactorStreamCatchupSubscriptionModel#cancelSubscription(String)}. Until a cancel of
+     * {@code subscriptionId} through this model has completed, and every other cancel of that id through this model has
+     * completed or failed, a subscribe of that id through this model throws {@link DuplicateSubscriptionIdException},
+     * and the other calls for that id reach that inner model. After a cancel that throws or fails they still reach it,
+     * since that inner model can still hold the subscription. That holds also when nothing subscribes to the
+     * {@code Mono}.
      */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
@@ -417,7 +419,8 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
             cancelEnds(subscriptionId, route, false);
             throw e;
         }
-        Mono<Void> ended = cancelled.doOnTerminate(() -> cancelEnds(subscriptionId, route, true)).cache();
+        // Kept after a cancel that fails too, since the owner still holds the subscription then
+        Mono<Void> ended = cancelled.doOnSuccess(unused -> cancelEnds(subscriptionId, route, true)).doOnError(failure -> cancelEnds(subscriptionId, route, false)).cache();
         // Subscribed here so the route is forgotten even when nothing subscribes to what this returns. The owner logs
         // a cancel that fails.
         ended.subscribe(unused -> {

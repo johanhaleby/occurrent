@@ -162,6 +162,26 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
     }
 
     @Test
+    void a_cancel_whose_mono_from_the_wrapped_model_fails_leaves_the_subscription_routed_to_the_model_that_replayed_it() {
+        HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
+        ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
+
+        Subscription replayed = catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), __ -> Mono.empty());
+        StepVerifier.create(replayed.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(10));
+        wrapped.failsTheCancel(new IllegalArgumentException("failed by the wrapped model"));
+        assertThatThrownBy(() -> catchup.cancelSubscription("replayed").block(Duration.ofSeconds(10)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("failed by the wrapped model");
+
+        wrapped.losesTheHistoryFrom("replayed", new StringBasedCheckpoint("elsewhere"));
+
+        // Refused only by the model that holds the record of the loss, as after a cancel that throws
+        assertThatThrownBy(() -> catchup.resumeSubscription("replayed"))
+                .isInstanceOf(CatchupCannotResumeException.class)
+                .hasMessageContaining("elsewhere");
+    }
+
+    @Test
     void a_history_loss_reported_while_the_wrapped_model_still_cancels_keeps_the_resume_refused() {
         HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
         ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
@@ -318,6 +338,11 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
 
         void refusesTheCancel(RuntimeException refusal) {
             cancelRefusal = refusal;
+        }
+
+        // A cancel from here on fails with failure and keeps the subscription
+        void failsTheCancel(RuntimeException failure) {
+            cancelEnds = Mono.error(failure);
         }
 
         // A cancel from here on keeps the subscription until the test completes the sink
