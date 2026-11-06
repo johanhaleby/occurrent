@@ -447,10 +447,12 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
         });
         CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
         CountDownLatch eventDelivered = new CountDownLatch(1);
+        AtomicReference<Throwable> subscribeFailure = new AtomicReference<>();
         Thread subscriber = new Thread(() -> subscriptionModel.subscribe("paused-while-it-answered", startAt, event -> Mono.fromRunnable(() -> {
             delivered.add(event.getId());
             eventDelivered.countDown();
         })));
+        subscriber.setUncaughtExceptionHandler((thread, throwable) -> subscribeFailure.set(throwable));
         subscriber.start();
         assertThat(firstAnswerAsked.await(10, SECONDS)).isTrue();
 
@@ -460,6 +462,8 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
         waitUntilStarted(subscriptionModel.resumeSubscription("paused-while-it-answered"));
         letFirstAnswerGo.countDown();
         subscriber.join(SECONDS.toMillis(10));
+        assertThat(subscriber.isAlive()).isFalse();
+        assertThat(subscribeFailure).hasNullValue();
         NameDefined written = nameDefined();
         write(written);
 

@@ -1123,9 +1123,10 @@ event. A reactor subscription that counts the first document takes the position 
 was subscribed to. It gives that position back to the function only when the change stream fails before it reads a
 document with error code 9, 280 or 286, the codes the server rejects a start position with. That holds also when a
 pause or another failure opened the change stream again at that position first. After a 9 or a 280 the model opens the
-change stream again, and that opening calls the function again. After a 286 it doesn't open at the position again. A
-subscription with an id first asks the listeners added with `addHistoryLossListener`, with the checkpoint the change
-stream opened at, and one of them can take the subscription over. Otherwise, with
+change stream again, and that opening calls the function again. After a 286 a subscription with an id first asks the
+listeners added with `addHistoryLossListener`, with the checkpoint the change stream opened at. One of them can take the
+subscription over. When one throws, the model logs it and opens again at the position after its backoff, which calls
+the function again and asks the listeners again if the history is still lost. Otherwise, with
 `restartSubscriptionsOnChangeStreamHistoryLost(true)` the model restarts the subscription at the present without
 calling the function, and with the default the subscription fails. A `Flux` from `subscribeFailingOnHistoryLoss`
 fails with a `HistoryLostException` that names that checkpoint, whatever the configuration. In 0.34.0 the models could call the function again at an opening
