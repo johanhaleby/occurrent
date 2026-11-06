@@ -206,6 +206,30 @@ class DcbCommandInSpringTransactionExecutorMongoTest {
     }
 
     @Test
+    void a_write_the_domain_function_makes_before_it_throws_rolls_back_on_propagation_not_supported_in_the_callers_transaction_and_the_caller_still_commits() {
+        String domainWrite = UUID.randomUUID().toString();
+        String callersWrite = UUID.randomUUID().toString();
+        var failure = new IllegalStateException("domain failure");
+        var service = service(eventStore, TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
+
+        Throwable thrown = new TransactionTemplate(transactionManager).execute(status -> {
+            mongoTemplate.insert(new Document("_id", callersWrite), "domain-writes");
+            return catchThrowable(() -> service.execute(DcbCriteria.tags(tag), events -> {
+                mongoTemplate.insert(new Document("_id", domainWrite), "domain-writes");
+                throw failure;
+            }));
+        });
+
+        assertAll(
+                () -> assertThat(thrown).as("what reached the caller").isSameAs(failure),
+                () -> assertThat(mongoTemplate.count(Query.query(Criteria.where("_id").is(domainWrite)), "domain-writes"))
+                        .as("domain writes stored").isZero(),
+                () -> assertThat(mongoTemplate.count(Query.query(Criteria.where("_id").is(callersWrite)), "domain-writes"))
+                        .as("caller's writes stored").isOne()
+        );
+    }
+
+    @Test
     void the_executor_runs_the_command_again_after_a_transient_read_failure() {
         var reads = new AtomicInteger();
         DcbEventStore failingOnTheFirstRead = (DcbEventStore) Proxy.newProxyInstance(getClass().getClassLoader(),

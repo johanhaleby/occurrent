@@ -198,9 +198,8 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             }
             try {
                 if (dispatchSynchronously && (!versionsRequested || transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
-                    // A failure of the domain function goes through the executor unless the executor joined a transaction, so a
-                    // transaction the executor opens rolls back with the function's write, and the executor can run the action again
-                    // after a transient read failure. A command asking for marker versions reads here only in an open transaction the
+                    // A failure of the domain function goes through the executor unless the executor reports a transaction both
+                    // before and inside the action and didn't open it. A command asking for marker versions reads here only in an open transaction the
                     // executor can leave for the append, or when the executor doesn't allow a read before it.
                     boolean transactionalBefore = transactionExecutor.isTransactional();
                     Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> {
@@ -215,10 +214,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                             decision = readAndDecide.get();
                         } catch (Throwable failure) {
                             // Throwable, since a domain function in Kotlin can throw a checked exception
-                            if (openedTransaction || !transactionalBefore) {
+                            if (openedTransaction || !transactionalBefore || !transactionExecutor.isTransactional()) {
                                 throw FailureAfterWrite.<RuntimeException>sneakyThrow(failure);
                             }
-                            // Going around the executor keeps the failure from marking the transaction it joined rollback-only
+                            // Going around the executor keeps the failure from marking a transaction it joined rollback-only
                             failureAfterWrite.keepBeforeWrite(failure);
                             return new Attempt<>(Optional.empty(), List.of());
                         }
