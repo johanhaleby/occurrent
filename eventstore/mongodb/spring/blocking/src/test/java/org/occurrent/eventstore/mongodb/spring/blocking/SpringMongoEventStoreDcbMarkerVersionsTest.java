@@ -66,6 +66,8 @@ import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -526,6 +528,23 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
 
         assertThat(second.get().markerVersions()).as("versions of a read in a session whose writes may still abort").isEmpty();
         assertThat(eventStore.read(BOUNDARY_A).events()).extracting(CloudEvent::getId).containsExactly("before", "first", "second");
+    }
+
+    @Test
+    void fails_an_append_that_conflicts_in_a_session_bound_in_a_scope_without_a_transaction_at_once_instead_of_retrying_until_the_deadline() {
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
+        DcbReadOptions confirming = DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving();
+        long startedAt = System.nanoTime();
+
+        Throwable thrown = catchThrowable(() -> inScopeWithoutTransaction(() -> {
+            DcbEventStream read = eventStore.read(BOUNDARY_A, confirming);
+            CompletableFuture.runAsync(() -> eventStore.append(List.of(taggedEvent("concurrent", DEPOSITED, ACCOUNT_A)))).join();
+            eventStore.append(List.of(taggedEvent("in scope", DEPOSITED, ACCOUNT_A)), failIfEventsMatch(BOUNDARY_A, read.consistencyToken()));
+        }));
+
+        assertThat(thrown).as("the append in the bound session conflicts with the concurrent one").isNotNull();
+        assertThat(Duration.ofNanos(System.nanoTime() - startedAt)).as("a retry in an aborted transaction runs until its deadline").isLessThan(Duration.ofSeconds(30));
+        assertThat(eventStore.read(BOUNDARY_A).events()).extracting(CloudEvent::getId).containsExactly("before", "concurrent");
     }
 
     @Test

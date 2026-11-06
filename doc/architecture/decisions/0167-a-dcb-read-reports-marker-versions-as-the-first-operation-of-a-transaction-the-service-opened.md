@@ -91,7 +91,13 @@ committed when the read returns, at the session's default read concern.
 
 In a scope of the caller's with no transaction, an executor that opens none takes part in that scope's
 synchronization, so the session transaction the read binds commits only when the caller's scope ends, after `execute`
-has returned. The confirmation doesn't find the append then, and a snapshot decider there saves no snapshot.
+has returned. The confirmation doesn't find the append then, and a snapshot decider there saves no snapshot. The
+session stays bound until that scope ends, as after a plain command, so a method on `PROPAGATION_NEVER` later in the
+scope fails.
+
+The Spring stores retry a write only in a transaction they own. A session bound for their database factory counts as
+one they don't, so an append in it that conflicts fails at once instead of being retried in the transaction the
+conflict aborted.
 
 ### Why the versions are safe to save
 
@@ -163,6 +169,8 @@ transaction the executor joined.
   Spring executor that opens none outside a scope of the caller's. It pays none of the three costs in the context that a plain command
   doesn't pay.
 - In a scope of the caller's with no transaction, on an executor that opens none, a snapshot decider saves no snapshot.
+- On a sharded cluster a read in the executor's transaction reports no versions, so a snapshot decider there saves no
+  snapshot and the store refuses a snapshot saved earlier.
 - The versions of such a read come from the executor's transaction, not from a read-only transaction committed at
   majority. The bound `markerVersionsCommitTimeout` doesn't apply to it. Whether the save is safe now rests on the
   confirmation, as the save after an append always did.

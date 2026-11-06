@@ -964,13 +964,18 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - A DCB application service with synchronous subscriptions reads and decides inside its transaction executor, as in
   0.34.0. When the executor opens the transaction, the service tells the store through `DcbReadOptions` that its read
   is the first operation of that transaction, and a MongoDB store on a replica set reads the marker versions in it, so
-  a decider there saves snapshots.
+  a decider there saves snapshots. On a sharded cluster it reports none, so a decider there saves no snapshot and the
+  store refuses a snapshot saved earlier.
 - On a Spring executor that opens no transaction, outside a Spring transaction scope of yours, a Spring MongoDB store
   on a replica set reads them in the session transaction its read binds. The decider's append joins that transaction, so a failing
   handler undoes the append.
 - In a Spring scope of yours with no transaction, on an executor that opens none, that session transaction commits
   when your scope ends, after `execute` returns, so a decider there saves no snapshot. When a session is already bound
-  there, the store reads through it and reports no versions, since its writes may still abort.
+  there, the store reads through it and reports no versions, since its writes may still abort. The session stays
+  bound until your scope ends, as after a plain `execute`, so a method on `PROPAGATION_NEVER` later in that scope
+  fails.
+- A Spring MongoDB store no longer retries a write in a session bound to the synchronization. A conflict fails it at
+  once, as in your transaction, instead of a retry in the transaction the conflict aborted.
 - `DcbReadOptions.confirmingAppendBeforeSaving()` and `asFirstOperationOfTransaction()` say something about the caller
   that the store can't check. Set them on a read of your own only when you keep the contract their javadoc states.
 - In a transaction you own, on a blocking service, an exception from your domain function no longer marks that

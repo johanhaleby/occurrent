@@ -63,6 +63,7 @@ import reactor.core.publisher.Mono;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.net.URI;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.List;
@@ -514,6 +515,22 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
 
         assertThat(second.get().markerVersions()).as("versions of a read in a session whose writes may still abort").isEmpty();
         assertThat(eventStore.read(BOUNDARY_A).block().events()).extracting(CloudEvent::getId).containsExactly("before", "first", "second");
+    }
+
+    @Test
+    void fails_an_append_that_conflicts_in_a_session_bound_in_a_scope_without_a_transaction_at_once_instead_of_retrying_until_the_deadline() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        DcbReadOptions confirming = DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving();
+        long startedAt = System.nanoTime();
+
+        // toFuture subscribes without the scope's context, so the concurrent append runs outside the bound session
+        Throwable thrown = errorOf(inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, confirming)
+                .flatMap(read -> Mono.fromFuture(() -> eventStore.append(List.of(taggedEvent("concurrent", DEPOSITED, ACCOUNT_A))).toFuture())
+                        .then(eventStore.append(List.of(taggedEvent("in scope", DEPOSITED, ACCOUNT_A)), failIfEventsMatch(BOUNDARY_A, read.consistencyToken()))))));
+
+        assertThat(thrown).as("the append in the bound session conflicts with the concurrent one").isNotNull();
+        assertThat(Duration.ofNanos(System.nanoTime() - startedAt)).as("a retry in an aborted transaction runs until its deadline").isLessThan(Duration.ofSeconds(30));
+        assertThat(eventStore.read(BOUNDARY_A).block().events()).extracting(CloudEvent::getId).containsExactly("before", "concurrent");
     }
 
     @Test
