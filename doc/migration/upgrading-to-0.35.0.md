@@ -107,6 +107,8 @@ other sections compile fine and behave differently, so read them first.
   A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
+- [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
+  handler of a synchronous subscription that fails now makes `execute` throw, where a retry could run the command again.
 
 ### Spring Boot starter
 
@@ -960,13 +962,15 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
 - A DCB application service with synchronous subscriptions on `noTransaction()` or a Spring executor now reads and
   decides before it enters its transaction executor's transaction when `execute` runs outside every Spring transaction
-  scope of yours, so a decider on it saves snapshots. Only the append, the
-  re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
+  scope of yours, so a decider on it saves snapshots. On `NativeMongoTransactionExecutor` it does so when no
+  `ClientSession` is bound on the thread, by the executor or by you through `ClientSessionHolder.set`. Only the append,
+  the re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
   write your domain function makes is no longer part of it. The executor's conflict retry re-runs the append, the re-read
   and the dispatch, with the token of the read the decision was made on, and not the read or your domain function. A
-  handler can run again on such a retry, as it could before. When the condition then fails, the service's retry strategy
+  handler can run again on such a retry when a transaction rolled the earlier attempt back, as it could before. When the condition then fails, the service's retry strategy
   by default reads and decides again. By default the service allows 5 attempts and the Spring executors 240 on the
-  blocking stack and 321 on the reactive one, so a command on a contended boundary can fail sooner, with the same
+  blocking stack and 321 on the reactive one, and `NativeMongoTransactionExecutor` retries for up to 120 seconds, the
+  limit of the driver's `withTransaction`, so a command on a contended boundary can fail sooner, with the same
   budget a service without synchronous subscriptions has.
 - The executor's conflict retry no longer covers that read. A transient failure of the read, such as a
   `QueryTimeoutException`, fails the command unless your retry strategy retries it. If you relied on that retry, add it to what you
@@ -1017,6 +1021,112 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   `var markerVersions, var highestFoldedPosition`.
 - A `SnapshotPolicy` of your own that reads `SnapshotDecision.newVersion()` gets 0 from a DCB decider, where 0.34.0 gave
   it the position of the append. Use `eventsSinceSnapshot()`.
+
+## A failure after the write doesn't run the command again
+
+With `noTransaction()` and no transaction of yours, a synchronous subscription runs after the write has committed. In 0.34.0, a handler that threw what
+the application service's retry strategy retries on made the service read, decide and write again. By default that's
+`WriteConditionNotFulfilledException` or `DcbAppendConditionNotFulfilledException`, so a handler that failed once stored the
+events twice and `execute` returned normally. A retry strategy that matches `RuntimeException` did the same for any handler
+failure and for a failed re-read of the written events. It applies to the stream and the DCB `GenericApplicationService`,
+blocking and reactive.
+
+### Who is affected
+
+You use synchronous subscriptions and the attempt doesn't open a transaction. That's `noTransaction()`, the default, an
+executor of your own that overrides neither `isTransactional()` nor `inTransactionTellingIfOpened`, or that answers a fixed
+`true`, a Spring executor on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or `PROPAGATION_NEVER`, and an executor that
+joins a transaction already open, whether yours or an outer service's. A Spring executor that opens its own transaction
+under yours, on `PROPAGATION_REQUIRES_NEW` or on another transaction manager, isn't affected. A service without synchronous
+subscriptions behaves as before.
+
+### What changes
+
+- `execute` fails, and the service's retry strategy doesn't run the command again. On the reactive stack the caller
+  gets the original failure. On the blocking stack a strategy made by the factory methods of `RetryStrategy` still
+  gives the failure to its `onError` listener and throws it as its `mapError` maps it, as for a failure its predicate
+  doesn't match. A strategy of your own that ignores the shutdown predicate gets an empty attempt from any later run,
+  before it reads or writes. When that strategy returns, the failure is thrown, and when it throws, the caller gets
+  what it throws.
+- The `sideEffect` doesn't run.
+- The retry strategy can still run the command again for a failure of the write itself, and for any failure when the
+  attempt opened a transaction. The
+  service asks through `inTransactionTellingIfOpened`, a new default method on `TransactionExecutor` and
+  `ReactiveTransactionExecutor`. The Spring executors answer from the transaction status, and the default infers it from
+  `isTransactional()` answering `false` before the executor and `true` inside it. The service can't see whether the store
+  joined, so a store that doesn't join keeps the first write and the retry writes again. The native MongoDB store under
+  `SpringTransactionExecutor` does that.
+- The service asks `isTransactional()` outside the executor too. An executor whose answer fails when no transaction is open
+  makes an `execute` with synchronous subscriptions fail before the write.
+- An executor that opens a transaction and overrides neither `isTransactional()`, which answers `false` by default, nor
+  `inTransactionTellingIfOpened` still sees an exception pass through and can roll back, but the command no longer runs again. A rollback rule keyed on the
+  handler's exception type sees a different exception now.
+- `NativeMongoTransactionExecutor.isTransactional()` answers whether the session bound to the thread has a transaction in
+  force, where it used to answer `true` always. With no session bound, a DCB application service with synchronous
+  subscriptions over it now reads and decides before it, so your domain function no longer runs in its transaction.
+
+### What to do
+
+- If you catch nothing around `execute` because a retry used to hide a handler's failure, handle it now. What's stored
+  by then depends on your executor, its propagation and the store, so read it back before you run the command again.
+  With `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring
+  MongoDB stores a write to a stream often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or
+  `PROPAGATION_NEVER`, and there a retry that used to work is gone. When `execute` runs outside every Spring transaction
+  scope of yours, a DCB append on those three propagations stays. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or
+  `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, the append of a plain `execute` rolls back as a write to a
+  stream does when you don't catch the failure inside that scope. An append whose read asks for marker versions and
+  gets them, as a snapshot decider's does, stays. ADR 165 says when the store answers that read without them.
+  [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
+- If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
+  so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open
+  one with another already open, override `inTransactionTellingIfOpened` too, since the default counts that as joining.
+- If a retry predicate was how a handler's work got done again, retry inside the handler, or use a transaction so the
+  write and the handler commit together.
+- If a handler on a service with no transaction writes to a stream through a service with a Spring executor on one of
+  those three propagations, over a Spring MongoDB store, that handler can lose its reaction. The first command's events
+  are stored, the handler's write rolls back, nothing runs the handler's command again, and a synchronous subscription
+  has no replay. Use an executor that opens a transaction on the handler's service, which keeps the retry, or retry
+  inside the handler.
+
+## A handler failure in a joined transaction doesn't stop the other handlers
+
+In 0.34.0 a synchronous dispatch stopped at the first handler that threw whenever the transaction executor reported a
+transaction, including one it had only joined. With `NativeMongoTransactionExecutor` or `SpringReactiveTransactionExecutor`
+inside a transaction of yours, a caller that caught the failure and committed kept the events, and the handlers behind the
+failing one never got them. It applies to the stream and the DCB `GenericApplicationService`, blocking and reactive.
+
+### Who is affected
+
+You use synchronous subscriptions, and `execute` runs in a transaction the executor joins instead of opening its own:
+
+- `NativeMongoTransactionExecutor` with a session already bound to the thread, yours or an outer service's.
+- `SpringReactiveTransactionExecutor` in a transaction of yours, on a propagation that joins it such as `PROPAGATION_REQUIRED`.
+- An executor of your own that answers `true` from `isTransactional()` before it opens its transaction, for example one
+  that answers a fixed `true`. The default `inTransactionTellingIfOpened(..)` then reports every transaction as joined,
+  also one the executor opened itself.
+
+`SpringTransactionExecutor` isn't affected unless its transaction manager has `setGlobalRollbackOnParticipationFailure(false)`
+or isn't an `AbstractPlatformTransactionManager`.
+
+### What changes
+
+- In a transaction the attempt joined, every handler gets the event and the failures are reported together, unless the
+  executor's `rollsBackAJoinedTransactionOnFailure()` answers `true`. It's a new default method on `TransactionExecutor`
+  and `ReactiveTransactionExecutor`, and it answers `false`.
+- `SpringTransactionExecutor` answers `true` when its transaction manager is an `AbstractPlatformTransactionManager`
+  that isn't set with `setGlobalRollbackOnParticipationFailure(false)`, and `false` for any other manager.
+- In a transaction the attempt opened, the dispatch still stops at the first failure.
+
+### What to do
+
+- If your executor opens its own transaction but answers `true` from `isTransactional()` before it does, override
+  `inTransactionTellingIfOpened(..)` to tell the action whether this call opened the transaction. The dispatch then stops
+  at the first failure in a transaction it opened, and a failure after the write reaches the retry strategy.
+- If your executor joins a transaction that a failure marks rollback-only, so the caller can't commit it, override
+  `rollsBackAJoinedTransactionOnFailure()` to return `true`. The dispatch then stops at the first failure as it did in
+  0.34.0, and the handlers behind it don't do work that the rollback discards.
+- Otherwise keep the default. If the transaction rolls back after all, the handlers behind the failing one did work that's
+  discarded, and a side effect outside the transaction, an HTTP call say, still happened.
 
 ## A read by position makes no promise about resuming
 

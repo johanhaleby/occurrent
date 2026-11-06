@@ -10,6 +10,10 @@ conflict, how the Spring stores tell a caller's transaction, and that the counte
 
 [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) moves the DCB service's read and decision out of a `TransactionExecutor` that allows a read before it and answers `false` from `isTransactional()`, so with synchronous subscriptions only the append, the re-read and the dispatch run through it. The decision below still holds.
 
+[ADR 165](0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) limits what the consequence
+about handlers running more than once says of the application service's retry. Unless the attempt opened the transaction, a
+failure after the write no longer runs the command again.
+
 ## Context
 
 The DCB write path retries a conflict between concurrent appends. In the Spring Mongo stores that retry wrapped the whole transaction:

@@ -6,6 +6,11 @@ Date: 2026-07-14
 
 Accepted
 
+[ADR 165](0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) keeps the application
+service's retry from running the command again for a failure after a write unless the attempt opened the transaction,
+so `execute` fails instead. It also stops the dispatch at the first failing handler in a transaction the
+attempt joined only when the executor says a failure rolls that transaction back.
+
 ## Context
 
 Occurrent has two ways to react to newly written events, and neither runs a decoupled, declared-once handler

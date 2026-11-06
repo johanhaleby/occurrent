@@ -24,6 +24,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.ClassUtils;
@@ -61,8 +62,8 @@ import java.util.function.Supplier;
 public class SpringTransactionExecutor implements TransactionExecutor {
 
     /**
-     * Retries a conflict between concurrent appends, but only when this executor opened the transaction: the store
-     * joins that transaction and so cannot retry one itself, and only its owner can start a fresh one. See ADR 0074.
+     * Retries a conflict between concurrent appends, but only when no transaction was open on entry. A store
+     * that joins an open transaction can't retry one itself, and only its owner can start a fresh one. See ADR 0074.
      * <p>
      * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
      * stands in for exactly that retry once the store has to give it up. Appends of the same type increment the same
@@ -175,14 +176,24 @@ public class SpringTransactionExecutor implements TransactionExecutor {
     @Override
     public <T> T inTransaction(Supplier<T> action) {
         Objects.requireNonNull(action, "action cannot be null");
+        return inTransactionTellingIfOpened(openedTransaction -> action.get());
+    }
+
+    /**
+     * Asks the transaction status rather than inferring it from {@link #isTransactional()}, since a caller-supplied
+     * {@link TransactionTemplate} on {@code PROPAGATION_REQUIRES_NEW} opens a transaction with one already open.
+     */
+    @Override
+    public <T> T inTransactionTellingIfOpened(Function<Boolean, T> action) {
+        Objects.requireNonNull(action, "action cannot be null");
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            // A transaction is already open, so the template joins it and this executor is not its owner. A conflict
-            // aborts the whole transaction, which only its owner can start again, so run the action once and let the
-            // error reach that owner. See ADR 0074.
-            return transactionTemplate.execute(status -> action.get());
+            // A transaction is already open, so this executor takes it as the caller's and runs the action once, also on a
+            // propagation that opens a new one. A conflict aborts a joined transaction, which only its owner can start
+            // again, so the error goes to that owner. See ADR 0074.
+            return transactionTemplate.execute(status -> action.apply(status.isNewTransaction()));
         }
         if (!stopAfterDefaultDeadline) {
-            return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.get()));
+            return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.apply(status.isNewTransaction())));
         }
         AtomicInteger failedCommits = new AtomicInteger();
         return DEFAULT_CONFLICT_RETRY.mapRetryPredicate(withinDeadline()).execute(() -> {
@@ -190,7 +201,7 @@ public class SpringTransactionExecutor implements TransactionExecutor {
             try {
                 return transactionTemplate.execute(status -> {
                     try {
-                        return action.get();
+                        return action.apply(status.isNewTransaction());
                     } catch (RuntimeException e) {
                         actionFailure.set(e);
                         throw e;
@@ -283,12 +294,24 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * Reads the live transaction state rather than answering {@code true} unconditionally, because a caller-supplied
      * {@link TransactionTemplate} can be configured not to open one at all, for example with
      * {@code PROPAGATION_NOT_SUPPORTED} or {@code PROPAGATION_NEVER}. Claiming a transaction that does not exist would
-     * make a synchronous dispatch stop at the first handler failure with nothing rolling back, stranding the handlers
-     * behind it.
+     * make a synchronous dispatch stop at the first handler failure, stranding the handlers behind it, since
+     * {@link #rollsBackAJoinedTransactionOnFailure()} answers {@code true} for Spring's default manager settings.
      */
     @Override
     public boolean isTransactional() {
         return TransactionSynchronizationManager.isActualTransactionActive();
+    }
+
+    /**
+     * {@code true} when the transaction manager is an {@code AbstractPlatformTransactionManager} that marks the transaction
+     * rollback-only after a failure in a part of it this executor joined, which it does unless it's set with
+     * {@code setGlobalRollbackOnParticipationFailure(false)}. Any other manager gets the default {@code false}, since this
+     * executor can't tell what that manager does with the caller's transaction.
+     */
+    @Override
+    public boolean rollsBackAJoinedTransactionOnFailure() {
+        return transactionTemplate.getTransactionManager() instanceof AbstractPlatformTransactionManager manager
+                && manager.isGlobalRollbackOnParticipationFailure();
     }
 
     /**

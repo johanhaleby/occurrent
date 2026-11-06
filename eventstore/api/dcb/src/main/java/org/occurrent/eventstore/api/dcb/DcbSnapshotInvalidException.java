@@ -102,9 +102,8 @@ public class DcbSnapshotInvalidException extends RuntimeException {
 
     /**
      * This refusal, marked as thrown by the read of an attempt of {@code execute}, with {@code this} as its cause. That
-     * attempt has appended nothing. The mark says nothing about an earlier attempt of the same execute, which has
-     * committed if the retry strategy retried after a committed append. Without a transaction, a synchronous subscription
-     * that throws what the retry strategy retries on does that.
+     * attempt has appended nothing. An earlier attempt of the same execute can still have committed, for example when its
+     * append lost the acknowledgement and the retry strategy retries on that failure.
      *
      * @param execute what identifies the execute, compared by identity. The application services use the domain
      *                function they were given, so a refusal from an execute with another function doesn't pass for the

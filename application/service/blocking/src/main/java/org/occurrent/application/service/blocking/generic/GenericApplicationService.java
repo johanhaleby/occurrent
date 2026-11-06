@@ -25,6 +25,7 @@ import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.ExecuteOptions;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.TransactionExecutor;
+import org.occurrent.application.service.internal.FailureAfterWrite;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
@@ -39,7 +40,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * A generic application service that works in many scenarios. If you need more complex logic, such as transaction support, you may consider either wrapping it
@@ -126,15 +126,27 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         }
 
         // @formatter:off
-              record Tuple<T1, T2>(T1 v1, T2 v2) {}
+              record Attempt<T1 extends @Nullable Object, T2>(T1 v1, T2 v2) {}
               // @formatter:on
 
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
 
-        Tuple<WriteResult, List<E>> result = retryStrategy.execute(() -> {
+        FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
+
+        Attempt<@Nullable WriteResult, List<E>> result = retryStrategy.execute(() -> {
+            if (failureAfterWrite.isHeld()) {
+                // Only a strategy that can't take the shutdown predicate gets here, and the failure is thrown after it returns
+                return new Attempt<>(null, List.of());
+            }
             Long fromStreamVersion = executeOptions.fromStreamVersion();
             int skip = fromStreamVersion == null ? 0 : Math.toIntExact(fromStreamVersion);
-            Supplier<Tuple<WriteResult, List<E>>> readDecideWrite = () -> {
+            Function<Boolean, Attempt<@Nullable WriteResult, List<E>>> readDecideWrite = openedTransaction -> {
+                if (failureAfterWrite.isHeld()) {
+                    // An executor that runs this again after the stand-in must not write a second time, and an empty attempt ends its retry
+                    return new Attempt<>(null, List.of());
+                }
+                // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
+                boolean transactional = dispatchSynchronously && (openedTransaction || (transactionExecutor.isTransactional() && transactionExecutor.rollsBackAJoinedTransactionOnFailure()));
                 EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId, skip, Integer.MAX_VALUE) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter, skip, Integer.MAX_VALUE);
                 List<E> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events()).toList();
 
@@ -147,20 +159,32 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                 WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
 
                 if (dispatchSynchronously && !newEvents.isEmpty()) {
-                    // Re-read exactly the just-written tail so synchronous handlers get events enriched by the store
-                    // (stream version and global position), then dispatch on this thread, inside the transaction.
-                    int newEventCount = newEvents.size();
-                    List<CloudEvent> writtenEnriched = eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newEventCount).events().toList();
-                    synchronousEventDispatcher.dispatch(writtenEnriched, transactionExecutor.isTransactional());
+                    try {
+                        // Re-read exactly the just-written tail so synchronous handlers get events enriched by the store
+                        // (stream version and global position), then dispatch on this thread, inside the transaction.
+                        int newEventCount = newEvents.size();
+                        List<CloudEvent> writtenEnriched = eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newEventCount).events().toList();
+                        synchronousEventDispatcher.dispatch(writtenEnriched, transactional);
+                    } catch (Throwable failure) {
+                        throw failureAfterWrite.propagate(failure, openedTransaction);
+                    }
                 }
 
-                return new Tuple<>(writeResult, newDomainEvents);
+                return new Attempt<>(writeResult, newDomainEvents);
             };
             // Only open the transaction executor when synchronous dispatch must commit atomically with the write.
             // Without synchronous subscriptions there is nothing extra to make atomic, so the write keeps exactly the
             // semantics it had before this feature and applications that do not use it pay no transaction overhead.
-            return dispatchSynchronously ? transactionExecutor.inTransaction(readDecideWrite) : readDecideWrite.get();
-        });
+            try {
+                return failureAfterWrite.attemptOrFailure(dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(readDecideWrite) : readDecideWrite.apply(false));
+            } catch (Throwable thrown) {
+                // The retry gets the failure itself, so its listeners and error mapper see it. When it's held, nothing says a
+                // transaction of this attempt undid the write, and the shutdown predicate stops the retry on it.
+                throw FailureAfterWrite.<RuntimeException>sneakyThrow(Objects.requireNonNull(failureAfterWrite.failureOfAttempt(thrown)));
+            }
+        }, __ -> !failureAfterWrite.isHeld());
+
+        failureAfterWrite.rethrowIfHeld();
 
         if (sideEffect != null) {
             sideEffect.accept(result.v2);

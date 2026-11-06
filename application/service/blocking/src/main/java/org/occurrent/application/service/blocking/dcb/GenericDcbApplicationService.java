@@ -23,6 +23,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.application.service.dcb.TagGenerator;
+import org.occurrent.application.service.internal.FailureAfterWrite;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
@@ -32,8 +33,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -140,12 +141,14 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         boolean versionsRequested = options.versionsRequested();
 
         // @formatter:off
-        record Tuple<T1, T2>(T1 v1, T2 v2) {}
+        record Attempt<T1, T2>(T1 v1, T2 v2) {}
         // @formatter:on
 
         // @formatter:off
         record Decision<T>(DcbEventStream eventStream, List<T> newDomainEvents, List<CloudEvent> dcbEvents) {}
         // @formatter:on
+
+        FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
 
         Supplier<Optional<Decision<E>>> readAndDecide = () -> {
             final DcbEventStream eventStream;
@@ -164,60 +167,82 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
             return Optional.of(new Decision<>(eventStream, newDomainEvents, addTags(options.tagGenerator(), newDomainEvents, cloudEvents)));
         };
-        Function<Decision<E>, Tuple<Optional<DcbAppendResult>, List<E>>> appendAndDispatch = decision -> {
+        BiFunction<Decision<E>, Boolean, Attempt<Optional<DcbAppendResult>, List<E>>> appendAndDispatch = (decision, openedTransaction) -> {
+            if (failureAfterWrite.isHeld()) {
+                // An executor that runs this again after the stand-in must not write a second time, and an empty attempt ends its retry
+                return new Attempt<>(Optional.empty(), List.of());
+            }
+            // Asked inside the transaction, since the answer depends on what's open, and before the append, so a failure here undoes nothing
+            boolean transactional = dispatchSynchronously && (openedTransaction || (transactionExecutor.isTransactional() && transactionExecutor.rollsBackAJoinedTransactionOnFailure()));
             DcbAppendResult appendResult = eventStore.append(decision.dcbEvents(), DcbAppendCondition.failIfEventsMatch(decision.eventStream().consistencyToken()));
 
             if (dispatchSynchronously) {
-                // A successful append is assigned a contiguous global-position block, so re-read exactly that block
-                // to get the events enriched with their positions, then dispatch on this thread, inside the transaction.
-                List<CloudEvent> writtenEnriched = eventStore.read(DcbCriteria.all(),
-                        DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
-                synchronousEventDispatcher.dispatch(writtenEnriched, transactionExecutor.isTransactional());
+                try {
+                    // A successful append is assigned a contiguous global-position block, so re-read exactly that block
+                    // to get the events enriched with their positions, then dispatch on this thread, inside the transaction.
+                    List<CloudEvent> writtenEnriched = eventStore.read(DcbCriteria.all(),
+                            DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
+                    synchronousEventDispatcher.dispatch(writtenEnriched, transactional);
+                } catch (Throwable failure) {
+                    throw failureAfterWrite.propagate(failure, openedTransaction);
+                }
             }
 
-            return new Tuple<>(Optional.of(withCheckedVersions(appendResult, versionsRequested, decision.eventStream())), decision.newDomainEvents());
+            return new Attempt<>(Optional.of(withCheckedVersions(appendResult, versionsRequested, decision.eventStream())), decision.newDomainEvents());
         };
 
-        Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
-            if (dispatchSynchronously && (transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
-                // The executor can leave the transaction that's open here for the append, so a read here could miss what the
-                // append's condition sees and fail on every attempt. The read and the decision go in the executor too, and
-                // that costs nothing, since a store already reports no marker versions in the open transaction.
-                // An executor that doesn't allow a read before it gets the read here too, for example under a caller's scope
-                // that has synchronization but no transaction, where a read would bind a session the executor then fails on.
-                // Their failure goes around the executor, so it can't mark that transaction rollback-only.
-                AtomicReference<@Nullable Throwable> failedBeforeAppend = new AtomicReference<>();
-                Tuple<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransaction(() -> {
-                    // An executor can run this action again, so a failure kept from an earlier run must not be thrown after a later run appends
-                    failedBeforeAppend.set(null);
-                    final Optional<Decision<E>> decision;
-                    try {
-                        decision = readAndDecide.get();
-                    } catch (Throwable failure) {
-                        // Throwable, since a domain function in Kotlin can throw a checked exception
-                        failedBeforeAppend.set(failure);
-                        return new Tuple<>(Optional.empty(), List.of());
-                    }
-                    return decision.map(appendAndDispatch).orElseGet(() -> new Tuple<>(Optional.empty(), List.of()));
-                });
-                Throwable failure = failedBeforeAppend.get();
-                if (failure != null) {
-                    throw GenericDcbApplicationService.<RuntimeException>sneakyThrow(failure);
+        Attempt<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
+            if (failureAfterWrite.isHeld()) {
+                // Only a strategy that can't take the shutdown predicate gets here, and the failure is thrown after it returns
+                return new Attempt<>(Optional.empty(), List.of());
+            }
+            try {
+                if (dispatchSynchronously && (transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
+                    // The executor can leave the transaction that's open here for the append, so a read here could miss what the
+                    // append's condition sees and fail on every attempt. The read and the decision go in the executor too, and
+                    // that costs nothing, since a store already reports no marker versions in the open transaction.
+                    // An executor that doesn't allow a read before it gets the read here too, for example under a caller's scope
+                    // that has synchronization but no transaction, where a read would bind a session the executor then fails on.
+                    // Their failure goes around the executor, so it can't mark that transaction rollback-only.
+                    Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> {
+                        if (failureAfterWrite.isHeld()) {
+                            // Before the read, so a run after the stand-in doesn't run the domain function again
+                            return new Attempt<>(Optional.empty(), List.of());
+                        }
+                        // An executor can run this action again, so a failure kept from an earlier run must not be thrown after a later run appends
+                        failureAfterWrite.keepBeforeWrite(null);
+                        final Optional<Decision<E>> decision;
+                        try {
+                            decision = readAndDecide.get();
+                        } catch (Throwable failure) {
+                            // Throwable, since a domain function in Kotlin can throw a checked exception
+                            failureAfterWrite.keepBeforeWrite(failure);
+                            return new Attempt<>(Optional.empty(), List.of());
+                        }
+                        return decision.map(it -> appendAndDispatch.apply(it, openedTransaction)).orElseGet(() -> new Attempt<>(Optional.empty(), List.of()));
+                    });
+                    return failureAfterWrite.attemptOrFailure(attempt);
                 }
-                return attempt;
+                // The read and the decision run outside the transaction, since a store reports no marker versions inside one.
+                // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
+                Optional<Decision<E>> decision = readAndDecide.get();
+                if (decision.isEmpty()) {
+                    return new Attempt<>(Optional.empty(), List.of());
+                }
+                // Only open the transaction executor when synchronous dispatch must commit atomically with the append.
+                // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
+                // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
+                // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0074.
+                return failureAfterWrite.attemptOrFailure(dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> appendAndDispatch.apply(decision.get(), openedTransaction)) : appendAndDispatch.apply(decision.get(), false));
+            } catch (Throwable thrown) {
+                // The retry gets the failure itself, so its listeners and error mapper see it. When it's held, nothing says a
+                // transaction of this attempt undid the write, and the shutdown predicate stops the retry on it. A failure kept
+                // before the append wins over one the executor threw on the way out, which stays as a suppressed exception.
+                throw FailureAfterWrite.<RuntimeException>sneakyThrow(Objects.requireNonNull(failureAfterWrite.failureOfAttempt(thrown)));
             }
-            // The read and the decision run outside the transaction, since a store reports no marker versions inside one.
-            // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
-            Optional<Decision<E>> decision = readAndDecide.get();
-            if (decision.isEmpty()) {
-                return new Tuple<>(Optional.empty(), List.of());
-            }
-            // Only open the transaction executor when synchronous dispatch must commit atomically with the append.
-            // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
-            // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
-            // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0074.
-            return dispatchSynchronously ? transactionExecutor.inTransaction(() -> appendAndDispatch.apply(decision.get())) : appendAndDispatch.apply(decision.get());
-        });
+        }, __ -> !failureAfterWrite.isHeld());
+
+        failureAfterWrite.rethrowIfHeld();
 
         // Invoke the side-effect once, after a successful append, with the newly written events. It is not invoked
         // on the no-new-events path, and it is outside the retry so it does not run per attempt.
@@ -231,11 +256,6 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     public boolean isAppendConfirmed(DcbAppendResult appendResult) {
         Objects.requireNonNull(appendResult, "appendResult cannot be null");
         return eventStore instanceof DcbAppendConfirmation confirmation && confirmation.isConfirmed(appendResult);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
-        throw (T) failure;
     }
 
     private static void refuseEventBelowFoldedPosition(DcbCriteria criteria, DcbExecuteOptions<?> options, DcbEventStream eventStream) {
