@@ -834,6 +834,36 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     }
 
     /**
+     * The wrapped model throws when asked where its feed is, for a subscription from StartAt.now(). Waiting for the
+     * start fails at once with what it threw, nothing is read, and the id can be subscribed again once it answers.
+     */
+    @Test
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_the_start_at_once_with_what_it_threw_and_leaves_the_id_free() {
+        // Given
+        Feed feed = new Feed();
+        IllegalStateException threw = new IllegalStateException(POSITION_READ_FAILED);
+        feed.throwsAtTheCall = threw;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> Mono.empty());
+            Throwable startEnded = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
+
+            // Then
+            assertThat(startEnded).as("how waiting for the start of the subscription ended").isSameAs(threw);
+            assertThat(feed.reads.get()).as("reads of where the feed was").isZero();
+            assertThat(failedReadWarnings(logged)).as("warnings logged for a failed read").isEmpty();
+
+            feed.throwsAtTheCall = null;
+            Throwable startAgainEnded = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT));
+            assertThat(startAgainEnded).as("how waiting for the start of the id subscribed again ended").isNull();
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    /**
      * A subscription whose read of where the feed was never answered is cancelled after it warned that it still waits,
      * and the same id is subscribed again once the reads answer. The cancelled one does not warn for the new one, which
      * starts at once.
@@ -2253,6 +2283,8 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
         // The reads numbered up to this fail, each after failureDelay
         volatile int readsToFail;
         volatile Duration failureDelay = Duration.ZERO;
+        // What globalCheckpointAsOfNow() throws at the call instead of returning a read
+        volatile @Nullable RuntimeException throwsAtTheCall;
         // A read that answers only once releaseReads() is called, as from a database that responds late
         volatile boolean readHeld;
         final Sinks.Empty<Void> readsReleased = Sinks.empty();
@@ -2285,6 +2317,10 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
         // Where the feed is at the call, answered as late as globalCheckpoint() answers
         @Override
         public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            RuntimeException thrown = throwsAtTheCall;
+            if (thrown != null) {
+                throw thrown;
+            }
             long atTheCall = present.get();
             return read(() -> atTheCall).doOnSubscribe(__ -> readsAsOfNow.incrementAndGet());
         }

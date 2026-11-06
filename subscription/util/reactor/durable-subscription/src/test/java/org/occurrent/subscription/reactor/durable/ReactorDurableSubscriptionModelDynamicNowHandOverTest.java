@@ -78,6 +78,7 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
     private static final Duration RETURNS_AT_ONCE = Duration.ofSeconds(5);
     private static final String SUBSCRIPTION_ID = "sub";
     private static final String READ_FAILED = "The wrapped model cannot tell where its feed is right now";
+    private static final String ASKING_THREW = "The wrapped model threw when asked where its feed is";
     private static final String REFUSED = "The wrapped model does not support this filter";
 
     private final NamedFeed feed = new NamedFeed();
@@ -205,6 +206,30 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
         assertThat(delivered).as("events delivered").containsExactly(writtenWhileTheFunctionRan.get(), writtenAfter);
         assertThat(failedReadWarnings()).as("warnings logged for a failed read").containsExactly(failedRead(1), failedRead(2));
         assertThat(logged.at(Level.ERROR)).as("errors logged").isEmpty();
+    }
+
+    @Test
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_the_start_at_once_with_what_it_threw_and_leaves_the_id_free() {
+        // Given
+        IllegalStateException threw = new IllegalStateException(ASKING_THREW);
+        feed.presentRead = atTheCall -> {
+            throw threw;
+        };
+
+        // When
+        CompletableFuture<Subscription> subscribed = subscribeFromADynamicNow();
+
+        // Then
+        assertThat(subscribed).as("the subscribe whose question to the wrapped model throws").succeedsWithin(RETURNS_AT_ONCE);
+        assertThat(subscribed.join().waitUntilStarted().toFuture()).as("waiting for the start of the subscription")
+                .failsWithin(RETURNS_AT_ONCE).withThrowableOfType(ExecutionException.class).havingCause().isSameAs(threw);
+        assertThat(failedReadWarnings()).as("warnings logged for a failed read").isEmpty();
+        assertThat(logged.at(Level.ERROR)).as("errors logged").anySatisfy(message -> assertThat(message).startsWith("Subscription " + SUBSCRIPTION_ID + " could not be started"));
+        assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").isEmpty();
+
+        feed.presentRead = Mono::just;
+        model.subscribe(SUBSCRIPTION_ID, null, dynamicNow(), cloudEvent -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+        assertThat(feed.subscribedIds).as("subscriptions the wrapped model took once the id was subscribed again").containsExactly(SUBSCRIPTION_ID);
     }
 
     @Test
