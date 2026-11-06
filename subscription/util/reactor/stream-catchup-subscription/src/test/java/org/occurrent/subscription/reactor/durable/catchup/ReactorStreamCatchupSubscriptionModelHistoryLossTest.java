@@ -38,6 +38,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
+import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
@@ -654,8 +655,9 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             reader.head = 4;
             HistoryLossHandling.TakeOver lossOfTheLiveStart = (HistoryLossHandling.TakeOver) wrapped.asksTheListeners(ID, wrapped.positionOf(ID));
 
-            // When the wrapped model pauses the subscription for the takeover just before a resume would reach it, and then
-            // runs the takeover
+            // When the subscription is resumed, and the wrapped model then pauses it for the takeover and runs the takeover.
+            // A resume that reached the wrapped model would find the subscription paused there, and resume it where it
+            // lost the history.
             wrapped.beforeTheNextResume = () -> wrapped.pauseSubscription(ID);
             Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
             int resumedWhereItWasHeld = wrapped.resumedWhereItWasHeld.get();
@@ -851,6 +853,145 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             assertAll(
                     () -> assertThat(received).as("the history again, now with the event written in the gap").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4"),
                     () -> assertThat(wrapped.resumedWhereItWasHeld).as("resumed where it lost the history").hasValue(0)
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_live_event_after_a_stop_and_a_start_that_run_the_takeover_while_the_catch_up_answers_a_loss_of_the_live_start_is_delivered() throws InterruptedException {
+        // Given a subscription whose live start the wrapped model is about to lose
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            Checkpoint lost = wrapped.positionOf(ID);
+            reader.head = 4;
+
+            // When a stop and a start that resumes subscriptions run the takeover right after the catch-up registered it,
+            // while it still answers the loss
+            NamedCatchupMapHook.installIn(catchup, "catchingUp").afterTheComputeIn("registerTakeOver", () -> {
+                catchup.stop();
+                catchup.start(true);
+            });
+            wrapped.reportsTheLossOfTheRunAt(ID, lost);
+            awaitNoReplayInFlight(catchup);
+            Throwable delivery = catchThrowable(() -> wrapped.deliver(liveEvent("e5", 5)));
+
+            // Then the takeover delivers the event written in the gap, and the live event after it is delivered too
+            assertAll(
+                    () -> assertThat(catchup.isRunning(ID)).as("whether the subscription is running").isTrue(),
+                    () -> assertThat(delivery).as("what delivering a live event after the takeover throws").isNull(),
+                    () -> assertThat(received).as("what the subscription received").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4", "e5"),
+                    () -> assertThat(wrapped.restartedFromThePresent).as("the live starts the wrapped model restarted at").isEmpty()
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_live_event_after_a_stop_and_a_start_that_run_the_takeover_while_a_resume_registers_it_is_delivered() throws InterruptedException {
+        // Given a subscription the wrapped model holds paused for a pause that reached it before it lost the live start,
+        // so a resume runs the takeover
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            Checkpoint lost = wrapped.positionOf(ID);
+            catchup.pauseSubscription(ID);
+            wrapped.reportsTheLossOfTheRunAt(ID, lost);
+            reader.head = 4;
+
+            // When a stop and a start that resumes subscriptions run the takeover right after the resume registered it
+            NamedCatchupMapHook.installIn(catchup, "catchingUp").afterTheComputeIn("registerTakeOver", () -> {
+                catchup.stop();
+                catchup.start(true);
+            });
+            Throwable resume = catchThrowable(() -> catchup.resumeSubscription(ID));
+            awaitNoReplayInFlight(catchup);
+            Throwable delivery = catchThrowable(() -> wrapped.deliver(liveEvent("e5", 5)));
+
+            // Then the takeover delivers the event written in the gap, and the live event after it is delivered too
+            assertAll(
+                    () -> assertThat(resume).as("what the resume throws").isNull(),
+                    () -> assertThat(wrapped.resumedWhereItWasHeld).as("resumed where it lost the history").hasValue(0),
+                    () -> assertThat(catchup.isRunning(ID)).as("whether the subscription is running").isTrue(),
+                    () -> assertThat(delivery).as("what delivering a live event after the takeover throws").isNull(),
+                    () -> assertThat(received).as("what the subscription received").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4", "e5")
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_subscribe_whose_replay_a_stop_and_a_start_launched_and_a_cancel_ended_before_the_subscribe_launches_it_leaves_the_wrapped_model_running_nothing() {
+        // Given a stop and a start that resumes subscriptions, which launch the replay of a subscribe once the subscribe
+        // has registered the id and before it launches the replay itself, and a cancel of the subscription once that
+        // replay has handed over
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(false);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        AtomicReference<@Nullable Throwable> cancel = new AtomicReference<>();
+        NamedCatchupMapHook.installIn(catchup, "owned").afterThePutIfAbsentIn("own", () -> {
+            catchup.stop();
+            catchup.start(true);
+            cancel.set(catchThrowable(() -> catchup.cancelSubscription(ID).block(Duration.ofSeconds(5))));
+        });
+        try {
+            // When the subscribe goes on to launch its replay
+            Throwable subscribe = catchThrowable(() -> catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                    cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId()))).waitUntilStarted().block(Duration.ofSeconds(5)));
+
+            // Then the replay ran once, and the wrapped model runs nothing after the cancel
+            assertAll(
+                    () -> assertThat(subscribe).as("what the subscribe throws").isNull(),
+                    () -> assertThat(cancel.get()).as("what the cancel throws").isNull(),
+                    () -> assertThat(wrapped.subscribeCalls).as("how many times the replay subscribed the wrapped model").hasValue(1),
+                    () -> assertThat(wrapped.isRunning(ID)).as("whether the wrapped model runs the subscription").isFalse(),
+                    () -> assertThat(wrapped.isPaused(ID)).as("whether the wrapped model holds the subscription paused").isFalse(),
+                    () -> assertThat(received).as("what the subscription received").containsExactly("e1", "e2", "e3")
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_pause_the_wrapped_model_refuses_as_already_paused_for_a_takeover_registered_meanwhile_leaves_the_subscription_paused_after_the_takeover_and_a_resume_delivers() throws InterruptedException {
+        // Given a subscription whose live start the wrapped model is about to lose, and a wrapped model that refuses to
+        // pause a subscription it holds paused
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        wrapped.refusesToPauseWhatItHoldsPaused = true;
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            reader.head = 4;
+
+            // When the wrapped model loses the live start and pauses the subscription for the takeover after a pause read
+            // that no takeover was in flight and before it reached the wrapped model, and then runs the takeover
+            AtomicReference<HistoryLossHandling> lossOfTheLiveStart = new AtomicReference<>();
+            wrapped.beforeTheNextPause = () -> {
+                lossOfTheLiveStart.set(wrapped.asksTheListeners(ID, wrapped.positionOf(ID)));
+                wrapped.pauseSubscription(ID);
+            };
+            Throwable pause = catchThrowable(() -> catchup.pauseSubscription(ID));
+            boolean pausedBeforeTheTakeover = catchup.isPaused(ID);
+            ((HistoryLossHandling.TakeOver) lossOfTheLiveStart.get()).afterPause().run();
+            awaitNoReplayInFlight(catchup);
+            boolean pausedAfterTheTakeover = catchup.isPaused(ID);
+            Throwable resume = catchThrowable(() -> catchup.resumeSubscription(ID));
+            wrapped.deliver(liveEvent("e5", 5));
+
+            // Then the pause is not refused, the subscription is paused before and after the takeover, which delivers the
+            // event written in the gap, and a resume delivers again
+            assertAll(
+                    () -> assertThat(pause).as("what the pause throws").isNull(),
+                    () -> assertThat(pausedBeforeTheTakeover).as("whether the subscription is paused before the takeover ran").isTrue(),
+                    () -> assertThat(pausedAfterTheTakeover).as("whether the subscription is paused after the takeover handed over").isTrue(),
+                    () -> assertThat(resume).as("what the resume throws").isNull(),
+                    () -> assertThat(received).as("what the subscription received").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4", "e5")
             );
         } finally {
             catchup.shutdown();
@@ -1095,9 +1236,9 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         return OccurrentCloudEventExtension.withPosition(CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("type").build(), position);
     }
 
-    // Takes the place of a map of the catch-up and runs a hook once, right after the first read of it, right before the
-    // first compute on it, or right after the first computeIfPresent on it that a given method of the catch-up makes
-    // itself. That puts the hook between two steps of a
+    // Takes the place of a map of the catch-up and runs a hook once, right after the first read of it, right before or
+    // right after the first compute on it, or right after the first computeIfPresent or putIfAbsent on it that a given
+    // method of the catch-up makes itself. That puts the hook between two steps of a
     // call, which no thread schedule reaches every time.
     @SuppressWarnings({"rawtypes", "unchecked"})
     private static final class NamedCatchupMapHook extends ConcurrentHashMap {
@@ -1105,8 +1246,12 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         private final AtomicReference<@Nullable Runnable> afterRead = new AtomicReference<>();
         private final AtomicReference<@Nullable String> computeIn = new AtomicReference<>();
         private final AtomicReference<@Nullable Runnable> beforeCompute = new AtomicReference<>();
+        private final AtomicReference<@Nullable String> afterComputeIn = new AtomicReference<>();
+        private final AtomicReference<@Nullable Runnable> afterCompute = new AtomicReference<>();
         private final AtomicReference<@Nullable String> computeIfPresentIn = new AtomicReference<>();
         private final AtomicReference<@Nullable Runnable> afterComputeIfPresent = new AtomicReference<>();
+        private final AtomicReference<@Nullable String> putIfAbsentIn = new AtomicReference<>();
+        private final AtomicReference<@Nullable Runnable> afterPutIfAbsent = new AtomicReference<>();
 
         static NamedCatchupMapHook installIn(ReactorStreamCatchupSubscriptionModel model, String fieldName) {
             NamedCatchupMapHook hook = new NamedCatchupMapHook();
@@ -1143,10 +1288,17 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             return value;
         }
 
+        void afterTheComputeIn(String method, Runnable hook) {
+            afterComputeIn.set(method);
+            afterCompute.set(hook);
+        }
+
         @Override
         public Object compute(Object key, BiFunction remapping) {
             runOnceIfCalledFrom(computeIn, beforeCompute);
-            return super.compute(key, remapping);
+            Object value = super.compute(key, remapping);
+            runOnceIfCalledFrom(afterComputeIn, afterCompute);
+            return value;
         }
 
         @Override
@@ -1154,6 +1306,18 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             Object value = super.computeIfPresent(key, remapping);
             runOnceIfCalledFrom(computeIfPresentIn, afterComputeIfPresent);
             return value;
+        }
+
+        void afterThePutIfAbsentIn(String method, Runnable hook) {
+            putIfAbsentIn.set(method);
+            afterPutIfAbsent.set(hook);
+        }
+
+        @Override
+        public Object putIfAbsent(Object key, Object value) {
+            Object existing = super.putIfAbsent(key, value);
+            runOnceIfCalledFrom(putIfAbsentIn, afterPutIfAbsent);
+            return existing;
         }
 
         private static void runOnceIfCalledFrom(AtomicReference<@Nullable String> method, AtomicReference<@Nullable Runnable> hook) {
@@ -1261,6 +1425,9 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         // Runs once, on the thread of the next pauseSubscription(id) before it pauses anything
         volatile Runnable beforeTheNextPause = () -> {
         };
+        // pauseSubscription(id) throws SubscriptionNotRunningException for a subscription it holds paused, as
+        // ReactorMongoSubscriptionModel does
+        volatile boolean refusesToPauseWhatItHoldsPaused;
         // Runs on the thread of every stop()
         volatile Runnable beforeStop = () -> {
         };
@@ -1312,6 +1479,27 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
                 }
             }
             return HistoryLossHandling.leaveToSubscriptionModel();
+        }
+
+        // Asks the listeners, and for a takeover pauses the subscription and runs what the taker runs once it is paused,
+        // unless the subscription no longer runs at lostFrom, as ReactorMongoSubscriptionModel drops the takeover of a run
+        // that is no longer current
+        void reportsTheLossOfTheRunAt(String subscriptionId, Checkpoint lostFrom) {
+            if (asksTheListeners(subscriptionId, lostFrom) instanceof HistoryLossHandling.TakeOver takeOver && pausesTheRunAt(subscriptionId, lostFrom)) {
+                takeOver.afterPause().run();
+            }
+        }
+
+        private boolean pausesTheRunAt(String subscriptionId, Checkpoint position) {
+            AtomicBoolean paused = new AtomicBoolean();
+            held.computeIfPresent(subscriptionId, (id, current) -> {
+                if (current.state() != State.RUNNING || !current.position().equals(position)) {
+                    return current;
+                }
+                paused.set(true);
+                return current.at(position, State.PAUSED);
+            });
+            return paused.get();
         }
 
         // The oplog loses the history from lostFrom for a subscription, wherever it opened
@@ -1506,6 +1694,9 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             beforeTheNextPause = () -> {
             };
             beforeThisPause.run();
+            if (refusesToPauseWhatItHoldsPaused && isPaused(subscriptionId)) {
+                throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
+            }
             held.computeIfPresent(subscriptionId, (id, current) -> current.at(current.position(), State.PAUSED));
         }
 

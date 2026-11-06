@@ -195,6 +195,11 @@ final class NamedCatchupSupport {
         return catchingUp.containsKey(subscriptionId);
     }
 
+    // Whether a replay of the id is in flight here or the wrapped model holds the id
+    boolean holds(String subscriptionId) {
+        return catchingUp.containsKey(subscriptionId) || named != null && holds(named, subscriptionId);
+    }
+
     // Who to tell about an id's catch-up boundaries, registered before the subscription that produces them.
     boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
         catchupListeners.put(subscriptionId, listener);
@@ -298,7 +303,7 @@ final class NamedCatchupSupport {
             throw new SubscriptionModelShutdownException();
         }
         try {
-            launchOrPark(state);
+            launchIfPending(state);
         } catch (RuntimeException | Error e) {
             // Before the release, which cancels nothing in the wrapped model while a replay of the id is in flight
             catchingUp.remove(subscriptionId, state);
@@ -308,23 +313,40 @@ final class NamedCatchupSupport {
         return new NamedCatchupSubscription(subscriptionId, state.started.asMono());
     }
 
-    // Runs the replay now, or parks it while the model is stopped
-    private void launchOrPark(CatchupState state) {
-        Object launched = null;
+    // Runs the first launch of the replay, or parks the replay while this model is stopped. Run by subscribeWithCatchup
+    // and by the wrapped model once it has paused the subscription a takeover was registered for. Runs nothing when
+    // the replay launched already, for instance through start(true) after a stop() parked it, or was cancelled.
+    private void launchIfPending(CatchupState state) {
+        Object launched;
         synchronized (state) {
-            // A shutdown() since the check above may have cancelled the state.
-            if (!state.cancelled.get()) {
-                if (stopped) {
-                    state.parked.set(true);
-                } else {
-                    launched = nextLaunch(state);
-                }
-            }
+            launched = launch(state, false);
         }
         // Outside the monitor, since a replay whose start, reader and action complete on this thread runs the action here
         if (launched != null) {
             state.launcher.accept(launched);
         }
+    }
+
+    // Called with the state monitor held. Every launch of a replay is named here, and the caller runs it once the
+    // monitor is released. Null means no launch. A state launches its replay once, as its first launch, and again
+    // each time start(true) or a resume unparks it after a stop() parked it. A first launch while this model is stopped
+    // parks the replay instead. Nothing launches once the replay has handed over or was cancelled, or once shutdown()
+    // has set its flag, even before that shutdown cancels the state.
+    private @Nullable Object launch(CatchupState state, boolean unparking) {
+        if (shutdown || state.cancelled.get() || state.handedOver.get()) {
+            return null;
+        }
+        if (unparking) {
+            return !stopped && state.parked.getAndSet(false) ? nextLaunch(state) : null;
+        }
+        if (!state.launchPending || state.parked.get()) {
+            return null;
+        }
+        if (stopped) {
+            state.parked.set(true);
+            return null;
+        }
+        return nextLaunch(state);
     }
 
     // Called with the state monitor held, for a replay that runs once the monitor is released. The launch is named here
@@ -817,11 +839,11 @@ final class NamedCatchupSupport {
     // the takeover it registers. A subscription this model didn't make is left to the wrapped model. A loss of the live
     // start a takeover handing over replaces is taken over with nothing to run, and that handover resumes the
     // subscription at its own live start. A loss of the live start the last replay of the id's current subscription
-    // handed over registers a takeover replay in catchingUp, which runs once the wrapped model has paused the
-    // subscription. When a takeover is in flight already, the loss is taken over for it, so the wrapped model keeps the
-    // subscription paused. When the wrapped model already holds the subscription paused, a pause reached it first, and
-    // ReactorMongoSubscriptionModel then drops the takeover, so none is registered and a resume runs it. Any other loss
-    // pauses the subscription for good.
+    // handed over registers a takeover replay in catchingUp. What the wrapped model runs once it paused the subscription
+    // launches that replay unless it is parked or cancelled, or a resume or a start(true) launched it first. When a
+    // takeover is in flight already, the loss is taken over for it, so the wrapped model keeps the subscription paused.
+    // When the wrapped model already holds the subscription paused, the loss is taken over with nothing to run, and a
+    // resume registers the takeover and runs it. Any other loss pauses the subscription for good.
     private HistoryLossHandling takeOverIfHandedOverAt(String subscriptionId, Checkpoint lostFrom) {
         return underIdLock(subscriptionId, () -> {
             Owned record = owned.get(subscriptionId);
@@ -838,7 +860,7 @@ final class NamedCatchupSupport {
                     made.takeOverAsked().set(true);
                     CatchupState inFlight = catchingUp.get(subscriptionId);
                     if (inFlight != null && inFlight != made.handingOver()) {
-                        return HistoryLossHandling.takeOver(() -> launchWhenTheWrappedModelPaused(inFlight));
+                        return HistoryLossHandling.takeOver(() -> launchIfPending(inFlight));
                     }
                     if (requireNonNull(named).isPaused(subscriptionId)) {
                         return HistoryLossHandling.takeOver(() -> {
@@ -847,7 +869,7 @@ final class NamedCatchupSupport {
                     CatchupState taking = registerTakeOver(subscriptionId, made);
                     return HistoryLossHandling.takeOver(() -> {
                         if (taking != null) {
-                            launchWhenTheWrappedModelPaused(taking);
+                            launchIfPending(taking);
                         }
                     });
                 }
@@ -878,17 +900,26 @@ final class NamedCatchupSupport {
         state.launcher = launcher(replay, state, null, replay.pipeline().replayAgainAfterLiveStartLost(wrapped, made.replayStart(), subscriptionId, made.replaysAgain(), replay.longestReplay()),
                 made.replaysAgain() + 1, made);
         CatchupState inFlight = catchingUp.compute(subscriptionId, (id, current) -> {
-            if (current == made.handingOver()) {
-                state.pendingPause.set(current.pendingPause.get());
-                return state;
+            if (current != null && current != made.handingOver()) {
+                return current;
             }
-            return current == null ? state : current;
+            if (current != null) {
+                state.pendingPause.set(current.pendingPause.get());
+            }
+            // Closed before the put, since a stop() and a start(true) take no lock of the id and can launch the takeover
+            // as soon as it is in the map, and its handover opens only a gate this state already holds. Opened by that
+            // handover, by a failure of the takeover or by a cancel of it that fails. A start(true) can resume the
+            // subscription in the wrapped model meanwhile, and the handover pauses it again before it resumes it at the
+            // new live start.
+            replay.live().close(state);
+            return state;
         });
         if (inFlight != state) {
             return null;
         }
         // Read again after the put, since shutdown() and stop() set their flag and then read the ids in flight without
-        // this lock. Either this sees the flag, or that read finds this state.
+        // this lock. Either this sees the flag, or that read finds this state. The gate stays closed, as it does for a
+        // takeover that shutdown() cancels.
         if (shutdown) {
             catchingUp.remove(subscriptionId, state);
             return null;
@@ -898,32 +929,7 @@ final class NamedCatchupSupport {
                 state.parked.set(true);
             }
         }
-        // Until this takeover hands over or fails. A start(true) can resume the subscription in the wrapped model
-        // meanwhile, and the handover pauses it again before it resumes it at the new live start.
-        replay.live().close(state);
         return state;
-    }
-
-    // Run by the wrapped model once it has paused the subscription a takeover was registered for. Runs that takeover
-    // unless it ran already, or is parked or cancelled.
-    private void launchWhenTheWrappedModelPaused(CatchupState state) {
-        Object launched;
-        synchronized (state) {
-            launched = pendingLaunch(state);
-        }
-        // Outside the monitor, since a replay whose start, reader and action complete on this thread runs the action here
-        if (launched != null) {
-            state.launcher.accept(launched);
-        }
-    }
-
-    // Called with the state monitor held. The first launch of a registered takeover, or null when it has run, is parked
-    // or cancelled, or this model is stopped or shut down. The caller runs it once the monitor is released.
-    private @Nullable Object pendingLaunch(CatchupState state) {
-        if (state.launchPending && !stopped && !shutdown && !state.parked.get() && !state.cancelled.get()) {
-            return nextLaunch(state);
-        }
-        return null;
     }
 
     // --- Life cycle. Each call forwards to the wrapped model, except a start, pause or resume that finds this model shut
@@ -987,7 +993,7 @@ final class NamedCatchupSupport {
         catchingUp.values().forEach(state -> {
             Object launched;
             synchronized (state) {
-                launched = unpark(state);
+                launched = launch(state, true);
             }
             if (launched != null) {
                 state.launcher.accept(launched);
@@ -1006,16 +1012,6 @@ final class NamedCatchupSupport {
         return !state.cancelled.get() && !state.parked.get() && state.episode.get() == launched;
     }
 
-    // Called with the state monitor held. The launch that runs the replay of a subscription that stop() interrupted, or
-    // that was made while the model was stopped, again from its original start position, or null when it stays parked.
-    // The caller runs it once the monitor is released. A shutdown() that set its flag before this check keeps the
-    // state parked, even before that shutdown cancels it.
-    private @Nullable Object unpark(CatchupState state) {
-        if (!stopped && !shutdown && !state.handedOver.get() && !state.cancelled.get() && state.parked.getAndSet(false)) {
-            return nextLaunch(state);
-        }
-        return null;
-    }
 
     // Not running until start(..) has cleared stopped, even when the wrapped model already runs, since a subscribe
     // before that is paused
@@ -1082,9 +1078,9 @@ final class NamedCatchupSupport {
             }
             return;
         }
-        // A takeover registered since the read above waits for a resume, as a replay paused during its run does.
-        // ReactorMongoSubscriptionModel drops a takeover when this pause reached it before its own pause for that
-        // takeover, and then never runs it.
+        // Marks a takeover registered since the read above paused, as the branch above marks a replay in flight.
+        // ReactorMongoSubscriptionModel never runs a takeover when this pause reached it before its own pause for that
+        // takeover, so that takeover runs once the subscription is resumed.
         pauseTakeOverRegisteredSince(subscriptionId);
     }
 
@@ -1140,10 +1136,10 @@ final class NamedCatchupSupport {
 
     // Called under the lock of the id. The replay a resume runs, or null when the resume goes to the wrapped model. A
     // replay in flight that hasn't handed over is resumed, or refuses the resume when it isn't paused. The wrapped model
-    // can hold paused a subscription whose loss of the live start this model answered by taking it over while no
-    // takeover is in flight, because the takeover replay failed or the wrapped model paused the subscription for a
-    // pause before it paused it for the takeover. Resuming the wrapped model would open the subscription where it lost
-    // the history, so the takeover is registered and runs now instead.
+    // can hold paused, with no takeover in flight, a subscription whose loss of the live start this model answered by
+    // taking it over, for instance after the takeover replay failed or a cancel of the takeover was refused. Resuming
+    // the wrapped model would open the subscription where it lost the history, so the takeover is registered instead,
+    // and runs unless this model is stopped or shut down meanwhile.
     private @Nullable Resumed resumeHoldingIdLock(String subscriptionId) {
         CatchupState state = catchingUp.get(subscriptionId);
         if (state != null) {
@@ -1154,8 +1150,9 @@ final class NamedCatchupSupport {
                     if (!state.parked.get() && !pausedDuringReplay) {
                         throw new SubscriptionAlreadyRunningException(subscriptionId);
                     }
-                    // A stop() since the start above keeps it parked, as a stop right after this resume would
-                    return new Resumed(state, state.parked.get() ? unpark(state) : pendingLaunch(state));
+                    // Launches nothing while this model is stopped. The replay is parked then, as a stop right after this
+                    // resume would park it.
+                    return new Resumed(state, launch(state, state.parked.get()));
                 }
             }
         }
@@ -1164,7 +1161,7 @@ final class NamedCatchupSupport {
             CatchupState taking = registerTakeOver(subscriptionId, made);
             if (taking != null) {
                 synchronized (taking) {
-                    return new Resumed(taking, pendingLaunch(taking));
+                    return new Resumed(taking, launch(taking, false));
                 }
             }
         }
@@ -1381,18 +1378,15 @@ final class NamedCatchupSupport {
         // The episode each launch announces. A stop parks this state and a resume runs its launcher again, reading
         // the history from the beginning, which is a different catch-up and gets a value of its own.
         final AtomicReference<Object> episode = new AtomicReference<>(new Object());
-        // Runs the replay, and runs it again. Assigned once in subscribeWithCatchup before the state is published, and
-        // run with the launch nextLaunch named, once the state monitor is released, by the initial subscribe and by
-        // start(true) or a resume for a parked subscription.
+        // Runs the replay, and runs it again. Assigned once, in subscribeWithCatchup or registerTakeOver, before the
+        // state is published. Run only with a launch that launch(..) named, once the state monitor is released.
         volatile Consumer<Object> launcher = launched -> {
         };
-        // Read and written under the state monitor. Set for a takeover until its first launch is named, which runs once
-        // the wrapped model has paused the subscription, see pendingLaunch.
-        boolean launchPending;
+        // Read and written under the state monitor. Set until nextLaunch names the first launch.
+        boolean launchPending = true;
 
         CatchupState(@Nullable HandedOver takesOver) {
             this.takesOver = takesOver;
-            this.launchPending = takesOver != null;
         }
     }
 
