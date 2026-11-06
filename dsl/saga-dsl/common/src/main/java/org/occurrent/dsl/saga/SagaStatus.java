@@ -27,7 +27,10 @@ package org.occurrent.dsl.saga;
  * have to name the store's envelope type in its own signature.
  */
 public enum SagaStatus {
-    /** The instance is running: it still folds events and can still fire timers. */
+    /**
+     * The instance is running: it still folds events and can still fire timers. An instance that keeps events which
+     * arrived before its start, and has not started yet, has this status too.
+     */
     ACTIVE,
 
     /** The instance reached a terminal state. It holds no timers and ignores further events. */
@@ -54,8 +57,10 @@ public enum SagaStatus {
      * from then on, and either source stops for good on a record the model refuses.
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
-     * which input the instance stopped on, when it started failing, and what the saga threw.
-     * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it.
+     * which input the instance stopped on, when that input first failed, and what the saga threw.
+     * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it. After the
+     * delete, a later event of that instance that is not a start event is kept on a new instance that waits for its
+     * start.
      * <p>
      * Note that {@code findByStatus(ACTIVE, ...)} does not return a quarantined instance. Enumerate this status too when
      * you are looking for instances that have stopped moving.

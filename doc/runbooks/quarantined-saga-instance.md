@@ -161,9 +161,9 @@ SagaInstance instance = quarantined.getFirst();
 SagaFailure failure = instance.failure();
 // failure.input()          the failing event's redelivery key, a stream id with its stream version
 // failure.position()       the event's global position when the store assigns one, otherwise null
-// failure.firstFailedAt()  when this instance started failing, strictly when its first failure record
-//                          was written, which is later than the first failure itself if an earlier
-//                          failure recorded nothing
+// failure.firstFailedAt()  when the event the record names first failed, strictly when that failure
+//                          was first recorded, on the record or on the event's pending entry, which is
+//                          later than the first failure itself if an earlier failure recorded nothing
 // failure.failureType()    the class name of the exception that stopped the processing. Usually one the
 //                          saga or its command dispatcher threw, and it can also be a store or
 //                          converter failure, since the runner catches the whole path including the
@@ -173,13 +173,14 @@ SagaFailure failure = instance.failure();
 //                          so the log lines are where a long message survives whole
 ```
 
-Read `firstFailedAt()` as the start of the instance's current run of failing, and not as the first time
-`failure.input()` itself failed. Reading it the other way under-reports how long the instance has been stuck.
+Read `firstFailedAt()` as how long `failure.input()` has been failing. Each failing event keeps its own clock, so
+another event that failed on the same instance before it does not move it. A record written before 0.35.0 can hold an
+earlier instant, from when the instance started failing on some other event.
 
-It is a floor rather than an exact incident start. The value is when the first failure record was written, and an
-earlier failure that recorded nothing, a failing timeout or a write that lost its compare-and-set for instance, makes
-that later than when the instance started failing. So the instance may have been failing for longer than the
-difference between `firstFailedAt()` and now.
+It is a floor rather than an exact incident start. The value is when the failure was first recorded, and an earlier
+failure of the same event that recorded nothing, one whose writes all lost their compare-and-set for instance, makes
+that later than when the event started failing. So the event may have been failing for longer than the difference
+between `firstFailedAt()` and now.
 
 The record holds the exception's class name and message, and not its stack trace. Take the stack trace from the log
 lines under "How you find out" above, which are the only place it exists.
@@ -245,6 +246,10 @@ It is still quarantined, and 0.34.0 has nothing that replays it.
 In every case the instance stays where it is. What you have gained is knowing whether the process it was running
 finished some other way, which is what you need before step 5.
 
+**Replaying a parked event costs its whole clock.** A parked event's clock keeps running while it is parked. When you
+replay it on an instance with quarantine on and it fails again after `quarantineAfter` has passed since its first
+failure, that first replay failure quarantines the instance. Fix the cause before you replay.
+
 ### 5. [you] Delete the instance, once you have decided not to recover it
 
 `SagaStateStore.delete(sagaId)` is the call, and whether you have anything to call it on depends on how the store was
@@ -286,6 +291,10 @@ half way through fulfilment when its instance stopped is still half way through 
 compensate it through whatever your application uses for that, before or after the delete, and not by expecting the
 saga to pick it up again.
 
+A non-start event that arrives for an id after you delete its instance is kept on a new instance that waits for a start
+event, and it stays there until one arrives or you delete that instance too. Leaving the instance `QUARANTINED` avoids
+that, because a quarantined instance skips those events.
+
 ### 6. [you] Verify
 
 ```java
@@ -324,6 +333,25 @@ Whether an instance should be quarantined at all is a question about your saga r
 `evolve` that throws on an event it does not recognise, rather than ignoring it, quarantines an instance for something
 that was never a failure. `SagaRunnerConfig.redeliveryDetection` under `REQUIRED`, which is its default, already
 refuses an event with no redelivery key before the saga sees it.
+
+## Instances that wait for their start
+
+A saga keeps an event that arrives before its instance's start on the instance, in an `early` field, and applies it
+with the start. Until then the instance is `ACTIVE` with `started: false`. One whose start never arrives stays, so a saga
+deployed onto a live topic collects the later events of instances that began before it. This lists them on MongoDB,
+with how many events each keeps:
+
+```javascript
+db.getCollection("saga-order-fulfilment").aggregate([
+  { $match: { started: false, early: { $exists: true } } },
+  { $project: { kept: { $size: "$early" }, createdAt: 1 } },
+  { $sort: { createdAt: 1 } }
+])
+```
+
+This is a scan of the collection, since no index covers `started`. Delete one you know will never start as in step 5.
+A quarantined instance that never started skips the events that arrive for it, and the ones it kept before its
+quarantine are still in `early`.
 
 ## Rollback considerations
 
