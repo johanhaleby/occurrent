@@ -266,20 +266,24 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
      * before a subscriber of the returned {@code Mono} is told that it completed. {@code ReactorMongoSubscriptionModel}
      * ends it before this method returns. A cancel the wrapped model never ends keeps a subscribe of the id refused.
      * <p>
-     * A subscribe of the id that goes straight to live can still be inside the wrapped model's {@code subscribe(..)}, for
-     * example when a {@code StartAt.dynamic} function that model calls there cancels the id. This method then sends the
-     * wrapped model the cancel at once, without waiting for that subscribe, and the action of that subscribe gets no event
-     * after that. When the wrapped {@code subscribe(..)} returns holding the id, the id is cancelled there again, unless a
-     * subscribe of the id made after this cancel took it there. That cancel waits until no other subscribe of the id is
-     * under way. The action gets no event, and the id is cancelled there again, also when the wrapped model refuses this
-     * cancel by throwing or with a failed {@code Mono}. A subscribe of the id is refused while the wrapped model holds the
-     * id for that subscribe, also once the returned {@code Mono} has completed, and while that second cancel runs.
+     * A subscribe of the id that goes straight to live can still be inside the wrapped model's {@code subscribe(..)},
+     * for example when a {@code StartAt.dynamic} function that model calls there cancels the id. This method then sends
+     * the wrapped model the cancel at once, without waiting for that subscribe, and the action of that subscribe gets
+     * no event after that. {@code ReactorMongoSubscriptionModel} and {@code ReactorDurableSubscriptionModel} register
+     * nothing for that subscribe when this cancel reaches them before they registered it. The subscribe then returns a
+     * {@link Subscription} whose {@code waitUntilStarted()} fails with {@link SubscriptionNotRunningException}. Another
+     * wrapped model can register it after this cancel. When the wrapped {@code subscribe(..)} returns holding the id,
+     * the id is cancelled there again, unless a subscribe of the id made after this cancel took it there. That cancel
+     * waits until no other subscribe of the id is under way. The action gets no event, and the id is cancelled there
+     * again, also when the wrapped model refuses this cancel by throwing or with a failed {@code Mono}. A subscribe of
+     * the id is refused while the wrapped model holds the id for that subscribe, also once the returned {@code Mono}
+     * has completed, and while that second cancel runs.
      * <p>
-     * When this cancel comes before the wrapped model has taken the id for that subscribe, a subscribe of the id made
-     * after this cancel can be refused by the wrapped model with {@link DuplicateSubscriptionIdException}, since the
-     * cancelled subscribe can take the id there first. A subscribe that replays history first gets that exception from
-     * {@code waitUntilStarted()} once the replay hands over. The id is then cancelled there again. A wrapped model that takes
-     * the id only after it evaluated the start makes that likely. {@code ReactorMongoSubscriptionModel} takes it before.
+     * When the wrapped model is another model and this cancel comes before it has taken the id for that subscribe, a
+     * subscribe of the id made after this cancel can be refused by the wrapped model with
+     * {@link DuplicateSubscriptionIdException}, since the cancelled subscribe can take the id there first. A subscribe that
+     * replays history first gets that exception from {@code waitUntilStarted()} once the replay hands over. The id is then
+     * cancelled there again. A wrapped model that takes the id only after it evaluated the start makes that likely.
      */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {

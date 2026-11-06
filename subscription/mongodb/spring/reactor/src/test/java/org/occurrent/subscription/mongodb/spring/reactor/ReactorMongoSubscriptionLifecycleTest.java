@@ -571,6 +571,52 @@ public class ReactorMongoSubscriptionLifecycleTest {
         }
     }
 
+    /**
+     * The subscribe a reactor catch-up calls with whether it has cancelled the subscribe, see
+     * {@link org.occurrent.subscription.api.reactor.internal.CancellableRegistration}.
+     */
+    @Nested
+    class SubscribingWithWhetherTheCallWasCancelled {
+
+        @Test
+        void registers_nothing_and_returns_null_when_the_call_was_cancelled() {
+            // Given
+            AtomicBoolean askedHoldingTheMonitor = new AtomicBoolean();
+
+            // When
+            Subscription subscription = subscriptionModel.subscribe("someSubscription", null, StartAt.now(), __ -> Mono.empty(), () -> {
+                askedHoldingTheMonitor.set(Thread.holdsLock(subscriptionModel));
+                return true;
+            });
+
+            // Then
+            assertAll(
+                    () -> assertThat(subscription).as("the subscription returned").isNull(),
+                    () -> assertThat(askedHoldingTheMonitor).as("whether the model asked holding the monitor its cancel takes").isTrue(),
+                    () -> assertThat(subscriptionModel.subscriptionIds()).as("the ids the model holds").isEmpty(),
+                    () -> assertThat(subscriptionModel.subscribe("someSubscription", __ -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(10)))
+                            .as("what waiting for a subscribe of the id afterwards gives").isNull());
+        }
+
+        @Test
+        void registers_the_subscription_when_the_call_was_not_cancelled() {
+            // Given
+            AtomicBoolean askedHoldingTheMonitor = new AtomicBoolean();
+
+            // When
+            Subscription subscription = subscriptionModel.subscribe("someSubscription", null, StartAt.now(), __ -> Mono.empty(), () -> {
+                askedHoldingTheMonitor.set(Thread.holdsLock(subscriptionModel));
+                return false;
+            });
+
+            // Then
+            assertAll(
+                    () -> assertThat(requireNonNull(subscription).id()).as("the id of the subscription returned").isEqualTo("someSubscription"),
+                    () -> assertThat(askedHoldingTheMonitor).as("whether the model asked holding the monitor its cancel takes").isTrue(),
+                    () -> assertThat(subscriptionModel.isRunning("someSubscription")).as("whether the model runs the subscription").isTrue());
+        }
+    }
+
     private Flux<CloudEvent> serialize(DomainEvent e) {
         return Flux.just(CloudEventBuilder.v1()
                 .withId(e.eventId())
