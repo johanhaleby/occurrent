@@ -59,8 +59,11 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -68,6 +71,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * Pins what {@link ReactorCatchupSubscriptionModel} does with a subscription id it did not create.
@@ -270,6 +274,53 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    void a_subscribe_routed_to_another_inner_model_is_refused_while_a_subscribe_whose_cancel_failed_is_still_inside_the_wrapped_subscribe() throws Exception {
+        verifiesASubscribeRoutedToAnotherInnerModelWaitsForACancelledSubscribeInsideTheWrappedSubscribe(true);
+    }
+
+    @Test
+    void a_subscribe_routed_to_another_inner_model_is_refused_while_a_subscribe_whose_cancel_ended_is_still_inside_the_wrapped_subscribe() throws Exception {
+        verifiesASubscribeRoutedToAnotherInnerModelWaitsForACancelledSubscribeInsideTheWrappedSubscribe(false);
+    }
+
+    private static void verifiesASubscribeRoutedToAnotherInnerModelWaitsForACancelledSubscribeInsideTheWrappedSubscribe(boolean cancelFails) throws InterruptedException {
+        // Given a subscribe straight to live, routed to the stream model and still inside the wrapped subscribe before it
+        // takes the id there, and a cancel of it
+        HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
+        ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
+        HeldSubscribe held = wrapped.holdsTheNextSubscribe();
+        CompletableFuture<Subscription> cancelledSubscribe = CompletableFuture.supplyAsync(() -> catchup.subscribe("live", StreamSubscriptionFilter.filter(Filter.all()), StartAt.now(), __ -> Mono.empty()));
+        Throwable cancel;
+        Throwable meanwhile;
+        try {
+            held.awaitEntered();
+            if (cancelFails) {
+                wrapped.failsTheNextCancel(new IllegalArgumentException("failed by the wrapped model"));
+            }
+            cancel = catchThrowable(() -> catchup.cancelSubscription("live").block(Duration.ofSeconds(10)));
+
+            // When a subscribe of the id is routed to the agnostic model meanwhile, which shares the wrapped model
+            meanwhile = catchThrowable(() -> catchup.subscribe("live", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.now(), __ -> Mono.empty()));
+        } finally {
+            held.release();
+        }
+        Throwable cancelledSubscribeReturned = catchThrowable(() -> cancelledSubscribe.get(10, TimeUnit.SECONDS));
+        boolean runsWhatTheCancelledSubscribeLeft = wrapped.isRunning("live");
+        Throwable later = catchThrowable(() -> catchup.subscribe("live", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.now(), __ -> Mono.empty()));
+
+        // Then that subscribe is refused, since the stream model cancels the id in the wrapped model once the cancelled
+        // subscribe returns, and a subscribe after that goes through and keeps running
+        assertAll(
+                () -> assertThat(cancel == null ? null : cancel.getMessage()).as("what the cancel fails with").isEqualTo(cancelFails ? "failed by the wrapped model" : null),
+                () -> assertThat(meanwhile).as("what a subscribe routed to the agnostic model throws while the cancelled subscribe is inside the wrapped subscribe").isInstanceOf(DuplicateSubscriptionIdException.class),
+                () -> assertThat(cancelledSubscribeReturned).as("what the cancelled subscribe throws").isNull(),
+                () -> assertThat(runsWhatTheCancelledSubscribeLeft).as("whether the wrapped model runs what the cancelled subscribe left").isFalse(),
+                () -> assertThat(later).as("what a subscribe of the id throws once what the cancelled subscribe left is cancelled").isNull(),
+                () -> assertThat(wrapped.isRunning("live")).as("whether the wrapped model runs that subscribe").isTrue()
+        );
+    }
+
     private static ReactorCatchupSubscriptionModel dualModeOver(RecordingSubscriptionModel wrapped) {
         return new ReactorCatchupSubscriptionModel(wrapped, new UnusedPositionOrderedReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
     }
@@ -354,6 +405,21 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         private volatile @Nullable RuntimeException cancelRefusal;
         private volatile Mono<Void> cancelEnds = Mono.empty();
         private volatile boolean dropsTheSubscriptionOnCancel;
+        private final AtomicReference<@Nullable HeldSubscribe> nextSubscribeHeld = new AtomicReference<>();
+        private final AtomicReference<@Nullable RuntimeException> nextCancelFailure = new AtomicReference<>();
+
+        // The next subscribe waits for the test before it takes the id, as a model does that evaluates a dynamic start
+        // on the calling thread
+        HeldSubscribe holdsTheNextSubscribe() {
+            HeldSubscribe held = new HeldSubscribe(new CountDownLatch(1), new CountDownLatch(1));
+            nextSubscribeHeld.set(held);
+            return held;
+        }
+
+        // The next cancel fails with failure and keeps what this model holds
+        void failsTheNextCancel(RuntimeException failure) {
+            nextCancelFailure.set(failure);
+        }
 
         void refusesTheCancel(RuntimeException refusal) {
             cancelRefusal = refusal;
@@ -414,7 +480,13 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
-            subscribed.add(subscriptionId);
+            HeldSubscribe held = nextSubscribeHeld.getAndSet(null);
+            if (held != null) {
+                held.waitUntilReleased();
+            }
+            if (!subscribed.add(subscriptionId)) {
+                throw new DuplicateSubscriptionIdException(subscriptionId);
+            }
             return new StartedSubscription(subscriptionId);
         }
 
@@ -475,6 +547,10 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
             RuntimeException refusal = cancelRefusal;
             if (refusal != null) {
                 throw refusal;
+            }
+            RuntimeException failure = nextCancelFailure.getAndSet(null);
+            if (failure != null) {
+                return Mono.error(failure);
             }
             if (dropsTheSubscriptionOnCancel) {
                 subscribed.remove(subscriptionId);
@@ -547,6 +623,29 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         @Override
         public boolean writesPosition() {
             return true;
+        }
+    }
+
+    // A subscribe that waits until the test releases it
+    private record HeldSubscribe(CountDownLatch entered, CountDownLatch released) {
+        void waitUntilReleased() {
+            entered.countDown();
+            try {
+                if (!released.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("The held subscribe was never released");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+        }
+
+        void awaitEntered() throws InterruptedException {
+            assertThat(entered.await(10, TimeUnit.SECONDS)).as("whether the held subscribe reached the wrapped model").isTrue();
+        }
+
+        void release() {
+            released.countDown();
         }
     }
 

@@ -236,7 +236,8 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         // owns the replay before that model has registered the replay itself; roll the claim back if the subscribe
         // refuses, so the id stays free.
         Route route = new Route(routed);
-        if (subscriptionOwners.putIfAbsent(subscriptionId, route) != null) {
+        Route current = subscriptionOwners.putIfAbsent(subscriptionId, route);
+        if (current != null && !replacesAKeptRoute(subscriptionId, current, route)) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         final Subscription subscription;
@@ -260,6 +261,8 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         // Read and written only inside a compute of subscriptionOwners on this route's id
         private int cancelsUnderWay;
         private boolean cancelEnded;
+        // Set once a cancel of the id finished and left the route in place, and read outside the map operations too
+        private volatile boolean keptByACancel;
 
         private Route(SubscriptionModel owner) {
             this.owner = owner;
@@ -398,9 +401,11 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
      * {@link ReactorStreamCatchupSubscriptionModel#cancelSubscription(String)}. Until a cancel of
      * {@code subscriptionId} through this model has ended, and every other cancel of that id through this model has
      * completed or failed, a subscribe of that id through this model throws {@link DuplicateSubscriptionIdException},
-     * and the other calls for that id reach that inner model. A cancel ends when it completes. A cancel that throws or
-     * fails ends only when, as it throws or fails, that inner model has no replay of the subscription in flight and the
-     * wrapped model no longer holds the subscription. That holds also when nothing subscribes to the {@code Mono}.
+     * and the other calls for that id reach that inner model. A cancel ends when, as it completes, throws or fails, that
+     * inner model has no replay of the subscription in flight and no subscribe of it that can still take the id in the
+     * wrapped model, and the wrapped model no longer holds the subscription. That holds also when nothing subscribes to
+     * the {@code Mono}. Once no cancel of that id through this model is under way, a subscribe of the id that finds all
+     * of that gone goes through too.
      */
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
@@ -415,10 +420,10 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         try {
             cancelled = route.owner.cancelSubscription(subscriptionId);
         } catch (RuntimeException | Error e) {
-            cancelRefused(subscriptionId, route);
+            cancelEnds(subscriptionId, route);
             throw e;
         }
-        Mono<Void> ended = cancelled.doOnSuccess(unused -> cancelEnds(subscriptionId, route, true)).doOnError(failure -> cancelRefused(subscriptionId, route)).cache();
+        Mono<Void> ended = cancelled.doOnSuccess(unused -> cancelEnds(subscriptionId, route)).doOnError(failure -> cancelEnds(subscriptionId, route)).cache();
         // Subscribed here so the route is forgotten even when nothing subscribes to what this returns. The owner logs
         // a cancel that fails.
         ended.subscribe(unused -> {
@@ -427,26 +432,36 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         return ended;
     }
 
-    // A cancel that throws or fails keeps the route while the owner still holds the id, so later calls still reach the
-    // owner, and otherwise counts as a cancel that ended
-    private void cancelRefused(String subscriptionId, Route route) {
-        cancelEnds(subscriptionId, route, !namedSupportOf(route.owner).holds(subscriptionId));
-    }
-
     private static NamedCatchupSupport namedSupportOf(SubscriptionModel innerModel) {
         return innerModel instanceof ReactorDcbCatchupSubscriptionModel dcb ? dcb.namedSubscriptions : ((ReactorStreamCatchupSubscriptionModel) innerModel).namedSubscriptions;
     }
 
-    // Forgets the route once no cancel of it is under way and one of them has ended
-    private void cancelEnds(String subscriptionId, Route route, boolean ended) {
+    // Forgets the route once no cancel of it is under way and one of them ended while its owner held nothing of the id.
+    // A route whose owner still holds the id is kept, so later calls still reach the owner. The owner is asked outside
+    // the map operation, which runs no code of the wrapped model under a lock of the map.
+    private void cancelEnds(String subscriptionId, Route route) {
+        boolean ended = !namedSupportOf(route.owner).holds(subscriptionId);
         subscriptionOwners.computeIfPresent(subscriptionId, (id, current) -> {
             if (current != route) {
                 return current;
             }
             current.cancelEnded |= ended;
             current.cancelsUnderWay--;
-            return current.cancelsUnderWay == 0 && current.cancelEnded ? null : current;
+            if (current.cancelsUnderWay == 0 && current.cancelEnded) {
+                return null;
+            }
+            current.keptByACancel = true;
+            return current;
         });
+    }
+
+    // Puts route in place of a route a cancel kept, once its owner holds nothing of the id and no cancel of it is under
+    // way. The map operation checks again that no cancel started since the owner was asked.
+    private boolean replacesAKeptRoute(String subscriptionId, Route kept, Route route) {
+        if (!kept.keptByACancel || namedSupportOf(kept.owner).holds(subscriptionId)) {
+            return false;
+        }
+        return subscriptionOwners.compute(subscriptionId, (id, current) -> current == null || current == kept && current.cancelsUnderWay == 0 ? route : current) == route;
     }
 
     @Override

@@ -195,9 +195,13 @@ final class NamedCatchupSupport {
         return catchingUp.containsKey(subscriptionId);
     }
 
-    // Whether a replay of the id is in flight here or the wrapped model holds the id
+    // Whether a replay of the id is in flight here, a subscribe of the id is still inside the wrapped subscribe(..) or
+    // can still have taken the id there after its cancel, or the wrapped model holds the id. For such a subscribe this
+    // model cancels the id in the wrapped model once it returns, unless a later subscribe here took the id.
     boolean holds(String subscriptionId) {
-        return catchingUp.containsKey(subscriptionId) || named != null && holds(named, subscriptionId);
+        Owned record = owned.get(subscriptionId);
+        return catchingUp.containsKey(subscriptionId) || record != null && record.subscribing || leftovers.containsKey(subscriptionId)
+                || named != null && holds(named, subscriptionId);
     }
 
     // Who to tell about an id's catch-up boundaries, registered before the subscription that produces them.
