@@ -525,11 +525,13 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
         AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
 
         inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving())
+                .then(eventStore.append(List.of(taggedEvent("in scope", DEPOSITED, ACCOUNT_A))))
                 .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
                 .doOnNext(withoutMark::set))
                 .block();
 
         assertThat(withoutMark.get().markerVersions()).as("versions from a read-only transaction of the store's own").isNotEmpty();
+        assertThat(withoutMark.get().events()).as("a read outside the bound session misses its append").extracting(CloudEvent::getId).containsExactly("before");
     }
 
     @Test

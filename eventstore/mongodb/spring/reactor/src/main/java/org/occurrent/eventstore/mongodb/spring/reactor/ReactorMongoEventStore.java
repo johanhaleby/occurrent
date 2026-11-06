@@ -131,9 +131,10 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a reactive transaction the subscriber
  * context carries it reports no marker versions, since that transaction's writes may still abort, and a read after
  * marker versions is refused. {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} can say the read is the first
- * operation of the transaction, or that the caller confirms an append before saving. On a replica set the store then
- * reads the versions in that transaction, or in the session transaction the read binds when synchronization is active
- * with no session bound yet. With a session already bound there, a read that confirms an append reports no versions.
+ * operation of the transaction, and on a replica set the store then reads the versions in that transaction. It can
+ * also say the caller confirms an append before saving. With synchronization active, no transaction and no session
+ * bound yet, the store on a replica set then reads the versions in the session transaction the read binds. With a
+ * session already bound, such a read reports no versions.
  * The store answers {@link DcbAppendConfirmation} with a
  * majority read on the primary from {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory#getMongoDatabase()},
  * which joins no session. A store built on a template from {@link ReactiveMongoTemplate#withSession(ClientSession)}

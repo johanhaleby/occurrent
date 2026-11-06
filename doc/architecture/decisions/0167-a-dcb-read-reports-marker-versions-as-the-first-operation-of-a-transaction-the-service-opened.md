@@ -86,7 +86,9 @@ see that session's writes, and an append checked against its token could fail it
 
 A read without `confirmsAppendBeforeSaving` keeps ADR 148's path in that scope. That covers the `@Snapshot` view and a
 read of the caller's in a method on `PROPAGATION_SUPPORTS`. Their versions come from a read-only transaction committed
-at majority, and they may save at them. Versions from the session transaction come from a transaction that hasn't
+at majority, and they may save at them. With a session already bound, such a read doesn't see that session's writes,
+and an append in the session checked against its token can fail its condition, as it could before this change.
+Versions from the session transaction come from a transaction that hasn't
 committed when the read returns, at the session's default read concern.
 
 In a scope of the caller's with no transaction, an executor that opens none takes part in that scope's

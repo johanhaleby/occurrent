@@ -972,8 +972,12 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - In a Spring scope of yours with no transaction, on an executor that opens none, that session transaction commits
   when your scope ends, after `execute` returns, so a decider there saves no snapshot. When a session is already bound
   there, the decider's read goes through it and reports no versions, since its writes may still abort. The session stays
-  bound until your scope ends, as after a plain `execute`, and a `MongoTransactionManager` over the same database
-  counts it as an existing transaction there.
+  bound until your scope ends, as after a plain `execute`, and a MongoDB transaction manager on the same database
+  factory counts it as an existing transaction there.
+- A versioned read without `confirmingAppendBeforeSaving()`, such as a snapshot decider's on a service without
+  synchronous subscriptions, reads on a transaction of the store's own in such a scope. When a session is already
+  bound there, it doesn't see that session's writes, and an append in the session checked against its token can fail
+  its condition.
 - A Spring MongoDB store no longer retries a DCB append in a session bound to the synchronization. A conflict fails it
   at once, as in your transaction, instead of a retry in the transaction the conflict aborted.
 - `DcbReadOptions.confirmingAppendBeforeSaving()` and `asFirstOperationOfTransaction()` say something about the caller
