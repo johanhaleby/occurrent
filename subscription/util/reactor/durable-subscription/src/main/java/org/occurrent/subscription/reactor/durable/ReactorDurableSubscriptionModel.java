@@ -218,8 +218,9 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * to 5 seconds, which the seventh wait is the first that can reach. The subscription keeps trying until the read
  * answers or the subscription is cancelled, paused, stopped or shut down, and the next start or resume begins again
  * from the first wait. When {@code globalCheckpointAsOfNow()} throws instead of returning a {@code Mono}, nothing is
- * read, and {@link Subscription#waitUntilStarted()} fails with what it threw when the subscription starts, which for
- * one registered on a stopped model is once the model is started. The id is then free to subscribe again. A read that
+ * read, and {@link Subscription#waitUntilStarted()} fails with what it threw when the subscription starts. For one
+ * registered on a stopped model, that is when {@code start()} or {@link #resumeSubscription(String)} starts it, and
+ * after {@code start(false)} it stays paused until it is resumed. The id is then free to subscribe again. A read that
  * is slow to answer is waited for however long it takes, with a {@code WARN} every 10 seconds while the subscription
  * waits, and so is the read for a subscription from the subscription-model default. A subscription from
  * {@link StartAt#now()} has at most one such read running, which every start and resume of it waits for instead of

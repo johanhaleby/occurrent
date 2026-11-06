@@ -870,6 +870,38 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     }
 
     /**
+     * The wrapped model throws when asked where its feed is, for a subscription from StartAt.now() registered on a
+     * stopped model. A start that resumes nothing keeps the subscription paused, so waiting for its start fails only
+     * once it is resumed.
+     */
+    @Test
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_the_start_of_a_subscription_registered_on_a_stopped_model_once_it_is_resumed() {
+        // Given
+        Feed feed = new Feed();
+        Throwable threw = ThrownAtTheCall.of("runtime exception", POSITION_READ_FAILED);
+        feed.throwsAtTheCall = threw;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        model.stop();
+
+        try {
+            CompletableFuture<Void> started = model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> Mono.empty()).waitUntilStarted().toFuture();
+
+            // When
+            model.start(false);
+            letTimePass(Duration.ofMillis(300));
+            boolean endedBeforeTheResume = started.isDone();
+            model.resumeSubscription(SUBSCRIPTION_ID);
+
+            // Then
+            assertThat(endedBeforeTheResume).as("waiting for the start ended after a start that resumes nothing").isFalse();
+            assertThat(started).as("waiting for the start once the subscription is resumed")
+                    .failsWithin(TIMEOUT).withThrowableOfType(ExecutionException.class).havingCause().isSameAs(threw);
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    /**
      * The wrapped model throws when asked where its feed is at the subscribe of a dynamic start position that answers
      * StartAt.now(), which reads it in case the function answers the model default, and the subscribe comes while a
      * cancel of the same id deletes its checkpoint. The subscription starts from where the feed is at its first start,
