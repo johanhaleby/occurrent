@@ -675,8 +675,9 @@ stack `PROPAGATION_NEVER` failed the same way, and `PROPAGATION_REQUIRES_NEW` st
 service also asks `allowsReadBeforeTransaction()`, a new default method on `TransactionExecutor` and
 `ReactiveTransactionExecutor`, and reads before the executor only when it answers `true`. The default answers `false`,
 which keeps an executor of your own reading in its transaction as in 0.34.0. `noTransaction()` answers `true`,
-`SpringTransactionExecutor` when no transaction synchronization is active, and `SpringReactiveTransactionExecutor` when
-the subscriber context holds no transaction context. `isTransactional()` keeps meaning an actual transaction, since the
+`NativeMongoTransactionExecutor` when no `ClientSession` is bound on the thread, `SpringTransactionExecutor` when no
+transaction synchronization is active, and `SpringReactiveTransactionExecutor` when the subscriber context holds no
+transaction context. `isTransactional()` keeps meaning an actual transaction, since the
 service passes it to the synchronous subscriptions as whether the write is in one. In such a scope a decider's read runs
 in the executor, so it gets versions only when the executor opens no transaction.
 

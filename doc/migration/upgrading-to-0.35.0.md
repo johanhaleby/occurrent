@@ -962,8 +962,9 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
 - A DCB application service with synchronous subscriptions on `noTransaction()` or a Spring executor now reads and
   decides before it enters its transaction executor's transaction when `execute` runs outside every Spring transaction
-  scope of yours, so a decider on it saves snapshots. Only the append, the
-  re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
+  scope of yours, so a decider on it saves snapshots. On `NativeMongoTransactionExecutor` it does so when no
+  `ClientSession` is bound on the thread, by the executor or by you through `ClientSessionHolder.set`. Only the append,
+  the re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
   write your domain function makes is no longer part of it. The executor's conflict retry re-runs the append, the re-read
   and the dispatch, with the token of the read the decision was made on, and not the read or your domain function. A
   handler can run again on such a retry when a transaction rolled the earlier attempt back, as it could before. When the condition then fails, the service's retry strategy
