@@ -11,7 +11,10 @@ blocking stack, `ReactorMongoSubscriptionModel` on the reactor stack. It closes 
 of the live start and the handover. Amended by
 [ADR 155](0155-a-catch-up-reads-its-live-start-from-the-event-store-and-refuses-to-resume-where-it-could-skip-an-event.md),
 which takes over only when the wrapped model loses the live start at its first open, and decides itself what a later
-history loss does.
+history loss does. Amended by
+[ADR 168](0168-a-reactor-catch-up-registers-a-takeover-replay-when-it-answers-the-loss.md), under which a reactor
+catch-up registers the takeover's replay when it answers the loss, so the paragraph on what the catch-up answers
+between the wrapped model's pause and `afterPause` holds for the blocking stack only.
 
 ## Context
 

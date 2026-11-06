@@ -17,15 +17,20 @@
 package org.occurrent.subscription;
 
 /**
- * A subscription model refused to subscribe because it has been shut down. A model that is shut down cannot be started
- * again, so subscribing to it again fails the same way until the application creates a new one.
+ * A subscription model refused to subscribe, or to pause or resume a subscription, because it has been shut down. A model
+ * that is shut down cannot be started again, so subscribing to it again fails the same way until the application creates
+ * a new one.
  * <p>
  * This extends {@link IllegalStateException}, which is what a model that was shut down threw before this type existed,
  * so code catching that still catches it. These throw it from a named {@code subscribe} once they are shut down:
  * {@code ReactorMongoSubscriptionModel}, {@code ReactorDurableSubscriptionModel}, and the reactor catch-up models
  * {@code ReactorCatchupSubscriptionModel}, {@code ReactorStreamCatchupSubscriptionModel} and
  * {@code ReactorDcbCatchupSubscriptionModel} wrapping a model that manages named subscriptions. The catch-up models
- * throw it before replaying any history. Other models throw what they threw before.
+ * throw it before replaying any history. {@code ReactorMongoSubscriptionModel} and those catch-up models throw it from
+ * {@code pauseSubscription} and {@code resumeSubscription} too, and so does a model that passes those calls on to
+ * {@code ReactorMongoSubscriptionModel}. {@code ReactorDurableSubscriptionModel} throws it from those calls when it
+ * wraps a model that manages no named subscriptions, and otherwise passes them on. Other models throw what they threw
+ * before.
  */
 public class SubscriptionModelShutdownException extends IllegalStateException {
 

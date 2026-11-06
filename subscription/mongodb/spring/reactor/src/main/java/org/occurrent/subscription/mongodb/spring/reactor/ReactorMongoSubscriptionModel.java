@@ -878,7 +878,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         Run run;
         synchronized (this) {
             if (shutdown) {
-                throw new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
+                throw new SubscriptionModelShutdownException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
             }
             requireKnown(subscriptionId);
             if (isPaused(subscriptionId)) {
@@ -935,7 +935,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         RunStart runStart;
         synchronized (this) {
             if (shutdown) {
-                throw new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
+                throw new SubscriptionModelShutdownException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
             }
             requireKnown(subscriptionId);
             if (isRunning(subscriptionId)) {
@@ -967,7 +967,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         RunStart runStart;
         synchronized (this) {
             if (shutdown) {
-                throw new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
+                throw new SubscriptionModelShutdownException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
             }
             requireKnown(subscriptionId);
             if (isRunning(subscriptionId)) {
