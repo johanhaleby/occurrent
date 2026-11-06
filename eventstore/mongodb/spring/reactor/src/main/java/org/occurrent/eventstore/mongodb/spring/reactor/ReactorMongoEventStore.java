@@ -344,7 +344,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // the events may include it while the token does not, which only makes a later conditional append
         // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The position comes
         // after the token. An append between a position read first and a token read second would be in the token and
-        // above the position the events are capped at, so a later conditional append would miss it.
+        // above the position the events are capped at, so a later conditional append would miss it. Two reads sent at
+        // once as the first commands of a transaction fail when the one that doesn't start the transaction reaches
+        // MongoDB first (NoSuchTransaction, error 251).
         return consistencyToken.zipWhen(token -> currentPosition).zipWith(readsUnbounded(template))
                 .flatMap(tokenHighWatermarkAndUnbounded -> {
                     DcbConsistencyToken token = tokenHighWatermarkAndUnbounded.getT1().getT1();
