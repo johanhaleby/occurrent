@@ -63,6 +63,8 @@ transaction undoes the write. Otherwise the retry strategy doesn't run the comma
   exception an executor attached to a wrapper of the stand-in.
 - **`NativeMongoTransactionExecutor`.** `isTransactional()` now answers whether the session bound to the thread has a
   transaction in force instead of always `true`, so the service can tell a transaction it would open from one it would join.
+  With no session bound it also lets a DCB service with synchronous subscriptions read and decide before it, since its
+  `allowsReadBeforeTransaction()` answers `true` then, as [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) describes.
 - **Which handlers get the event when one fails.** The dispatch stops at the first failing handler only when the write
   can't commit after the failure, that is when the attempt opened the transaction, or when it joined one and
   `rollsBackAJoinedTransactionOnFailure()` answers `true`. That's a new default method on `TransactionExecutor` and
@@ -145,8 +147,10 @@ its executor, and the store reserves positions outside every transaction, so not
 and the store commits it in a transaction of its own. I ran that after merging main at 4485a0462, and before that merge
 the append rolled back too. In a Spring scope of the caller's that opens no transaction, the Spring executors don't
 allow a read before them, so the DCB service reads in the executor as in 0.34.0, and the append of a plain `execute`
-rolls back as a write to a stream does. A snapshot decider's read asks for versions, runs on a session of the store's
-own and binds nothing, and its append stays as in the last row. I ran that row on both stacks with a retry strategy that
+rolls back as a write to a stream does. A read that asks for versions, as a snapshot decider's does, runs on a session
+of the store's own and binds nothing, and its append stays as in the last row. The store answers such a read without
+versions when `resumeFromMarkerVersions` is off, when the criteria matches every event, or after the read of the
+versions failed, and that read binds a session as a plain `execute`'s does. I ran that row on both stacks with a retry strategy that
 matches the handler's failure, and on the blocking stack also with one that doesn't, and every command was decided once.
 A caller that catches the failure and lets its scope complete may keep the append, and I didn't run that. In the last
 two rows, over a stream, a strategy that matched the failure used to run the command again and store one event with no
