@@ -338,10 +338,11 @@ final class NamedCatchupSupport {
     }
 
     // Called with the state monitor held. Every launch of a replay is named here, and the caller runs it once the
-    // monitor is released. Null means no launch. A state launches its replay once, as its first launch, and again
-    // each time start(true) or a resume unparks it after a stop() parked it. A first launch while this model is stopped
-    // parks the replay instead. Nothing launches once the replay has handed over or was cancelled, or once shutdown()
-    // has set its flag, even before that shutdown cancels the state.
+    // monitor is released. Null means no launch. A state launches its replay at its first launch, and again each time
+    // start(true) or a resume unparks it. A stop() parks a replay that has not handed over, and a first launch while
+    // this model is stopped parks the replay instead. registerTakeOver parks a takeover it registers while this model
+    // is stopped, so that takeover's first launch is an unpark. Nothing launches once the replay has handed over or was
+    // cancelled, or once shutdown() has set its flag, even before that shutdown cancels the state.
     private @Nullable Object launch(CatchupState state, boolean unparking) {
         if (shutdown || state.cancelled.get() || state.handedOver.get()) {
             return null;
