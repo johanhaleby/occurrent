@@ -104,8 +104,8 @@ public class NativeMongoTransactionExecutor implements TransactionExecutor {
     /**
      * {@code true} when no {@link ClientSession} is bound on this thread, by this executor or by a caller through
      * {@link ClientSessionHolder#set(ClientSession)}. With one bound, a DCB application service with synchronous
-     * subscriptions reads inside {@link #inTransaction(Supplier)}, which joins that session, so the read and the append
-     * run in the same session.
+     * subscriptions reads inside {@link #inTransaction(Supplier)}, which joins that session, as every executor did before
+     * 0.35.0.
      */
     @Override
     public boolean allowsReadBeforeTransaction() {

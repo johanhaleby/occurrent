@@ -635,8 +635,8 @@ and these are the consequences:
   service's retry strategy instead of one of the executor's. By default the service allows 5 attempts and the Spring
   executors 240 on the blocking stack and 321 on the reactive one, so a command on a contended boundary can fail sooner,
   with the same budget a service without synchronous subscriptions has.
-- When the executor allows a read before it and no transaction is open, the domain function no longer runs in the
-  executor's transaction, and a decision with no new events no longer opens one.
+- When the executor allows a read before it and its `isTransactional()` answers `false`, the domain function no longer
+  runs in the executor's transaction, and a decision with no new events no longer opens one.
 - The executor's conflict retry no longer covers the read, so a transient failure of the read now fails the command
   unless the service's retry strategy retries it, as on a service without synchronous subscriptions. I ran one
   `QueryTimeoutException` from the first read on both stacks. Before this order the command stored its event, and after
@@ -1070,8 +1070,8 @@ the store unchanged.
 - The first command on a boundary reads in full and saves nothing, whether the boundary is new or existed before the
   upgrade, because its markers don't exist yet or have no epoch yet. Its append gives them one, and the next command
   can save.
-- On a DCB application service with synchronous subscriptions whose executor allows a read before it, with no
-  transaction open, the domain function no longer runs in the executor's transaction. The executor's conflict retry re-runs the append, the re-read and the dispatch, with the token of the
+- On a DCB application service with synchronous subscriptions whose executor allows a read before it and answers
+  `false` from `isTransactional()`, the domain function no longer runs in the executor's transaction. The executor's conflict retry re-runs the append, the re-read and the dispatch, with the token of the
   read the decision was made on, and not the read or the domain function.
 - A decider inside a transaction the caller owns never saves a snapshot. Saving after that transaction commits isn't in
   0.35.0, and this is a known limitation, tracked in #1307. The warning lists a transaction the caller owns as one of
