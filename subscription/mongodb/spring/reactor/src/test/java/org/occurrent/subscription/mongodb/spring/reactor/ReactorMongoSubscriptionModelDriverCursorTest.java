@@ -438,7 +438,8 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
             if (answer == 1) {
                 firstAnswerAsked.countDown();
                 try {
-                    letFirstAnswerGo.await();
+                    // Bounded, so a failure before the test lets it go doesn't leave the subscriber thread blocked
+                    letFirstAnswerGo.await(30, SECONDS);
                 } catch (InterruptedException e) {
                     throw new IllegalStateException(e);
                 }
