@@ -128,9 +128,12 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * <p>
  * A DCB read that asks for marker versions runs in a read-only snapshot transaction of its own, on a session from the
  * template's {@link org.springframework.data.mongodb.MongoDatabaseFactory}, bounded by
- * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a Spring-managed transaction it reports
- * no marker versions, since that transaction's writes may still abort, and a read after marker versions is refused. The
- * store answers {@link DcbAppendConfirmation} with a majority read on the primary from
+ * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a Spring-managed transaction, or with a
+ * session bound to transaction synchronization, it reports no marker versions, since that transaction's writes may
+ * still abort, and a read after marker versions is refused. {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} can say the read is the first
+ * operation of the transaction, or that the caller confirms an append before saving. On a replica set the store then
+ * reads the versions in that transaction, or in the session transaction the read binds when synchronization is active
+ * with no session bound yet. The store answers {@link DcbAppendConfirmation} with a majority read on the primary from
  * {@link org.springframework.data.mongodb.MongoDatabaseFactory#getMongoDatabase()}, which joins no session. A store
  * built on a template from {@link MongoTemplate#withSession(ClientSession)} isn't supported for DCB snapshot deciders.
  */
@@ -328,17 +331,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // Markers, counter and events come from one point in time, so an event that commits after it is above the reported
-    // versions. ADR 148 and ADR 149 say what a read after them can still miss. This runs in a read-only snapshot
-    // transaction on a session of the store's own, never through the configured TransactionTemplate, and commits it
-    // once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a Spring-managed
-    // transaction it reports no versions, since the transaction's own increments may still abort and a later append
-    // would reuse them, unless the caller says the read is the transaction's first operation and the store runs on a
-    // replica set. Then it reads in that transaction. With synchronization active, no transaction and no session bound
-    // yet, a caller that confirms an append before saving gets the read through the template on a replica set, which
-    // binds a session transaction the read is the first operation of, so an append in the synchronization joins it.
-    // In those two cases a failure fails the read so the transaction's owner can retry. Otherwise a failure reports no
-    // versions instead of failing the read. A read after versions can't fall back to a full read without
-    // double-applying events, so it is refused in both cases.
+    // versions. ADR 148 and ADR 149 say what a read after them can still miss. By default this runs in a read-only
+    // snapshot transaction on a session of the store's own, never through the configured TransactionTemplate, and commits
+    // it once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a Spring-managed
+    // transaction it reports no versions, since the transaction's own increments may still abort and a later append would
+    // reuse them, unless the caller says the read is the transaction's first operation and the store runs on a replica
+    // set. Then it reads in that transaction. With synchronization active and no transaction, a session already bound may
+    // hold writes that abort later, so the read goes through it and reports no versions. With no session bound yet, a
+    // caller that confirms an append before saving gets the read through the template on a replica set, which binds a
+    // session transaction the read is the first operation of, so an append in the synchronization joins it. Where it reads
+    // versions in a transaction it doesn't own, a failure fails the read so the transaction's owner can retry. Otherwise a
+    // failure reports no versions instead of failing the read. A read after versions can't fall back to a full read
+    // without double-applying events, so it is refused wherever the store reports no versions.
     private DcbEventStream readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -358,9 +362,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             }
             return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
         }
-        if (options.confirmsAppendBeforeSaving() && runsOnReplicaSet && TransactionSynchronizationManager.isSynchronizationActive()
-                && TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) == null) {
-            return readMarkerVersionsWith(mongoTemplate, criteria, options);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            if (TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) != null) {
+                return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
+            }
+            if (options.confirmsAppendBeforeSaving() && runsOnReplicaSet) {
+                return readMarkerVersionsWith(mongoTemplate, criteria, options);
+            }
         }
 
         final ClientSession clientSession;

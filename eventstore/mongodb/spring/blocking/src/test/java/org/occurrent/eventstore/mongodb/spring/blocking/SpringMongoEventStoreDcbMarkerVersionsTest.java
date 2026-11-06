@@ -512,6 +512,23 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
+    void reads_through_the_session_a_first_read_bound_in_a_scope_without_a_transaction_and_reports_no_marker_versions_so_a_second_append_sees_the_first() {
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
+        AtomicReference<DcbEventStream> second = new AtomicReference<>();
+        DcbReadOptions confirming = DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving();
+
+        inScopeWithoutTransaction(() -> {
+            DcbEventStream first = eventStore.read(BOUNDARY_A, confirming);
+            eventStore.append(List.of(taggedEvent("first", DEPOSITED, ACCOUNT_A)), failIfEventsMatch(BOUNDARY_A, first.consistencyToken()));
+            second.set(eventStore.read(BOUNDARY_A, confirming));
+            eventStore.append(List.of(taggedEvent("second", DEPOSITED, ACCOUNT_A)), failIfEventsMatch(BOUNDARY_A, second.get().consistencyToken()));
+        });
+
+        assertThat(second.get().markerVersions()).as("versions of a read in a session whose writes may still abort").isEmpty();
+        assertThat(eventStore.read(BOUNDARY_A).events()).extracting(CloudEvent::getId).containsExactly("before", "first", "second");
+    }
+
+    @Test
     void adds_no_marker_versions_extension_to_the_events_a_stream_read_and_a_query_return() {
         eventStore.append(List.of(taggedEvent("a", DEPOSITED, ACCOUNT_A)));
         Document stored = rawEvent("a");

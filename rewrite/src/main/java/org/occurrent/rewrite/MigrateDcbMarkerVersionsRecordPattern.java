@@ -27,7 +27,8 @@ import java.util.List;
  * ones stops compiling, since a record pattern has to name every component of the canonical constructor. A
  * {@code DcbAppendResult} pattern with four bindings gains {@code var markerVersions}, a {@code DcbEventStream}
  * pattern with three gains {@code var markerVersions}, and a {@code DcbReadOptions} pattern with four gains
- * {@code var versionsRequested, var afterVersions}, and a {@code Snapshot} pattern with three gains
+ * {@code var versionsRequested, var afterVersions, var confirmsAppendBeforeSaving, var firstOperationOfTransaction},
+ * and a {@code Snapshot} pattern with three gains
  * {@code var markerVersions, var highestFoldedPosition}. A binding name already bound in scope gets a numbered variant
  * ({@code markerVersions1} and so on). A pattern of any other arity is left alone. Nothing in this repository uses
  * these patterns, so this exists for a caller's own source. See doc/migration/upgrading-to-0.35.0.md.
@@ -37,7 +38,8 @@ public class MigrateDcbMarkerVersionsRecordPattern extends Recipe {
     private static final List<AddRecordPatternBindings.Target> TARGETS = List.of(
             AddRecordPatternBindings.Target.of("org.occurrent.eventstore.api.dcb.DcbAppendResult", 4, "markerVersions"),
             AddRecordPatternBindings.Target.of("org.occurrent.eventstore.api.dcb.DcbEventStream", 3, "markerVersions"),
-            AddRecordPatternBindings.Target.of("org.occurrent.eventstore.api.dcb.DcbReadOptions", 4, "versionsRequested", "afterVersions"),
+            AddRecordPatternBindings.Target.of("org.occurrent.eventstore.api.dcb.DcbReadOptions", 4, "versionsRequested", "afterVersions",
+                    "confirmsAppendBeforeSaving", "firstOperationOfTransaction"),
             AddRecordPatternBindings.Target.of("org.occurrent.dsl.snapshot.Snapshot", 3, "markerVersions", "highestFoldedPosition"));
 
     @Override
@@ -51,7 +53,8 @@ public class MigrateDcbMarkerVersionsRecordPattern extends Recipe {
                "marker versions (ADR 148). A record pattern naming only the original components stops compiling, " +
                "since a record pattern has to name every canonical component. This appends `var markerVersions` " +
                "to a four-component DcbAppendResult pattern and a three-component DcbEventStream pattern, and " +
-               "`var versionsRequested, var afterVersions` to a four-component DcbReadOptions pattern, and " +
+               "`var versionsRequested, var afterVersions, var confirmsAppendBeforeSaving, var firstOperationOfTransaction` " +
+               "to a four-component DcbReadOptions pattern, and " +
                "`var markerVersions, var highestFoldedPosition` to a three-component Snapshot pattern, in a switch " +
                "case or an instanceof pattern alike. See doc/migration/upgrading-to-0.35.0.md.";
     }

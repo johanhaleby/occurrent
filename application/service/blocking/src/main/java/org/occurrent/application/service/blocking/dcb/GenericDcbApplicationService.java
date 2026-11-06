@@ -280,7 +280,6 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         }
     }
 
-    @SuppressWarnings("removal")
     // A read in the executor tells the store that a caller saves at versions only after confirming an append, and whether
     // the read is the first operation of a transaction the executor opened
     private static DcbReadOptions inExecutor(DcbReadOptions readOptions, boolean firstOperationOfTransaction) {
@@ -290,6 +289,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         return firstOperationOfTransaction ? readOptions.asFirstOperationOfTransaction() : readOptions.confirmingAppendBeforeSaving();
     }
 
+    @SuppressWarnings("removal")
     private static @Nullable DcbReadOptions readOptions(DcbExecuteOptions<?> options) {
         @Nullable Long fromPosition = options.fromPosition();
         @Nullable DcbMarkerVersions fromVersions = options.fromVersions();

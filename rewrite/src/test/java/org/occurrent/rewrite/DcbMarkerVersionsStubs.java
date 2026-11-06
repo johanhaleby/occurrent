@@ -104,7 +104,8 @@ final class DcbMarkerVersionsStubs {
             import java.util.OptionalInt;
 
             public record DcbReadOptions(PositionRange positionRange, Direction direction, int skip, OptionalInt limit,
-                                         boolean versionsRequested, Optional<DcbMarkerVersions> afterVersions) {
+                                         boolean versionsRequested, Optional<DcbMarkerVersions> afterVersions,
+                                         boolean confirmsAppendBeforeSaving, boolean firstOperationOfTransaction) {
 
                 public enum Direction {
                     FORWARD,

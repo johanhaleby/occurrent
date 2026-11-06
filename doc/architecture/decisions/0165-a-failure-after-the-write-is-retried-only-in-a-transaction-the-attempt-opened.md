@@ -138,9 +138,9 @@ that matches the failure, on both stacks unless a row says otherwise. Every Spri
 | Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, and no Spring scope | | gets the failure | 0 on a stream, and 0 on a DCB boundary on `NOT_SUPPORTED` |
 
 The Spring MongoDB stores set `SessionSynchronization.ALWAYS` themselves, so with no transaction reported the store
-still writes to a stream in a synchronization-based transaction that rolls back. In the last row a DCB append rolls back as a write to a stream does, which I ran on `NOT_SUPPORTED` on both stacks,
-for a plain command and for a snapshot decider. The service reads in the executor, and the read binds a session to the
-synchronization, which the append joins. [ADR 167](0167-a-dcb-read-reports-marker-versions-as-the-first-operation-of-a-transaction-the-service-opened.md) says how a read that asks for versions does that. In a Spring scope of
+still writes to a stream in a synchronization-based transaction that rolls back. In the last row a DCB append rolls back as a write to a stream does, which I ran on `NOT_SUPPORTED` on both stacks on a
+replica set, for a plain command and for a snapshot decider. The service reads in the executor, and there the read
+binds a session to the synchronization, which the append joins. [ADR 167](0167-a-dcb-read-reports-marker-versions-as-the-first-operation-of-a-transaction-the-service-opened.md) says how a read that asks for versions does that. In a Spring scope of
 the caller's that opens no transaction, the append of a plain `execute` rolls back the same way. I ran that row on both stacks with a retry strategy that
 matches the handler's failure, and on the blocking stack also with one that doesn't, and every command was decided once.
 A caller that catches the failure and lets its scope complete may keep the append, and I didn't run that. In the last

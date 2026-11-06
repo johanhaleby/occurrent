@@ -73,8 +73,8 @@ public interface TransactionExecutor {
      * opened and open its own, which that inference reports as joining. See ADR 165.
      * <p>
      * When this tells the action it opened the transaction, a DCB application service reads as the first operation of
-     * that transaction and lets the event store report marker versions for the read, which a snapshot decider saves its
-     * snapshot at. So make no DCB write in the transaction before you run the action. See ADR 167.
+     * that transaction and lets the event store report marker versions for the read. So make no DCB write in the
+     * transaction before you run the action. See ADR 167.
      *
      * @param action The unit of work to run, given {@code true} if this call opened the transaction it runs in.
      * @param <T>    The result type produced by the action.

@@ -437,12 +437,16 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Test
-        void a_command_that_asks_for_no_marker_versions_never_reads_as_the_first_operation_of_a_transaction() {
+        @SuppressWarnings("removal")
+        void a_read_after_a_position_reaches_the_store_from_the_executor_without_either_mark() {
             var store = new TracingStore(trace);
 
-            transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, events -> decide());
+            Throwable thrown = catchThrowable(() -> transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromPosition(7L), events -> decide()));
 
-            assertThat(store.readOptions).as("[read options]").noneMatch(options -> options.map(DcbReadOptions::firstOperationOfTransaction).orElse(false));
+            assertAll(
+                    () -> assertThat(thrown).as("[thrown]").isNull(),
+                    () -> assertThat(store.readOptions).as("[read options]").containsExactly(Optional.of(DcbReadOptions.afterPosition(7L)))
+            );
         }
 
         @Test

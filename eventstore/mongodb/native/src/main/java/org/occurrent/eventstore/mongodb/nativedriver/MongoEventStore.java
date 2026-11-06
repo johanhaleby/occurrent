@@ -101,7 +101,8 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWith
  * A DCB read that asks for marker versions runs in a read-only snapshot transaction of its own, bounded by
  * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a session the caller bound with
  * {@link ClientSessionHolder} it reports no marker versions, since that transaction's writes may still abort, and a read
- * after marker versions is refused. The store answers {@link DcbAppendConfirmation} with a majority read on the
+ * after marker versions is refused, unless {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} says the read is the transaction's first operation and the store
+ * runs on a replica set. Then it reads the versions in that transaction. The store answers {@link DcbAppendConfirmation} with a majority read on the
  * primary that joins no session.
  */
 @NullMarked

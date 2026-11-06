@@ -630,8 +630,8 @@ Replacing an event document isn't supported, and no setting turns this off. A st
 Three things break, and two of them are compile errors.
 
 - A record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions` with the old number of components stops
-  compiling. `UpgradeToOccurrent_0_35` adds `var markerVersions` to the first two, and `var versionsRequested` and
-  `var afterVersions` to the third.
+  compiling. `UpgradeToOccurrent_0_35` adds `var markerVersions` to the first two, and `var versionsRequested`,
+  `var afterVersions`, `var confirmsAppendBeforeSaving` and `var firstOperationOfTransaction` to the third.
 - `DcbEventStream(List, long)` is removed, so a store or a test double that builds a stream with it stops compiling.
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with)
   says what to call instead.
@@ -966,10 +966,11 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   is the first operation of that transaction, and a MongoDB store on a replica set reads the marker versions in it, so
   a decider there saves snapshots.
 - On a Spring executor that opens no transaction, outside a Spring transaction scope of yours, a Spring MongoDB store
-  reads them in the session transaction its read binds. The decider's append joins that transaction, so a failing
+  on a replica set reads them in the session transaction its read binds. The decider's append joins that transaction, so a failing
   handler undoes the append.
-- In a Spring scope of yours on `PROPAGATION_SUPPORTS` with no transaction, that session transaction commits when your
-  scope ends, after `execute` returns, so a decider there saves no snapshot.
+- In a Spring scope of yours with no transaction, on an executor that opens none, that session transaction commits
+  when your scope ends, after `execute` returns, so a decider there saves no snapshot. When a session is already bound
+  there, the store reads through it and reports no versions, since its writes may still abort.
 - `DcbReadOptions.confirmingAppendBeforeSaving()` and `asFirstOperationOfTransaction()` say something about the caller
   that the store can't check. Set them on a read of your own only when you keep the contract their javadoc states.
 - In a transaction you own, on a blocking service, an exception from your domain function no longer marks that
@@ -1057,8 +1058,8 @@ subscriptions behaves as before.
   With `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring
   MongoDB stores a write to a stream often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or
   `PROPAGATION_NEVER`, and there a retry that used to work is gone. When `execute` runs outside every Spring transaction
-  scope of yours, a DCB append on `PROPAGATION_NOT_SUPPORTED` rolls back as a write to a stream does, a snapshot
-  decider's included. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`, which opens
+  scope of yours, a DCB append on `PROPAGATION_NOT_SUPPORTED` rolls back as a write to a stream does, and on a
+  replica set a snapshot decider's does too. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`, which opens
   no transaction, the append of a plain `execute` rolls back too when you don't catch the failure inside that scope.
   [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,

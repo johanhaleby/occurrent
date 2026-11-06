@@ -21,7 +21,8 @@ description: >-
   DcbAppendResult, DcbEventStream, DcbReadOptions and the snapshot DSL's Snapshot canonical constructors grew
   components for marker versions (ADR 148), so a record pattern naming only the original components stops compiling. Rewrites a
   four-binding DcbAppendResult pattern and a three-binding DcbEventStream pattern by appending var markerVersions,
-  a four-binding DcbReadOptions pattern by appending var versionsRequested and var afterVersions, and a
+  a four-binding DcbReadOptions pattern by appending var versionsRequested, var afterVersions,
+  var confirmsAppendBeforeSaving and var firstOperationOfTransaction, and a
   three-binding Snapshot pattern by appending var markerVersions and var highestFoldedPosition, in a switch
   case or an instanceof pattern alike. A pattern of any other arity is left alone. This is unconditional, since a
   record pattern's arity is a compiler-enforced fact rather than a judgement call. See

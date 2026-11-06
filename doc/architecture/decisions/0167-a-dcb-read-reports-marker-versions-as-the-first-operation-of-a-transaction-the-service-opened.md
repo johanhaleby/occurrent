@@ -81,14 +81,15 @@ failing handler couldn't undo it. Now the Spring stores read through the templat
 set, synchronization is active, no transaction is, no session is bound for the store's database factory yet, and the
 store runs on a replica set. The read is then the first operation of the session transaction it binds, and it reports
 versions from it. When a session is already bound, for example in a scope of the caller's that already wrote, the
-store reads on a session of its own as before.
+store reads through that session and reports no versions, as it does inside a transaction. A read on a session of its
+own wouldn't see that session's writes, so an append after it would fail its condition on every attempt.
 
-A read without `confirmsAppendBeforeSaving` keeps ADR 148's path in that scope. That covers the `@Snapshot` view and a
+With no session bound, a read without `confirmsAppendBeforeSaving` keeps ADR 148's path in that scope. That covers the `@Snapshot` view and a
 read of the caller's in a method on `PROPAGATION_SUPPORTS`. Their versions come from a read-only transaction committed
 at majority, and they may save at them. Versions from the session transaction come from a transaction that hasn't
 committed when the read returns, at the session's default read concern.
 
-In a scope of the caller's on `PROPAGATION_SUPPORTS` with no transaction, the executor takes part in that scope's
+In a scope of the caller's with no transaction, an executor that opens none takes part in that scope's
 synchronization, so the session transaction the read binds commits only when the caller's scope ends, after `execute`
 has returned. The confirmation doesn't find the append then, and a snapshot decider there saves no snapshot.
 
@@ -146,7 +147,8 @@ transaction the executor joined.
   the store's own doesn't see. That breaks the option's contract on purpose.
 - Each Spring store gets a test for the scope with synchronization and no transaction. A read with
   `confirmsAppendBeforeSaving` reports versions, and an append after it in the scope is gone when the scope throws. A
-  read without it reports versions too, and the append stays.
+  read without it reports versions too, and the append stays. A second read with it, after an append in the scope, reports
+  no versions, and an append with its token succeeds.
 - `SnapshotDcbDeciderInCallerTransactionTest` and its reactive twin keep the caller's transaction cases. Their case where
   the executor owns the transaction asserts the snapshot is saved with the read in the transaction.
 - One test per gap over a Spring MongoDB store, for a snapshot decider. On the blocking stack a write of the domain
@@ -157,10 +159,10 @@ transaction the executor joined.
 ## Consequences
 
 - A snapshot decider on a service with synchronous subscriptions reads and decides in the executor's transaction, as a
-  plain command does. It still saves snapshots when the executor opened that transaction, and on a Spring executor that
-  opens none outside a scope of the caller's. It pays none of the three costs in the context that a plain command
+  plain command does. On a replica set it still saves snapshots when the executor opened that transaction, and on a
+  Spring executor that opens none outside a scope of the caller's. It pays none of the three costs in the context that a plain command
   doesn't pay.
-- In a scope of the caller's on `PROPAGATION_SUPPORTS` with no transaction, a snapshot decider saves no snapshot.
+- In a scope of the caller's with no transaction, on an executor that opens none, a snapshot decider saves no snapshot.
 - The versions of such a read come from the executor's transaction, not from a read-only transaction committed at
   majority. The bound `markerVersionsCommitTimeout` doesn't apply to it. Whether the save is safe now rests on the
   confirmation, as the save after an append always did.

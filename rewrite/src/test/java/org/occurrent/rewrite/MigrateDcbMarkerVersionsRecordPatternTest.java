@@ -221,7 +221,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
     }
 
     @Test
-    void addsTheVersionsRequestedAndAfterVersionsBindingsInThatOrderToAVarDcbReadOptionsSwitchPattern() {
+    void addsTheFourNewBindingsInThatOrderToAVarDcbReadOptionsSwitchPattern() {
         rewriteRun(
                 java(
                         """
@@ -246,7 +246,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
                         class Reader {
                             String describe(Object options) {
                                 return switch (options) {
-                                    case DcbReadOptions(var positionRange, var direction, var skip, var limit, var versionsRequested, var afterVersions) -> direction + ":" + skip;
+                                    case DcbReadOptions(var positionRange, var direction, var skip, var limit, var versionsRequested, var afterVersions, var confirmsAppendBeforeSaving, var firstOperationOfTransaction) -> direction + ":" + skip;
                                     default -> "unknown";
                                 };
                             }
@@ -257,7 +257,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
     }
 
     @Test
-    void addsTheVersionsRequestedAndAfterVersionsBindingsToAnExplicitlyTypedDcbReadOptionsInstanceofPattern() {
+    void addsTheFourNewBindingsToAnExplicitlyTypedDcbReadOptionsInstanceofPattern() {
         rewriteRun(
                 java(
                         """
@@ -289,7 +289,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
 
                         class Reader {
                             int skipped(Object options) {
-                                if (options instanceof DcbReadOptions(PositionRange positionRange, Direction direction, int skip, OptionalInt limit, var versionsRequested, var afterVersions)) {
+                                if (options instanceof DcbReadOptions(PositionRange positionRange, Direction direction, int skip, OptionalInt limit, var versionsRequested, var afterVersions, var confirmsAppendBeforeSaving, var firstOperationOfTransaction)) {
                                     return skip;
                                 }
                                 return 0;
@@ -487,7 +487,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
                         class Reader {
                             String describe(Object options, boolean versionsRequested) {
                                 String afterVersions = "unrelated";
-                                if (options instanceof DcbReadOptions(var positionRange, var direction, var skip, var limit, var versionsRequested1, var afterVersions1)) {
+                                if (options instanceof DcbReadOptions(var positionRange, var direction, var skip, var limit, var versionsRequested1, var afterVersions1, var confirmsAppendBeforeSaving, var firstOperationOfTransaction)) {
                                     return afterVersions + ":" + versionsRequested + ":" + skip;
                                 }
                                 return afterVersions;
@@ -627,7 +627,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
     }
 
     @Test
-    void leavesADcbReadOptionsPatternWithSixBindingsAlone() {
+    void leavesADcbReadOptionsPatternWithEightBindingsAlone() {
         rewriteRun(
                 java(
                         """
@@ -638,7 +638,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
                         class Reader {
                             String describe(Object options) {
                                 return switch (options) {
-                                    case DcbReadOptions(var positionRange, var direction, var skip, var limit, var versionsRequested, var afterVersions) -> direction + ":" + afterVersions;
+                                    case DcbReadOptions(var positionRange, var direction, var skip, var limit, var versionsRequested, var afterVersions, var confirmsAppendBeforeSaving, var firstOperationOfTransaction) -> direction + ":" + afterVersions;
                                     default -> "unknown";
                                 };
                             }
@@ -802,7 +802,7 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
 
                         class Reader {
                             boolean matches(Object options) {
-                                return options instanceof DcbReadOptions(var range, var direction, var skip, var limit, var versionsRequested, var afterVersions);
+                                return options instanceof DcbReadOptions(var range, var direction, var skip, var limit, var versionsRequested, var afterVersions, var confirmsAppendBeforeSaving, var firstOperationOfTransaction);
                             }
                         }
                         """,
@@ -810,6 +810,8 @@ class MigrateDcbMarkerVersionsRecordPatternTest implements RewriteTest {
                             assertThat(bindingTypes(cu, "versionsRequested")).containsExactly("boolean");
                             assertThat(bindingTypes(cu, "afterVersions"))
                                     .containsExactly("java.util.Optional<org.occurrent.eventstore.api.dcb.DcbMarkerVersions>");
+                            assertThat(bindingTypes(cu, "confirmsAppendBeforeSaving")).containsExactly("boolean");
+                            assertThat(bindingTypes(cu, "firstOperationOfTransaction")).containsExactly("boolean");
                         })
                 )
         );
