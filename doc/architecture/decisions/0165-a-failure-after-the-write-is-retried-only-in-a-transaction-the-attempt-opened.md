@@ -63,8 +63,6 @@ transaction undoes the write. Otherwise the retry strategy doesn't run the comma
   exception an executor attached to a wrapper of the stand-in.
 - **`NativeMongoTransactionExecutor`.** `isTransactional()` now answers whether the session bound to the thread has a
   transaction in force instead of always `true`, so the service can tell a transaction it would open from one it would join.
-  With no session bound it also lets a DCB service with synchronous subscriptions read and decide before it, since its
-  `allowsReadBeforeTransaction()` answers `true` then, as [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) describes.
 - **Which handlers get the event when one fails.** The dispatch stops at the first failing handler only when the write
   can't commit after the failure, that is when the attempt opened the transaction, or when it joined one and
   `rollsBackAJoinedTransactionOnFailure()` answers `true`. That's a new default method on `TransactionExecutor` and
@@ -88,9 +86,7 @@ lost a retry that was safe.
 **Ask the store whether the write survived.** A prototype that called `isConfirmed` after the failure got the retry back
 on `PROPAGATION_NOT_SUPPORTED`, `SUPPORTS` and `NEVER`, on the DCB service only, since the stream service has no such
 call. A read that fails answers `false` too, so it would run a command again whose write is stored. I didn't run that
-case or the native store. Since then a DCB append on those propagations stays when `execute` runs outside every Spring
-transaction scope, on the reactive service and on the blocking one for a command that asks for marker versions, as the
-table below shows, so for those the DCB service no longer has a rolled-back write there to retry.
+case or the native store.
 
 **Hold the failure inside the executor and return normally.** It keeps the code in one place, but the executor then sees
 success. An executor that opens a transaction and doesn't override `isTransactional()`, which answers `false` by default,
@@ -137,22 +133,15 @@ that matches the failure, on both stacks unless a row says otherwise. Every Spri
 | `NativeMongoTransactionExecutor` | the caller's | catches it and commits | the commit succeeds | 1 |
 | Spring, `REQUIRES_NEW` | the caller's | | the command runs again, no exception | 1 |
 | Spring, `REQUIRED` | the caller's, on another transaction manager | | the command runs again, no exception | 1 |
-| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, in a Spring scope of the caller's on `NOT_SUPPORTED` or `SUPPORTS` | doesn't catch it | gets the failure | 0, and can be 1 for a snapshot decider |
+| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, in a Spring scope of the caller's on `NOT_SUPPORTED` or `SUPPORTS` | doesn't catch it | gets the failure | 0 for a plain `execute` |
 | Spring, `NOT_SUPPORTED` | the caller's | catches it and commits | the commit succeeds | 0 |
-| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, and no Spring scope | | gets the failure | 0 on a stream, 1 on a DCB boundary, 0 there on `NOT_SUPPORTED` for a blocking command that asks for no marker versions |
+| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, and no Spring scope | | gets the failure | 0 on a stream, and 0 on a DCB boundary on `NOT_SUPPORTED` |
 
 The Spring MongoDB stores set `SessionSynchronization.ALWAYS` themselves, so with no transaction reported the store
-still writes to a stream in a synchronization-based transaction that rolls back. In the last row a DCB append stays on
-the reactive stack, and on the blocking stack for a command that asks for marker versions. Outside every Spring scope
-the Spring executors allow a read before them, so the DCB service reads such a command before its executor, and the store reserves positions outside every transaction, so nothing binds a session before the append
-and the store commits it in a transaction of its own. I ran that after merging main at 4485a0462, and before that merge
-the append rolled back too. A blocking command that asks for no marker versions reads in the executor as in 0.34.0, so
-its append in the last row rolls back as a write to a stream does, which I ran on `NOT_SUPPORTED`. In a Spring scope of the caller's that opens no transaction, the Spring executors don't
-allow a read before them, so the DCB service reads in the executor as in 0.34.0, and the append of a plain `execute`
-rolls back as a write to a stream does. A read that asks for versions, as a snapshot decider's does, runs on a session
-of the store's own and binds nothing, and its append stays as in the last row, unless the store answers it without
-versions. It does that when `resumeFromMarkerVersions` is off, when the criteria matches every event, or after the read
-of the versions failed, and that read binds a session as a plain `execute`'s does. I ran that row on both stacks with a retry strategy that
+still writes to a stream in a synchronization-based transaction that rolls back. In the last row a DCB append rolls back as a write to a stream does, which I ran on `NOT_SUPPORTED` on both stacks,
+for a plain command and for a snapshot decider. The service reads in the executor, and the read binds a session to the
+synchronization, which the append joins. [ADR 167](0167-a-dcb-read-reports-marker-versions-as-the-first-operation-of-a-transaction-the-service-opened.md) says how a read that asks for versions does that. In a Spring scope of
+the caller's that opens no transaction, the append of a plain `execute` rolls back the same way. I ran that row on both stacks with a retry strategy that
 matches the handler's failure, and on the blocking stack also with one that doesn't, and every command was decided once.
 A caller that catches the failure and lets its scope complete may keep the append, and I didn't run that. In the last
 two rows, over a stream, a strategy that matched the failure used to run the command again and store one event with no

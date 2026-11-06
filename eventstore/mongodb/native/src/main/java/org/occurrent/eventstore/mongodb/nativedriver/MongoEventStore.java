@@ -438,9 +438,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // versions. ADR 148 and ADR 149 say what a read after them can still miss. This runs in a read-only snapshot
     // transaction of the store's own, never with the transaction options configured for writes, and commits it once by
     // hand. The majority commit makes sure the snapshot was majority-committed. Inside a caller's session it reports no
-    // versions, since the session's own increments may still abort and a later append would reuse them. A failure
-    // reports no versions instead of failing the read. A read after versions can't fall back to a full read without
-    // double-applying events, so it is refused in both cases.
+    // versions, since the session's own increments may still abort and a later append would reuse them, unless the
+    // caller says the read is the first operation of the session's transaction and the store runs on a replica set. Then
+    // it reads in that transaction, and a failure fails the read so the transaction's owner can retry. A failure outside a
+    // session reports no versions instead of failing the read. A read after versions can't fall back to a full read
+    // without double-applying events, so it is refused in both cases.
     private DcbEventStream readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         if (!resumeFromMarkerVersions) {
@@ -456,6 +458,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         ClientSession ambientSession = ClientSessionHolder.get();
         if (ambientSession != null) {
+            if (options.firstOperationOfTransaction() && runsOnReplicaSet && ambientSession.hasActiveTransaction()) {
+                return readMarkerVersionsInSession(ambientSession, criteria, options);
+            }
             return markerVersionsUnavailable(criteria, options, "The read runs inside a session or transaction the caller owns, whose writes may still abort", null);
         }
 

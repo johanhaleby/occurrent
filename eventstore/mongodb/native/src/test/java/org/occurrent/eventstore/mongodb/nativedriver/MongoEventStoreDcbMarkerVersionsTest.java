@@ -61,6 +61,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static com.mongodb.client.model.Filters.eq;
@@ -443,6 +444,35 @@ class MongoEventStoreDcbMarkerVersionsTest {
         inCallerTransaction(() -> result[0] = eventStore.append(List.of(taggedEvent("own", DEPOSITED, ACCOUNT_A))));
 
         assertThat(eventStore.isConfirmed(result[0])).isFalse();
+    }
+
+    @Test
+    void reports_marker_versions_for_a_read_that_is_the_first_operation_of_a_transaction_the_caller_opened_and_resumes_from_them_later() {
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
+        AtomicReference<DcbEventStream> read = new AtomicReference<>();
+
+        inCallerTransaction(() -> read.set(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().asFirstOperationOfTransaction())));
+
+        assertThat(read.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(read.get().markerVersions()).as("the versions of a read that is the first operation of the transaction").isPresent();
+        eventStore.append(List.of(taggedEvent("later", DEPOSITED, ACCOUNT_A)));
+        assertThat(eventStore.read(BOUNDARY_A, DcbReadOptions.afterVersions(read.get().markerVersions().orElseThrow())).events())
+                .extracting(CloudEvent::getId).containsExactly("later");
+    }
+
+    @Test
+    void counts_the_uncommitted_append_of_the_transaction_for_a_read_that_says_it_is_the_first_operation_of_it_although_an_append_came_first() {
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
+
+        inCallerTransaction(() -> {
+            eventStore.read(BOUNDARY_A);
+            eventStore.append(List.of(taggedEvent("own", DEPOSITED, ACCOUNT_A)));
+
+            DcbEventStream read = eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().asFirstOperationOfTransaction());
+
+            assertThat(read.markerVersions()).as("the store reports versions from the transaction the caller opened").isPresent();
+            assertThat(read.markerVersions().orElseThrow().get(KEY_A).orElseThrow().version()).as("the read runs in the transaction and not on a session of its own, so it counts the increment of the append").isEqualTo(2);
+        });
     }
 
     @Test

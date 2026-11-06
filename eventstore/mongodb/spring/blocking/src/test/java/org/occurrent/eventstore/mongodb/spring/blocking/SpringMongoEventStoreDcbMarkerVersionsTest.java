@@ -53,6 +53,7 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -66,6 +67,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static com.mongodb.client.model.Filters.eq;
@@ -451,6 +453,65 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
+    void reports_marker_versions_for_a_read_that_is_the_first_operation_of_a_transaction_the_caller_opened_and_resumes_from_them_later() {
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
+        AtomicReference<DcbEventStream> read = new AtomicReference<>();
+
+        inCallerTransaction(() -> read.set(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().asFirstOperationOfTransaction())));
+
+        assertThat(read.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(read.get().markerVersions()).as("the versions of a read that is the first operation of the transaction").isPresent();
+        eventStore.append(List.of(taggedEvent("later", DEPOSITED, ACCOUNT_A)));
+        assertThat(eventStore.read(BOUNDARY_A, DcbReadOptions.afterVersions(read.get().markerVersions().orElseThrow())).events())
+                .extracting(CloudEvent::getId).containsExactly("later");
+    }
+
+    @Test
+    void counts_the_uncommitted_append_of_the_transaction_for_a_read_that_says_it_is_the_first_operation_of_it_although_an_append_came_first() {
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
+
+        inCallerTransaction(() -> {
+            eventStore.read(BOUNDARY_A);
+            eventStore.append(List.of(taggedEvent("own", DEPOSITED, ACCOUNT_A)));
+
+            DcbEventStream read = eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().asFirstOperationOfTransaction());
+
+            assertThat(read.markerVersions()).as("the store reports versions from the transaction the caller opened").isPresent();
+            assertThat(read.markerVersions().orElseThrow().get(KEY_A).orElseThrow().version()).as("the read runs in the transaction and not on a session of its own, so it counts the increment of the append").isEqualTo(2);
+        });
+    }
+
+    @Test
+    void reports_marker_versions_for_a_read_that_confirms_an_append_before_saving_in_a_scope_without_a_transaction_and_rolls_back_an_append_in_the_scope() {
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
+        AtomicReference<DcbEventStream> read = new AtomicReference<>();
+
+        assertThat(catchThrowable(() -> inScopeWithoutTransaction(() -> {
+            read.set(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving()));
+            eventStore.append(List.of(taggedEvent("own", DEPOSITED, ACCOUNT_A)));
+            throw new IllegalStateException("scope fails after the append");
+        }))).hasMessage("scope fails after the append");
+
+        assertThat(read.get().markerVersions()).isPresent();
+        assertThat(eventStore.read(BOUNDARY_A).events()).as("the append joined the session transaction the read bound, which rolled back").extracting(CloudEvent::getId).containsExactly("before");
+    }
+
+    @Test
+    void reports_marker_versions_for_a_read_without_the_confirmation_in_a_scope_without_a_transaction_and_commits_an_append_in_the_scope_on_its_own() {
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
+        AtomicReference<DcbEventStream> read = new AtomicReference<>();
+
+        assertThat(catchThrowable(() -> inScopeWithoutTransaction(() -> {
+            read.set(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()));
+            eventStore.append(List.of(taggedEvent("own", DEPOSITED, ACCOUNT_A)));
+            throw new IllegalStateException("scope fails after the append");
+        }))).hasMessage("scope fails after the append");
+
+        assertThat(read.get().markerVersions()).isPresent();
+        assertThat(eventStore.read(BOUNDARY_A).events()).extracting(CloudEvent::getId).containsExactly("before", "own");
+    }
+
+    @Test
     void adds_no_marker_versions_extension_to_the_events_a_stream_read_and_a_query_return() {
         eventStore.append(List.of(taggedEvent("a", DEPOSITED, ACCOUNT_A)));
         Document stored = rawEvent("a");
@@ -460,6 +521,12 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
 
         assertThat(queried).hasSize(1);
         assertThat(queried.getFirst().getExtensionNames()).doesNotContain(EVENT_MARKER_VERSIONS);
+    }
+
+    private void inScopeWithoutTransaction(Runnable body) {
+        TransactionTemplate supports = new TransactionTemplate(transactionManager);
+        supports.setPropagationBehavior(TransactionDefinition.PROPAGATION_SUPPORTS);
+        supports.executeWithoutResult(status -> body.run());
     }
 
     private void inCallerTransaction(Runnable body) {

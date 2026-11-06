@@ -22,6 +22,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import org.bson.Document;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -103,9 +104,11 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
     private static final String ACCOUNT = "acct";
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
 
+    // enableTestCommands lets the server accept configureFailPoint. withCommand replaces the whole command line, so the
+    // replica set name ReplicaSetReadyMongoDBContainer configures is repeated.
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withCommand("--replSet", "docker-rs", "--setParameter", "enableTestCommands=1");
 
     @RegisterExtension
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
@@ -149,7 +152,8 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
     }
 
     @AfterEach
-    void close_client() {
+    void switch_off_fail_point_and_close_client() {
+        configureFailPoint(new Document("mode", "off"));
         mongoClient.close();
     }
 
@@ -315,6 +319,39 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
         };
     }
 
+    @Test
+    void a_transient_failure_of_the_first_read_is_retried_by_the_executor_and_the_command_succeeds() {
+        appendSeed();
+        configureFailPoint(new Document("mode", new Document("times", 1))
+                .append("data", new Document("failCommands", List.of("find", "aggregate"))
+                        .append("errorCode", 112)
+                        .append("errorLabels", List.of("TransientTransactionError"))));
+
+        Throwable thrown = catchThrowable(() -> service.execute(new Add("first"), decider).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what execute threw").isNull(),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored").hasSize(2),
+                () -> assertThat(seenBySubscription).as("events the subscription saw").hasSize(1),
+                () -> assertThat(snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria())).block(TIMEOUT)).as("the snapshot saved, which needs the retried read to report versions").isNotNull()
+        );
+    }
+
+    @Test
+    void a_synchronous_handler_that_fails_after_the_append_undoes_it_on_an_executor_that_opens_no_transaction() {
+        appendSeed();
+        IllegalStateException failure = new IllegalStateException("from the handler");
+        subscriptions.subscribe("failing", event -> Mono.error(failure));
+        ReactiveSnapshotDcbDeciderApplicationService<DomainEvent> notSupportingTransactions = new ReactiveSnapshotDcbDeciderApplicationService<>(applicationServiceOnPropagation(TransactionDefinition.PROPAGATION_NOT_SUPPORTED));
+
+        Throwable thrown = catchThrowable(() -> notSupportingTransactions.execute(new Add("first"), decider).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what execute threw").isSameAs(failure),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored").hasSize(1)
+        );
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("failuresFromTheDomainFunction")
     void the_callers_transaction_commits_when_it_handles_a_failure_from_the_domain_function(Throwable failure) {
@@ -352,6 +389,12 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
             eventsSeen.add(events.size());
             return List.of(nameWasChanged(name));
         };
+    }
+
+    private void configureFailPoint(Document configuration) {
+        Document command = new Document("configureFailPoint", "failCommand");
+        command.putAll(configuration);
+        Mono.from(mongoClient.getDatabase("admin").runCommand(command)).block(TIMEOUT);
     }
 
     private GenericDcbApplicationService<DomainEvent> applicationServiceOnPropagation(int propagationBehavior) {

@@ -140,7 +140,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
         return Mono.defer(() -> {
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
-            Mono<Decision<E>> readAndDecide = Mono.defer(() -> readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions))
+            // Given true only when the executor opened the transaction the read runs in and the read is its first operation
+            Function<Boolean, Mono<Decision<E>>> readAndDecide = firstOperationOfTransaction -> Mono.defer(() -> readOptions == null
+                            ? eventStore.read(criteria)
+                            : eventStore.read(criteria, dispatchSynchronously ? inExecutor(readOptions, firstOperationOfTransaction) : readOptions))
                     .doOnNext(eventStream -> refuseEventBelowFoldedPosition(criteria, options, eventStream))
                     .onErrorMap(DcbSnapshotInvalidException.class, refused -> refused.beforeAppend(functionThatCallsDomainModel))
                     .flatMap(eventStream -> {
@@ -170,24 +173,15 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 return appended.map(appendResult -> new Result<>(withCheckedVersions(appendResult, versionsRequested, decision.eventStream()), decision.newDomainEvents()));
             });
 
-            Mono<Result<E>> attempt = readsInTransaction(dispatchSynchronously).flatMap(readInside -> {
-                if (readInside) {
-                    // The executor can leave the transaction that's open here for the append, so a read here could miss what the
-                    // append's condition sees and fail on every attempt. The read and the decision go in the executor too, and
-                    // that costs nothing, since a store already reports no marker versions in the open transaction.
-                    // An executor that doesn't allow a read before it gets the read here too, for example under a caller's scope
-                    // that has synchronization but no transaction, where a read would bind a session the executor then fails on.
-                    return transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> Mono.defer(() -> failureAfterWrite.isHeld()
+            // With synchronous subscriptions the read and the decision run in the executor, as in 0.34.0. Without them there's no
+            // transaction executor to open, and the append keeps its prior semantics. The append's condition holds the read's
+            // token, and a failed condition goes to the retry around this, which can read and decide again.
+            Mono<Result<E>> attempt = dispatchSynchronously
+                    ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> Mono.defer(() -> failureAfterWrite.isHeld()
                             // Before the read, so a run after the stand-in doesn't run the domain function again
                             ? Mono.<Result<E>>empty()
-                            : readAndDecide.flatMap(decision -> appendAndDispatch.apply(decision, openedTransaction))));
-                }
-                // The read and the decision run outside the transaction, since a store reports no marker versions inside one. The
-                // append's condition holds this read's token, and a failed condition goes to the retry around this, which can read
-                // and decide again. Enter the transaction executor only when synchronous dispatch must commit atomically with the
-                // append. Otherwise the append keeps exactly its prior semantics and no transaction overhead is added.
-                return readAndDecide.flatMap(decision -> dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> appendAndDispatch.apply(decision, openedTransaction)) : appendAndDispatch.apply(decision, false));
-            });
+                            : readAndDecide.apply(openedTransaction).flatMap(decision -> appendAndDispatch.apply(decision, openedTransaction))))
+                    : readAndDecide.apply(false).flatMap(decision -> appendAndDispatch.apply(decision, false));
             // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
             return attempt.onErrorResume(failureAfterWrite::isHeldAfter, failure -> Mono.empty())
                     .retryWhen(retry)
@@ -207,13 +201,6 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         return dispatchSynchronously ? transactionExecutor.isTransactional().defaultIfEmpty(false) : Mono.just(false);
     }
 
-    private Mono<Boolean> readsInTransaction(boolean dispatchSynchronously) {
-        return dispatchSynchronously
-                ? Mono.zip(transactionExecutor.isTransactional().defaultIfEmpty(false), transactionExecutor.allowsReadBeforeTransaction().defaultIfEmpty(false),
-                (transactionOpen, readBeforeAllowed) -> transactionOpen || !readBeforeAllowed)
-                : Mono.just(false);
-    }
-
     @Override
     public Mono<Boolean> isAppendConfirmed(DcbAppendResult appendResult) {
         Objects.requireNonNull(appendResult, "appendResult cannot be null");
@@ -228,6 +215,15 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     @SuppressWarnings("removal")
+    // A read in the executor tells the store that a caller saves at versions only after confirming an append, and whether
+    // the read is the first operation of a transaction the executor opened
+    private static DcbReadOptions inExecutor(DcbReadOptions readOptions, boolean firstOperationOfTransaction) {
+        if (!readOptions.versionsRequested()) {
+            return readOptions;
+        }
+        return firstOperationOfTransaction ? readOptions.asFirstOperationOfTransaction() : readOptions.confirmingAppendBeforeSaving();
+    }
+
     private static @Nullable DcbReadOptions readOptions(DcbExecuteOptions<?> options) {
         @Nullable Long fromPosition = options.fromPosition();
         @Nullable DcbMarkerVersions fromVersions = options.fromVersions();

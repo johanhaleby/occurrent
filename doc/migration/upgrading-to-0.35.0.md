@@ -961,33 +961,19 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - Inside a transaction of yours a read reports no versions, so a decider that runs in one reads the whole
   boundary and saves no snapshot. This is a known limitation, tracked in
   [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
-- A DCB application service with synchronous subscriptions on `noTransaction()` or a Spring executor now reads and
-  decides before it enters its transaction executor's transaction when `execute` runs outside every Spring transaction
-  scope of yours, so a decider on it saves snapshots. On the blocking service only a command that asks for marker
-  versions does, and any other command reads and decides inside the executor, as in 0.34.0. On
-  `NativeMongoTransactionExecutor` it does so when no
-  `ClientSession` is bound on the thread, by the executor or by you through `ClientSessionHolder.set`. Only the append,
-  the re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
-  write your domain function makes is no longer part of it. The executor's conflict retry re-runs the append, the re-read
-  and the dispatch, with the token of the read the decision was made on, and not the read or your domain function. A
-  handler can run again on such a retry when a transaction rolled the earlier attempt back, as it could before. When the condition then fails, the service's retry strategy
-  by default reads and decides again. By default the service allows 5 attempts and the Spring executors 240 on the
-  blocking stack and 321 on the reactive one, and `NativeMongoTransactionExecutor` retries for up to 120 seconds, the
-  limit of the driver's `withTransaction`, so a command on a contended boundary can fail sooner, with the same
-  budget a service without synchronous subscriptions has.
-- The executor's conflict retry no longer covers that read. A transient failure of the read, such as a
-  `QueryTimeoutException`, fails the command unless your retry strategy retries it. If you relied on that retry, add it to what you
-  pass to `retryStrategy` on the blocking builder or `retry` on the reactive builder.
-- In a Spring scope of yours that opens no transaction, on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`, the
-  service reads and decides in the executor, as in 0.34.0.
-- An executor of your own keeps the read and the decision in its transaction, as in 0.34.0, since
-  `allowsReadBeforeTransaction()` answers `false` by default. A decider on it saves no snapshot when that transaction is
-  open. If your executor still works after a read that ran before `inTransaction` on the same thread, override the
-  method to answer `true`. The service reads before the executor only while the executor's `isTransactional()` answers `false`.
-- In a transaction you own, the service still reads and decides in the executor, so what such a command sees doesn't
-  change, also on `PROPAGATION_REQUIRES_NEW` and `PROPAGATION_NOT_SUPPORTED`. On a blocking service an exception from
-  your domain function no longer marks that transaction rollback-only when the executor joins it and its
-  `isTransactional()` answers `true` there.
+- A DCB application service with synchronous subscriptions reads and decides inside its transaction executor, as in
+  0.34.0. When the executor opens the transaction, the service tells the store through `DcbReadOptions` that its read
+  is the first operation of that transaction, and a MongoDB store on a replica set reads the marker versions in it, so
+  a decider there saves snapshots.
+- On a Spring executor that opens no transaction, outside a Spring transaction scope of yours, a Spring MongoDB store
+  reads them in the session transaction its read binds. The decider's append joins that transaction, so a failing
+  handler undoes the append.
+- In a Spring scope of yours on `PROPAGATION_SUPPORTS` with no transaction, that session transaction commits when your
+  scope ends, after `execute` returns, so a decider there saves no snapshot.
+- `DcbReadOptions.confirmingAppendBeforeSaving()` and `asFirstOperationOfTransaction()` say something about the caller
+  that the store can't check. Set them on a read of your own only when you keep the contract their javadoc states.
+- In a transaction you own, on a blocking service, an exception from your domain function no longer marks that
+  transaction rollback-only when the executor joins it and its `isTransactional()` answers `true` there.
 
 ### Stored snapshots
 
@@ -1071,12 +1057,9 @@ subscriptions behaves as before.
   With `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring
   MongoDB stores a write to a stream often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or
   `PROPAGATION_NEVER`, and there a retry that used to work is gone. When `execute` runs outside every Spring transaction
-  scope of yours, a DCB append on those three propagations stays on the reactive service, and on the blocking service
-  for a command that asks for marker versions, as a snapshot decider's does. On `PROPAGATION_NOT_SUPPORTED` the append of any other
-  `execute` on the blocking service rolls back as a write to a stream does. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or
-  `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, the append of a plain `execute` rolls back too when you don't
-  catch the failure inside that scope. A snapshot decider's append can stay there, unless `resumeFromMarkerVersions` is
-  off on the store, the criteria matches every event (`DcbCriteria.all()`), or the read of the versions failed.
+  scope of yours, a DCB append on `PROPAGATION_NOT_SUPPORTED` rolls back as a write to a stream does, a snapshot
+  decider's included. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`, which opens
+  no transaction, the append of a plain `execute` rolls back too when you don't catch the failure inside that scope.
   [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
   so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open

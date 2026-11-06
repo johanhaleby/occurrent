@@ -150,10 +150,15 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
 
-        Supplier<Optional<Decision<E>>> readAndDecide = () -> {
+        // Given true only when the executor opened the transaction the read runs in and the read is its first operation
+        Function<Boolean, Optional<Decision<E>>> readAndDecide = firstOperationOfTransaction -> {
             final DcbEventStream eventStream;
             try {
-                eventStream = readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions);
+                if (readOptions == null) {
+                    eventStream = eventStore.read(criteria);
+                } else {
+                    eventStream = eventStore.read(criteria, dispatchSynchronously ? inExecutor(readOptions, firstOperationOfTransaction) : readOptions);
+                }
                 refuseEventBelowFoldedPosition(criteria, options, eventStream);
             } catch (DcbSnapshotInvalidException refused) {
                 throw refused.beforeAppend(functionThatCallsDomainModel);
@@ -197,7 +202,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 return new Attempt<>(Optional.empty(), List.of());
             }
             try {
-                if (dispatchSynchronously && (!versionsRequested || transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
+                if (dispatchSynchronously) {
                     // A failure of the domain function goes through the executor unless the executor reports a transaction both
                     // before and inside the action and didn't open it
                     boolean transactionalBefore = transactionExecutor.isTransactional();
@@ -210,7 +215,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                         failureAfterWrite.keepBeforeWrite(null);
                         final Optional<Decision<E>> decision;
                         try {
-                            decision = readAndDecide.get();
+                            decision = readAndDecide.apply(openedTransaction);
                         } catch (Throwable failure) {
                             // Throwable, since a domain function in Kotlin can throw a checked exception
                             if (openedTransaction || !transactionalBefore || !isTransactionalInside(failure)) {
@@ -224,18 +229,14 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     });
                     return failureAfterWrite.attemptOrFailure(attempt);
                 }
-                // Without synchronous subscriptions every command reads and decides here, and with them a command that asks for
-                // marker versions does, since a store reports none inside a transaction.
-                // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
-                Optional<Decision<E>> decision = readAndDecide.get();
+                // Without synchronous subscriptions there's no transaction executor to open, and the append keeps its prior
+                // semantics. The append's condition holds this read's token, and a failed condition goes to the retry
+                // strategy around this.
+                Optional<Decision<E>> decision = readAndDecide.apply(false);
                 if (decision.isEmpty()) {
                     return new Attempt<>(Optional.empty(), List.of());
                 }
-                // Only open the transaction executor when synchronous dispatch must commit atomically with the append.
-                // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
-                // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
-                // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0074.
-                return failureAfterWrite.attemptOrFailure(dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> appendAndDispatch.apply(decision.get(), openedTransaction)) : appendAndDispatch.apply(decision.get(), false));
+                return failureAfterWrite.attemptOrFailure(appendAndDispatch.apply(decision.get(), false));
             } catch (Throwable thrown) {
                 // The retry gets the failure itself, so its listeners and error mapper see it. When it's held, nothing says a
                 // transaction of this attempt undid the write, and the shutdown predicate stops the retry on it. A failure kept
@@ -280,6 +281,15 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     @SuppressWarnings("removal")
+    // A read in the executor tells the store that a caller saves at versions only after confirming an append, and whether
+    // the read is the first operation of a transaction the executor opened
+    private static DcbReadOptions inExecutor(DcbReadOptions readOptions, boolean firstOperationOfTransaction) {
+        if (!readOptions.versionsRequested()) {
+            return readOptions;
+        }
+        return firstOperationOfTransaction ? readOptions.asFirstOperationOfTransaction() : readOptions.confirmingAppendBeforeSaving();
+    }
+
     private static @Nullable DcbReadOptions readOptions(DcbExecuteOptions<?> options) {
         @Nullable Long fromPosition = options.fromPosition();
         @Nullable DcbMarkerVersions fromVersions = options.fromVersions();
