@@ -972,8 +972,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - In a Spring scope of yours with no transaction, on an executor that opens none, that session transaction commits
   when your scope ends, after `execute` returns, so a decider there saves no snapshot. When a session is already bound
   there, the store reads through it and reports no versions, since its writes may still abort. The session stays
-  bound until your scope ends, as after a plain `execute`, so a method on `PROPAGATION_NEVER` later in that scope
-  fails.
+  bound until your scope ends, as after a plain `execute`, and a `MongoTransactionManager` over the same database
+  counts it as an existing transaction there.
 - A Spring MongoDB store no longer retries a write in a session bound to the synchronization. A conflict fails it at
   once, as in your transaction, instead of a retry in the transaction the conflict aborted.
 - `DcbReadOptions.confirmingAppendBeforeSaving()` and `asFirstOperationOfTransaction()` say something about the caller
