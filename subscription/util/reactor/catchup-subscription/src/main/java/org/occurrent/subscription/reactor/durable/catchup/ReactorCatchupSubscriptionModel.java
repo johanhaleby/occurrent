@@ -67,6 +67,8 @@ import static java.util.Objects.requireNonNull;
 @NullMarked
 public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, ReplayAwareSubscriptions {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ReactorCatchupSubscriptionModel.class);
+
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final @Nullable ReactorStreamCatchupSubscriptionModel streamCatchupSubscriptionModel;
     private final @Nullable ReactorDcbCatchupSubscriptionModel dcbCatchupSubscriptionModel;
@@ -420,10 +422,10 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         try {
             cancelled = route.owner.cancelSubscription(subscriptionId);
         } catch (RuntimeException | Error e) {
-            cancelEnds(subscriptionId, route);
+            cancelEnds(subscriptionId, route, e);
             throw e;
         }
-        Mono<Void> ended = cancelled.doOnSuccess(unused -> cancelEnds(subscriptionId, route)).doOnError(failure -> cancelEnds(subscriptionId, route)).cache();
+        Mono<Void> ended = cancelled.doOnSuccess(unused -> cancelEnds(subscriptionId, route, null)).doOnError(failure -> cancelEnds(subscriptionId, route, failure)).cache();
         // Subscribed here so the route is forgotten even when nothing subscribes to what this returns. The owner logs
         // a cancel that fails.
         ended.subscribe(unused -> {
@@ -438,9 +440,25 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     // Forgets the route once no cancel of it is under way and one of them ended while its owner held nothing of the id.
     // A route whose owner still holds the id is kept, so later calls still reach the owner. The owner is asked outside
-    // the map operation, which runs no code of the wrapped model under a lock of the map.
-    private void cancelEnds(String subscriptionId, Route route) {
-        boolean ended = !namedSupportOf(route.owner).holds(subscriptionId);
+    // the map operation, which runs no code of the wrapped model under a lock of the map. An owner that throws when
+    // asked keeps the route. Its exception is added to failure, what the cancel failed with, or logged when the cancel
+    // completed.
+    private void cancelEnds(String subscriptionId, Route route, @Nullable Throwable failure) {
+        boolean ownerHolds = true;
+        try {
+            ownerHolds = namedSupportOf(route.owner).holds(subscriptionId);
+        } catch (RuntimeException e) {
+            if (failure == null) {
+                log.warn("Could not tell whether the inner model still holds subscription {} once its cancel completed, so a subscribe of the id goes through only once that model can tell it holds nothing.", subscriptionId, e);
+            } else if (failure != e) {
+                failure.addSuppressed(e);
+            }
+        } finally {
+            finishCancel(subscriptionId, route, !ownerHolds);
+        }
+    }
+
+    private void finishCancel(String subscriptionId, Route route, boolean ended) {
         subscriptionOwners.computeIfPresent(subscriptionId, (id, current) -> {
             if (current != route) {
                 return current;

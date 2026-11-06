@@ -45,6 +45,7 @@ import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
+import org.occurrent.subscription.api.reactor.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.reactor.RepositionableSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
@@ -56,6 +57,7 @@ import reactor.test.StepVerifier;
 import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -222,6 +224,43 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         assertAll(
                 () -> assertThat(routed).as("whether the dispatcher keeps a route for the id the wrapped model no longer holds").isFalse(),
                 () -> assertThat(subscribe).as("what a subscribe of the id the wrapped model no longer holds throws").isNull()
+        );
+    }
+
+    @Test
+    void a_cancel_the_wrapped_model_refuses_throws_its_own_exception_and_frees_the_id_when_asking_whether_the_wrapped_model_holds_the_id_throws() {
+        verifiesACancelThatCannotTellWhetherTheIdIsHeldFailsWithItsOwnExceptionAndFreesTheId(true);
+    }
+
+    @Test
+    void a_cancel_whose_mono_from_the_wrapped_model_fails_fails_with_its_own_exception_and_frees_the_id_when_asking_whether_the_wrapped_model_holds_the_id_throws() {
+        verifiesACancelThatCannotTellWhetherTheIdIsHeldFailsWithItsOwnExceptionAndFreesTheId(false);
+    }
+
+    private static void verifiesACancelThatCannotTellWhetherTheIdIsHeldFailsWithItsOwnExceptionAndFreesTheId(boolean refusedOnTheCallingThread) {
+        // Given a replay in flight, and a wrapped model that can't list its subscriptions once its cancel failed
+        HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
+        ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new StalledReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
+        catchup.subscribe("replaying", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), __ -> Mono.empty());
+        IllegalStateException listing = new IllegalStateException("cannot list the subscriptions");
+        wrapped.failsToListItsIdsFromTheNextCancel(listing);
+        IllegalArgumentException refusal = new IllegalArgumentException("refused by the wrapped model");
+        if (refusedOnTheCallingThread) {
+            wrapped.refusesTheCancel(refusal);
+        } else {
+            wrapped.failsTheNextCancel(refusal);
+        }
+
+        // When the replay is cancelled, and a subscribe of the id comes once the wrapped model lists its subscriptions again
+        Throwable cancel = catchThrowable(() -> catchup.cancelSubscription("replaying").block(Duration.ofSeconds(10)));
+        wrapped.listsItsIdsAgain();
+        Throwable subscribe = catchThrowable(() -> catchup.subscribe("replaying", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.now(), __ -> Mono.empty()));
+
+        // Then the cancel fails with what the wrapped model failed it with, and the subscribe goes through
+        assertAll(
+                () -> assertThat(cancel).as("what the cancel throws").isSameAs(refusal),
+                () -> assertThat(cancel == null ? null : cancel.getSuppressed()).as("what the cancel's exception carries").contains(listing),
+                () -> assertThat(subscribe).as("what a subscribe of the id throws once the wrapped model lists its subscriptions again").isNull()
         );
     }
 
@@ -427,7 +466,7 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
     }
 
     // Reports a lost history to its listeners as a model that loses it does, and pauses the subscription when one takes it over
-    private static final class HistoryLosingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
+    private static final class HistoryLosingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions, IntrospectableSubscriptions {
         private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
         private final Set<String> paused = ConcurrentHashMap.newKeySet();
         private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
@@ -436,6 +475,28 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         private volatile boolean dropsTheSubscriptionOnCancel;
         private final AtomicReference<@Nullable HeldSubscribe> nextSubscribeHeld = new AtomicReference<>();
         private final AtomicReference<@Nullable RuntimeException> nextCancelFailure = new AtomicReference<>();
+        private final AtomicReference<@Nullable RuntimeException> listingFailureFromTheNextCancel = new AtomicReference<>();
+        private volatile @Nullable RuntimeException listingFailure;
+
+        // From the next cancel on, subscriptionIds() throws failure until listsItsIdsAgain()
+        void failsToListItsIdsFromTheNextCancel(RuntimeException failure) {
+            listingFailureFromTheNextCancel.set(failure);
+        }
+
+        void listsItsIdsAgain() {
+            listingFailure = null;
+        }
+
+        @Override
+        public Set<String> subscriptionIds() {
+            RuntimeException failure = listingFailure;
+            if (failure != null) {
+                throw failure;
+            }
+            Set<String> ids = new HashSet<>(subscribed);
+            ids.addAll(paused);
+            return ids;
+        }
 
         // The next subscribe waits for the test before it takes the id, as a model does that evaluates a dynamic start
         // on the calling thread
@@ -579,6 +640,10 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
 
         @Override
         public Mono<Void> cancelSubscription(String subscriptionId) {
+            RuntimeException listing = listingFailureFromTheNextCancel.getAndSet(null);
+            if (listing != null) {
+                listingFailure = listing;
+            }
             if (dropsTheSubscriptionOnCancel) {
                 subscribed.remove(subscriptionId);
                 paused.remove(subscriptionId);
