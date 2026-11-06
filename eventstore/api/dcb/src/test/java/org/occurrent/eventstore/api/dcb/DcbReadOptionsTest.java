@@ -173,42 +173,42 @@ class DcbReadOptionsTest {
 
         @Test
         void rejects_an_after_position_bound() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.afterPosition(5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED)))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.afterPosition(5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Reading after marker versions cannot be combined with a position bound");
         }
 
         @Test
         void rejects_an_up_to_position_bound() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.upToPosition(5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED)))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.upToPosition(5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Reading after marker versions cannot be combined with a position bound");
         }
 
         @Test
         void rejects_a_position_range_with_both_bounds() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.between(1, 5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED)))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.between(1, 5), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Reading after marker versions cannot be combined with a position bound");
         }
 
         @Test
         void rejects_an_after_position_bound_of_zero() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.afterPosition(0), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED)))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.afterPosition(0), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.of(SAVED), false))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Reading after marker versions cannot be combined with a position bound");
         }
 
         @Test
         void rejects_not_asking_for_versions() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.fromBeginning(), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), false, Optional.of(SAVED)))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.fromBeginning(), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), false, Optional.of(SAVED), false))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Reading after marker versions requires the read to ask for versions");
         }
 
         @Test
         void rejects_null_after_versions_in_the_canonical_constructor() {
-            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.fromBeginning(), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, null))
+            assertThatThrownBy(() -> new DcbReadOptions(PositionRange.fromBeginning(), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, null, false))
                     .isExactlyInstanceOf(NullPointerException.class)
                     .hasMessage("After versions cannot be null");
         }

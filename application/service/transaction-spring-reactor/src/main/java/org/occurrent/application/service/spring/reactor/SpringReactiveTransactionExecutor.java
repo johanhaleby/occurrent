@@ -294,11 +294,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
     }
 
     /**
-     * Reads the live transaction state rather than emitting {@code true} unconditionally. The DCB application service
-     * asks before it enters this executor, and a {@code true} there makes it read and decide inside this executor. With
-     * no transaction open before the call and the default {@code PROPAGATION_REQUIRED}, that read would run in the
-     * transaction this executor opens, where a store reports no marker versions, so a DCB snapshot decider would save no
-     * snapshot.
+     * Reads the live transaction state rather than emitting {@code true} unconditionally.
      */
     @Override
     public Mono<Boolean> isTransactional() {
@@ -309,22 +305,6 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                 // "no transaction" for a genuine failure.
                 .onErrorResume(throwable -> "NoTransactionInContextException".equals(throwable.getClass().getSimpleName())
                         ? Mono.just(false)
-                        : Mono.error(throwable));
-    }
-
-    /**
-     * {@code false} whenever the subscriber context holds a transaction context, also one with no transaction, such as a
-     * caller's {@code PROPAGATION_SUPPORTS} or {@code PROPAGATION_NOT_SUPPORTED}. A read through Spring's reactive MongoDB
-     * template there binds a session to that context, and a {@code PROPAGATION_NEVER} {@link TransactionalOperator} then
-     * takes the session for an existing transaction.
-     */
-    @Override
-    public Mono<Boolean> allowsReadBeforeTransaction() {
-        return TransactionSynchronizationManager.forCurrentTransaction()
-                .map(transactionContext -> false)
-                // Matched by simple name for the same reason as in isTransactional
-                .onErrorResume(throwable -> "NoTransactionInContextException".equals(throwable.getClass().getSimpleName())
-                        ? Mono.just(true)
                         : Mono.error(throwable));
     }
 
