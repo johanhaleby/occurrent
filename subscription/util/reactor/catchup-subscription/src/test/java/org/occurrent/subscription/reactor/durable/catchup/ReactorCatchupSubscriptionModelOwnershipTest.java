@@ -186,7 +186,7 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
     }
 
     @Test
-    void a_subscribe_after_a_cancel_whose_mono_fails_once_the_wrapped_model_dropped_the_subscription_is_not_refused() {
+    void a_subscribe_after_a_cancel_whose_mono_fails_once_the_wrapped_model_dropped_the_subscription_is_not_refused() throws ReflectiveOperationException {
         HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
         ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
         Subscription replayed = catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), __ -> Mono.empty());
@@ -198,9 +198,31 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("failed by the wrapped model");
 
+        assertThat(routes(catchup, "replayed")).as("whether the dispatcher keeps a route for the id the wrapped model no longer holds").isFalse();
         assertThatCode(() -> catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.now(), __ -> Mono.empty()))
                 .as("a subscribe of the id the wrapped model no longer holds")
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    void a_subscribe_after_a_cancel_the_wrapped_model_refuses_once_it_dropped_the_subscription_is_not_refused() throws ReflectiveOperationException {
+        HistoryLosingSubscriptionModel wrapped = new HistoryLosingSubscriptionModel();
+        ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
+        Subscription replayed = catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), __ -> Mono.empty());
+        StepVerifier.create(replayed.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(10));
+
+        // The wrapped model drops the subscription as it cancels it, and then throws
+        wrapped.dropsTheSubscriptionAndRefusesTheCancel(new IllegalArgumentException("refused by the wrapped model"));
+        assertThatThrownBy(() -> catchup.cancelSubscription("replayed"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("refused by the wrapped model");
+        boolean routed = routes(catchup, "replayed");
+        Throwable subscribe = catchThrowable(() -> catchup.subscribe("replayed", AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.now(), __ -> Mono.empty()));
+
+        assertAll(
+                () -> assertThat(routed).as("whether the dispatcher keeps a route for the id the wrapped model no longer holds").isFalse(),
+                () -> assertThat(subscribe).as("what a subscribe of the id the wrapped model no longer holds throws").isNull()
+        );
     }
 
     @Test
@@ -321,6 +343,13 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         );
     }
 
+    // Whether the dispatcher routes the id to an inner model, which it forgets once a cancel of the id has ended
+    private static boolean routes(ReactorCatchupSubscriptionModel catchup, String subscriptionId) throws ReflectiveOperationException {
+        Field subscriptionOwners = ReactorCatchupSubscriptionModel.class.getDeclaredField("subscriptionOwners");
+        subscriptionOwners.setAccessible(true);
+        return ((Map<?, ?>) subscriptionOwners.get(catchup)).containsKey(subscriptionId);
+    }
+
     private static ReactorCatchupSubscriptionModel dualModeOver(RecordingSubscriptionModel wrapped) {
         return new ReactorCatchupSubscriptionModel(wrapped, new UnusedPositionOrderedReader(), new UnusedDcbEventStore(), DcbCriteria.all(), Filter.all());
     }
@@ -428,6 +457,12 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         // A cancel from here on fails with failure and keeps the subscription
         void failsTheCancel(RuntimeException failure) {
             cancelEnds = Mono.error(failure);
+        }
+
+        // A cancel from here on removes the subscription and then throws refusal
+        void dropsTheSubscriptionAndRefusesTheCancel(RuntimeException refusal) {
+            dropsTheSubscriptionOnCancel = true;
+            cancelRefusal = refusal;
         }
 
         // A cancel from here on removes the subscription before it returns, and its Mono then fails with failure
@@ -544,6 +579,10 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
 
         @Override
         public Mono<Void> cancelSubscription(String subscriptionId) {
+            if (dropsTheSubscriptionOnCancel) {
+                subscribed.remove(subscriptionId);
+                paused.remove(subscriptionId);
+            }
             RuntimeException refusal = cancelRefusal;
             if (refusal != null) {
                 throw refusal;
@@ -551,10 +590,6 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
             RuntimeException failure = nextCancelFailure.getAndSet(null);
             if (failure != null) {
                 return Mono.error(failure);
-            }
-            if (dropsTheSubscriptionOnCancel) {
-                subscribed.remove(subscriptionId);
-                paused.remove(subscriptionId);
             }
             return cancelEnds.then(Mono.fromRunnable(() -> {
                 subscribed.remove(subscriptionId);
