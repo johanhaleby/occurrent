@@ -1636,12 +1636,16 @@ The code compiles unchanged, and there is no OpenRewrite recipe, because no sign
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 
 `ReactorDurableSubscriptionModel` starts a subscription whose `StartAt.dynamic(..)` function answers `StartAt.now()`
-from where the feed was when `subscribe(..)` was called, as `globalCheckpointAsOfNow()` of the wrapped model answers
-it. A read that fails is read again after a delay that about doubles, with a `WARN` for each failure, until it answers
-or a cancel of the id or a `shutdown()` ends the wait. When the read answers nothing, the subscription doesn't start.
-`waitUntilStarted()` of the subscription `subscribe(..)` returned fails with an `IllegalStateException`, and an `ERROR`
-is logged. In 0.34.0 the subscription started from wherever the feed had reached when the wrapped model got it, and
-skipped what was written before that.
+from where the feed was when `subscribe(..)` was called, as `globalCheckpointAsOfNow()` of the wrapped model answers it.
+When the read answers nothing, the subscription doesn't start. `waitUntilStarted()` of the subscription `subscribe(..)`
+returned fails with an `IllegalStateException`, and an `ERROR` is logged. In 0.34.0 the subscription started from
+wherever the feed had reached when the wrapped model got it, and skipped what was written before that.
+
+A read that fails is read again, with a `WARN` for each failed read, and the subscription waits without starting until a
+read answers or a cancel of the id or a `shutdown()` ends the wait. The wait before the next read starts between 100 and
+150 milliseconds and about doubles with each failure, up to 5 seconds, which it can reach from the seventh failure on.
+When `globalCheckpointAsOfNow()` throws instead of returning a `Mono`, nothing is read again, and `waitUntilStarted()`
+fails at once with what it threw.
 
 ### Who is affected
 
