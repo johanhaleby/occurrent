@@ -81,12 +81,21 @@ and stays with the wrapped model. After the takeover the catch-up:
 4. Answers `isRunning(id)` with `true` and `isPaused(id)` with `false` meanwhile, as for any replay in flight, so a
    competing consumer that reads them doesn't see the wrapped model's pause.
 
-The catch-up records that it takes the subscription over when it answers, before the wrapped model pauses it. Between
-that pause and `afterPause`, the subscription reads as paused. A `resumeSubscription(id)` of the catch-up in that time
-runs the takeover's replay itself, instead of resuming the wrapped model at the lost live start, and the
-`afterPause` that follows finds nothing left to do. So does a blocking `start(true)` that finds the takeover recorded.
+The catch-up records that it takes the subscription over when it answers, before the wrapped model pauses it. On the
+blocking stack, between that pause and `afterPause`, the subscription reads as paused. A `resumeSubscription(id)` of the
+blocking catch-up in that time runs the takeover's replay itself, instead of resuming the wrapped model at the lost live
+start, and the `afterPause` that follows finds nothing left to do. So does a blocking `start(true)` that finds the
+takeover recorded.
+
+On the reactor stack the catch-up registers the takeover's replay as in flight when it answers, and answers for the
+subscription as for any replay in flight until that replay hands over. Between the wrapped model's pause and
+`afterPause`, `isRunning(id)` therefore answers `true` and `isPaused(id)` answers `false`, and a
+`resumeSubscription(id)` of the catch-up throws `SubscriptionAlreadyRunningException` instead of resuming the wrapped
+model at the lost live start. A subscription paused or stopped through the catch-up in that time reads as paused
+instead, and a resume runs the takeover's replay.
+
 A blocking `start(true)` that read the subscriptions before the takeover was recorded, and a reactor `start(true)`, can
-resume the wrapped model at the lost live start instead, and the wrapped model loses it again. Once the catch-up has
+still resume the wrapped model at the lost live start, and the wrapped model loses it again. Once the catch-up has
 taken the subscription over, it answers for that live start too, so it takes the new loss over as well, and the wrapped
 model pauses the subscription again. When the takeover's replay is done, its resume at the new live start first pauses
 the subscription if the wrapped model runs it, and tries again when a `start(true)` resumes it before that resume
