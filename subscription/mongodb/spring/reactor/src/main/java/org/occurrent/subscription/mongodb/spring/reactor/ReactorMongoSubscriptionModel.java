@@ -813,8 +813,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * the present or ends it, as {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. The listeners are
      * asked only when there is a checkpoint to name as where the history is lost from. That is the checkpoint the
      * subscription holds, or, while it still holds the position its change stream opened from, the checkpoint the
-     * change stream opened at, so a dynamic position gets them asked too. A change stream opened at the present without
-     * an operation time has no checkpoint, so the listeners aren't asked for it.
+     * change stream opened at, so a dynamic position gets them asked too.
      */
     @Override
     public void addHistoryLossListener(HistoryLossListener listener) {
@@ -1174,8 +1173,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * is closed and no step is under way, and the next run for the subscription reads nothing before that.
      * <p>
      * The monitor of the run is held while {@code open}, {@code stepsUnderWay} and {@code hasEnded} change, and while
-     * {@code move} and {@code compareAndMove} set the position of the subscription. {@code openedAt} is volatile and set
-     * without it, and {@code reads} is a swap that needs none. No code of the caller runs while it's held.
+     * {@code move} and {@code compareAndMove} set the position of the subscription. {@code changeStreamOpened} of the
+     * subscription also holds it from the check that the run is open until it has recorded where the run opened, so a
+     * pause closes the run before that or after it. {@code openedAt} is volatile and set without it, and
+     * {@code reads} is a swap that needs none. No code of the caller runs while it's held.
      */
     static final class Run {
         private final Sinks.Empty<Void> started = Sinks.empty();

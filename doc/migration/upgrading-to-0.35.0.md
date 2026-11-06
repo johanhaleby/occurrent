@@ -1125,7 +1125,7 @@ document with error code 9, 280 or 286, the codes the server rejects a start pos
 pause or another failure opened the change stream again at that position first. After a 9 or a 280 the model opens the
 change stream again, and that opening calls the function again. After a 286 a subscription with an id first asks the
 listeners added with `addHistoryLossListener`, with the checkpoint the change stream opened at. One of them can take the
-subscription over. When one throws, the model logs it and opens again at the position after its backoff, which calls
+subscription over. When one throws, the model logs it and opens the change stream again after its backoff, which calls
 the function again and asks the listeners again if the history is still lost. Otherwise, with
 `restartSubscriptionsOnChangeStreamHistoryLost(true)` the model restarts the subscription at the present without
 calling the function, and with the default the subscription fails. A `Flux` from `subscribeFailingOnHistoryLoss`
