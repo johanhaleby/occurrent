@@ -163,7 +163,8 @@ other sections compile fine and behave differently, so read them first.
   a `@Snapshot` DCB view save at marker versions, and ignore a snapshot 0.34.0 saved at a position. `Snapshot` gains two
   components. **Breaks the build** if you use a record pattern over `Snapshot`. A DCB application service with
   synchronous subscriptions on `noTransaction()` or a Spring executor no longer runs your domain function in its
-  transaction executor's transaction outside a Spring transaction scope of yours.
+  transaction executor's transaction outside a Spring transaction scope of yours. On the blocking service that holds only
+  for a command that asks for marker versions, as a snapshot decider's does.
 - [The reactive `executeAndReturnState` emits a non-null state](#the-reactive-executeandreturnstate-emits-a-non-null-state).
   The emitted state is declared non-null. Breaks the build only for a Kotlin `Mono<State?>` written by hand.
 
@@ -962,14 +963,17 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
 - A DCB application service with synchronous subscriptions on `noTransaction()` or a Spring executor now reads and
   decides before it enters its transaction executor's transaction when `execute` runs outside every Spring transaction
-  scope of yours, so a decider on it saves snapshots. On `NativeMongoTransactionExecutor` it does so when no
+  scope of yours, so a decider on it saves snapshots. On the blocking service only a command that asks for marker
+  versions does, and any other command reads and decides in the executor's transaction, as in 0.34.0. On
+  `NativeMongoTransactionExecutor` it does so when no
   `ClientSession` is bound on the thread, by the executor or by you through `ClientSessionHolder.set`. Only the append,
   the re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
   write your domain function makes is no longer part of it. The executor's conflict retry re-runs the append, the re-read
   and the dispatch, with the token of the read the decision was made on, and not the read or your domain function. A
   handler can run again on such a retry when a transaction rolled the earlier attempt back, as it could before. When the condition then fails, the service's retry strategy
   by default reads and decides again. By default the service allows 5 attempts and the Spring executors 240 on the
-  blocking stack and 321 on the reactive one, so a command on a contended boundary can fail sooner, with the same
+  blocking stack and 321 on the reactive one, and `NativeMongoTransactionExecutor` retries for up to 120 seconds, the
+  limit of the driver's `withTransaction`, so a command on a contended boundary can fail sooner, with the same
   budget a service without synchronous subscriptions has.
 - The executor's conflict retry no longer covers that read. A transient failure of the read, such as a
   `QueryTimeoutException`, fails the command unless your retry strategy retries it. If you relied on that retry, add it to what you
@@ -1067,10 +1071,12 @@ subscriptions behaves as before.
   With `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring
   MongoDB stores a write to a stream often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or
   `PROPAGATION_NEVER`, and there a retry that used to work is gone. When `execute` runs outside every Spring transaction
-  scope of yours, a DCB append on those three propagations stays. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or
-  `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, the append of a plain `execute` rolls back as a write to a
-  stream does when you don't catch the failure inside that scope. A snapshot decider's append
-  can stay there, and ADR 165 says when.
+  scope of yours, a DCB append on those three propagations stays on the reactive service, and on the blocking service
+  for a command that asks for marker versions, as a snapshot decider's does. The append of any other `execute` on the
+  blocking service rolls back as a write to a stream does. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or
+  `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, the append of a plain `execute` rolls back too when you don't
+  catch the failure inside that scope. A snapshot decider's append can stay there, unless `resumeFromMarkerVersions` is
+  off on the store, the criteria matches every event (`DcbCriteria.all()`), or the read of the versions failed.
   [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,
   so `false` until the transaction is open. An executor that answers a fixed `true` counts as joining one. If it can open

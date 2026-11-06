@@ -619,7 +619,8 @@ service dropped the append's versions, and a decider on such a service saved no 
 did save snapshots, at positions, so the fix for #1230 would have made every command on it read its whole boundary.
 
 The service now reads and decides first when the executor allows it, as described below, and only the append, the
-re-read and the dispatch run in the transaction. That is the order the service has without synchronous subscriptions,
+re-read and the dispatch run in the transaction. On the blocking service only a command that asks for marker versions
+does this, as explained after the consequences. That is the order the service has without synchronous subscriptions,
 and these are the consequences:
 
 - The append's condition holds the token of the read, so a transaction around the read adds nothing to the check. A
@@ -641,10 +642,17 @@ and these are the consequences:
 - The executor's conflict retry no longer covers the read, so a transient failure of the read now fails the command
   unless the service's retry strategy retries it, as on a service without synchronous subscriptions. I ran one
   `QueryTimeoutException` from the first read on both stacks. Before this order the command stored its event, and after
-  it the command failed with that exception. I kept this, since the service's retry strategy is where a caller already
-  decides what to retry.
+  it the command failed with that exception. I kept this for a command that asks for marker versions, since the
+  service's retry strategy is where a caller already decides what to retry.
 - This changes one sentence of ADR 74's context, the one saying the service runs the whole read-decide-append through a
   `TransactionExecutor`. ADR 74's decision still holds.
+
+On the blocking service a command that asks for no marker versions reads and decides in the executor's transaction, as
+in 0.34.0, since it has no versions to lose there. Reading first cost such a command two things. A write its domain
+function made before it threw stayed stored, with no caller scope and in a caller's scope on `PROPAGATION_SUPPORTS` or
+`PROPAGATION_NOT_SUPPORTED`, and with no caller scope a transient failure of the read failed the command where the
+executor had run it again. I ran both on a Spring MongoDB store, and with the read in the executor the write rolled back and the command
+stored its event. The reactive service still reads first for every command.
 
 `GenericApplicationService`, the stream service, still reads and decides in the transaction, since a stream snapshot
 needs no marker versions.
@@ -681,10 +689,12 @@ transaction context. `isTransactional()` keeps meaning an actual transaction, si
 service passes it to the synchronous subscriptions as whether the write is in one. In such a scope a decider's read runs
 in the executor, so it gets versions only when the executor opens no transaction.
 
-On the blocking service a failure of the read or the decision goes around the executor, so it can't mark a transaction
-the caller owns rollback-only, and a caller that catches it and continues commits. The service holds it inside the
+On the blocking service a failure of the read or the decision goes around the executor when `isTransactional()`
+answered `true` before the service entered it, so it can't mark a transaction the caller owns rollback-only, and a
+caller that catches it and continues commits. The service holds it inside the
 executor's action, returns normally, and throws it after the executor has returned, an `Error` as well. Without that
-hold the caller's commit threw `UnexpectedRollbackException`. The reactive service lets the failure through the
+hold the caller's commit threw `UnexpectedRollbackException`. When `isTransactional()` answered `false`, the failure
+goes through the executor, which rolls back a transaction it opened. The reactive service lets the failure through the
 executor. `GenericReactiveTransaction.isRollbackOnly()` in spring-tx 7.0.9 reads only its own flag, so a participant
 can't stop the caller's commit, and with and without a hold the caller's transaction committed on a Spring MongoDB store.
 I ran no other reactive executor.
@@ -1072,7 +1082,8 @@ the store unchanged.
   upgrade, because its markers don't exist yet or have no epoch yet. Its append gives them one, and the next command
   can save.
 - On a DCB application service with synchronous subscriptions whose executor allows a read before it and answers
-  `false` from `isTransactional()`, the domain function no longer runs in the executor's transaction. The executor's conflict retry re-runs the append, the re-read and the dispatch, with the token of the
+  `false` from `isTransactional()`, the domain function of a command that asks for marker versions, and of every command
+  on the reactive service, no longer runs in the executor's transaction. The executor's conflict retry re-runs the append, the re-read and the dispatch, with the token of the
   read the decision was made on, and not the read or the domain function.
 - A decider inside a transaction the caller owns never saves a snapshot. Saving after that transaction commits isn't in
   0.35.0, and this is a known limitation, tracked in #1307. The warning lists a transaction the caller owns as one of
