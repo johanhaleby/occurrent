@@ -962,7 +962,7 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - A DCB application service with synchronous subscriptions on `noTransaction()` or a Spring executor now reads and
   decides before it enters its transaction executor's transaction when `execute` runs outside every Spring transaction
   scope of yours, so a decider on it saves snapshots. On the blocking service only a command that asks for marker
-  versions does, and any other command reads and decides in the executor's transaction, as in 0.34.0. Only the append, the
+  versions does, and any other command reads and decides inside the executor, as in 0.34.0. Only the append, the
   re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
   write your domain function makes is no longer part of it. The executor's conflict retry re-runs the append, the re-read
   and the dispatch, with the token of the read the decision was made on, and not the read or your domain function. A
@@ -981,8 +981,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   method to answer `true`. The service reads before the executor only while the executor's `isTransactional()` answers `false`.
 - In a transaction you own, the service still reads and decides in the executor, so what such a command sees doesn't
   change, also on `PROPAGATION_REQUIRES_NEW` and `PROPAGATION_NOT_SUPPORTED`. On a blocking service an exception from
-  your domain function no longer marks that transaction rollback-only, so if you catch it and continue, that transaction
-  commits.
+  your domain function no longer marks that transaction rollback-only when the executor joins it and its
+  `isTransactional()` answers `true` there, so if you catch it and continue, that transaction commits.
 
 ### Stored snapshots
 
