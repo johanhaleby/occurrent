@@ -28,8 +28,8 @@ no longer pays:
 
 - A write the domain function makes before it throws stays stored, since no transaction holds it.
 - A transient failure of the read doesn't get the executor's retry.
-- On an executor that opens no transaction, a handler that fails doesn't undo the append. The read runs on a session of
-  the store's own and binds nothing, so the append commits on its own.
+- On an executor that opens no transaction, a handler that fails doesn't undo the append. The read binds no session the
+  append joins, so the append commits on its own.
 
 A transaction the service's executor just opened has had nothing run in it when the service reads. That is the case
 this decision handles. A transaction the caller owns stays a known limitation, tracked in
@@ -76,7 +76,7 @@ the caller's opens no transaction, so the service doesn't set `firstOperationOfT
 synchronization. An append in the same synchronization joins it, and the synchronization commits or rolls it back
 when the executor returns. A plain command has read that way since 0.34.0, so a failing handler undoes its append.
 
-A read with versions ran on a session of the store's own, so the append committed on its own and a
+A read with versions bound no session the append would join, so the append committed on its own and a
 failing handler couldn't undo it. Now the Spring stores read through the template when `confirmsAppendBeforeSaving` is
 set, synchronization is active, no transaction is, no session is bound for the store's database factory yet, and the
 store runs on a replica set. The read is then the first operation of the session transaction it binds, and it reports
@@ -84,7 +84,7 @@ versions from it. When a session is already bound, for example by an earlier rea
 through that session and reports no versions, as it does inside a transaction. A read on a session of its own wouldn't
 see that session's writes, and an append checked against its token could fail its condition on them.
 
-A read without `confirmsAppendBeforeSaving` keeps ADR 148's path in that scope. That covers the `@Snapshot` view and a
+A read without `confirmsAppendBeforeSaving` takes ADR 148's path in that scope. That covers the `@Snapshot` view and a
 read of the caller's in a method on `PROPAGATION_SUPPORTS`. Their versions come from a read-only transaction committed
 at majority, and they may save at them. With a session already bound, such a read doesn't see that session's writes,
 and an append in the session checked against its token can fail its condition, as it could before this change.
@@ -94,7 +94,7 @@ committed when the read returns, at the session's default read concern.
 In a scope of the caller's with no transaction, an executor that opens none takes part in that scope's
 synchronization, so the session transaction the read binds commits only when the caller's scope ends, after `execute`
 has returned. The confirmation doesn't find the append then, and a snapshot decider there saves no snapshot. The
-session stays bound until that scope ends, as after a plain command, and a `MongoTransactionManager` over the same
+session stays bound until that scope ends, as after a plain command, and a MongoDB transaction manager on the same
 database factory counts it as an existing transaction there.
 
 The Spring stores retry a write only in a transaction they own. A session bound for their database factory counts as
