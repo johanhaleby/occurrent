@@ -289,11 +289,15 @@ final class NamedCatchupSupport {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             forgetATakeoverNeverLaunched(subscriptionId);
-            if (catchingUp.putIfAbsent(subscriptionId, state) != null) {
+            // Before the put, since a stop() and a start(true) take no lock of the id and launch every replay in
+            // catchingUp, so a replay put for a subscribe that own(..) then refuses could run
+            if (!own(subscriptionId, delegate, record)) {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
-            if (!own(subscriptionId, delegate, record, state)) {
-                catchingUp.remove(subscriptionId, state);
+            if (catchingUp.putIfAbsent(subscriptionId, state) != null) {
+                // Undoes own(..), which put this record rather than replacing one, since it replaces one only while no
+                // replay of the id is in flight here
+                owned.remove(subscriptionId, record);
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             return null;
@@ -319,7 +323,9 @@ final class NamedCatchupSupport {
 
     // Runs the first launch of the replay, or parks the replay while this model is stopped. Run by subscribeWithCatchup
     // and by the wrapped model once it has paused the subscription a takeover was registered for. Runs nothing when
-    // the replay launched already, for instance through start(true) after a stop() parked it, or was cancelled.
+    // the replay was cancelled or launched already. A start(true) unparks and launches every parked replay in
+    // catchingUp, which holds no replay of a subscribe that own(..) has not accepted, so a stop() and a start(true)
+    // between the put and this run the first launch themselves.
     private void launchIfPending(CatchupState state) {
         Object launched;
         synchronized (state) {
@@ -522,7 +528,7 @@ final class NamedCatchupSupport {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             forgetATakeoverNeverLaunched(subscriptionId);
-            if (!own(subscriptionId, delegate, record, null)) {
+            if (!own(subscriptionId, delegate, record)) {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             record.subscribing = true;
@@ -652,10 +658,10 @@ final class NamedCatchupSupport {
     }
 
     // Called under the per-id lock. Puts record for the id, replacing a record whose subscription is gone, which is one
-    // with no replay in flight here, other than ours, that the wrapped model neither runs nor holds paused. False when
+    // with no replay in flight here that the wrapped model neither runs nor holds paused. False when
     // the id has a live record, or a cancel of it has not had the wrapped model cancel yet. catchingUp is read first,
     // since a handover registers the id in the wrapped model before it removes the id from catchingUp.
-    private boolean own(String subscriptionId, SubscriptionModel delegate, Owned record, @Nullable CatchupState ours) {
+    private boolean own(String subscriptionId, SubscriptionModel delegate, Owned record) {
         if (cancelsUnderWay.containsKey(subscriptionId)) {
             return false;
         }
@@ -666,8 +672,7 @@ final class NamedCatchupSupport {
         if (existing.subscribing && !existing.cancelled) {
             return false;
         }
-        CatchupState inFlight = catchingUp.get(subscriptionId);
-        boolean gone = (inFlight == null || inFlight == ours) && !holds(delegate, subscriptionId);
+        boolean gone = !catchingUp.containsKey(subscriptionId) && !holds(delegate, subscriptionId);
         if (!gone || !owned.replace(subscriptionId, existing, record)) {
             return false;
         }

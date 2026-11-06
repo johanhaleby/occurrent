@@ -30,6 +30,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
@@ -934,7 +935,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         LosingLiveStartModel wrapped = new LosingLiveStartModel(false);
         ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
         AtomicReference<@Nullable Throwable> cancel = new AtomicReference<>();
-        NamedCatchupMapHook.installIn(catchup, "owned").afterThePutIfAbsentIn("own", () -> {
+        NamedCatchupMapHook.installIn(catchup, "catchingUp").afterThePutIfAbsentIn("subscribeWithCatchup", () -> {
             catchup.stop();
             catchup.start(true);
             cancel.set(catchThrowable(() -> catchup.cancelSubscription(ID).block(Duration.ofSeconds(5))));
@@ -952,6 +953,43 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
                     () -> assertThat(wrapped.isRunning(ID)).as("whether the wrapped model runs the subscription").isFalse(),
                     () -> assertThat(wrapped.isPaused(ID)).as("whether the wrapped model holds the subscription paused").isFalse(),
                     () -> assertThat(received).as("what the subscription received").containsExactly("e1", "e2", "e3")
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_subscribe_refused_while_a_cancel_of_the_id_is_under_way_launches_no_replay_when_a_stop_and_a_start_come_while_it_checks_the_id() {
+        // Given a replay parked while the model is stopped, whose cancel the wrapped model has not ended yet
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(false);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            catchup.stop();
+            catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+            Sinks.Empty<Void> cancelEnds = Sinks.empty();
+            wrapped.cancelCompletesWhen = cancelEnds.asMono();
+            Mono<Void> cancel = catchup.cancelSubscription(ID);
+            wrapped.cancelCompletesWhen = Mono.empty();
+            // and a stop and a start that resumes subscriptions while a subscribe of the id checks whether the id is free
+            NamedCatchupMapHook.installIn(catchup, "cancelsUnderWay").afterTheReadIn("own", () -> {
+                catchup.stop();
+                catchup.start(true);
+            });
+
+            // When that subscribe is refused, and the cancel ends
+            Throwable subscribe = catchThrowable(() -> catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                    cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId()))));
+            cancelEnds.tryEmitEmpty();
+            Throwable cancelled = catchThrowable(() -> cancel.block(Duration.ofSeconds(5)));
+
+            // Then nothing of the refused subscribe ran
+            assertAll(
+                    () -> assertThat(subscribe).as("what the subscribe throws").isInstanceOf(DuplicateSubscriptionIdException.class),
+                    () -> assertThat(cancelled).as("what the cancel throws").isNull(),
+                    () -> assertThat(received).as("what the refused subscribe's action received").isEmpty(),
+                    () -> assertThat(wrapped.subscribeCalls).as("how many times a replay subscribed the wrapped model").hasValue(0),
+                    () -> assertThat(wrapped.isRunning(ID)).as("whether the wrapped model runs the subscription").isFalse()
             );
         } finally {
             catchup.shutdown();
