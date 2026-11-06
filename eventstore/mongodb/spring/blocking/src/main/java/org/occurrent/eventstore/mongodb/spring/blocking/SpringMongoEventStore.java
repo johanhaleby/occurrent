@@ -773,13 +773,16 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     /**
      * Runs the action, applying the retry strategy only when this store owns the transaction. When one is already
-     * active the template joins it, a conflict aborts it, and every further attempt fails on its first read with
-     * {@code NoSuchTransaction}, so retrying could never commit. Every retry of a transaction on the write path goes
-     * through here, the DCB append and the stream {@code write} condition retry, so neither can be written without the
-     * check. The position counter's cold-start retry runs outside any transaction and doesn't need it. See ADR 0074.
+     * active, or a session bound to the synchronization holds one, the template joins it, a conflict aborts it, and
+     * every further attempt fails on its first read with {@code NoSuchTransaction}, so retrying could never commit.
+     * Every retry of a transaction on the write path goes through here, the DCB append and the stream {@code write}
+     * condition retry, so neither can be written without the check. The position counter's cold-start retry runs
+     * outside any transaction and doesn't need it. See ADR 0074.
      */
-    private static <T> T retryOnlyWhenThisStoreOwnsTheTransaction(RetryStrategy retry, Supplier<T> action) {
-        return TransactionSynchronizationManager.isActualTransactionActive() ? action.get() : retry.execute(action);
+    private <T> T retryOnlyWhenThisStoreOwnsTheTransaction(RetryStrategy retry, Supplier<T> action) {
+        boolean joinsATransaction = TransactionSynchronizationManager.isActualTransactionActive()
+                || (TransactionSynchronizationManager.isSynchronizationActive() && TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) != null);
+        return joinsATransaction ? action.get() : retry.execute(action);
     }
 
     private DcbAppendResult appendDcbInTransaction(String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition, AppendId appendId) {

@@ -750,13 +750,20 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     /**
-     * Applies the retry spec only when this store owns the transaction. When one is already active the operator joins
-     * it, a conflict aborts it, and every further attempt fails on its first read with {@code NoSuchTransaction}, so
-     * retrying could never commit. Route every retry of a transaction on the write path through here so the ownership
-     * check cannot be forgotten. See ADR 0074.
+     * Applies the retry spec only when this store owns the transaction. When one is already active, or a session bound
+     * to the synchronization holds one, the operator joins it, a conflict aborts it, and every further attempt fails on
+     * its first read with {@code NoSuchTransaction}, so retrying could never commit. Route every retry of a transaction
+     * on the write path through here so the ownership check cannot be forgotten. See ADR 0074.
      */
-    private static <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
-        return callerTransactionActive().flatMap(transactionAlreadyActive -> transactionAlreadyActive ? action : action.retryWhen(retry));
+    private <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
+        return joinsATransaction().flatMap(joinsATransaction -> joinsATransaction ? action : action.retryWhen(retry));
+    }
+
+    private Mono<Boolean> joinsATransaction() {
+        return TransactionSynchronizationManager.forCurrentTransaction()
+                .map(synchronization -> synchronization.isActualTransactionActive()
+                        || (synchronization.isSynchronizationActive() && synchronization.hasResource(mongoTemplate.getMongoDatabaseFactory())))
+                .onErrorResume(NoTransactionException.class, e -> Mono.just(false));
     }
 
     // A read through this store's template inside a MongoDB transaction on its database factory sees that transaction's
