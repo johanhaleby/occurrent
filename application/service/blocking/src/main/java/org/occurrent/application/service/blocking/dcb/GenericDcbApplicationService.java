@@ -199,8 +199,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             try {
                 if (dispatchSynchronously && (!versionsRequested || transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
                     // A failure of the domain function goes through the executor unless the executor reports a transaction both
-                    // before and inside the action and didn't open it. A command asking for marker versions reads here only in an
-                    // open transaction the executor can leave for the append, or when the executor doesn't allow a read before it.
+                    // before and inside the action and didn't open it
                     boolean transactionalBefore = transactionExecutor.isTransactional();
                     Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> {
                         if (failureAfterWrite.isHeld()) {
