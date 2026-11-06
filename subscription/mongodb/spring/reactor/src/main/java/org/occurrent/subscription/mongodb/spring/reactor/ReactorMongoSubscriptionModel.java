@@ -562,7 +562,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                         // Advances the tracked position for every document received, even ones that don't
                         // deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel, so
                         // a resubscribe resumes gap-free. In one hold of the run's lock with the clear, so a pause
-                        // can't leave the opening recorded after the run has moved on from it.
+                        // can't leave the opening recorded after the read counted the run as opened.
                         whileOpen.accept(() -> {
                             onDocumentRead.accept(StartAt.checkpoint(checkpoint));
                             recordedUntilRead.set(null);
@@ -1185,8 +1185,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * {@code move} and {@code compareAndMove} set the position of the subscription. {@code changeStreamOpened} of the
      * subscription also holds it from the check that the run is open until it has recorded where the run opened, so a
      * pause closes the run before that or after it. {@code whileOpen} holds it while a change stream records, gives
-     * back or clears its opening, and while a read moves the position and clears the opening, for the same reason. {@code openedAt} is volatile and set without it, and
-     * {@code reads} is a swap that needs none. No code of the caller runs while it's held.
+     * back or clears its opening, and while a read records where the run opened and clears the opening, for the same
+     * reason. {@code openedAt} is volatile and set without it, and {@code reads} is a swap that needs none. No code of the caller runs while it's held.
      */
     static final class Run {
         private final Sinks.Empty<Void> started = Sinks.empty();
