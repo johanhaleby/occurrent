@@ -524,6 +524,88 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     }
 
     /**
+     * A cancel's delete waits for a position write of the cancelled subscription, and a subscribe takes that delete
+     * over. The function of its dynamic start position throws a checked exception, which Kotlin code throws without
+     * declaring it. The subscribe throws it as it is and gives back the id and the delete, so the delete removes the
+     * checkpoint that write stores, and a later subscribe from the model default starts at its call. That holds on the
+     * path that drives the feed, and on the one that hands the subscription to a wrapped model.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"drives-the-feed", "handed-over"})
+    void a_subscribe_that_takes_over_a_delete_and_whose_start_position_throws_a_checked_exception_at_the_call_gives_the_id_and_the_delete_back(String path) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = path.equals("handed-over") ? new NamedFeed() : new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        Throwable threw = ThrownAtTheCall.of("checked exception", START_POSITION_FAILED);
+        StartAt throwing = StartAt.dynamic(() -> {
+            throw ThrownAtTheCall.undeclared(threw);
+        });
+        try {
+            Held heldWrite = cancelWhileHeld(model, storage, feed, "write-in-flight-arrives", release);
+            assertThat(heldWrite.entered().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("position write held").isTrue();
+
+            // When
+            Throwable atTheCall = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, throwing, action(new CopyOnWriteArrayList<>())));
+            boolean heldOnceItThrew = model.isRunning(SUBSCRIPTION_ID) || model.isPaused(SUBSCRIPTION_ID);
+            release.countDown();
+            String storedOnceTheWriteArrived = untilNothingStored(storage);
+
+            // Then
+            assertThat(atTheCall).as("what the subscribe threw").isSameAs(threw);
+            assertThat(heldOnceItThrew).as("whether the model held the id once the subscribe threw").isFalse();
+            assertThat(storedOnceTheWriteArrived).as("checkpoint stored once the position write the delete waited for arrived").isEqualTo("-");
+            Later later = subscribeAgain(model, feed, caller);
+            assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                    .containsExactly(later.writtenAfter());
+        } finally {
+            release.countDown();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe on a stopped model registers a subscription whose dynamic start position throws a checked exception,
+     * which Kotlin code throws without declaring it. Its resume takes over a delete whose try is held, so the function
+     * is asked once the checkpoint that try read is written back. The function then throws, and the subscription stays
+     * paused, as it does for a RuntimeException.
+     */
+    @Test
+    void a_resume_whose_start_position_throws_a_checked_exception_once_a_delete_it_took_over_is_written_back_keeps_the_subscription_paused() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        CountDownLatch release = new CountDownLatch(1);
+        Throwable threw = ThrownAtTheCall.of("checked exception", START_POSITION_FAILED);
+        StartAt throwing = StartAt.dynamic(() -> {
+            throw ThrownAtTheCall.undeclared(threw);
+        });
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            cancelWithCheckpointStored(model, storage, feed, release);
+            model.stop();
+            model.subscribe(SUBSCRIPTION_ID, null, throwing, action(new CopyOnWriteArrayList<>()));
+            Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+
+            // When
+            release.countDown();
+
+            // Then
+            Throwable notStarted = catchThrowable(() -> resumed.waitUntilStarted().toFuture().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            assertThat(notStarted).as("how waiting for the start of the resume ended").hasCauseReference(threw);
+            assertThat(logged.at(Level.ERROR)).as("errors logged").containsExactly("The start position of subscription " + SUBSCRIPTION_ID
+                    + " threw once the checkpoint a cancel of it deleted was written back, so the subscription stays paused");
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(model.isPaused(SUBSCRIPTION_ID)).as("whether the subscription is paused").isTrue());
+        } finally {
+            release.countDown();
+            model.shutdown();
+        }
+    }
+
+    /**
      * A subscribe takes over a delete whose try is held, and a pause comes before it started. Its resume then cannot
      * read the start position, so the subscription never starts and is dropped. The delete goes ahead and removes the
      * checkpoint, and a later subscribe from the model default starts from where the feed is.

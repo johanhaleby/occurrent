@@ -596,10 +596,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
         try {
             return startReserved(reservation, storedAtTheCall);
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
             // A dynamic start position that throws gives the id back, so subscribing again under it is not refused as
             // a duplicate. That also gives back the takeover of this call, unless a pause, a stop(), a cancel or a
-            // shutdown moved the subscription meanwhile, see releaseReservation.
+            // shutdown moved the subscription meanwhile, see releaseReservation. A checked exception thrown from
+            // Kotlin gives them back too, and reaches the caller as it is.
             releaseReservation(reservation);
             throw e;
         }
@@ -662,8 +663,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // the deletes taken over no longer count this subscribe.
             giveBackPositionDelete(subscriptionId, writer.takeOver, writer);
             return new ReactorDurableSubscription(subscriptionId, Mono.error(cancelledBeforeItStarted(subscriptionId)));
-        } catch (RuntimeException | Error e) {
-            // A refusal, or a function of a dynamic StartAt that threw
+        } catch (Throwable e) {
+            // A refusal, or a function of a dynamic StartAt that threw, a checked exception thrown from Kotlin too
             giveBackPositionDelete(subscriptionId, writer.takeOver, writer);
             throw e;
         } finally {
@@ -739,7 +740,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         final boolean duplicate;
         try {
             duplicate = refusedAsDuplicate || refused == null && heldByTheWrappedModel(delegate, subscriptionId);
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
             // Ends the keeping with what the lookup threw, so a resume made meanwhile fails with it, as one does for a
             // subscribe that fails at the hand-over. subscribeByDelegating gives back the delete taken over and the
             // writer.
@@ -1039,7 +1040,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             delegated = startAtToUse == null
                     ? delegate.subscribe(subscriptionId, filter, startAt, delivering)
                     : delegate.subscribe(subscriptionId, filter, startAtToUse, settledThen(settled, persistingAction(subscriptionId, writer, delivering)));
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
             handedOver(writer, Mono.empty());
             throw e;
         }
@@ -1172,7 +1173,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         try {
             again = delegate.subscribe(subscriptionId, filter, StartAt.checkpoint(from),
                     persistingAction(subscriptionId, writer, heldWhilePaused(kept, liveAction)));
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
             handedOver(writer, Mono.empty());
             throw e;
         }
@@ -2211,7 +2212,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                     .then(Mono.defer(() -> {
                         try {
                             return askStartAt(subscriptionId, startAt, positionNow, positionAtRegistration, present, writer, storedAtTheCall);
-                        } catch (RuntimeException | Error e) {
+                        } catch (Throwable e) {
                             writer.startPositionThrew = true;
                             return Mono.error(e);
                         }
@@ -2693,7 +2694,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
         try {
             return startReserved(reservation, null);
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
             // A dynamic StartAt that throws keeps the subscription paused rather than dropped from both maps
             releaseReservation(reservation);
             throw e;
@@ -3712,7 +3713,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         for (Reservation reservation : reservations) {
             try {
                 startReserved(reservation, null);
-            } catch (RuntimeException | Error e) {
+            } catch (Throwable e) {
                 releaseReservation(reservation);
                 if (first == null) {
                     first = e;
@@ -3721,11 +3722,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 }
             }
         }
-        if (first instanceof RuntimeException runtimeException) {
-            throw runtimeException;
-        } else if (first instanceof Error error) {
-            throw error;
+        if (first != null) {
+            throw thrownAsItIs(first);
         }
+    }
+
+    // Throws throwable as it is, a checked exception thrown from Kotlin too, without declaring it. Declared to return,
+    // so a caller can write throw thrownAsItIs(throwable).
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> RuntimeException thrownAsItIs(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     @Override
