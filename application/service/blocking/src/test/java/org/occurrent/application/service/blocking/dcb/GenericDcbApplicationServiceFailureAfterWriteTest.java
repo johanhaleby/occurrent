@@ -530,6 +530,7 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
 
         assertThat(thrown).as("[exception reaching the caller]").isSameAs(domainFailure);
         assertThat(thrown.getSuppressed()).as("[exceptions suppressed by the failure]").containsExactly(executor.failure);
+        assertThat(executor.thrownFromAction).as("[exception leaving the executor's action]").isSameAs(domainFailure);
     }
 
     @Test
@@ -849,12 +850,16 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
     private static final class JoinsAndFailsToReportInside implements TransactionExecutor {
         final RuntimeException failure = new IllegalStateException("transaction state unavailable");
         private boolean inside;
+        Throwable thrownFromAction;
 
         @Override
         public <T> T inTransaction(Supplier<T> action) {
             inside = true;
             try {
                 return action.get();
+            } catch (RuntimeException e) {
+                thrownFromAction = e;
+                throw e;
             } finally {
                 inside = false;
             }
