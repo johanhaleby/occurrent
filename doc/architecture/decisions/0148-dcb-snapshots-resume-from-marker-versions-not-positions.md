@@ -690,8 +690,8 @@ service passes it to the synchronous subscriptions as whether the write is in on
 in the executor, so it gets versions only when the executor opens no transaction.
 
 On the blocking service a failure of the read or the decision goes around the executor when `isTransactional()`
-answered `true` before the service entered it and `inTransactionTellingIfOpened` says the attempt didn't open its
-transaction. So it can't mark a transaction the caller owns rollback-only, and a caller that catches it and continues
+answers `true` both before the service enters it and when the failure happens, and `inTransactionTellingIfOpened` says
+the attempt didn't open its transaction. So it can't mark a transaction the caller owns rollback-only, and a caller that catches it and continues
 commits. The service holds it inside the executor's action, returns normally, and throws it after the executor has
 returned, an `Error` as well. Without that hold the caller's commit threw `UnexpectedRollbackException`. Otherwise the
 failure goes through the executor, which rolls back a transaction it opened. An executor of your own that keeps the
