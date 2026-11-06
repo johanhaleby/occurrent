@@ -834,11 +834,13 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     }
 
     /**
-     * The wrapped model throws when asked where its feed is, for a subscription from StartAt.now(). Waiting for the
-     * start fails at once with what it threw, nothing is read, and the id can be subscribed again once it answers.
+     * The wrapped model throws when asked where its feed is, for a subscription from StartAt.now() and for a dynamic
+     * start position that answers StartAt.now(). Waiting for the start fails at once with what it threw, nothing is
+     * read, and the id can be subscribed again once it answers.
      */
-    @Test
-    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_the_start_at_once_with_what_it_threw_and_leaves_the_id_free() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_the_start_at_once_with_what_it_threw_and_leaves_the_id_free(boolean dynamic) {
         // Given
         Feed feed = new Feed();
         IllegalStateException threw = new IllegalStateException(POSITION_READ_FAILED);
@@ -847,7 +849,7 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
         try (LoggedByTheModel logged = new LoggedByTheModel()) {
             // When
-            Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> Mono.empty());
+            Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, startFromNow(dynamic), __ -> Mono.empty());
             Throwable startEnded = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
 
             // Then
@@ -856,10 +858,48 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             assertThat(failedReadWarnings(logged)).as("warnings logged for a failed read").isEmpty();
 
             feed.throwsAtTheCall = null;
-            Throwable startAgainEnded = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT));
+            Throwable startAgainEnded = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, startFromNow(dynamic), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT));
             assertThat(startAgainEnded).as("how waiting for the start of the id subscribed again ended").isNull();
         } finally {
             model.shutdown();
+        }
+    }
+
+    /**
+     * A read of where the feed was that always fails, for a subscription from StartAt.now() and for a dynamic start
+     * position that answers StartAt.now(). Each read again comes after a wait the model documents. The read at the
+     * subscribe of StartAt.now() fails before the start waits for it, and the start reads again with no wait. A dynamic
+     * start position takes the moment it starts from at its first start, so no read of that moment comes before it.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_read_of_where_the_feed_was_that_keeps_failing_is_read_again_after_waits_that_start_between_100_and_150_ms_and_about_double_up_to_5_s(boolean dynamic) {
+        // Given
+        HeldDelays delays = new HeldDelays();
+        Schedulers.Snapshot schedulers = Schedulers.setFactoryWithSnapshot(delays);
+        Feed feed = new Feed();
+        feed.readFails = true;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            CompletableFuture<Void> started = model.subscribe(SUBSCRIPTION_ID, null, startFromNow(dynamic), __ -> Mono.empty()).waitUntilStarted().toFuture();
+            await().atMost(TIMEOUT).until(() -> delays.waiting() == 1 || started.isDone());
+            // Each wait let go reads again on this thread, the read fails, and the next wait is then held
+            while (failedReadWarnings(logged).size() < 8 && !started.isDone()) {
+                delays.letGo();
+                await().atMost(TIMEOUT).until(() -> delays.waiting() == 1 || started.isDone());
+            }
+            int failedReads = failedReadWarnings(logged).size();
+            List<Duration> asked = delays.asked();
+
+            // Then
+            assertThat(started).as("waiting for the start while the read kept failing").isNotDone();
+            assertThat(asked).as("waits asked for after " + failedReads + " failed reads").hasSize(dynamic ? failedReads : failedReads - 1);
+            ReadAgainWaits.assertDocumented(asked);
+        } finally {
+            model.shutdown();
+            Schedulers.resetFrom(schedulers);
         }
     }
 

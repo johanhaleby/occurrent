@@ -20,6 +20,7 @@ import reactor.core.Disposable;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadFactory;
@@ -32,6 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 final class HeldDelays implements Schedulers.Factory {
     private final List<HeldDelay> held = new CopyOnWriteArrayList<>();
+    private final List<Duration> asked = new CopyOnWriteArrayList<>();
 
     @Override
     public Scheduler newParallel(int parallelism, ThreadFactory threadFactory) {
@@ -40,6 +42,11 @@ final class HeldDelays implements Schedulers.Factory {
 
     int waiting() {
         return (int) held.stream().filter(delay -> !delay.isDisposed()).count();
+    }
+
+    // The delay each held task was asked to wait, in the order they were asked for
+    List<Duration> asked() {
+        return List.copyOf(asked);
     }
 
     // Runs each task waiting now. One that such a task schedules waits for the next call
@@ -69,6 +76,7 @@ final class HeldDelays implements Schedulers.Factory {
                 return scheduler.schedule(task);
             }
             HeldDelay heldDelay = new HeldDelay(task);
+            asked.add(Duration.ofNanos(unit.toNanos(delay)));
             held.add(heldDelay);
             return heldDelay;
         }

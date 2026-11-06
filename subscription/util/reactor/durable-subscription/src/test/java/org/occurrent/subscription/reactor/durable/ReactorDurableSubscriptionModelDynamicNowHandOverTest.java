@@ -42,7 +42,9 @@ import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Operators;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
@@ -54,9 +56,11 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -80,6 +84,7 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
     private static final String READ_FAILED = "The wrapped model cannot tell where its feed is right now";
     private static final String ASKING_THREW = "The wrapped model threw when asked where its feed is";
     private static final String REFUSED = "The wrapped model does not support this filter";
+    private static final String EACH_OPERATOR_HOOK = "lifts each operator";
 
     private final NamedFeed feed = new NamedFeed();
     private final ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
@@ -267,6 +272,138 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
         } finally {
             Schedulers.resetFrom(schedulers);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_read_that_keeps_failing_is_read_again_after_waits_that_start_between_100_and_150_ms_and_about_double_up_to_5_s(boolean waitsForAWriteBack) {
+        // Given
+        HeldDelays delays = new HeldDelays();
+        Schedulers.Snapshot schedulers = Schedulers.setFactoryWithSnapshot(delays);
+        HeldDeleteStorage storage = new HeldDeleteStorage();
+        ReactorDurableSubscriptionModel waits = new ReactorDurableSubscriptionModel(feed, storage);
+        feed.presentRead = atTheCall -> Mono.error(new IllegalStateException(READ_FAILED));
+
+        try {
+            // When
+            Subscription subscription;
+            if (waitsForAWriteBack) {
+                subscription = subscribedWhileACancelDeletes(waits, storage, dynamicNow(), cloudEvent -> Mono.empty());
+                storage.releaseDelete.complete(null);
+            } else {
+                subscription = waits.subscribe(SUBSCRIPTION_ID, null, dynamicNow(), cloudEvent -> Mono.empty());
+            }
+            CompletableFuture<Void> started = subscription.waitUntilStarted().toFuture();
+            await().atMost(TIMEOUT).until(() -> delays.waiting() == 1 || started.isDone());
+            // Each wait let go reads again on this thread, the read fails, and the next wait is then held
+            while (failedReadWarnings().size() < 8 && !started.isDone()) {
+                delays.letGo();
+                await().atMost(TIMEOUT).until(() -> delays.waiting() == 1 || started.isDone());
+            }
+            int failedReads = failedReadWarnings().size();
+            List<Duration> asked = delays.asked();
+
+            // Then
+            assertThat(started).as("waiting for the start while the read kept failing").isNotDone();
+            // The read at the call fails before the hand-over waits for it, and the hand-over reads again with no wait.
+            // A subscribe that waits for a write back makes no read at the call.
+            assertThat(asked).as("waits asked for after " + failedReads + " failed reads").hasSize(waitsForAWriteBack ? failedReads : failedReads - 1);
+            ReadAgainWaits.assertDocumented(asked);
+        } finally {
+            storage.releaseDelete.complete(null);
+            waits.shutdown();
+            Schedulers.resetFrom(schedulers);
+        }
+    }
+
+    @Test
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_a_subscribe_that_waits_for_the_checkpoint_a_cancel_deleted_with_what_it_threw_and_leaves_the_id_free() {
+        // Given
+        HeldDeleteStorage storage = new HeldDeleteStorage();
+        ReactorDurableSubscriptionModel waits = new ReactorDurableSubscriptionModel(feed, storage);
+        IllegalStateException threw = new IllegalStateException(ASKING_THREW);
+        feed.presentRead = atTheCall -> {
+            throw threw;
+        };
+
+        try {
+            Subscription subscription = subscribedWhileACancelDeletes(waits, storage, dynamicNow(), cloudEvent -> Mono.empty());
+            feed.presentRead = Mono::just;
+
+            // When
+            storage.releaseDelete.complete(null);
+
+            // Then
+            assertThat(subscription.waitUntilStarted().toFuture()).as("waiting for the start of the subscription")
+                    .failsWithin(RETURNS_AT_ONCE).withThrowableOfType(ExecutionException.class).havingCause().isSameAs(threw);
+            assertThat(failedReadWarnings()).as("warnings logged for a failed read").isEmpty();
+            assertThat(feed.subscribedIds).as("subscriptions the wrapped model took").isEmpty();
+
+            waits.subscribe(SUBSCRIPTION_ID, null, dynamicNow(), cloudEvent -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+            assertThat(feed.subscribedIds).as("subscriptions the wrapped model took once the id was subscribed again").containsExactly(SUBSCRIPTION_ID);
+        } finally {
+            storage.releaseDelete.complete(null);
+            waits.shutdown();
+        }
+    }
+
+    // Reactor's operator debug mode, and a hook on each operator, wrap each Mono an operator assembles
+    @ParameterizedTest
+    @ValueSource(strings = {"operator debug", "each operator"})
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_the_start_at_once_with_a_reactor_hook_in_place(String hook) {
+        // Given
+        if (hook.equals("operator debug")) {
+            Hooks.onOperatorDebug();
+        } else {
+            Hooks.onEachOperator(EACH_OPERATOR_HOOK, Operators.lift((scannable, subscriber) -> subscriber));
+        }
+        IllegalStateException threw = new IllegalStateException(ASKING_THREW);
+        feed.presentRead = atTheCall -> {
+            throw threw;
+        };
+
+        try {
+            // When
+            CompletableFuture<Subscription> subscribed = subscribeFromADynamicNow();
+
+            // Then
+            assertThat(subscribed.join().waitUntilStarted().toFuture()).as("waiting for the start of the subscription")
+                    .failsWithin(RETURNS_AT_ONCE).withThrowableOfType(ExecutionException.class).havingCause().isSameAs(threw);
+            assertThat(failedReadWarnings()).as("warnings logged for a failed read").isEmpty();
+        } finally {
+            Hooks.resetOnOperatorDebug();
+            Hooks.resetOnEachOperator(EACH_OPERATOR_HOOK);
+        }
+    }
+
+    @Test
+    void a_subscribe_of_the_id_while_a_dynamic_start_position_of_it_runs_starts_and_the_dynamic_one_is_refused_at_the_call_without_reaching_the_wrapped_model_once_it_answers_now() throws Exception {
+        // Given
+        CountDownLatch inTheFunction = new CountDownLatch(1);
+        CountDownLatch functionLetGo = new CountDownLatch(1);
+        CompletableFuture<Subscription> other = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(() -> {
+            inTheFunction.countDown();
+            try {
+                functionLetGo.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return StartAt.now();
+        }), cloudEvent -> Mono.empty()), caller);
+        assertThat(inTheFunction.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the function of the other subscribe asked").isTrue();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+
+        // When
+        Throwable subscribeFailed = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), action(delivered)).waitUntilStarted().block(TIMEOUT));
+        functionLetGo.countDown();
+        Throwable otherFailed = catchThrowable(() -> other.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+        long writtenAfter = feed.write();
+
+        // Then
+        assertThat(subscribeFailed).as("how the subscribe while the function of the other ran ended").isNull();
+        assertThat(otherFailed).as("how the other subscribe ended").isInstanceOf(ExecutionException.class).hasCauseInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(feed.subscribes).as("subscribes the wrapped model was asked for").hasValue(1);
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered to the subscription that started").contains(writtenAfter));
     }
 
     @Test
@@ -634,6 +771,8 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
         private final Sinks.Many<CloudEvent> written = Sinks.many().replay().all();
         private final Map<String, Reading> readings = new ConcurrentHashMap<>();
         private final List<String> subscribedIds = new CopyOnWriteArrayList<>();
+        // Every subscribe this model was asked for, the refused ones too
+        private final AtomicInteger subscribes = new AtomicInteger();
         private volatile Function<Checkpoint, Mono<Checkpoint>> presentRead = Mono::just;
         private volatile @Nullable RuntimeException refusal;
 
@@ -664,6 +803,7 @@ class ReactorDurableSubscriptionModelDynamicNowHandOverTest {
 
         @Override
         public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            subscribes.incrementAndGet();
             @Nullable RuntimeException refused = refusal;
             if (refused != null) {
                 throw refused;
