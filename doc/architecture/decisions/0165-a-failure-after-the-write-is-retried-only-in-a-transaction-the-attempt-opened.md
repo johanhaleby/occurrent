@@ -63,8 +63,6 @@ transaction undoes the write. Otherwise the retry strategy doesn't run the comma
   exception an executor attached to a wrapper of the stand-in.
 - **`NativeMongoTransactionExecutor`.** `isTransactional()` now answers whether the session bound to the thread has a
   transaction in force instead of always `true`, so the service can tell a transaction it would open from one it would join.
-  With no session bound it also lets a DCB service with synchronous subscriptions read and decide before it, since its
-  `allowsReadBeforeTransaction()` answers `true` then, as [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) describes.
 - **Which handlers get the event when one fails.** The dispatch stops at the first failing handler only when the write
   can't commit after the failure, that is when the attempt opened the transaction, or when it joined one and
   `rollsBackAJoinedTransactionOnFailure()` answers `true`. That's a new default method on `TransactionExecutor` and

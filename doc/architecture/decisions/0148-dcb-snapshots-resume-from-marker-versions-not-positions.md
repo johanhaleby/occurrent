@@ -11,7 +11,9 @@ the pull request that closes #1230. Applies to the three MongoDB event stores
 (`SpringMongoEventStore`, `MongoEventStore` and `ReactorMongoEventStore`), `InMemoryEventStore`, the snapshot DSL on
 both stacks and the DCB `@Snapshot` view. Amends [ADR 61](0061-first-class-snapshot-support.md), whose DCB snapshot
 version is a position. Amends [ADR 21](0021-dcb-write-path-query-scoped-concurrency.md) on what pruning markers costs.
-Extends [ADR 84](0084-what-a-position-guarantees.md) with what a position can't be used for.
+Extends [ADR 84](0084-what-a-position-guarantees.md) with what a position can't be used for. Amended by
+[ADR 167](0167-a-dcb-read-reports-marker-versions-as-the-first-operation-of-a-transaction-the-service-opened.md),
+where the DCB application services read every command in the executor again.
 
 ## Context
 
@@ -611,6 +613,10 @@ need, from the late event until the next save. Both Spring Mongo snapshot stores
 as unreadable, which also means a full read.
 
 ### The read and the decision run before the executor's transaction
+
+[ADR 167](0167-a-dcb-read-reports-marker-versions-as-the-first-operation-of-a-transaction-the-service-opened.md)
+replaces the order this section describes. Both services read and decide in the executor for every command again, and
+`allowsReadBeforeTransaction()` is gone.
 
 `GenericDcbApplicationService` opens the transaction executor only when it has synchronous subscriptions to dispatch to.
 It used to run the read, the decision, the append, the re-read of the written block and the dispatch all in that
