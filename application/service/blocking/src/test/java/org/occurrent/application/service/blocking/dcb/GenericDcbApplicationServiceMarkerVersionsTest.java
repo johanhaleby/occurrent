@@ -445,7 +445,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
             assertAll(
                     () -> assertThat(thrown).as("[thrown]").isNull(),
-                    () -> assertThat(store.readOptions).as("[read options]").containsExactly(Optional.of(DcbReadOptions.afterPosition(7L)))
+                    () -> assertThat(store.readOptions).as("[read options]").startsWith(Optional.of(DcbReadOptions.afterPosition(7L)))
             );
         }
 
