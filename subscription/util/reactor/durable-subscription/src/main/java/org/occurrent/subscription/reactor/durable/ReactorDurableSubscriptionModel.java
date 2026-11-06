@@ -545,7 +545,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         Sinks.Empty<Void> readsAbandoned = Sinks.empty();
         // StartAt.now() begins where the feed was at this call, and not where it is when a start or a resume opens it. A
         // dynamic start position reads it as of its first start, in case it answers StartAt.now().
-        final @Nullable PresentRead present = startAt.isNow() ? readPresent(subscriptionId)
+        final @Nullable PresentRead present = startAt.isNow() ? readPresent(subscriptionId, asOfNow())
                 : startAt.isDynamic() ? new PresentRead(subscriptionId) : null;
         final @Nullable Mono<Checkpoint> positionNow;
         @Nullable StoredAtTheCall storedAtTheCall = null;
@@ -752,34 +752,24 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             positionWriterNoLongerStarting(subscriptionId, writer);
             return new ReactorDurableSubscription(subscriptionId, Mono.error(cancelledBeforeItStarted(subscriptionId)));
         }
-        // Asked here, whether storage holds a checkpoint or not, since that is known only once storage answers, and
-        // subscribed to before this call returns. Cancelled once the hand-over has ended, for a read that has not
-        // answered by then. StartAt.now() keeps the moment rather than one answer of it, so a read that fails is read
-        // again, see fromThePresent.
-        final Mono<Checkpoint> readAtTheCall;
-        final @Nullable PresentRead nowFrom;
-        final Runnable endTheRead;
+        // Each read is subscribed to before this call returns and cancelled once the hand-over has ended, for a read that
+        // has not answered by then. The hand-over is subscribed to on a thread of this model's own, so not even a
+        // storage that blocks while subscribing holds up the caller.
+        final Mono<Subscription> handedOver;
         if (resolveFrom.isNow()) {
-            PresentRead presentRead = new PresentRead(subscriptionId);
-            presentRead.readAsOf(present);
-            // The read logs its own failure, see PresentRead
-            presentRead.readAhead().subscribe(unused -> {
-            }, failure -> {
-            });
-            readAtTheCall = present;
-            nowFrom = presentRead;
-            endTheRead = presentRead::end;
+            // Keeps the moment rather than one answer of it, so a read that fails is read again, see fromThePresent
+            PresentRead presentRead = readPresent(subscriptionId, present);
+            handedOver = fromThePresent(subscriptionId, writer, presentRead, resolveFrom)
+                    .flatMap(from -> handOverOnceResolved(delegate, subscriptionId, filter, startAt, from, action, writer, present))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .doFinally(__ -> presentRead.end());
         } else {
+            // Asked whether storage holds a checkpoint or not, since that is known only once storage answers
             CompletableFuture<Checkpoint> presentAtTheCall = present.toFuture();
-            readAtTheCall = Mono.fromFuture(presentAtTheCall, true);
-            nowFrom = null;
-            endTheRead = () -> presentAtTheCall.cancel(false);
+            handedOver = handOverOnceResolved(delegate, subscriptionId, filter, startAt, resolveFrom, action, writer, Mono.fromFuture(presentAtTheCall, true))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .doFinally(__ -> presentAtTheCall.cancel(false));
         }
-        // Subscribed on a thread of this model's own, so not even a storage that blocks while subscribing holds up the
-        // caller
-        Mono<Subscription> handedOver = handOverOnceResolved(delegate, subscriptionId, filter, startAt, resolveFrom, action, writer, readAtTheCall, nowFrom)
-                .subscribeOn(Schedulers.boundedElastic())
-                .doFinally(__ -> endTheRead.run());
         String from = resolveFrom.isNow() ? "from where the feed was at the call" : "from the subscription-model default";
         return startedLater(delegate, subscriptionId, writer, kept, handedOver, from + ", over the wrapped model " + subscription.getClass().getName());
     }
@@ -795,10 +785,6 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // itself, to clean up after an earlier subscription of the id, does not refuse a subscribe that the check at the
     // call let through.
     //
-    // With nowFrom, a resolveFrom that answers StartAt.now() is handed over from where the feed was at the call, see
-    // fromThePresent. Without it, now() is handed over as it is, since startDelegatedOnceRestored has resolved it
-    // already.
-    //
     // A WARN is logged each time another STILL_WAITING_FOR_A_POSITION_READ_EVERY has passed since this was subscribed
     // to, right before the first check for such a call, when the hand-over waits for such a call at that moment. Both
     // checks share that one count, which goes on while the read in between runs, so a wait at either check shorter
@@ -806,7 +792,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // ended doesn't start the count again.
     private Mono<Subscription> handOverOnceResolved(SubscriptionModel delegate, String subscriptionId, @Nullable SubscriptionFilter filter,
                                                     StartAt startAt, @Nullable StartAt resolveFrom, Function<CloudEvent, Mono<Void>> action,
-                                                    PositionWriter writer, Mono<Checkpoint> present, @Nullable PresentRead nowFrom) {
+                                                    PositionWriter writer, Mono<Checkpoint> present) {
         return Mono.defer(() -> {
             AtomicBoolean waiting = new AtomicBoolean();
             Disposable warnings = Flux.interval(STILL_WAITING_FOR_A_POSITION_READ_EVERY, STILL_WAITING_FOR_A_POSITION_READ_EVERY)
@@ -818,12 +804,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                             return Mono.<Optional<StartAt>>error(cancelledBeforeItStarted(subscriptionId));
                         }
                         @Nullable StartAt answered = resolveFrom == null ? null : answeredStartAt(resolveFrom);
-                        if (answered != null && answered.isDefault()) {
-                            return readStartPosition(subscriptionId, answered, writer, present).map(Optional::of);
-                        } else if (answered != null && answered.isNow() && nowFrom != null) {
-                            return fromThePresent(subscriptionId, writer, nowFrom, answered).map(Optional::of);
-                        }
-                        return Mono.just(Optional.ofNullable(answered));
+                        return answered != null && answered.isDefault()
+                                ? readStartPosition(subscriptionId, answered, writer, present).map(Optional::of)
+                                : Mono.just(Optional.ofNullable(answered));
                     }))
                     .publishOn(Schedulers.boundedElastic())
                     .flatMap(resolved -> onceNoWrappedCallInFlight(subscriptionId, writer, waiting, Mono.defer(() -> {
@@ -985,7 +968,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 .map(Optional::of)
                 .defaultIfEmpty(Optional.empty())
                 // An empty answer opts out of starting, and the wrapped model gets startAt as it is, see handOver
-                .flatMap(answered -> handOverOnceResolved(delegate, subscriptionId, filter, startAt, answered.orElse(null), action, writer, present, null))
+                .flatMap(answered -> handOverOnceResolved(delegate, subscriptionId, filter, startAt, answered.orElse(null), action, writer, present))
                 .doFinally(__ -> presentRead.end());
         return startedLater(delegate, subscriptionId, writer, kept, handedOver, "once the checkpoint a cancel of it deleted was written back");
     }
@@ -1709,14 +1692,14 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
     }
 
-    // Where the feed is at this call, for a subscription that starts from StartAt.now(), so each start and resume
-    // before its first event begins from this moment and not from wherever the feed has reached by then. Read at once
+    // Where the feed was at moment, for a subscription that starts from StartAt.now(), so each start and resume
+    // before its first event begins from that moment and not from wherever the feed has reached by then. Read at once
     // and kept once it has answered, so a start much later does not depend on the wrapped model remembering the moment.
     // A read that fails is not kept, so the next start reads it again, see untilPresentIsRead. Empty when the wrapped
-    // model answers nothing, and the subscription then opens its feed at StartAt.now() each time it starts.
-    private PresentRead readPresent(String subscriptionId) {
+    // model answers nothing.
+    private PresentRead readPresent(String subscriptionId, Mono<Checkpoint> moment) {
         PresentRead present = new PresentRead(subscriptionId);
-        present.readAsOf(asOfNow());
+        present.readAsOf(moment);
         // The read logs its own failure, see PresentRead
         present.readAhead().subscribe(unused -> {
         }, failure -> {
