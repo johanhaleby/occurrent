@@ -525,20 +525,20 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     // A subscribe here doesn't say whether the server accepted the position, so where a dynamic position opens is
     // recorded as the stream opens and given back on an error cannotOpenAt matches before a document is read.
     // recordedUntilRead holds that opening across the subscription's runs and retries, since the rejection can come
-    // after a pause or another failure has opened the stream again at the recorded position. whileOpen gives the opening
-    // back and clears it only while the run is open, so a run a pause has closed doesn't touch it and the run after it can
-    // still give it back
+    // after a pause or another failure has opened the stream again at the recorded position. whileOpen records, gives
+    // back and clears the opening only while the run is open, so a run a pause has closed doesn't touch it and the run
+    // after it can still give it back
     private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt,
                                           AtomicReference<@Nullable OpenedAt> recordedUntilRead, Consumer<Runnable> whileOpen, BiPredicate<StartAt, StartAt> recordOpeningPosition,
                                           Consumer<OpenedAt> opened, Consumer<StartAt> onDocumentRead, Runnable onSubscribe) {
         SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
         return openingPosition(currentStartAt, presentAt, recordOpeningPosition, openedAt -> {
             opened.accept(openedAt);
-            // On a run a pause has closed, recordOpeningPosition answers true without moving the position, so there is
-            // nothing to give back
-            if (MongoCommons.recordWhereItOpened(openedAt, recordOpeningPosition) && currentStartAt.get() == openedAt.openingPosition()) {
-                recordedUntilRead.set(openedAt);
-            }
+            whileOpen.accept(() -> {
+                if (MongoCommons.recordWhereItOpened(openedAt, recordOpeningPosition) && currentStartAt.get() == openedAt.openingPosition()) {
+                    recordedUntilRead.set(openedAt);
+                }
+            });
         }).<CloudEvent>flatMapMany(openingPosition -> {
             // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
             // and that includes an operation stamped at exactly the given time.
@@ -561,9 +561,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                         MongoResumeTokenCheckpoint checkpoint = new MongoResumeTokenCheckpoint(requireNonNull(raw.getResumeToken()));
                         // Advances the tracked position for every document received, even ones that don't
                         // deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel, so
-                        // a resubscribe resumes gap-free.
-                        onDocumentRead.accept(StartAt.checkpoint(checkpoint));
-                        whileOpen.accept(() -> recordedUntilRead.set(null));
+                        // a resubscribe resumes gap-free. In one hold of the run's lock with the clear, so a pause
+                        // can't leave the opening recorded after the run has moved on from it.
+                        whileOpen.accept(() -> {
+                            onDocumentRead.accept(StartAt.checkpoint(checkpoint));
+                            recordedUntilRead.set(null);
+                        });
                         return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                                 .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, checkpoint))
                                 .map(Mono::just)
@@ -1181,8 +1184,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * The monitor of the run is held while {@code open}, {@code stepsUnderWay} and {@code hasEnded} change, and while
      * {@code move} and {@code compareAndMove} set the position of the subscription. {@code changeStreamOpened} of the
      * subscription also holds it from the check that the run is open until it has recorded where the run opened, so a
-     * pause closes the run before that or after it. {@code whileOpen} holds it while a change stream gives back or
-     * clears the opening it recorded, for the same reason. {@code openedAt} is volatile and set without it, and
+     * pause closes the run before that or after it. {@code whileOpen} holds it while a change stream records, gives
+     * back or clears its opening, and while a read moves the position and clears the opening, for the same reason. {@code openedAt} is volatile and set without it, and
      * {@code reads} is a swap that needs none. No code of the caller runs while it's held.
      */
     static final class Run {
