@@ -161,7 +161,8 @@ other sections compile fine and behave differently, so read them first.
   a `@Snapshot` DCB view save at marker versions, and ignore a snapshot 0.34.0 saved at a position. `Snapshot` gains two
   components. **Breaks the build** if you use a record pattern over `Snapshot`. A DCB application service with
   synchronous subscriptions on `noTransaction()` or a Spring executor no longer runs your domain function in its
-  transaction executor's transaction outside a Spring transaction scope of yours.
+  transaction executor's transaction outside a Spring transaction scope of yours. On the blocking service that holds only
+  for a command that asks for marker versions, as a snapshot decider's does.
 - [The reactive `executeAndReturnState` emits a non-null state](#the-reactive-executeandreturnstate-emits-a-non-null-state).
   The emitted state is declared non-null. Breaks the build only for a Kotlin `Mono<State?>` written by hand.
 
@@ -960,7 +961,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
 - A DCB application service with synchronous subscriptions on `noTransaction()` or a Spring executor now reads and
   decides before it enters its transaction executor's transaction when `execute` runs outside every Spring transaction
-  scope of yours, so a decider on it saves snapshots. Only the append, the
+  scope of yours, so a decider on it saves snapshots. On the blocking service only a command that asks for marker
+  versions does, and any other command reads and decides in the executor's transaction, as in 0.34.0. Only the append, the
   re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
   write your domain function makes is no longer part of it. The executor's conflict retry re-runs the append, the re-read
   and the dispatch, with the token of the read the decision was made on, and not the read or your domain function. A

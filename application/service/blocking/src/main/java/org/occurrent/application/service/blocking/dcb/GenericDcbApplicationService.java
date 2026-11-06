@@ -179,13 +179,11 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         };
 
         Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
-            if (dispatchSynchronously && (transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
-                // The executor can leave the transaction that's open here for the append, so a read here could miss what the
-                // append's condition sees and fail on every attempt. The read and the decision go in the executor too, and
-                // that costs nothing, since a store already reports no marker versions in the open transaction.
-                // An executor that doesn't allow a read before it gets the read here too, for example under a caller's scope
-                // that has synchronization but no transaction, where a read would bind a session the executor then fails on.
-                // Their failure goes around the executor, so it can't mark that transaction rollback-only.
+            if (dispatchSynchronously && (!versionsRequested || transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
+                // In the executor a write of the domain function rolls back with the executor's transaction, and the executor
+                // can run the action again after a transient read failure. A command asking for marker versions reads here only
+                // in an open transaction the executor can leave for the append, or when the executor doesn't allow a read before it.
+                boolean joinsATransaction = transactionExecutor.isTransactional();
                 AtomicReference<@Nullable Throwable> failedBeforeAppend = new AtomicReference<>();
                 Tuple<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransaction(() -> {
                     // An executor can run this action again, so a failure kept from an earlier run must not be thrown after a later run appends
@@ -195,6 +193,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                         decision = readAndDecide.get();
                     } catch (Throwable failure) {
                         // Throwable, since a domain function in Kotlin can throw a checked exception
+                        if (!joinsATransaction) {
+                            throw GenericDcbApplicationService.<RuntimeException>sneakyThrow(failure);
+                        }
+                        // Going around the executor keeps the failure from marking the caller's transaction rollback-only
                         failedBeforeAppend.set(failure);
                         return new Tuple<>(Optional.empty(), List.of());
                     }
@@ -206,7 +208,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 }
                 return attempt;
             }
-            // The read and the decision run outside the transaction, since a store reports no marker versions inside one.
+            // A command that asks for marker versions reads and decides outside the transaction, since a store reports none inside one.
             // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
             Optional<Decision<E>> decision = readAndDecide.get();
             if (decision.isEmpty()) {

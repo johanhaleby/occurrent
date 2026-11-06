@@ -263,7 +263,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             var executor = new RecordingExecutor();
             var refusal = new DcbSnapshotInvalidException(CRITERIA, versions("epoch-1", 2), "refused by the domain function");
 
-            Throwable thrown = catchThrowable(() -> transactionalService(store, executor, new RecordingDispatcher()).execute(CRITERIA, events -> {
+            Throwable thrown = catchThrowable(() -> transactionalService(store, executor, new RecordingDispatcher()).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> {
                 throw refusal;
             }));
 
@@ -326,9 +326,34 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         void the_read_and_the_domain_function_run_outside_the_transaction_and_the_append_and_dispatch_inside_it() {
             var store = new TracingStore(trace);
 
-            transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, events -> decide());
+            transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
 
             assertThat(trace).containsExactly("read", "decide", "begin", "append", "read", "dispatch", "commit");
+        }
+
+        @Test
+        void a_command_that_asks_for_no_marker_versions_reads_and_decides_inside_the_transaction() {
+            var store = new TracingStore(trace);
+
+            transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, events -> decide());
+
+            assertThat(trace).containsExactly("begin", "read", "decide", "append", "read", "dispatch", "commit");
+        }
+
+        @Test
+        void a_failure_from_the_domain_function_rolls_back_the_transaction_the_executor_opened() {
+            var store = new TracingStore(trace);
+            var failure = new IllegalStateException("refused by the domain function");
+
+            Throwable thrown = catchThrowable(() -> transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, events -> {
+                trace.add("decide");
+                throw failure;
+            }));
+
+            assertAll(
+                    () -> assertThat(thrown).as("what reached the caller").isSameAs(failure),
+                    () -> assertThat(trace).containsExactly("begin", "read", "decide", "rollback")
+            );
         }
 
         @Test
@@ -345,7 +370,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             var store = new TracingStore(trace);
             var executor = new TracingExecutor(trace);
 
-            Optional<DcbAppendResult> result = transactionalService(store, executor, dispatcher).execute(CRITERIA, events -> {
+            Optional<DcbAppendResult> result = transactionalService(store, executor, dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> {
                 trace.add("decide");
                 return List.of();
             });
@@ -363,7 +388,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             var executor = new TracingExecutor(trace).runningTheActionAgainAfterAConflict();
             var decisions = new AtomicInteger();
 
-            transactionalService(store, executor, dispatcher).execute(CRITERIA, events -> {
+            transactionalService(store, executor, dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> {
                 decisions.incrementAndGet();
                 return decide();
             });
@@ -381,7 +406,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             var store = new TracingStore(trace).conflictingOnTheFirstAppends(1);
             var decisions = new AtomicInteger();
 
-            transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, events -> {
+            transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> {
                 decisions.incrementAndGet();
                 return decide();
             });
