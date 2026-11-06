@@ -696,8 +696,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // caller's thread never waits for storage. A thread that has to deliver the read's answer itself, a Netty event
     // loop of the storage's driver for one, would otherwise wait for good. Until the hand-over, a pause, a resume, a
     // stop or a start is kept here, as in startDelegatedOnceRestored, and the wrapped model gets it once it has the
-    // subscription. A refusal on the way, from the wrapped model or from recording the start position, and a read that
-    // fails, then fail the handle and are logged as an error, since there is no call left to throw from.
+    // subscription. A refusal on the way, from the wrapped model, from recording the start position or from a read that
+    // answers nothing, and a read for the subscription-model default that fails, then fail the handle and are logged
+    // as an error, since there is no call left to throw from. A read for StartAt.now() that fails is read again, see
+    // fromThePresent.
     //
     // A duplicate found here is refused before storage is read. The checks and the start of the keeping are one step
     // under positionLock, after which a hand-over of the id that another subscribe has not marked yet is refused, see
