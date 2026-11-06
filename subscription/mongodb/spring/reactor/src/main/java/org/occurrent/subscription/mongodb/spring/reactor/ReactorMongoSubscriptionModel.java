@@ -1187,7 +1187,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * pause closes the run before that or after it. {@code whileOpen} holds it while a change stream records, gives
      * back or clears its opening, and while a read records where the run opened and clears the opening, for the same
      * reason. {@code openedAt} is volatile and set without it, and {@code reads} is a swap that needs none. No code of
-     * the caller runs while it's held.
+     * the caller runs while it's held, apart from the {@code asString()} of a {@code Checkpoint} class of its own that
+     * a dynamic position answered, which recording where the run opened reads.
      */
     static final class Run {
         private final Sinks.Empty<Void> started = Sinks.empty();
