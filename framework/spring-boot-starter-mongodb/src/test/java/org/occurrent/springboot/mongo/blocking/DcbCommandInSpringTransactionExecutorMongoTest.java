@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
@@ -177,6 +178,25 @@ class DcbCommandInSpringTransactionExecutorMongoTest {
             mongoTemplate.insert(new Document("_id", domainWrite), "domain-writes");
             throw failure;
         })));
+
+        assertAll(
+                () -> assertThat(thrown).as("what reached the caller").isSameAs(failure),
+                () -> assertThat(mongoTemplate.count(Query.query(Criteria.where("_id").is(domainWrite)), "domain-writes"))
+                        .as("domain writes stored").isZero()
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {TransactionDefinition.PROPAGATION_SUPPORTS, TransactionDefinition.PROPAGATION_NOT_SUPPORTED, TransactionDefinition.PROPAGATION_NEVER})
+    void a_write_the_domain_function_makes_before_it_throws_rolls_back_with_the_session_an_executor_that_opens_no_transaction_binds(int executorsPropagation) {
+        String domainWrite = UUID.randomUUID().toString();
+        var failure = new IllegalStateException("domain failure");
+        var service = service(eventStore, executorsPropagation);
+
+        Throwable thrown = catchThrowable(() -> service.execute(DcbCriteria.tags(tag), events -> {
+            mongoTemplate.insert(new Document("_id", domainWrite), "domain-writes");
+            throw failure;
+        }));
 
         assertAll(
                 () -> assertThat(thrown).as("what reached the caller").isSameAs(failure),

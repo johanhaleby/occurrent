@@ -80,7 +80,7 @@ import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
  * The executor against a real {@link SpringMongoEventStore}. A transaction it owns is undone when a synchronous handler
  * fails, so the command runs again and leaves one event and one side effect. Under {@code PROPAGATION_NOT_SUPPORTED} it
  * opens no transaction and reports none, yet the store's session synchronization is active and still rolls a write to a
- * stream or a DCB boundary back when the handler fails, and the command doesn't run again. A transaction the caller opened changes nothing for an executor that opens its own, on
+ * stream, or a DCB boundary's write of a command that asks for no marker versions, back when the handler fails, and the command doesn't run again. A transaction the caller opened changes nothing for an executor that opens its own, on
  * {@code PROPAGATION_REQUIRES_NEW} or on another transaction manager. In a transaction the caller opened on the same
  * manager, a failing handler stops the handlers behind it and keeps the caller from committing, unless the manager is set
  * not to mark a transaction rollback-only after a failure in a part of it.

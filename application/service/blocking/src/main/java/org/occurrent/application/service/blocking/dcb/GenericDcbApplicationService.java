@@ -198,9 +198,11 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             }
             try {
                 if (dispatchSynchronously && (!versionsRequested || transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
-                    // In the executor a write of the domain function rolls back with the executor's transaction, and the executor
-                    // can run the action again after a transient read failure. A command asking for marker versions reads here only
-                    // in an open transaction the executor can leave for the append, or when the executor doesn't allow a read before it.
+                    // A failure of the domain function goes through the executor unless the executor joined a transaction, so a
+                    // transaction the executor opens rolls back with the function's write, and the executor can run the action again
+                    // after a transient read failure. A command asking for marker versions reads here only in an open transaction the
+                    // executor can leave for the append, or when the executor doesn't allow a read before it.
+                    boolean transactionalBefore = transactionExecutor.isTransactional();
                     Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> {
                         if (failureAfterWrite.isHeld()) {
                             // Before the read, so a run after the stand-in doesn't run the domain function again
@@ -213,10 +215,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                             decision = readAndDecide.get();
                         } catch (Throwable failure) {
                             // Throwable, since a domain function in Kotlin can throw a checked exception
-                            if (openedTransaction) {
+                            if (openedTransaction || !transactionalBefore) {
                                 throw FailureAfterWrite.<RuntimeException>sneakyThrow(failure);
                             }
-                            // Going around the executor keeps the failure from marking the caller's transaction rollback-only
+                            // Going around the executor keeps the failure from marking the transaction it joined rollback-only
                             failureAfterWrite.keepBeforeWrite(failure);
                             return new Attempt<>(Optional.empty(), List.of());
                         }
@@ -224,7 +226,8 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     });
                     return failureAfterWrite.attemptOrFailure(attempt);
                 }
-                // A command that asks for marker versions reads and decides outside the transaction, since a store reports none inside one.
+                // Without synchronous subscriptions every command reads and decides here, and with them a command that asks for
+                // marker versions does, since a store reports none inside a transaction.
                 // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
                 Optional<Decision<E>> decision = readAndDecide.get();
                 if (decision.isEmpty()) {

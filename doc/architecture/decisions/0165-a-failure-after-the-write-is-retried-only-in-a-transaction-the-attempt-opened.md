@@ -139,7 +139,7 @@ that matches the failure, on both stacks unless a row says otherwise. Every Spri
 | Spring, `REQUIRED` | the caller's, on another transaction manager | | the command runs again, no exception | 1 |
 | Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, in a Spring scope of the caller's on `NOT_SUPPORTED` or `SUPPORTS` | doesn't catch it | gets the failure | 0, and can be 1 for a snapshot decider |
 | Spring, `NOT_SUPPORTED` | the caller's | catches it and commits | the commit succeeds | 0 |
-| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, and no Spring scope | | gets the failure | 0 on a stream, 1 on a DCB boundary, 0 there for a blocking command that asks for no marker versions |
+| Spring, `NOT_SUPPORTED`, `SUPPORTS` or `NEVER` | none, and no Spring scope | | gets the failure | 0 on a stream, 1 on a DCB boundary, 0 there on `NOT_SUPPORTED` for a blocking command that asks for no marker versions |
 
 The Spring MongoDB stores set `SessionSynchronization.ALWAYS` themselves, so with no transaction reported the store
 still writes to a stream in a synchronization-based transaction that rolls back. In the last row a DCB append stays on

@@ -647,12 +647,13 @@ and these are the consequences:
 - This changes one sentence of ADR 74's context, the one saying the service runs the whole read-decide-append through a
   `TransactionExecutor`. ADR 74's decision still holds.
 
-On the blocking service a command that asks for no marker versions reads and decides in the executor's transaction, as
-in 0.34.0, since it has no versions to lose there. Reading first cost such a command two things. A write its domain
-function made before it threw stayed stored, with no caller scope and in a caller's scope on `PROPAGATION_SUPPORTS` or
-`PROPAGATION_NOT_SUPPORTED`, and with no caller scope a transient failure of the read failed the command where the
-executor had run it again. I ran both on a Spring MongoDB store, and with the read in the executor the write rolled back and the command
-stored its event. The reactive service still reads first for every command.
+On the blocking service a command that asks for no marker versions reads and decides inside the executor, as in
+0.34.0, since it has no versions to lose there. With no caller scope, reading first cost such a command two
+things. A write its domain function made before it threw stayed stored, and a transient failure of the read failed the
+command where the executor had run it again. In a caller's scope on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`
+the read already ran in the executor, and the write stayed stored because the service held the failure, as described
+below, and the executor committed. I ran these on a Spring MongoDB store with the executor on `PROPAGATION_REQUIRED`. With
+the read in the executor and the failure passed through it, the write rolled back and the command stored its event. The reactive service still reads first for every command.
 
 `GenericApplicationService`, the stream service, still reads and decides in the transaction, since a stream snapshot
 needs no marker versions.
@@ -690,16 +691,20 @@ service passes it to the synchronous subscriptions as whether the write is in on
 in the executor, so it gets versions only when the executor opens no transaction.
 
 On the blocking service a failure of the read or the decision goes around the executor when `isTransactional()`
-answered `true` before the service entered it, so it can't mark a transaction the caller owns rollback-only, and a
-caller that catches it and continues commits. The service holds it inside the
-executor's action, returns normally, and throws it after the executor has returned, an `Error` as well. Without that
-hold the caller's commit threw `UnexpectedRollbackException`. When `isTransactional()` answered `false`, the failure
-goes through the executor, which rolls back a transaction it opened. The reactive service lets the failure through the
+answered `true` before the service entered it and `inTransactionTellingIfOpened` says the attempt didn't open its
+transaction. So it can't mark a transaction the caller owns rollback-only, and a caller that catches it and continues
+commits. The service holds it inside the executor's action, returns normally, and throws it after the executor has
+returned, an `Error` as well. Without that hold the caller's commit threw `UnexpectedRollbackException`. Otherwise the
+failure goes through the executor, which rolls back a transaction it opened. An executor of your own that keeps the
+default of `inTransactionTellingIfOpened` and opens a transaction while `isTransactional()` already answers `true`
+reports joining it, so the failure is held there and the executor can commit a write the domain function made before
+it threw. The reactive service lets the failure through the
 executor. `GenericReactiveTransaction.isRollbackOnly()` in spring-tx 7.0.9 reads only its own flag, so a participant
 can't stop the caller's commit, and with and without a hold the caller's transaction committed on a Spring MongoDB store.
 I ran no other reactive executor.
 
-The answers of `isTransactional()` and `allowsReadBeforeTransaction()` decide all of this. I ran an executor that
+With synchronous subscriptions, where the read runs follows from whether the command asks for marker versions and from
+the answers of `isTransactional()` and `allowsReadBeforeTransaction()`. I ran an executor that
 answers `true` from `isTransactional()` with no transaction open, against what the interface asks for, on both stacks
 over a Spring MongoDB store. When it opens a transaction, the read runs in that transaction and the decider saves no
 snapshot. When it opens none, the decider saves one. In both the command stored its event, the handler ran once, and an

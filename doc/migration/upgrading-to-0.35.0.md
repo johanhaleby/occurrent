@@ -964,7 +964,7 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - A DCB application service with synchronous subscriptions on `noTransaction()` or a Spring executor now reads and
   decides before it enters its transaction executor's transaction when `execute` runs outside every Spring transaction
   scope of yours, so a decider on it saves snapshots. On the blocking service only a command that asks for marker
-  versions does, and any other command reads and decides in the executor's transaction, as in 0.34.0. On
+  versions does, and any other command reads and decides inside the executor, as in 0.34.0. On
   `NativeMongoTransactionExecutor` it does so when no
   `ClientSession` is bound on the thread, by the executor or by you through `ClientSessionHolder.set`. Only the append,
   the re-read of the written block and the dispatch run in that transaction. Your domain function no longer runs in it, so a
@@ -986,8 +986,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   method to answer `true`. The service reads before the executor only while the executor's `isTransactional()` answers `false`.
 - In a transaction you own, the service still reads and decides in the executor, so what such a command sees doesn't
   change, also on `PROPAGATION_REQUIRES_NEW` and `PROPAGATION_NOT_SUPPORTED`. On a blocking service an exception from
-  your domain function no longer marks that transaction rollback-only, so if you catch it and continue, that transaction
-  commits.
+  your domain function no longer marks that transaction rollback-only when the executor joins it and its
+  `isTransactional()` answers `true` there, so if you catch it and continue, that transaction commits.
 
 ### Stored snapshots
 
@@ -1072,8 +1072,8 @@ subscriptions behaves as before.
   MongoDB stores a write to a stream often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or
   `PROPAGATION_NEVER`, and there a retry that used to work is gone. When `execute` runs outside every Spring transaction
   scope of yours, a DCB append on those three propagations stays on the reactive service, and on the blocking service
-  for a command that asks for marker versions, as a snapshot decider's does. The append of any other `execute` on the
-  blocking service rolls back as a write to a stream does. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or
+  for a command that asks for marker versions, as a snapshot decider's does. On `PROPAGATION_NOT_SUPPORTED` the append of any other
+  `execute` on the blocking service rolls back as a write to a stream does. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or
   `PROPAGATION_NOT_SUPPORTED`, which opens no transaction, the append of a plain `execute` rolls back too when you don't
   catch the failure inside that scope. A snapshot decider's append can stay there, unless `resumeFromMarkerVersions` is
   off on the store, the criteria matches every event (`DcbCriteria.all()`), or the read of the versions failed.

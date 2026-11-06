@@ -357,10 +357,26 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Test
+        void a_failure_from_the_domain_function_rolls_back_the_transaction_of_an_executor_that_keeps_the_defaults_for_telling_whether_it_opened_it() {
+            var store = new TracingStore(trace);
+            var failure = new IllegalStateException("refused by the domain function");
+
+            Throwable thrown = catchThrowable(() -> transactionalService(store, new TracingExecutor(trace).inferringWhetherItOpenedTheTransaction(), dispatcher).execute(CRITERIA, events -> {
+                trace.add("decide");
+                throw failure;
+            }));
+
+            assertAll(
+                    () -> assertThat(thrown).as("what reached the caller").isSameAs(failure),
+                    () -> assertThat(trace).containsExactly("begin", "read", "decide", "rollback")
+            );
+        }
+
+        @Test
         void an_executor_that_does_not_allow_a_read_before_it_gets_the_read_and_the_domain_function_inside_its_transaction() {
             var store = new TracingStore(trace);
 
-            transactionalService(store, new TracingExecutor(trace).notAllowingAReadBeforeIt(), dispatcher).execute(CRITERIA, events -> decide());
+            transactionalService(store, new TracingExecutor(trace).notAllowingAReadBeforeIt(), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
 
             assertThat(trace).containsExactly("begin", "read", "decide", "append", "read", "dispatch", "commit");
         }
@@ -710,6 +726,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         private final List<String> trace;
         private boolean runAgainAfterAConflict;
         private boolean allowsReadBeforeIt = true;
+        private boolean infersWhetherItOpened;
 
         TracingExecutor(List<String> trace) {
             this.trace = trace;
@@ -725,6 +742,12 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             return this;
         }
 
+        // Keeps the default inference and the default isTransactional of false, so it reports not opening the transaction it opens
+        TracingExecutor inferringWhetherItOpenedTheTransaction() {
+            this.infersWhetherItOpened = true;
+            return this;
+        }
+
         // Opens nothing around the caller unless told otherwise, like a Spring executor with no caller scope
         @Override
         public boolean allowsReadBeforeTransaction() {
@@ -734,6 +757,9 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         // Opens the transaction it begins
         @Override
         public <T> T inTransactionTellingIfOpened(Function<Boolean, T> action) {
+            if (infersWhetherItOpened) {
+                return TransactionExecutor.super.inTransactionTellingIfOpened(action);
+            }
             return inTransaction(() -> action.apply(true));
         }
 
