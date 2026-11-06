@@ -535,7 +535,7 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
-    void reads_a_versioned_read_without_the_confirmation_mark_in_a_transaction_of_its_own_where_a_session_is_already_bound() {
+    void reads_a_versioned_read_without_the_confirmation_mark_outside_a_session_already_bound() {
         eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
         AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
 
@@ -545,7 +545,7 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
             withoutMark.set(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()));
         });
 
-        assertThat(withoutMark.get().markerVersions()).as("versions from a read-only transaction of the store's own").isNotEmpty();
+        assertThat(withoutMark.get().markerVersions()).as("versions of a read outside the bound session").isNotEmpty();
         assertThat(withoutMark.get().events()).as("a read outside the bound session misses its append").extracting(CloudEvent::getId).containsExactly("before");
     }
 
