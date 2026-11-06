@@ -22,7 +22,7 @@ What the failing event holds up in the meantime is decided by whatever feeds the
 
 Quarantine is off by default in 0.34.0, so an instance can only be quarantined if you turned it on, with
 `SagaRunnerConfig.withQuarantineAfter(..)` or `occurrent.saga.quarantine-after` on the annotation path. The executor
-then times how long the instance has been failing. Once that reaches the budget, the instance can move to
+then times how long the event it is failing on has been failing. Once that reaches the budget, the instance can move to
 `SagaStatus.QUARANTINED`, and when it does the executor stops rethrowing.
 
 Reaching the budget is not enough on its own. The javadoc on `SagaStatus.QUARANTINED` lists what else has to hold, so
@@ -78,7 +78,7 @@ a later delivery may have succeeded and cleared the record, which the runner doe
 instance's status with step 1 rather than reading the quiet either way.
 
 When an instance is quarantined, the same logger logs an `ERROR` saying it is now `QUARANTINED`. That line is the one
-to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
+to alert on. It names two durations, how long the event had been failing and then the budget, in that order.
 
 The third line is a `WARN` for one of the ways an instance past its budget is not quarantined, where the subscription
 could not confirm it still holds the failing event. That instance stays `ACTIVE`, so it does not appear in step 1,
@@ -99,9 +99,9 @@ run of refusals, so it says nothing on the redeliveries that follow. It says it 
 handles successfully, and again after a restart, since that memory does not survive one. An alert on it should
 therefore neither expect one line per redelivery nor treat a second line as a second instance.
 
-The elapsed duration is how long the instance has been failing, which can be longer than the named event has. The
-clock belongs to the instance rather than to one event, so an instance where two events both fail keeps the instant it
-started failing and renames the record to whichever event failed last.
+The elapsed duration is how long the named event has been failing, measured from when it first failed. Each failing
+event keeps its own clock, so an instance where two events fail in turn renames the record to whichever event failed
+last, with that event's own instant.
 
 ## The sequence
 
@@ -161,9 +161,9 @@ SagaInstance instance = quarantined.getFirst();
 SagaFailure failure = instance.failure();
 // failure.input()          the failing event's redelivery key, a stream id with its stream version
 // failure.position()       the event's global position when the store assigns one, otherwise null
-// failure.firstFailedAt()  when this instance started failing, strictly when its first failure record
-//                          was written, which is later than the first failure itself if an earlier
-//                          failure recorded nothing
+// failure.firstFailedAt()  when the event the record names first failed, strictly when that failure
+//                          was first recorded, on the record or on the event's pending entry, which is
+//                          later than the first failure itself if an earlier failure recorded nothing
 // failure.failureType()    the class name of the exception that stopped the processing. Usually one the
 //                          saga or its command dispatcher threw, and it can also be a store or
 //                          converter failure, since the runner catches the whole path including the
@@ -173,13 +173,14 @@ SagaFailure failure = instance.failure();
 //                          so the log lines are where a long message survives whole
 ```
 
-Read `firstFailedAt()` as the start of the instance's current run of failing, and not as the first time
-`failure.input()` itself failed. Reading it the other way under-reports how long the instance has been stuck.
+Read `firstFailedAt()` as how long `failure.input()` has been failing. Each failing event keeps its own clock, so
+another event that failed on the same instance before it does not move it. A record written before 0.35.0 can hold an
+earlier instant, from when the instance started failing on some other event.
 
-It is a floor rather than an exact incident start. The value is when the first failure record was written, and an
-earlier failure that recorded nothing, a failing timeout or a write that lost its compare-and-set for instance, makes
-that later than when the instance started failing. So the instance may have been failing for longer than the
-difference between `firstFailedAt()` and now.
+It is a floor rather than an exact incident start. The value is when the failure was first recorded, and an earlier
+failure of the same event that recorded nothing, one whose writes all lost their compare-and-set for instance, makes
+that later than when the event started failing. So the event may have been failing for longer than the difference
+between `firstFailedAt()` and now.
 
 The record holds the exception's class name and message, and not its stack trace. Take the stack trace from the log
 lines under "How you find out" above, which are the only place it exists.
@@ -245,6 +246,12 @@ It is still quarantined, and 0.34.0 has nothing that replays it.
 In every case the instance stays where it is. What you have gained is knowing whether the process it was running
 finished some other way, which is what you need before step 5.
 
+**Replaying a parked event costs its whole clock.** A parked event's clock keeps running while it is parked. When you
+replay it on an instance with quarantine on and it fails again after `quarantineAfter` has passed since its first
+failure, that first replay failure quarantines the instance, and the `ERROR` line comes with no `WARN` before it. Fix
+the cause before you replay. Turning quarantine on works the same way for an event that failed while it was off, since
+that event has been failing since then.
+
 ### 5. [you] Delete the instance, once you have decided not to recover it
 
 `SagaStateStore.delete(sagaId)` is the call, and whether you have anything to call it on depends on how the store was
@@ -304,8 +311,8 @@ which is the race in step 5.
 
 ## Preventing the next one
 
-`SagaRunnerConfig.quarantineAfter` is how long an instance has to keep failing before it can be quarantined. It is
-empty by default, which means never, and five minutes is a reasonable budget when you turn it on. On the annotation
+`SagaRunnerConfig.quarantineAfter` is how long one event has to keep failing before its instance can be quarantined
+on it. It is empty by default, which means never, and five minutes is a reasonable budget when you turn it on. On the annotation
 path it is `occurrent.saga.quarantine-after` instead.
 
 Lower it when you would rather find out sooner and are willing to quarantine an instance whose downstream service was

@@ -42,6 +42,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -832,6 +834,232 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
             // Then
             assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(LEGACY_FAILED_MARKS);
+        }
+    }
+
+    @Nested
+    @DisplayName("when an instance with pending since instants is saved")
+    class WhenAnInstanceWithPendingSinceIsSaved {
+
+        private final Instant since4 = Instant.parse("2026-01-01T00:01:00.123Z");
+        private final Instant since6 = Instant.parse("2026-01-01T00:02:00.456Z");
+        private final Instant since1 = Instant.parse("2026-01-01T00:03:00.789Z");
+
+        private final Map<String, StreamMarks> pendingSinceMarks = Map.of(
+                STREAM_ID, new StreamMarks(3, Map.of(PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L), 8)),
+                        Map.of(PLACED_TYPE, List.of(4L, 6L)), List.of(), Map.of(4L, since4, 6L, since6)),
+                "other", new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(PLACED_TYPE, List.of(1L)), List.of(), Map.of(1L, since1)));
+
+        private SagaEnvelope<String> withMarks(SagaEnvelope<String> read, Map<String, StreamMarks> marks) {
+            return new SagaEnvelope<>(SAGA_ID, read.state(), read.status(), read.version() + 1, read.timers(), read.streamWatermarks(), null,
+                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), marks);
+        }
+
+        @Test
+        void find_reads_back_the_pending_since_of_every_stream() {
+            // Given
+            save(instanceWith(pendingSinceMarks, 1), 0);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertAll(
+                    () -> assertThat(read.streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(4L, since4, 6L, since6)),
+                    () -> assertThat(read.streamMarks().get("other").pendingSince()).isEqualTo(Map.of(1L, since1)),
+                    () -> assertThat(read.streamMarks()).isEqualTo(pendingSinceMarks)
+            );
+        }
+
+        @Test
+        void findWithoutState_reads_back_the_pending_since() {
+            // Given
+            save(instanceWith(pendingSinceMarks, 1), 0);
+
+            // When
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // Then
+            assertAll(
+                    () -> assertThat(read.state()).isNull(),
+                    () -> assertThat(read.streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(4L, since4, 6L, since6)),
+                    () -> assertThat(read.streamMarks()).isEqualTo(pendingSinceMarks)
+            );
+        }
+
+        @Test
+        void the_pending_since_is_stored_as_a_list_of_version_and_date_on_each_stream() {
+            // Given
+            save(instanceWith(pendingSinceMarks, 1), 0);
+
+            // When
+            Document raw = rawDocument();
+
+            // Then
+            Document stream = raw.getList("streamMarks", Document.class).stream().filter(s -> STREAM_ID.equals(s.getString("streamId"))).findFirst().orElseThrow();
+            List<Document> pendingSince = stream.getList("pendingSince", Document.class);
+            assertThat(pendingSince).isNotNull();
+            assertAll(
+                    () -> assertThat(pendingSince).extracting(entry -> entry.getLong("version")).containsExactlyInAnyOrder(4L, 6L),
+                    () -> assertThat(pendingSince).filteredOn(entry -> entry.getLong("version") == 4L).singleElement()
+                            .satisfies(entry -> assertThat(entry.getDate("since")).isEqualTo(Date.from(since4)))
+            );
+        }
+
+        @Test
+        void an_instant_is_stored_at_millisecond_precision() {
+            // Given
+            Instant precise = Instant.parse("2026-01-01T00:01:00.123456789Z");
+            Map<String, StreamMarks> marks = Map.of(STREAM_ID, new StreamMarks(3, Map.of(), Map.of(PLACED_TYPE, List.of(4L)), List.of(), Map.of(4L, precise)));
+            save(instanceWith(marks, 1), 0);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertThat(read.streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(4L, precise.truncatedTo(ChronoUnit.MILLIS)));
+        }
+
+        @Test
+        void an_update_replaces_the_pending_since_it_had_before() {
+            // Given
+            save(instanceWith(pendingSinceMarks, 1), 0);
+            Map<String, StreamMarks> later = Map.of(STREAM_ID, new StreamMarks(3, Map.of(), Map.of(PLACED_TYPE, List.of(6L)), List.of(), Map.of(6L, since6)));
+
+            // When
+            save(instanceWith(later, 2), 1);
+
+            // Then
+            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(6L, since6));
+        }
+
+        @Test
+        void a_save_with_nothing_pending_takes_away_the_pending_since_the_document_had() {
+            // Given
+            save(instanceWith(pendingSinceMarks, 1), 0);
+            SagaEnvelope<String> before = stateStore.find(SAGA_ID).orElseThrow();
+
+            // When
+            save(instanceWith(MARKS, 2), 1);
+
+            // Then
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            assertAll(
+                    () -> assertThat(before.streamMarks().get(STREAM_ID).pendingSince()).isNotEmpty(),
+                    () -> assertThat(read.streamMarks().get(STREAM_ID).pendingSince()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_write_without_the_state_stores_the_pending_since_and_leaves_the_state_where_it_was() {
+            // Given
+            save(instanceWith(MARKS, 1), 0);
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // When
+            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, withMarks(read, pendingSinceMarks), read.version());
+
+            // Then
+            SagaEnvelope<String> after = stateStore.find(SAGA_ID).orElseThrow();
+            assertAll(
+                    () -> assertThat(written).isTrue(),
+                    () -> assertThat(after.streamMarks()).isEqualTo(pendingSinceMarks),
+                    () -> assertThat(after.state()).isEqualTo("awaiting-payment")
+            );
+        }
+
+        @Test
+        void an_insert_without_the_state_of_an_instance_whose_first_event_failed_stores_the_pending_since() {
+            // Given
+            Map<String, StreamMarks> insertedMarks = Map.of(STREAM_ID,
+                    new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(PLACED_TYPE, List.of(1L)), List.of(), Map.of(1L, since1)));
+            SagaEnvelope<String> inserted = new SagaEnvelope<>(SAGA_ID, "initial", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null,
+                    NOW, NOW, null, null, false, null, insertedMarks);
+
+            // When
+            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, inserted, 0);
+
+            // Then
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            assertAll(
+                    () -> assertThat(written).isTrue(),
+                    () -> assertThat(read.streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(1L, since1))
+            );
+        }
+
+        @Test
+        void a_write_without_the_state_that_carries_the_marks_over_keeps_the_pending_since() {
+            // Given
+            save(instanceWith(pendingSinceMarks, 1), 0);
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // When
+            stateStore.compareAndSaveWithoutState(SAGA_ID, withMarks(read, read.streamMarks()), read.version());
+
+            // Then
+            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(pendingSinceMarks);
+        }
+    }
+
+    @Nested
+    @DisplayName("when a stored stream entry has no pendingSince field")
+    class WhenAStoredStreamEntryHasNoPendingSinceField {
+
+        private Document documentWithPendingAndNoPendingSince() {
+            Document type = new Document("type", PLACED_TYPE).append("mark", 12L).append("applied", List.of(9L, 10L, 11L)).append("horizon", 8L);
+            Document pending = new Document("type", PLACED_TYPE).append("versions", List.of(4L, 6L));
+            Document stream = new Document("streamId", STREAM_ID).append("floor", 3L).append("types", List.of(type))
+                    .append("pending", List.of(pending)).append("legacyFailed", List.of(5L));
+            return documentWrittenBy0_34().append("streamMarks", List.of(stream));
+        }
+
+        private void assertEmptyPendingSinceAndOtherMarksIntact(SagaEnvelope<String> read) {
+            StreamMarks marks = read.streamMarks().get(STREAM_ID);
+            assertAll(
+                    () -> assertThat(marks.pendingSince()).isEmpty(),
+                    () -> assertThat(marks.floor()).isEqualTo(3L),
+                    () -> assertThat(marks.byType().get(PLACED_TYPE)).isEqualTo(new TypeMark(12, List.of(9L, 10L, 11L), 8)),
+                    () -> assertThat(marks.pending()).isEqualTo(Map.of(PLACED_TYPE, List.of(4L, 6L))),
+                    () -> assertThat(marks.legacyFailed()).containsExactly(5L)
+            );
+        }
+
+        @Test
+        void find_reads_it_with_an_empty_pending_since_and_the_other_marks_intact() {
+            // Given
+            mongoOperations.insert(documentWithPendingAndNoPendingSince(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+
+            // Then
+            assertEmptyPendingSinceAndOtherMarksIntact(read);
+        }
+
+        @Test
+        void findWithoutState_reads_it_with_an_empty_pending_since_and_the_other_marks_intact() {
+            // Given
+            mongoOperations.insert(documentWithPendingAndNoPendingSince(), COLLECTION);
+
+            // When
+            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+
+            // Then
+            assertEmptyPendingSinceAndOtherMarksIntact(read);
+        }
+
+        @Test
+        void the_first_save_after_it_writes_the_pending_since() {
+            // Given
+            mongoOperations.insert(documentWithPendingAndNoPendingSince(), COLLECTION);
+            Instant since = Instant.parse("2026-01-01T00:01:00.123Z");
+            Map<String, StreamMarks> marks = Map.of(STREAM_ID, new StreamMarks(3, Map.of(), Map.of(PLACED_TYPE, List.of(4L, 6L)), List.of(), Map.of(4L, since)));
+
+            // When
+            save(instanceWith(marks, 2), 1);
+
+            // Then
+            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(4L, since));
         }
     }
 }
