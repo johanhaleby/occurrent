@@ -650,8 +650,7 @@ On the blocking service a command that asks for no marker versions reads and dec
 in 0.34.0, since it has no versions to lose there. With no caller scope, reading first cost such a command two
 things. A write its domain function made before it threw stayed stored, and a transient failure of the read failed the
 command where the executor had run it again. In a caller's scope on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`
-the read already ran in the executor, and the write stayed stored because the service held the failure, as described
-below, and the executor committed. I ran these on a Spring MongoDB store with the executor on `PROPAGATION_REQUIRED`. With
+the write stayed stored too. I ran these on a Spring MongoDB store with the executor on `PROPAGATION_REQUIRED`. With
 the read in the executor and the failure passed through it, the write rolled back and the command stored its event. The reactive service still reads first for every command.
 
 `GenericApplicationService`, the stream service, still reads and decides in the transaction, since a stream snapshot
