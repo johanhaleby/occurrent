@@ -31,6 +31,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.internal.LostStartHold;
 
 import java.net.URI;
 import java.time.Duration;
@@ -129,6 +130,43 @@ class ManualStartSubscriptionModelTest {
         assertThat(call.startAt()).isSameAs(startAt);
         assertThat(call.action()).isSameAs(action);
         assertThat(subscription).isSameAs(delegate.subscriptions.get(SUBSCRIPTION_ID));
+    }
+
+    @Test
+    void a_subscribe_made_asking_for_the_lost_start_hold_while_stopped_is_made_in_the_wrapped_model_with_the_hold_asked_by_a_later_start_outside_it() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        LostStartHold.askedDuring(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        }));
+
+        model.start(true);
+
+        assertThat(delegate.holdAskedAtSubscribe).as("hold asked inside the wrapped model's subscribe").containsExactly(true);
+        assertThat(LostStartHold.isAsked()).as("asked on the test thread afterwards").isFalse();
+    }
+
+    @Test
+    void a_subscribe_made_asking_for_the_lost_start_hold_while_stopped_is_made_in_the_wrapped_model_with_the_hold_asked_by_a_later_resume_outside_it() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        LostStartHold.askedDuring(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        }));
+
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.holdAskedAtSubscribe).as("hold asked inside the wrapped model's subscribe").containsExactly(true);
+    }
+
+    @Test
+    void a_subscribe_made_without_asking_for_the_lost_start_hold_while_stopped_is_made_in_the_wrapped_model_without_the_hold_asked() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        model.start(true);
+
+        assertThat(delegate.holdAskedAtSubscribe).as("hold asked inside the wrapped model's subscribe").containsExactly(false);
     }
 
     @Test
@@ -1587,6 +1625,7 @@ class ManualStartSubscriptionModelTest {
     private static class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions {
         final List<SubscribeCall> subscribeCalls = new CopyOnWriteArrayList<>();
         final Map<String, Subscription> subscriptions = new HashMap<>();
+        final List<Boolean> holdAskedAtSubscribe = new CopyOnWriteArrayList<>();
         final List<String> resumeCalls = new CopyOnWriteArrayList<>();
         final List<String> cancelCalls = new CopyOnWriteArrayList<>();
         final Set<String> paused = new LinkedHashSet<>();
@@ -1622,6 +1661,7 @@ class ManualStartSubscriptionModelTest {
             if (subscriptionId.equals(failSubscribeFor)) {
                 throw new IllegalStateException("Cannot subscribe " + subscriptionId);
             }
+            holdAskedAtSubscribe.add(LostStartHold.isAsked());
             subscribeCalls.add(new SubscribeCall(subscriptionId, filter, startAt, action));
             Subscription subscription = new RecordedSubscription(subscriptionId);
             subscriptions.put(subscriptionId, subscription);

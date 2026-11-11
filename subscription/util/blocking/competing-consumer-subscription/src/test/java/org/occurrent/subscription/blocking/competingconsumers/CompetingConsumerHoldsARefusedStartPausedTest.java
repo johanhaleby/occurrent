@@ -31,11 +31,13 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.subscription.CatchupCannotResumeException;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.internal.LostStartHold;
 import org.slf4j.LoggerFactory;
 
@@ -242,6 +244,115 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         );
     }
 
+    @Test
+    void throws_from_a_subscribe_that_asks_for_the_hold_and_leaves_nothing_so_the_id_subscribes_again_when_the_wrapped_model_refuses_it_for_a_reason_other_than_a_lost_position() {
+        // Given
+        strategy.grantOnRegister = true;
+        wrapped.refusing = true;
+        wrapped.refusingForAnotherReason = true;
+
+        // When
+        Throwable thrown = catchThrowable(() -> subscribe(true));
+
+        // Then
+        assertThat(thrown).as("thrown by the subscribe").isInstanceOf(CatchupCannotResumeException.class);
+        assertAll(
+                () -> assertThat(model.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(strategy.registrations).as("registered with the strategy").isEmpty(),
+                () -> assertThat(strategy.holders).as("holding the lease").isEmpty()
+        );
+        wrapped.refusing = false;
+        assertThatCode(() -> subscribe(true)).as("subscribing the id again").doesNotThrowAnyException();
+        assertThat(model.isRunning(ID)).as("running").isTrue();
+    }
+
+    @Test
+    void does_not_hold_a_waiting_consumer_paused_when_a_grant_is_refused_for_a_reason_other_than_a_lost_position_but_gives_the_lease_back_and_competes_again() {
+        // Given
+        subscribeWaiting(true);
+        wrapped.refusing = true;
+        wrapped.refusingForAnotherReason = true;
+
+        // When
+        Throwable thrown = grantTheLease();
+
+        // Then
+        assertThat(thrown).as("thrown by the grant to the strategy").isInstanceOf(CatchupCannotResumeException.class);
+        assertAll(
+                () -> assertThat(model.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(warningsLogged()).as("warnings logged").hasSize(1),
+                () -> assertThat(strategy.registrations).as("registered with the strategy, competing again").contains(ID),
+                () -> assertThat(strategy.holders).as("holding the lease").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+        wrapped.refusing = false;
+        grantTheLease();
+        assertThat(model.isRunning(ID)).as("running once the wrapped model stops refusing").isTrue();
+    }
+
+    @Test
+    void keeps_a_held_consumer_paused_through_start_false_and_does_not_ask_the_wrapped_model_to_subscribe_or_resume_it_again_when_the_model_was_built_over_a_wrapped_model_that_was_not_running() {
+        // Given
+        useAModelBuiltOverAWrappedModelThatIsNotRunning();
+        strategy.grantOnRegister = true;
+        wrapped.refusing = true;
+        subscribe(true);
+        assertHeldPaused();
+        int callsBefore = wrapped.calls.get();
+
+        // When
+        model.start(false);
+
+        // Then
+        assertHeldPaused();
+        await().during(NO_FURTHER_CALLS_FOR).atMost(NO_FURTHER_CALLS_FOR.plusSeconds(5)).untilAsserted(() ->
+                assertThat(wrapped.calls.get()).as("calls into the wrapped model after start(false)").isEqualTo(callsBefore));
+        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+    }
+
+    @Test
+    void competes_again_for_a_held_consumer_when_start_true_follows_a_start_false_on_a_model_built_over_a_wrapped_model_that_was_not_running() {
+        // Given
+        useAModelBuiltOverAWrappedModelThatIsNotRunning();
+        strategy.grantOnRegister = true;
+        wrapped.refusing = true;
+        subscribe(true);
+        model.start(false);
+        assertHeldPaused();
+        wrapped.refusing = false;
+
+        // When
+        model.start(true);
+
+        // Then
+        assertThat(model.isRunning(ID)).as("running").isTrue();
+    }
+
+    @Test
+    void competes_again_for_a_held_consumer_when_the_user_resumes_it_after_a_start_false_on_a_model_built_over_a_wrapped_model_that_was_not_running() {
+        // Given
+        useAModelBuiltOverAWrappedModelThatIsNotRunning();
+        strategy.grantOnRegister = true;
+        wrapped.refusing = true;
+        subscribe(true);
+        model.start(false);
+        assertHeldPaused();
+        wrapped.refusing = false;
+
+        // When
+        model.resumeSubscription(ID);
+
+        // Then
+        assertThat(model.isRunning(ID)).as("running").isTrue();
+    }
+
+    private void useAModelBuiltOverAWrappedModelThatIsNotRunning() {
+        model.shutdown();
+        wrapped = new WrappedModel(false);
+        strategy = new Strategy();
+        model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
+    }
+
     private void subscribeWaiting(boolean holdAsked) {
         strategy.grantOnRegister = false;
         subscribe(holdAsked);
@@ -273,6 +384,10 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
                 () -> assertThat(strategy.registrations).as("registered with the strategy").isEmpty(),
                 () -> assertThat(strategy.holders).as("holding the lease").isEmpty()
         );
+    }
+
+    private List<String> warningsLogged() {
+        return logged.events.stream().filter(event -> event.getLevel().equals(Level.WARN)).map(ILoggingEvent::getFormattedMessage).toList();
     }
 
     private List<String> errorsLogged() {
@@ -344,7 +459,15 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         private final AtomicInteger calls = new AtomicInteger();
         private final List<String> askedDuringACall = new CopyOnWriteArrayList<>();
         private volatile boolean refusing;
+        private volatile boolean refusingForAnotherReason;
         private boolean running = true;
+
+        private WrappedModel() {
+        }
+
+        private WrappedModel(boolean running) {
+            this.running = running;
+        }
 
         @Override
         public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -414,7 +537,10 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
             calls.incrementAndGet();
             noteTheHold(call);
             if (refusing) {
-                throw new CatchupCannotResumeException("No history back to the position stored for " + subscriptionId);
+                if (refusingForAnotherReason) {
+                    throw new CatchupCannotResumeException("The position stored for " + subscriptionId + " cannot be resumed, though no history is lost");
+                }
+                throw HistoryLossMessages.cannotStartFrom(subscriptionId, (Checkpoint) () -> "stored position");
             }
         }
 
