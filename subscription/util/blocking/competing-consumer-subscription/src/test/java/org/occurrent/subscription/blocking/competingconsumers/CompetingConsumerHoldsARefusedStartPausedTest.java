@@ -436,6 +436,89 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         assertThat(errorsLogged()).as("errors logged").hasSize(1);
     }
 
+    @Test
+    void holds_a_consumer_the_system_paused_paused_with_one_error_when_its_resume_on_a_grant_is_refused_as_a_history_loss_of_a_resume() {
+        // Given
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        strategy.holders.remove(ID);
+        model.onConsumeProhibited(ID, NODE);
+        wrapped.refusing = true;
+        wrapped.refusingAResumeAsAHistoryLoss = true;
+
+        // When
+        Throwable thrown = grantTheLease();
+
+        // Then
+        assertThat(thrown).as("thrown by the grant to the strategy").isNull();
+        assertHeldPaused();
+        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+    }
+
+    @Test
+    void makes_the_subscription_in_the_wrapped_model_when_a_consumer_held_while_it_waited_is_resumed_and_granted_the_lease() {
+        // Given
+        subscribeWaiting(true);
+        wrapped.refusing = true;
+        grantTheLease();
+        assertHeldPaused();
+        wrapped.refusing = false;
+        strategy.grantOnRegister = true;
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(wrapped.callNames.getLast()).as("last call into the wrapped model").isEqualTo("subscribe"),
+                () -> assertThat(model.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(wrapped.isRunning(ID)).as("running in the wrapped model").isTrue()
+        );
+    }
+
+    @Test
+    void throws_a_refusal_as_a_history_loss_from_a_subscribe_that_asked_for_the_hold_when_the_id_was_cancelled_during_the_subscribe() {
+        // Given
+        strategy.grantOnRegister = true;
+        wrapped.refusing = true;
+        wrapped.beforeRefusing = () -> model.cancelSubscription(ID);
+
+        // When
+        Throwable thrown = catchThrowable(() -> subscribe(true));
+
+        // Then
+        assertThat(thrown).as("thrown by the subscribe").isInstanceOf(CatchupCannotResumeException.class);
+        assertAll(
+                () -> assertThat(model.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(model.isRunning(ID)).as("running").isFalse(),
+                () -> assertThat(strategy.registrations).as("registered with the strategy").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+    }
+
+    @Test
+    void throws_a_history_loss_that_a_grant_inside_the_registration_met_to_the_resume_that_registered_a_consumer_held_while_it_waited() {
+        // Given
+        subscribeWaiting(true);
+        wrapped.refusing = true;
+        grantTheLease();
+        assertHeldPaused();
+        strategy.grantInsideRegister = true;
+        wrapped.callNames.clear();
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isInstanceOf(CatchupCannotResumeException.class);
+        assertAll(
+                () -> assertThat(wrapped.callNames).as("calls into the wrapped model, the refused one only").hasSize(1),
+                () -> assertThat(model.isRunning(ID)).as("running").isFalse(),
+                () -> assertThat(strategy.holders).as("holding the lease").isEmpty()
+        );
+    }
+
     private void useAModelBuiltOverAWrappedModelThatIsNotRunning() {
         model.shutdown();
         wrapped = new WrappedModel(false);
@@ -499,10 +582,16 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         private final Set<String> registrations = ConcurrentHashMap.newKeySet();
         private final List<CompetingConsumerListener> listeners = new CopyOnWriteArrayList<>();
         private volatile boolean grantOnRegister;
+        private volatile boolean grantInsideRegister;
 
         @Override
         public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
             registrations.add(subscriptionId);
+            if (grantInsideRegister) {
+                holders.add(subscriptionId);
+                listeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
+                return true;
+            }
             if (grantOnRegister) {
                 holders.add(subscriptionId);
                 return true;
@@ -550,6 +639,9 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         private final List<String> askedDuringACall = new CopyOnWriteArrayList<>();
         private volatile boolean refusing;
         private volatile boolean refusingForAnotherReason;
+        private volatile boolean refusingAResumeAsAHistoryLoss;
+        private volatile @Nullable Runnable beforeRefusing;
+        private final List<String> callNames = new CopyOnWriteArrayList<>();
         private boolean running = true;
 
         private WrappedModel() {
@@ -576,6 +668,9 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         @Override
         public synchronized Subscription resumeSubscription(String subscriptionId) {
             enter("resumeSubscription", subscriptionId);
+            if (!pausedIds.contains(subscriptionId) && !runningIds.contains(subscriptionId)) {
+                throw new IllegalStateException("Resume of " + subscriptionId + ", which was never subscribed in the wrapped model");
+            }
             pausedIds.remove(subscriptionId);
             runningIds.add(subscriptionId);
             return new WrappedSubscription(subscriptionId);
@@ -625,8 +720,16 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
 
         private void enter(String call, String subscriptionId) {
             calls.incrementAndGet();
+            callNames.add(call);
             noteTheHold(call);
             if (refusing) {
+                Runnable before = beforeRefusing;
+                if (before != null) {
+                    before.run();
+                }
+                if (refusingAResumeAsAHistoryLoss && call.equals("resumeSubscription")) {
+                    throw HistoryLossMessages.historyLost(subscriptionId, (Checkpoint) () -> "stored position");
+                }
                 if (refusingForAnotherReason) {
                     throw new CatchupCannotResumeException("The position stored for " + subscriptionId + " cannot be resumed, though no history is lost");
                 }
