@@ -907,7 +907,8 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
      * The wrapped model throws when asked where its feed is at the subscribe of a dynamic start position that answers
      * StartAt.now(), which reads it in case the function answers the model default, and the subscribe comes while a
      * cancel of the same id deletes its checkpoint. The subscription starts from where the feed is at its first start,
-     * and a subscribe from the model default after a cancel of it starts at its call.
+     * so an event written after that checkpoint and before the subscribe is not delivered. A subscribe from the model
+     * default after a cancel of it starts at its call.
      */
     @ParameterizedTest
     @ValueSource(strings = {"runtime exception", "error", "checked exception"})
@@ -921,6 +922,7 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
         feed.throwsAtTheCall = ThrownAtTheCall.of(kind, POSITION_READ_FAILED);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
         storage.save(SUBSCRIPTION_ID, checkpoint(0)).block(TIMEOUT);
+        long writtenAfterTheCheckpoint = feed.write();
         model.cancelSubscription(SUBSCRIPTION_ID);
         AtomicReference<Subscription> subscription = new AtomicReference<>();
         List<String> delivered = new CopyOnWriteArrayList<>();
@@ -937,7 +939,9 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             assertThat(atTheCall).as("what the subscribe threw at the call").isNull();
             assertThat(subscription.get().waitUntilStarted().toFuture()).as("waiting for the start of the subscription").succeedsWithin(TIMEOUT);
             long writtenAfterTheStart = feed.write();
-            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered to the subscription").containsExactly(String.valueOf(writtenAfterTheStart)));
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered to the subscription").contains(String.valueOf(writtenAfterTheStart)));
+            assertThat(delivered).as("events delivered to the subscription, with " + writtenAfterTheCheckpoint + " written after the checkpoint and before the subscribe")
+                    .containsExactly(String.valueOf(writtenAfterTheStart));
 
             model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
             assertThatASubscribeFromTheModelDefaultStartsAtItsCall(model, feed, deliveredAgain);
