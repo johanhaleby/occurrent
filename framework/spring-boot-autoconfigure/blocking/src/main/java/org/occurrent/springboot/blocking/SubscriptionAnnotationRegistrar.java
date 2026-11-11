@@ -301,7 +301,7 @@ class SubscriptionAnnotationRegistrar {
         StreamSubscriptions<E> subscribable = applicationContext.getBean(StreamSubscriptions.class);
         startPositionSupport.applyStartupWorkarounds();
 
-        return () -> subscribable.subscribe(id, filter(filter), startAt, shouldWaitUntilStarted, consumer);
+        return () -> BackgroundStartup.subscribe(subscription.startupMode(), () -> subscribable.subscribe(id, filter(filter), startAt, shouldWaitUntilStarted, consumer));
     }
 
     @SuppressWarnings("unchecked")
@@ -328,7 +328,7 @@ class SubscriptionAnnotationRegistrar {
         Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
         startPositionSupport.applyStartupWorkarounds();
 
-        return () -> subscribable.subscribe(id, AgnosticSubscriptionFilter.filter(filter), startAt, shouldWaitUntilStarted, consumer);
+        return () -> BackgroundStartup.subscribe(annotation.startupMode(), () -> subscribable.subscribe(id, AgnosticSubscriptionFilter.filter(filter), startAt, shouldWaitUntilStarted, consumer));
     }
 
     @SuppressWarnings("unchecked")
@@ -395,12 +395,12 @@ class SubscriptionAnnotationRegistrar {
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
         startPositionSupport.applyStartupWorkarounds();
 
-        return () -> {
+        return () -> BackgroundStartup.subscribe(annotation.startupMode(), () -> {
             var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer);
             if (shouldWaitUntilStarted) {
                 subscription.waitUntilStarted();
             }
-        };
+        });
     }
 
     // Resolves the object first, then the method against that object, so the two always agree even when a late

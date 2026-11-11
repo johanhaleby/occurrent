@@ -56,7 +56,7 @@ public final class HistoryLossMessages {
      * before anything is read. {@code subscriptionId} only names the subscription, and may be null.
      */
     public static CatchupCannotResumeException cannotStartFrom(@Nullable String subscriptionId, Checkpoint checkpoint) {
-        return new CatchupCannotResumeException("Cannot start catch-up subscription " + name(subscriptionId) + " from checkpoint \"" + checkpoint.asString()
+        return new HistoryLost("Cannot start catch-up subscription " + name(subscriptionId) + " from checkpoint \"" + checkpoint.asString()
                 + "\", because the subscription model no longer has the history back to it, and starting from anywhere later would skip the events in between."
                 + " Start the subscription from the beginning, or from an earlier checkpoint the application kept.");
     }
@@ -66,8 +66,23 @@ public final class HistoryLossMessages {
      * {@code lostFrom}. {@code subscriptionId} only names the subscription, and may be null.
      */
     public static CatchupCannotResumeException historyLost(@Nullable String subscriptionId, Checkpoint lostFrom) {
-        return new CatchupCannotResumeException("Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + lostFrom.asString()
+        return new HistoryLost("Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + lostFrom.asString()
                 + "\", where it stopped, and resuming from anywhere later would skip the events in between. Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept.");
+    }
+
+    /**
+     * Whether {@code failure} is a refusal from {@link #cannotStartFrom} or {@link #historyLost}, so the position the
+     * subscription would go on from is one the subscription model no longer has the history back to. Any other
+     * {@link CatchupCannotResumeException} answers {@code false}.
+     */
+    public static boolean isHistoryLost(Throwable failure) {
+        return failure instanceof HistoryLost;
+    }
+
+    private static final class HistoryLost extends CatchupCannotResumeException {
+        private HistoryLost(String message) {
+            super(message);
+        }
     }
 
     private static String name(@Nullable String subscriptionId) {

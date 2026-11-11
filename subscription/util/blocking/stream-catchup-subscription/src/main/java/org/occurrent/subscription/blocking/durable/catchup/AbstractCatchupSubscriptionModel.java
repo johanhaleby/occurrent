@@ -50,6 +50,7 @@ import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConf
 import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.internal.LongestReplay;
+import org.occurrent.subscription.internal.LostStartHold;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -1257,14 +1258,33 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Refuses to hand {@code subscriptionId} to the live delegate at {@code firstStartAt} when it is a checkpoint the live
-     * delegate no longer has the history back to, so nothing is subscribed and no event is skipped. A start that names
-     * no position, such as now or the model default, and a position a catch-up replays from are not checked.
+     * Hands {@code subscriptionId} to the live delegate at {@code firstStartAt} through {@code subscribeLive}, held
+     * paused there when {@code holdPaused} is set, unless {@code firstStartAt} is a checkpoint the live delegate no
+     * longer has the history back to. The subscribe is then refused with {@link CatchupCannotResumeException}, so
+     * nothing is subscribed and no event is skipped. When {@link LostStartHold} asks it on this thread, the live
+     * delegate holds the subscription paused instead, and the loss is recorded and logged as when the live delegate
+     * reports it for a running subscription. {@link #resumeSubscription(String)} then refuses until the subscription is
+     * cancelled or resumed at a given position. A start that names no position, such as now or the model default, and
+     * a position a catch-up replays from are not checked.
      */
-    protected void refuseIfLiveStartLost(String subscriptionId, StartAt firstStartAt) {
-        if (!firstStartAt.isDynamic() && firstStartAt instanceof StartAtCheckpoint at && !isCatchupCheckpoint(at.checkpoint) && !subscriptionModel.canResumeFrom(at.checkpoint)) {
+    protected Subscription subscribeLiveUnlessItsStartIsLost(String subscriptionId, StartAt firstStartAt, boolean holdPaused, Function<Boolean, Subscription> subscribeLive) {
+        if (firstStartAt.isDynamic() || !(firstStartAt instanceof StartAtCheckpoint at) || isCatchupCheckpoint(at.checkpoint) || subscriptionModel.canResumeFrom(at.checkpoint)) {
+            return subscribeLive.apply(holdPaused);
+        }
+        if (!LostStartHold.isAsked()) {
             throw HistoryLossMessages.cannotStartFrom(subscriptionId, at.checkpoint);
         }
+        Subscription heldPaused = subscribeLive.apply(true);
+        LostStartHold.heldPaused();
+        // The subscribe holds the claim, so no resumeSubscription, pause or cancel of the id comes between the live
+        // delegate holding it paused and the loss being recorded. A start(true) takes no claim and can resume it in
+        // that window. MongoDB then reports the loss when the change stream opens, which pauses it again
+        Subscribed made = subscribed.get(subscriptionId);
+        if (made != null && made.owner() == this && made.historyLost().recordUnlessCleared(made.historyLost().clears(), at.checkpoint)) {
+            String lost = at.checkpoint.asString();
+            log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, lost, lost);
+        }
+        return heldPaused;
     }
 
     // By the string form, since a live start is a typed checkpoint where the live delegate reads it and a

@@ -1461,7 +1461,10 @@ any position other than the beginning could skip that event.
   pauses it again with one more error.
 - On the blocking stack, a subscription you start from a resume token that is already gone throws
   `CatchupCannotResumeException` from `subscribe`, and nothing is stored. Under competing consumers the start runs
-  when a node acquires the lease, so it fails there. On the reactor stack such a subscription with an id is paused as
+  when a node acquires the lease. When it fails there, that node pauses the subscription, logs an error that names
+  it, and gives up the lease. The node doesn't compete for the lease again until you resume the subscription, with `resumeSubscription(id)` or
+  `start(true)`.
+  Another node that waits for the lease can then get it, and pauses the subscription the same way. On the reactor stack such a subscription with an id is paused as
   above once the MongoDB subscription model opens it, and nothing is stored.
 - In Spring Boot the blocking starter throws `CatchupCannotResumeException` when it registers a subscription whose
   start reads the stored resume token and that token is gone, which can keep the application from starting. Once a
@@ -1482,6 +1485,17 @@ any position other than the beginning could skip that event.
   Any other blocking subscription with `startAt = DEFAULT` is paused as above instead, and the application starts. A
   `NOW` start that no `SubscriptionResumePoints` bean answers for doesn't read the stored token and opens at the
   present. Every reactive subscription is paused as above.
+
+  A subscription with `startupMode = BACKGROUND` on the annotation whose stored resume token is gone is paused
+  instead, with an error in the log that names it, and the rest of the application starts. With
+  `occurrent.subscription.mode=manual` that happens in `start(true)`, which goes on to start the other subscriptions,
+  or in the `resumeSubscription(id)` that first starts the subscription, which doesn't throw.
+  The node doesn't compete for the lease again until you resume the subscription, as the competing consumers item
+  above describes. A later `resumeSubscription(id)` competes again, and throws `CatchupCannotResumeException` when this node
+  gets the lease during the call and the token is still gone. With `startupMode`
+  unset the application doesn't start on a node that holds the lease when the subscription registers. While the
+  subscription model runs, a node that waits for the lease starts in either mode, and pauses the subscription once it
+  gets the lease, as above.
 - The `Flux` of an unnamed reactor subscription fails with `CatchupCannotResumeException`.
 
 ### How to recover
@@ -1495,6 +1509,10 @@ When the application doesn't start, or you would rather not call `cancelSubscrip
 instead, with every instance of the application stopped. Spring Boot stores it in the collection
 `occurrent.subscription.mongodb.collection` names, `subscriptions` by default, as the document whose `_id` is the
 subscription id. Every step below that cancels the subscription can delete that document instead.
+
+A subscription that the blocking starter paused under `startupMode = BACKGROUND` recovers the same way. With every
+instance of the application stopped, delete its stored checkpoint, or replace it with a resume token the oplog still
+has, and start the application again. It then starts where its annotation says, or from the resume token you stored.
 
 To replay from the beginning, when the read model or saga can take every event again:
 
