@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -190,6 +191,45 @@ class RabbitMqDomainEventSourceInboundMapperTest extends RabbitMqTestSupport {
             publishPlainMessage("order-8", 2);
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
             assertThat(handled.get(0).streamId()).isEqualTo("order-8");
+        }
+        assertAcknowledged(queue);
+    }
+
+    /**
+     * Only close() interrupts the worker thread, and a mapper that blocks and is interrupted throws an
+     * InterruptedException after the thread's interrupt flag is cleared. The source puts the flag back, so the park
+     * publish that follows cannot wait for its confirm, and the delivery is put back on the queue instead of being
+     * acknowledged as parked. The parked copy is still written before the confirm wait fails. close() passes its
+     * deadline before it interrupts, so the source skips the park then, and only this test's interrupt reaches it.
+     * Here the mapper throws on the first attempt only, so the delivery is offered again and reaches the handler.
+     * With the flag lost, the first attempt would be parked and acknowledged, and the second
+     * attempt would never happen.
+     */
+    @Test
+    void a_mapper_that_sneaky_throws_an_InterruptedException_leaves_the_worker_interrupted_so_the_message_is_put_back_on_the_queue_and_offered_again() throws Exception {
+        String queue = declareAndBindQueue();
+        declareParkingQueue();
+        List<RecordedEvent> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = feedWith(new RecordingView(handled));
+        AtomicInteger attempts = new AtomicInteger();
+        RabbitMqInboundMapper mapper = (properties, body) -> {
+            if (attempts.incrementAndGet() == 1) {
+                InboundMapperTestSupport.<RuntimeException>sneakyThrow(new InterruptedException("interrupted while mapping"));
+            }
+            return plainPublisherMapper().toCloudEvent(properties, body);
+        };
+
+        try (RabbitMqDomainEventSource<TestOrderPlaced> source = RabbitMqDomainEventSource.builder(connection(), feed, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(RabbitMqDestination.of(exchange, "parked"))
+                .inboundMapper(mapper)
+                .build()) {
+            publishPlainMessage("order-7", 3);
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
+            assertThat(attempts).hasValue(2);
         }
         assertAcknowledged(queue);
     }

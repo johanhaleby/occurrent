@@ -21,19 +21,26 @@ import com.rabbitmq.client.GetResponse;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.retry.RetryStrategy;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Named.named;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class RabbitMqCloudEventSinkOutboundMapperTest extends RabbitMqTestSupport {
 
@@ -176,28 +183,26 @@ class RabbitMqCloudEventSinkOutboundMapperTest extends RabbitMqTestSupport {
     }
 
     /**
-     * The AMQP client throws an IllegalArgumentException from basicPublish for a header value it cannot encode, after
-     * it has counted the publish as awaiting a confirm the broker never sends. Without retiring the channel, the next
-     * valid publish waited out the whole acknowledgement timeout and failed although its message was delivered.
+     * The AMQP client throws from basicPublish for a message it cannot encode, after it has counted the publish as
+     * awaiting a confirm the broker never sends. Without retiring the channel, the next valid publish waited out the
+     * whole acknowledgement timeout and failed although its message was delivered. The timeout is long here so that a
+     * publish that waits on it fails the test instead of passing slowly.
      */
-    @Test
-    void a_header_value_the_client_cannot_encode_fails_that_publish_with_an_IllegalArgumentException_and_the_next_valid_publish_succeeds_within_the_acknowledgement_timeout() throws Exception {
+    @ParameterizedTest
+    @MethodSource("messagesTheClientCannotEncode")
+    void a_message_the_client_cannot_encode_fails_that_publish_with_the_clients_exception_and_the_next_valid_publish_succeeds(BasicProperties badProperties, Class<? extends RuntimeException> expectedFailure) throws Exception {
         String queue = declareAndBindQueue();
         RabbitMqOutboundMapper mapper = (cloudEvent, destination) -> {
             if ("id-bad".equals(cloudEvent.getId())) {
-                Map<String, Object> headers = new HashMap<>();
-                headers.put("orderId", UUID.randomUUID());
-                return new RabbitMqMessage(new BasicProperties.Builder().headers(headers).build(), new byte[]{1});
+                return new RabbitMqMessage(badProperties, new byte[]{1});
             }
             return RabbitMqOutboundMapper.cloudEventHeaders().toMessage(cloudEvent, destination);
         };
 
-        try (RabbitMqCloudEventSink sink = sinkWithAcknowledgementTimeout(mapper, Duration.ofSeconds(2))) {
-            assertThatThrownBy(() -> sink.publish(event("id-bad"))).isExactlyInstanceOf(IllegalArgumentException.class);
+        try (RabbitMqCloudEventSink sink = sinkWithAcknowledgementTimeout(mapper, Duration.ofSeconds(10))) {
+            assertThatThrownBy(() -> sink.publish(event("id-bad"))).isExactlyInstanceOf(expectedFailure);
 
-            long start = System.nanoTime();
-            sink.publish(event("id-good"));
-            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("the valid publish must not wait out the acknowledgement timeout").isLessThan(Duration.ofSeconds(1));
+            assertThatCode(() -> sink.publish(event("id-good"))).doesNotThrowAnyException();
 
             GetResponse response = adminChannel.basicGet(queue, true);
             assertThat(response).as("the valid message should be on the queue").isNotNull();
@@ -206,27 +211,17 @@ class RabbitMqCloudEventSinkOutboundMapperTest extends RabbitMqTestSupport {
         }
     }
 
-    @Test
-    void a_messageId_over_255_bytes_fails_that_publish_with_an_IllegalArgumentException_and_the_next_valid_publish_succeeds_within_the_acknowledgement_timeout() throws Exception {
-        String queue = declareAndBindQueue();
-        RabbitMqOutboundMapper mapper = (cloudEvent, destination) -> {
-            if ("id-bad".equals(cloudEvent.getId())) {
-                return new RabbitMqMessage(new BasicProperties.Builder().messageId("x".repeat(300)).build(), new byte[]{1});
-            }
-            return RabbitMqOutboundMapper.cloudEventHeaders().toMessage(cloudEvent, destination);
-        };
-
-        try (RabbitMqCloudEventSink sink = sinkWithAcknowledgementTimeout(mapper, Duration.ofSeconds(2))) {
-            assertThatThrownBy(() -> sink.publish(event("id-bad"))).isExactlyInstanceOf(IllegalArgumentException.class);
-
-            long start = System.nanoTime();
-            sink.publish(event("id-good"));
-            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("the valid publish must not wait out the acknowledgement timeout").isLessThan(Duration.ofSeconds(1));
-
-            GetResponse response = adminChannel.basicGet(queue, true);
-            assertThat(response).as("the valid message should be on the queue").isNotNull();
-            assertThat(response.getProps().getHeaders().get("cloudEvents_id")).hasToString("id-good");
-        }
+    private static Stream<Arguments> messagesTheClientCannotEncode() {
+        Map<String, Object> uuidHeader = new HashMap<>();
+        uuidHeader.put("orderId", UUID.randomUUID());
+        Map<String, Object> nullKeyHeader = new HashMap<>();
+        nullKeyHeader.put(null, "value");
+        Map<String, Object> nestedNonStringKeyHeader = Map.of("nested", Map.of(1, "x"));
+        return Stream.of(
+                arguments(named("a header value of a type AMQP cannot encode", new BasicProperties.Builder().headers(uuidHeader).build()), IllegalArgumentException.class),
+                arguments(named("a header name that is null", new BasicProperties.Builder().headers(nullKeyHeader).build()), NullPointerException.class),
+                arguments(named("a nested map header value with a non-String key", new BasicProperties.Builder().headers(nestedNonStringKeyHeader).build()), ClassCastException.class),
+                arguments(named("a messageId over 255 bytes", new BasicProperties.Builder().messageId("x".repeat(300)).build()), IllegalArgumentException.class));
     }
 
     @Test

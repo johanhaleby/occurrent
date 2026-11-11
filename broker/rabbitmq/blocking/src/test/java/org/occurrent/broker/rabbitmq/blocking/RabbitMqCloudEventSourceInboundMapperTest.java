@@ -277,6 +277,46 @@ class RabbitMqCloudEventSourceInboundMapperTest extends RabbitMqTestSupport {
         assertAcknowledged(queue);
     }
 
+    /**
+     * Only close() interrupts the worker thread, and a mapper that blocks and is interrupted throws an
+     * InterruptedException after the thread's interrupt flag is cleared. The source puts the flag back, so the park
+     * publish that follows cannot wait for its confirm, and the delivery is put back on the queue instead of being
+     * acknowledged as parked. The parked copy is still written before the confirm wait fails. close() passes its
+     * deadline before it interrupts, so the source skips the park then, and only this test's interrupt reaches it.
+     * Here the mapper throws on the first attempt only, so the delivery is offered again and reaches the subscriber.
+     * With the flag lost, the first attempt would be parked and acknowledged, and the second
+     * attempt would never happen.
+     */
+    @Test
+    void a_mapper_that_sneaky_throws_an_InterruptedException_leaves_the_worker_interrupted_so_the_message_is_put_back_on_the_queue_and_offered_again() throws Exception {
+        String queue = declareAndBindQueue();
+        declareParkingQueue();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", handled::add);
+        AtomicInteger attempts = new AtomicInteger();
+        RabbitMqInboundMapper mapper = (properties, body) -> {
+            if (attempts.incrementAndGet() == 1) {
+                InboundMapperTestSupport.<RuntimeException>sneakyThrow(new InterruptedException("interrupted while mapping"));
+            }
+            return plainPublisherMapper().toCloudEvent(properties, body);
+        };
+
+        try (RabbitMqCloudEventSource source = RabbitMqCloudEventSource.builder(connection(), model, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(RabbitMqDestination.of(exchange, "parked"))
+                .inboundMapper(mapper)
+                .build()) {
+            publishPlainMessage("order-7", 3);
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
+            assertThat(attempts).hasValue(2);
+        }
+        assertAcknowledged(queue);
+    }
+
     @Test
     void inboundMapper_refuses_null() {
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
