@@ -16,9 +16,11 @@
 
 package org.occurrent.springboot.broker.rabbitmq.blocking;
 
+import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
+import com.rabbitmq.client.GetResponse;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
@@ -28,6 +30,9 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSource;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqInboundMapper;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqMessage;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqOutboundMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqUnroutableEventException;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
@@ -42,6 +47,9 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
@@ -149,6 +157,88 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                 .run(context -> assertThatCode(() -> context.getBean(RabbitMqCloudEventSink.class).publish(unroutableEvent())).doesNotThrowAnyException());
     }
 
+    /**
+     * The mapper is observable only through the message the sink publishes, so a plain {@code basicGet} reads what a
+     * consumer that is not Occurrent would.
+     */
+    @Test
+    void an_outbound_mapper_bean_is_used_by_the_auto_configured_sink() {
+        sinkContextRunner()
+                .withBean(RabbitMqOutboundMapper.class, () -> (cloudEvent, destination) -> new RabbitMqMessage(
+                        new BasicProperties.Builder().messageId(cloudEvent.getId()).headers(Map.of("quantity", 3)).build(),
+                        "{\"custom\":true}".getBytes(StandardCharsets.UTF_8)))
+                .run(context -> {
+                    String queue = declareQueueBoundTo(TestEvent.class.getName());
+
+                    context.getBean(RabbitMqCloudEventSink.class).publish(unroutableEvent("id-1"));
+
+                    try (Channel channel = connection.createChannel()) {
+                        GetResponse response = channel.basicGet(queue, true);
+                        assertThat(response).isNotNull();
+                        assertThat(new String(response.getBody(), StandardCharsets.UTF_8)).isEqualTo("{\"custom\":true}");
+                        assertThat(response.getProps().getMessageId()).isEqualTo("id-1");
+                        assertThat(response.getProps().getHeaders().get("quantity")).isEqualTo(3);
+                        assertThat(response.getProps().getHeaders()).doesNotContainKey("cloudEvents_id");
+                    }
+                });
+    }
+
+    @Test
+    void the_auto_configured_sink_publishes_the_cloudEvents_headers_when_there_is_no_outbound_mapper_bean() {
+        sinkContextRunner().run(context -> {
+            String queue = declareQueueBoundTo(TestEvent.class.getName());
+
+            context.getBean(RabbitMqCloudEventSink.class).publish(unroutableEvent("id-1"));
+
+            try (Channel channel = connection.createChannel()) {
+                GetResponse response = channel.basicGet(queue, true);
+                assertThat(response).isNotNull();
+                assertThat(response.getProps().getHeaders().get("cloudEvents_id")).hasToString("id-1");
+            }
+        });
+    }
+
+    @Test
+    void an_inbound_mapper_bean_is_used_by_a_source_the_factory_builds() {
+        sinkContextRunner()
+                .withBean(RabbitMqInboundMapper.class, () -> (properties, body) -> CloudEventBuilder.v1()
+                        .withId(properties.getMessageId())
+                        .withSource(URI.create("urn:plain-publisher"))
+                        .withType(TestEvent.class.getName())
+                        .withExtension("streamid", String.valueOf(properties.getHeaders().get("streamId")))
+                        .withExtension("streamversion", ((Number) properties.getHeaders().get("streamVersion")).longValue())
+                        .build())
+                .run(context -> {
+                    BlockingQueue<CloudEvent> received = new LinkedBlockingQueue<>();
+                    PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+                    model.subscribe("test-subscription", received::add);
+
+                    RabbitMqCloudEventSource source = context.getBean(RabbitMqCloudEventSourceFactory.class).forQueue("test-queue-" + UUID.randomUUID(), model).build();
+                    try (Channel channel = connection.createChannel()) {
+                        Map<String, Object> headers = new HashMap<>();
+                        headers.put("streamId", "order-7");
+                        headers.put("streamVersion", 3);
+                        channel.basicPublish(exchange, "orders.placed", new BasicProperties.Builder().messageId("m-1").headers(headers).build(), new byte[0]);
+
+                        CloudEvent delivered = received.poll(15, TimeUnit.SECONDS);
+                        assertThat(delivered).isNotNull();
+                        assertThat(delivered.getExtension("streamid")).isEqualTo("order-7");
+                        assertThat(delivered.getExtension("streamversion")).isEqualTo(3L);
+                    } finally {
+                        source.close();
+                        model.shutdown();
+                    }
+                });
+    }
+
+    private String declareQueueBoundTo(String routingKey) throws Exception {
+        try (Channel channel = connection.createChannel()) {
+            String queue = channel.queueDeclare().getQueue();
+            channel.queueBind(queue, exchange, routingKey);
+            return queue;
+        }
+    }
+
     private ApplicationContextRunner sinkContextRunner() {
         return new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(OccurrentRabbitMqAutoConfiguration.class))
@@ -159,8 +249,12 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
     }
 
     private static CloudEvent unroutableEvent() {
+        return unroutableEvent(UUID.randomUUID().toString());
+    }
+
+    private static CloudEvent unroutableEvent(String id) {
         return CloudEventBuilder.v1()
-                .withId(UUID.randomUUID().toString())
+                .withId(id)
                 .withSource(URI.create("urn:occurrent:test"))
                 .withType(TestEvent.class.getName())
                 .build();
