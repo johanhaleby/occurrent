@@ -25,9 +25,12 @@ import org.occurrent.subscription.RoutingOutcome;
  * an application can count them, for example as metrics. Set it with the {@code listener} method on the source's
  * builder. Every method does nothing by default, so a listener implements only the ones it needs.
  * <p>
- * The source calls the listener from the thread that handles its deliveries and from the thread that polls the
- * subscription, so two calls can run at once and a listener must be thread-safe. A listener that throws is logged at
- * {@code warn} and ignored, and the source goes on as if it had returned. A listener should still return quickly.
+ * The source calls the listener from the thread that handles its deliveries, from the thread that polls the
+ * subscription, and from the thread that calls {@code close()}, so two calls can run at once and a listener must be
+ * thread-safe. A listener that throws is logged at {@code warn} and ignored, and the source goes on as if it had
+ * returned. That covers an {@link Error} too, such as the {@link LinkageError} a listener throws when it cannot link
+ * against its metrics library, but not a {@link VirtualMachineError}, such as an {@link OutOfMemoryError}, which the
+ * source does not catch. A listener should still return quickly.
  * The next delivery waits for it, and {@link #parked(String)} and {@link #redelivered(String)} are called while the
  * source holds the lock its poll and {@code close()} also take.
  * <p>
@@ -48,7 +51,9 @@ public interface RabbitMqSourceListener {
 
     /**
      * A delivery went to the source's {@link DeliveryFailurePolicy}. Called before the policy is applied, so
-     * {@link #parked(String)} or {@link #redelivered(String)} follows when that works.
+     * {@link #parked(String)} or {@link #redelivered(String)} follows when that works. Neither follows for a delivery
+     * that fails after {@code close()} stopped waiting for the source's deliveries, which the broker puts back on the
+     * queue once the channel closes.
      *
      * @param queue   The queue the source consumes from.
      * @param failure What the inbound mapper threw, or what handling the event threw, or {@code null} for a
@@ -66,9 +71,8 @@ public interface RabbitMqSourceListener {
     }
 
     /**
-     * The source handed a failed delivery back to the queue under {@link DeliveryFailurePolicy#REDELIVER}. A
-     * delivery that could not be parked goes back to the queue too, but is not reported here, so it shows up only in
-     * {@link #failed(String, Throwable)}.
+     * The source handed a failed delivery back to the queue, under {@link DeliveryFailurePolicy#REDELIVER} or after a
+     * park that failed.
      *
      * @param queue The queue the source consumes from.
      */

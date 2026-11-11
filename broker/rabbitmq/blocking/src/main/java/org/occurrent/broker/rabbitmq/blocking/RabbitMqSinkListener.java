@@ -25,7 +25,9 @@ import java.time.Duration;
  * <p>
  * The sink calls the listener on the thread that publishes, once per attempt, so a publish the sink retries reports
  * each attempt. A listener that throws is logged at {@code warn} and ignored, and the publish goes on as if it had
- * returned. A listener should still return quickly, since the publish waits for it.
+ * returned. That covers an {@link Error} too, such as the {@link LinkageError} a listener throws when it cannot link
+ * against its metrics library, but not a {@link VirtualMachineError}, such as an {@link OutOfMemoryError}, which the
+ * sink does not catch. A listener should still return quickly, since the publish waits for it.
  * <p>
  * An attempt that fails before the sink knows where the event goes, because the resolver threw, is not reported.
  */

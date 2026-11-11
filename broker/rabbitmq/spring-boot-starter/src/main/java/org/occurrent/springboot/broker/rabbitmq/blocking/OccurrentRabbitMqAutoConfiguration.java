@@ -40,6 +40,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator;
 import org.springframework.boot.health.contributor.CompositeHealthContributor;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -199,10 +200,13 @@ public class OccurrentRabbitMqAutoConfiguration {
     /**
      * A health contributor named {@code rabbitMqBroker}, with one indicator per sink and source bean already
      * created, when {@code spring-boot-health} is on the classpath. A sink is down once it is closed or its
-     * connection is, and a source is down when it has stopped, been closed or lost its connection.
+     * connection is, and a source is down when it has stopped, been closed or lost its connection. Turned off by
+     * {@code management.health.rabbitMqBroker.enabled=false}, or by {@code management.health.defaults.enabled=false}
+     * unless {@code management.health.rabbitMqBroker.enabled} is {@code true}.
      */
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(CompositeHealthContributor.class)
+    @ConditionalOnEnabledHealthIndicator("rabbitMqBroker")
     static class HealthConfiguration {
 
         @Bean

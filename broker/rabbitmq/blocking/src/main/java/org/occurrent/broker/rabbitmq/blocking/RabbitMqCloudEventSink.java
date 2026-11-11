@@ -163,12 +163,15 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         publisher.publish(destination.exchange(), destination.routingKey(), properties, message.body());
     }
 
-    // Exception rather than RuntimeException, since a listener written in Kotlin can throw a checked exception
-    // through the Java interface. An Error is not caught
+    // Throwable, since a listener written in Kotlin can throw a checked exception through the Java interface, and a
+    // listener that cannot link against its metrics library throws a LinkageError, neither of which may fail a publish.
+    // A VirtualMachineError is rethrown, since nothing keeps running after one
     private void report(String callback, Runnable call) {
         try {
             call.run();
-        } catch (Exception e) {
+        } catch (VirtualMachineError e) {
+            throw e;
+        } catch (Throwable e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }

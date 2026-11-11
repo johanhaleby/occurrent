@@ -46,7 +46,9 @@ public interface RabbitMqSourceListener {
 | `parked` | The parking destination confirmed a parked copy and the source acknowledged the original. |
 | `redelivered` | The source handed a failed delivery back to the queue, under `REDELIVER` or after a park that failed. |
 
-A listener that throws is logged and ignored, so a broken metrics binding never fails a publish or a delivery.
+A listener that throws is logged and ignored, so a broken metrics binding never fails a publish or a delivery. That
+includes an `Error`, such as the `LinkageError` from a listener that cannot link against its metrics library. Only a
+`VirtualMachineError`, such as an `OutOfMemoryError`, is not caught.
 
 **The sink and the sources say whether they work.** `RabbitMqCloudEventSink#isOpen()` is `false` once the sink is
 closed or its connection is. `status()` on both sources returns a `RabbitMqSourceStatus`, `CONSUMING`, `STOPPED` after
