@@ -448,7 +448,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 Subscribed before = subscribed.put(subscriptionId, made);
                 try {
                     return subscribe(subscriptionId, filter, answered, action, holdPaused);
-                } catch (RuntimeException | Error e) {
+                } catch (Throwable e) {
+                    // Throwable, since a live model written in Kotlin can throw a checked exception
                     // Puts back the record this one replaced, of a subscription no longer in use, as before the subscribe
                     subscribed.compute(subscriptionId, (id, now) -> now == made ? before : now);
                     throw e;
@@ -884,7 +885,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private static void putBack(List<ReplayInTheWay> inTheWay, Throwable e) {
         try {
             runEach(inTheWay, ReplayInTheWay::putBack);
-        } catch (RuntimeException | Error putBackFailure) {
+        } catch (Throwable putBackFailure) {
+            // Throwable, since runEach rethrows a checked exception a listener written in Kotlin threw
             addSuppressed(e, putBackFailure);
         }
     }
@@ -1085,7 +1087,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             try {
                 return handover.get();
-            } catch (RuntimeException | Error failure) {
+            } catch (Throwable failure) {
+                // Throwable, since a live model written in Kotlin can throw a checked exception
                 CatchupAttempt attempt = Objects.requireNonNull(CURRENT_ATTEMPT.get());
                 if (attempt.handingOver) {
                     // Asked for the subscription the live delegate didn't get, so it goes with it. Still under the lock
@@ -2739,7 +2742,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     allRunAsBefore.set(false);
                 }
             });
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
+            // Throwable, since runEach rethrows a checked exception a listener written in Kotlin threw
             putBackFailure = e;
         }
         String whatChanged = putBackFailure != null ? "A catch-up replay this call held for the subscription couldn't be run again, and the suppressed exception says why."

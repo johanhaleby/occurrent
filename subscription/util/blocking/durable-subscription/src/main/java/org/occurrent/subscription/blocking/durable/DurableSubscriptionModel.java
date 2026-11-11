@@ -488,8 +488,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // the function was asked under the lock
             try {
                 runUnderLockFor(subscriptionId, () -> stopUntrackedRegistrations(subscriptionId));
-            } catch (RuntimeException | Error stopFailure) {
-                e.addSuppressed(stopFailure);
+            } catch (Throwable stopFailure) {
+                // Throwable, since a wrapped model written in Kotlin can throw a checked exception
+                if (stopFailure != e) {
+                    e.addSuppressed(stopFailure);
+                }
             }
             throw e;
         }
@@ -784,7 +787,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         @Nullable Checkpoint stored;
         try {
             stored = storage.read(subscriptionId);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a storage written in Kotlin can throw a checked exception
             throw StartPositionAlreadyPinnedException.readingTheStoredPositionBackFailed(subscriptionId, positionRead, e);
         }
         if (stored == null) {
@@ -990,8 +994,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
         try {
             storage.save(subscriptionId, previous, writeCondition);
-        } catch (RuntimeException | Error putBackFailure) {
-            resumeFailure.addSuppressed(putBackFailure);
+        } catch (Throwable putBackFailure) {
+            // Throwable, since a storage written in Kotlin can throw a checked exception
+            if (putBackFailure != resumeFailure) {
+                resumeFailure.addSuppressed(putBackFailure);
+            }
         }
     }
 
