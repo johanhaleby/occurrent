@@ -38,6 +38,8 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
@@ -584,6 +586,21 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
+    void fails_a_stream_write_that_conflicts_in_a_session_bound_in_a_scope_without_a_transaction_at_once_instead_of_retrying_it_in_that_session() {
+        String streamId = UUID.randomUUID().toString();
+        eventStore.write(streamId, List.of(streamEvent("before")));
+
+        Throwable thrown = catchThrowable(() -> inScopeWithoutTransaction(() -> {
+            eventStore.read(streamId).events().toList();
+            CompletableFuture.runAsync(() -> eventStore.write(streamId, List.of(streamEvent("concurrent")))).join();
+            eventStore.write(streamId, WriteCondition.anyStreamVersion(), List.of(streamEvent("in scope")));
+        }));
+
+        assertThat(thrown).as("the write in the bound session conflicts with the concurrent one, and a retry in that session fails on another error").isInstanceOf(WriteConditionNotFulfilledException.class);
+        assertThat(eventStore.read(streamId).events()).extracting(CloudEvent::getId).containsExactly("before", "concurrent");
+    }
+
+    @Test
     void adds_no_marker_versions_extension_to_the_events_a_stream_read_and_a_query_return() {
         eventStore.append(List.of(taggedEvent("a", DEPOSITED, ACCOUNT_A)));
         Document stored = rawEvent("a");
@@ -694,6 +711,10 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
     }
 
     private record Recorded(String key, String epoch, long version) {
+    }
+
+    private static CloudEvent streamEvent(String id) {
+        return CloudEventBuilder.v1().withId(id).withSource(SOURCE).withType(DEPOSITED).withTime(OffsetDateTime.now()).withData("{}".getBytes(UTF_8)).build();
     }
 
     private static CloudEvent taggedEvent(String id, String type, String... tags) {
