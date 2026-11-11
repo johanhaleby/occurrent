@@ -513,7 +513,8 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         // Then
         assertThat(thrown).as("thrown by the resume").isInstanceOf(CatchupCannotResumeException.class);
         assertAll(
-                () -> assertThat(wrapped.callNames).as("calls into the wrapped model, the refused one only").hasSize(1),
+                () -> assertThat(wrapped.callNames).as("calls into the wrapped model, the refused one only").containsExactly("subscribe"),
+                () -> assertThat(model.isPaused(ID)).as("paused").isTrue(),
                 () -> assertThat(model.isRunning(ID)).as("running").isFalse(),
                 () -> assertThat(strategy.holders).as("holding the lease").isEmpty()
         );
@@ -724,6 +725,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
             noteTheHold(call);
             if (refusing) {
                 Runnable before = beforeRefusing;
+                beforeRefusing = null;
                 if (before != null) {
                     before.run();
                 }
