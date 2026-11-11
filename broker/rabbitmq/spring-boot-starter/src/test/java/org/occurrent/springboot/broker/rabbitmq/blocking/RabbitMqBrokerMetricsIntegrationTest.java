@@ -24,12 +24,18 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSource;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqSinkListener;
+import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSource;
+import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.filter.Filter;
+import org.occurrent.springboot.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSourceFactory;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.assertj.core.api.ThrowingConsumer;
@@ -44,12 +50,14 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -129,6 +137,34 @@ class RabbitMqBrokerMetricsIntegrationTest {
             } finally {
                 source.close();
                 model.shutdown();
+            }
+        });
+    }
+
+    @Test
+    void a_delivery_to_a_domain_source_the_domain_factory_builds_is_counted_for_its_queue() {
+        contextRunner().run(context -> {
+            String queue = "test-domain-queue-" + UUID.randomUUID();
+            List<TestDomainEvent> received = new CopyOnWriteArrayList<>();
+            TestDomainEventConverter converter = new TestDomainEventConverter();
+            DomainEventFeed<TestDomainEvent> feed =
+                    new DomainEventFeed<>(new InMemoryEventStore(), converter, TestDomainEvent::id);
+            feed.register("test-domain-projection", received::add, Filter.type(TestDomainEvent.class.getName()));
+            feed.goLive("test-domain-projection");
+            RabbitMqDomainEventSource<TestDomainEvent> source =
+                    context.getBean(RabbitMqDomainEventSourceFactory.class).forQueue(queue, feed).build();
+            try {
+                CloudEvent event = converter.toCloudEvent(new TestDomainEvent("id-1"));
+                context.getBean(RabbitMqCloudEventSink.class).publish(event);
+
+                MeterRegistry registry = context.getBean(MeterRegistry.class);
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                        assertThat(registry.find("occurrent.rabbitmq.source.delivered").tag("queue", queue).counter())
+                                .as("the delivered counter for the queue").isNotNull()
+                                .satisfies(counter -> assertThat(counter.count()).isEqualTo(1)));
+                assertThat(received).containsExactly(new TestDomainEvent("id-1"));
+            } finally {
+                source.close();
             }
         });
     }
@@ -214,6 +250,33 @@ class RabbitMqBrokerMetricsIntegrationTest {
     private static String rabbitMqVersion() {
         String version = System.getProperty("test.rabbitmq.version");
         return version == null || version.isBlank() ? "4.1" : version.trim();
+    }
+
+    private record TestDomainEvent(String id) {
+    }
+
+    private static final class TestDomainEventConverter implements CloudEventConverter<TestDomainEvent> {
+        @Override
+        public CloudEvent toCloudEvent(TestDomainEvent domainEvent) {
+            return CloudEventBuilder.v1()
+                    .withId(domainEvent.id())
+                    .withSource(URI.create("urn:occurrent:test"))
+                    .withType(getCloudEventType(TestDomainEvent.class))
+                    .withData(domainEvent.id().getBytes(StandardCharsets.UTF_8))
+                    .build();
+        }
+
+        @Override
+        public TestDomainEvent toDomainEvent(CloudEvent cloudEvent) {
+            byte[] data = requireNonNull(cloudEvent.getData()).toBytes();
+            return new TestDomainEvent(new String(data, StandardCharsets.UTF_8));
+        }
+
+        // The resolver round-trips the type through Class.forName, so the name has to be the class
+        @Override
+        public String getCloudEventType(Class<? extends TestDomainEvent> type) {
+            return TestDomainEvent.class.getName();
+        }
     }
 
     /** Its fully qualified name is the event type published above, see the comment there. */

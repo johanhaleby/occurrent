@@ -44,9 +44,9 @@ import static org.mockito.Mockito.verify;
 class RabbitMqCloudEventSourceStatusTest extends RabbitMqTestSupport {
 
     @Test
-    void a_source_is_CONSUMING_and_connected_after_build() throws Exception {
+    void a_source_is_OPEN_and_connected_after_build() throws Exception {
         try (RabbitMqCloudEventSource source = builderOn(connection()).build()) {
-            assertThat(source.status()).isEqualTo(RabbitMqSourceStatus.CONSUMING);
+            assertThat(source.status()).isEqualTo(RabbitMqSourceStatus.OPEN);
             assertThat(source.isConnected()).isTrue();
         }
     }
@@ -61,7 +61,7 @@ class RabbitMqCloudEventSourceStatusTest extends RabbitMqTestSupport {
     }
 
     @Test
-    void a_source_is_not_connected_once_its_connection_is_closed_and_is_still_CONSUMING_until_it_stops() throws Exception {
+    void a_source_is_not_connected_once_its_connection_is_closed_and_is_still_OPEN_until_it_stops() throws Exception {
         ConnectionFactory connectionFactory = new ConnectionFactory();
         connectionFactory.setUri(amqpUrl());
         Connection ownConnection = connectionFactory.newConnection();
@@ -71,7 +71,7 @@ class RabbitMqCloudEventSourceStatusTest extends RabbitMqTestSupport {
 
             assertThat(source.isConnected()).isFalse();
             assertThat(source.status()).as("status() says whether the source stopped, isConnected() says whether the connection is open")
-                    .isEqualTo(RabbitMqSourceStatus.CONSUMING);
+                    .isEqualTo(RabbitMqSourceStatus.OPEN);
         } finally {
             source.close();
         }
@@ -86,7 +86,7 @@ class RabbitMqCloudEventSourceStatusTest extends RabbitMqTestSupport {
         model.subscribe("sub", cloudEvent -> { });
         RabbitMqCloudEventSource source = new RabbitMqCloudEventSource(model, channel, "queue-" + UUID.randomUUID(), 1, Duration.ofMinutes(1),
                 failureAction, subscriptionId -> true, Duration.ofSeconds(1));
-        assertThat(source.status()).isEqualTo(RabbitMqSourceStatus.CONSUMING);
+        assertThat(source.status()).isEqualTo(RabbitMqSourceStatus.OPEN);
 
         ArgumentCaptor<ShutdownListener> listeners = ArgumentCaptor.forClass(ShutdownListener.class);
         verify(channel, atLeastOnce()).addShutdownListener(listeners.capture());

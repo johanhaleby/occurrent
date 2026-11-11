@@ -194,7 +194,7 @@ class RabbitMqDomainEventSourceListenerTest extends RabbitMqTestSupport {
             publishMessage(new TestOrderPlacedConverter().toCloudEvent(new TestOrderPlaced("order-2")));
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(2));
-            assertThat(source.status()).isEqualTo(RabbitMqSourceStatus.CONSUMING);
+            assertThat(source.status()).isEqualTo(RabbitMqSourceStatus.OPEN);
         }
 
         assertThat(listener.callbacks()).containsExactly("delivered", "delivered");
@@ -216,7 +216,7 @@ class RabbitMqDomainEventSourceListenerTest extends RabbitMqTestSupport {
             publishMessage(new TestOrderPlacedConverter().toCloudEvent(new TestOrderPlaced("order-1")));
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
-            assertThat(source.status()).isEqualTo(RabbitMqSourceStatus.CONSUMING);
+            assertThat(source.status()).isEqualTo(RabbitMqSourceStatus.OPEN);
         }
 
         assertThat(listener.callbacks()).containsSubsequence("failed", "redelivered", "delivered");

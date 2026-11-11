@@ -48,6 +48,11 @@ public final class RecordingRabbitMqSinkListener implements RabbitMqSinkListener
     }
 
     @Override
+    public void unresolved(Throwable failure) {
+        calls.add(new Call("unresolved", null, null, failure));
+    }
+
+    @Override
     public void failed(RabbitMqDestination destination, Throwable failure) {
         calls.add(new Call("failed", destination, null, failure));
     }

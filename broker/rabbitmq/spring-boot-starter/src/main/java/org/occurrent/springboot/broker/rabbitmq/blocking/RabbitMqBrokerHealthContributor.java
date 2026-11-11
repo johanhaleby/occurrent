@@ -83,7 +83,7 @@ final class RabbitMqBrokerHealthContributor implements CompositeHealthContributo
     }
 
     private static Health sourceHealth(RabbitMqSourceStatus status, boolean connected) {
-        boolean up = status == RabbitMqSourceStatus.CONSUMING && connected;
+        boolean up = status == RabbitMqSourceStatus.OPEN && connected;
         return (up ? Health.up() : Health.down())
                 .withDetail("status", status.name())
                 .withDetail("connected", connected)

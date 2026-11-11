@@ -30,13 +30,15 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Counts what a {@code RabbitMqCloudEventSink} publishes, per exchange. The routing key is not a tag, since a
- * routing key derived from the event type has one value per type. See ADR 171.
+ * routing key derived from the event type has one value per type. An attempt whose destination the resolver could not
+ * give has no exchange, so it is counted by a meter without tags. See ADR 171.
  */
 final class MicrometerRabbitMqSinkListener implements RabbitMqSinkListener {
 
     static final String PUBLISHED = "occurrent.rabbitmq.sink.published";
     static final String UNROUTABLE = "occurrent.rabbitmq.sink.unroutable";
     static final String FAILED = "occurrent.rabbitmq.sink.failed";
+    static final String UNRESOLVED = "occurrent.rabbitmq.sink.unresolved";
     static final String PUBLISH = "occurrent.rabbitmq.sink.publish";
     static final String EXCHANGE_TAG = "exchange";
 
@@ -45,9 +47,13 @@ final class MicrometerRabbitMqSinkListener implements RabbitMqSinkListener {
     private final Map<String, Counter> unroutable = new ConcurrentHashMap<>();
     private final Map<String, Counter> failed = new ConcurrentHashMap<>();
     private final Map<String, Timer> publishTime = new ConcurrentHashMap<>();
+    private final Counter unresolved;
 
     MicrometerRabbitMqSinkListener(MeterRegistry registry) {
         this.registry = requireNonNull(registry, MeterRegistry.class.getSimpleName() + " cannot be null");
+        this.unresolved = Counter.builder(UNRESOLVED)
+                .description("Publish attempts that failed because the destination resolver threw or returned null")
+                .register(registry);
     }
 
     @Override
@@ -63,6 +69,11 @@ final class MicrometerRabbitMqSinkListener implements RabbitMqSinkListener {
     @Override
     public void unroutable(RabbitMqDestination destination) {
         counter(unroutable, UNROUTABLE, "Publishes the broker returned because no queue was bound for them", destination).increment();
+    }
+
+    @Override
+    public void unresolved(Throwable failure) {
+        unresolved.increment();
     }
 
     @Override

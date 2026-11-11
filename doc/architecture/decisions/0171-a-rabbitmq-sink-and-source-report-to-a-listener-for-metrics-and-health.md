@@ -25,6 +25,7 @@ default does nothing.
 public interface RabbitMqSinkListener {
     default void published(RabbitMqDestination destination, Duration publishTime) { }
     default void unroutable(RabbitMqDestination destination) { }
+    default void unresolved(Throwable failure) { }
     default void failed(RabbitMqDestination destination, Throwable failure) { }
 }
 
@@ -40,32 +41,41 @@ public interface RabbitMqSourceListener {
 | --- | --- |
 | `published` | The broker confirmed a publish attempt and did not return it. `publishTime` runs from the start of the attempt to the confirm. |
 | `unroutable` | The broker returned a publish attempt, under both unroutable policies. |
-| `failed` (sink) | A publish attempt threw for any other reason, the outbound mapper included. A publish the sink retries can call it more than once. |
-| `delivered` | The source acknowledged a delivery its subscriber took or filtered out. |
+| `unresolved` | A publish attempt failed before the sink knew where the event goes, because the destination resolver threw or returned `null`. |
+| `failed` (sink) | A publish attempt to a resolved destination threw for any other reason, the outbound mapper included. |
+| `delivered` | The source handed the client the acknowledgement of a delivery its subscriber took or filtered out. |
 | `failed` (source) | A delivery went to the delivery failure policy. `failure` is `null` for a `NOT_DELIVERABLE` outcome. |
-| `parked` | The parking destination confirmed a parked copy and the source acknowledged the original. |
+| `parked` | The parking destination confirmed a parked copy and the source handed the client the acknowledgement of the original. |
 | `redelivered` | The source handed a failed delivery back to the queue, under `REDELIVER` or after a park that failed. |
 
 A listener that throws is logged and ignored, so a broken metrics binding never fails a publish or a delivery. That
 includes an `Error`, such as the `LinkageError` from a listener that cannot link against its metrics library. Only a
 `VirtualMachineError`, such as an `OutOfMemoryError`, is not caught.
 
+The sink calls its listener once per attempt, so a publish it retries reports every attempt. The client drops the
+acknowledgement of a delivery from before an automatic connection recovery and the broker delivers it again, so
+`delivered` and `parked` can count that delivery twice.
+
 **The sink and the sources say whether they work.** `RabbitMqCloudEventSink#isOpen()` is `false` once the sink is
-closed or its connection is. `status()` on both sources returns a `RabbitMqSourceStatus`, `CONSUMING`, `STOPPED` after
-a permanent stop, or `CLOSED`, and `isConnected()` says whether the connection is open.
+closed or its connection is. `status()` on both sources returns a `RabbitMqSourceStatus`, `OPEN`, `STOPPED` after a
+permanent stop, or `CLOSED`, and `isConnected()` says whether the connection is open. `OPEN` does not say a consumer
+is registered, since a source has none while what it delivers to is paused or not ready.
 
 **The starter adds metrics and health only when their libraries are there.** `micrometer-core` and
 `spring-boot-health` are optional dependencies of the starter.
 
 - With a `MeterRegistry` bean, the starter passes a Micrometer listener to its sink and to every builder its source
   factories return. The counters are `occurrent.rabbitmq.sink.published`, `.unroutable` and `.failed`, tagged with the
-  exchange, and the timer `occurrent.rabbitmq.sink.publish`. The source counters are
-  `occurrent.rabbitmq.source.delivered`, `.failed`, `.parked` and `.redelivered`, tagged with the queue. The routing
-  key is not a tag, since a type-derived routing key has one value per event type.
+  exchange, the timer `occurrent.rabbitmq.sink.publish`, also tagged with the exchange, and the counter
+  `occurrent.rabbitmq.sink.unresolved` without tags, since an unresolved attempt has no exchange. The source counters
+  are `occurrent.rabbitmq.source.delivered`, `.failed`, `.parked` and `.redelivered`, tagged with the queue. The
+  routing key is not a tag, since a type-derived routing key has one value per event type.
 - With `spring-boot-health` on the classpath, a health contributor named `rabbitMqBroker` has one indicator per sink
   and source bean that exists. A sink is down when `isOpen()` is `false`. A source is down when its status is not
-  `CONSUMING` or its connection is closed. The contributor never creates a bean, so a `@Lazy` sink nothing has asked for
-  yet is not listed.
+  `OPEN` or its connection is closed. The contributor never creates a bean, so a `@Lazy` sink nothing has asked for
+  yet is not listed. The contributor's id is `rabbitmqbroker`, lowercase like Spring Boot's own, so
+  `management.health.rabbitmqbroker.enabled=false` turns it off, and so does the same key written `rabbitMqBroker` or
+  `rabbit-mq-broker`.
 
 An application listener bean replaces the Micrometer one, and an application that builds its sink or source by hand
 sets a listener on the builder.

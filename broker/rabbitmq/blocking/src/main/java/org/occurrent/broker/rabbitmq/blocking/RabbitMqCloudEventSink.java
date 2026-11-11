@@ -75,8 +75,8 @@ import static java.util.Objects.requireNonNull;
  * {@link IOException} from encoding a header that a custom {@link RabbitMqOutboundMapper} set, which can fail the same
  * way on every attempt, so give such a sink a retry strategy with a cap on attempts. The retry is not
  * a substitute for the acknowledgement wait, since a publish that was never acknowledged is not known to have
- * failed, only unresolved. Per ADR 133, an expired {@link RabbitMqPublishTimeoutException} is for the caller to
- * decide on rather than something this retry absorbs, so the default excludes it, along with
+ * failed, only to have an unknown outcome. Per ADR 133, an expired {@link RabbitMqPublishTimeoutException} is for
+ * the caller to decide on rather than something this retry absorbs, so the default excludes it, along with
  * {@link RabbitMqUnroutableEventException}, a channel this client has already closed, an interrupted wait, and an
  * unrecognised cloud event type from the resolver, none of which a retry can turn into success. What stops an
  * uncapped retry from outliving its caller is {@link #close()}, not a limit on attempts. Once called, the attempt
@@ -124,10 +124,16 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         retryStrategy.execute(() -> publishOnce(cloudEvent), __ -> !shutdown);
     }
 
-    // A resolver that throws gives no destination to report, so the listener is not called for that attempt
     private void publishOnce(CloudEvent cloudEvent) {
         long startNanos = System.nanoTime();
-        RabbitMqDestination destination = resolver.destinationFor(cloudEvent);
+        RabbitMqDestination destination;
+        try {
+            destination = resolvedDestination(cloudEvent);
+        } catch (Throwable e) {
+            // Throwable, since a resolver written in Kotlin can throw a checked exception. Rethrown unchanged
+            report("unresolved", () -> listener.unresolved(e));
+            throw e;
+        }
         try {
             publishTo(destination, cloudEvent);
         } catch (RabbitMqUnroutableEventException e) {
@@ -148,6 +154,16 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         }
         Duration publishTime = Duration.ofNanos(System.nanoTime() - startNanos);
         report("published", () -> listener.published(destination, publishTime));
+    }
+
+    // A null from a resolver written in Kotlin or Java without null checks fails here, so failed(..) never gets one
+    private RabbitMqDestination resolvedDestination(CloudEvent cloudEvent) {
+        RabbitMqDestination destination = resolver.destinationFor(cloudEvent);
+        if (destination == null) {
+            throw new IllegalStateException("The " + DestinationResolver.class.getSimpleName() + " returned null for the event with id \""
+                    + cloudEvent.getId() + "\" and type \"" + cloudEvent.getType() + "\"");
+        }
+        return destination;
     }
 
     private void publishTo(RabbitMqDestination destination, CloudEvent cloudEvent) {
@@ -180,9 +196,11 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     }
 
     /**
-     * Whether this sink can publish. {@code false} once {@link #close()} has been called or the {@link Connection}
-     * it was built from is closed, also while an automatic connection recovery is under way. Opens no channel, so a
-     * channel this sink retired after a failed publish is not checked, since the next publish opens a new one.
+     * {@code false} once {@link #close()} has been called or the {@link Connection} this sink was built from is
+     * closed, also while an automatic connection recovery is under way. {@code true} does not mean the next publish
+     * works, since a publish to an exchange that does not exist fails while this stays {@code true}. Opens no
+     * channel, so a channel this sink retired after a failed publish is not checked, since the next publish opens a
+     * new one.
      */
     public boolean isOpen() {
         return !shutdown && publisher.isConnectionOpen();

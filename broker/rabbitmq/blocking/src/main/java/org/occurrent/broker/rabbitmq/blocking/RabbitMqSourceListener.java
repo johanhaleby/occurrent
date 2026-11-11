@@ -41,8 +41,9 @@ import org.occurrent.subscription.RoutingOutcome;
 public interface RabbitMqSourceListener {
 
     /**
-     * The source acknowledged a delivery its subscriber took or filtered out. Not called when the acknowledgement
-     * itself threw.
+     * The source handed the client the acknowledgement of a delivery its subscriber took or filtered out. Not called
+     * when that call threw. The client drops the acknowledgement of a delivery from before an automatic connection
+     * recovery, so the broker delivers it again and it can be counted twice.
      *
      * @param queue The queue the source consumes from.
      */
@@ -63,7 +64,9 @@ public interface RabbitMqSourceListener {
     }
 
     /**
-     * The parking destination confirmed a copy of a failed delivery, and the source acknowledged the original.
+     * The parking destination confirmed a copy of a failed delivery, and the source handed the client the
+     * acknowledgement of the original, which the client drops across an automatic connection recovery like the one
+     * {@link #delivered(String)} describes.
      *
      * @param queue The queue the source consumes from.
      */

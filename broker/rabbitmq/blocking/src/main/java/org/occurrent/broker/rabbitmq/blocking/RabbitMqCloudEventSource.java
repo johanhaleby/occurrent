@@ -829,16 +829,18 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     /**
      * Whether this source still works. {@link RabbitMqSourceStatus#CLOSED} once {@link #close()} has started,
      * {@link RabbitMqSourceStatus#STOPPED} once the source has stopped for good on its own, and
-     * {@link RabbitMqSourceStatus#CONSUMING} otherwise. {@code CONSUMING} includes a source waiting for its
-     * subscription to start or to be ready, and one whose connection is down, which {@link #isConnected()} tells.
-     * A channel that closed for good stops the source on its next poll, so this can say {@code CONSUMING} for up to
+     * {@link RabbitMqSourceStatus#OPEN} otherwise. {@code OPEN} includes a source waiting for its subscription to
+     * start or to be ready, and one whose connection is down, which {@link #isConnected()} tells.
+     * A channel that closed for good stops the source on its next poll, so this can say {@code OPEN} for up to
      * one {@link Builder#pollInterval(Duration)} after it.
      */
     public RabbitMqSourceStatus status() {
+        // permanentlyStopped first, since close() sets closed before it, so a close in between reads as CLOSED
+        boolean stopped = permanentlyStopped;
         if (closed) {
             return RabbitMqSourceStatus.CLOSED;
         }
-        return permanentlyStopped ? RabbitMqSourceStatus.STOPPED : RabbitMqSourceStatus.CONSUMING;
+        return stopped ? RabbitMqSourceStatus.STOPPED : RabbitMqSourceStatus.OPEN;
     }
 
     /**

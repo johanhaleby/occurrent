@@ -201,19 +201,22 @@ public class OccurrentRabbitMqAutoConfiguration {
      * A health contributor named {@code rabbitMqBroker}, with one indicator per sink and source bean already
      * created, when {@code spring-boot-health} is on the classpath. A sink is down once it is closed or its
      * connection is, and a source is down when it has stopped, been closed or lost its connection. Turned off by
-     * {@code management.health.rabbitMqBroker.enabled=false}, or by {@code management.health.defaults.enabled=false}
-     * unless {@code management.health.rabbitMqBroker.enabled} is {@code true}.
+     * {@code management.health.rabbitmqbroker.enabled=false}, or by {@code management.health.defaults.enabled=false}
+     * unless {@code management.health.rabbitmqbroker.enabled} is {@code true}. The id is lowercase like Spring Boot's
+     * own, such as {@code diskspace}, so the key also works written {@code rabbitMqBroker} or {@code rabbit-mq-broker},
+     * or as the environment variable {@code MANAGEMENT_HEALTH_RABBITMQBROKER_ENABLED}.
      */
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(CompositeHealthContributor.class)
     static class HealthConfiguration {
 
         // On the method, since Spring loads every condition class on the configuration class before evaluating any,
-        // which fails without spring-boot-health before @ConditionalOnClass can skip it
+        // which fails without spring-boot-health before @ConditionalOnClass can skip it. Spring Boot names the
+        // contributor after the bean without its HealthContributor suffix, which gives rabbitMqBroker
         @Bean
-        @ConditionalOnEnabledHealthIndicator("rabbitMqBroker")
-        @ConditionalOnMissingBean(name = "rabbitMqBroker")
-        CompositeHealthContributor rabbitMqBroker(ConfigurableListableBeanFactory beanFactory) {
+        @ConditionalOnEnabledHealthIndicator("rabbitmqbroker")
+        @ConditionalOnMissingBean(name = {"rabbitMqBrokerHealthIndicator", "rabbitMqBrokerHealthContributor"})
+        CompositeHealthContributor rabbitMqBrokerHealthContributor(ConfigurableListableBeanFactory beanFactory) {
             return new RabbitMqBrokerHealthContributor(beanFactory);
         }
     }

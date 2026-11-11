@@ -28,8 +28,6 @@ import java.time.Duration;
  * returned. That covers an {@link Error} too, such as the {@link LinkageError} a listener throws when it cannot link
  * against its metrics library, but not a {@link VirtualMachineError}, such as an {@link OutOfMemoryError}, which the
  * sink does not catch. A listener should still return quickly, since the publish waits for it.
- * <p>
- * An attempt that fails before the sink knows where the event goes, because the resolver threw, is not reported.
  */
 public interface RabbitMqSinkListener {
 
@@ -37,7 +35,9 @@ public interface RabbitMqSinkListener {
      * The broker confirmed a publish attempt and did not return it.
      *
      * @param destination Where the event was published.
-     * @param publishTime From the start of the attempt, before the destination was resolved, to the confirm.
+     * @param publishTime From the start of the attempt, before the destination was resolved, to the confirm. The sink
+     *                    publishes and waits for a confirm one attempt at a time, so this includes the time the
+     *                    attempt waited for other threads publishing through the same sink.
      */
     default void published(RabbitMqDestination destination, Duration publishTime) {
     }
@@ -52,8 +52,19 @@ public interface RabbitMqSinkListener {
     }
 
     /**
-     * A publish attempt threw for any other reason, the outbound mapper included. The sink rethrows {@code failure}
-     * unchanged after this, so a publish it retries can call this more than once.
+     * A publish attempt failed before the sink knew where the event goes, because the destination resolver threw or
+     * returned {@code null}. The sink rethrows {@code failure} unchanged after this, so a publish it retries can call
+     * this more than once.
+     *
+     * @param failure What the resolver threw, or the {@link IllegalStateException} the sink threw for a {@code null}.
+     */
+    default void unresolved(Throwable failure) {
+    }
+
+    /**
+     * A publish attempt to a resolved destination threw for any reason other than an unroutable return, the outbound
+     * mapper included. The sink rethrows {@code failure} unchanged after this, so a publish it retries can call this
+     * more than once.
      *
      * @param destination Where the event was to be published.
      * @param failure     What the attempt threw.

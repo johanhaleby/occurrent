@@ -25,9 +25,14 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.broker.api.blocking.DestinationResolver;
+import org.occurrent.filter.Filter;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -110,6 +115,56 @@ class RabbitMqCloudEventSinkListenerTest extends RabbitMqTestSupport {
                 assertThat(call.callback()).isEqualTo("failed");
                 assertThat(call.failure()).isSameAs(thrown);
             });
+        }
+    }
+
+    @Test
+    void a_resolver_that_throws_tells_the_listener_unresolved_with_that_exception_and_never_failed() throws Exception {
+        RecordingRabbitMqSinkListener listener = new RecordingRabbitMqSinkListener();
+        IllegalArgumentException failure = new IllegalArgumentException("no destination for this event");
+
+        try (RabbitMqCloudEventSink sink = sinkBuilderResolvingWith(cloudEvent -> {
+            throw failure;
+        }).listener(listener).build()) {
+            assertThatThrownBy(() -> sink.publish(event("id-1"))).isSameAs(failure);
+        }
+
+        assertThat(listener.calls()).singleElement().satisfies(call -> {
+            assertThat(call.callback()).isEqualTo("unresolved");
+            assertThat(call.destination()).isNull();
+            assertThat(call.failure()).isSameAs(failure);
+        });
+    }
+
+    @Test
+    void a_resolver_returning_null_tells_the_listener_unresolved_with_the_exception_the_caller_gets() throws Exception {
+        RecordingRabbitMqSinkListener listener = new RecordingRabbitMqSinkListener();
+
+        try (RabbitMqCloudEventSink sink = sinkBuilderResolvingWith(cloudEvent -> null).listener(listener).build()) {
+            Throwable thrown = catchThrowable(() -> sink.publish(event("id-null")));
+
+            assertThat(thrown).isExactlyInstanceOf(IllegalStateException.class).hasMessageContaining("id-null");
+            assertThat(listener.calls()).singleElement().satisfies(call -> {
+                assertThat(call.callback()).isEqualTo("unresolved");
+                assertThat(call.failure()).isSameAs(thrown);
+            });
+        }
+    }
+
+    @Test
+    void a_listener_that_throws_from_unresolved_leaves_the_resolver_failure_unchanged() throws Exception {
+        IllegalArgumentException failure = new IllegalArgumentException("no destination for this event");
+        RabbitMqSinkListener listener = new RabbitMqSinkListener() {
+            @Override
+            public void unresolved(Throwable failure) {
+                throw new IllegalStateException("broken metrics binding");
+            }
+        };
+
+        try (RabbitMqCloudEventSink sink = sinkBuilderResolvingWith(cloudEvent -> {
+            throw failure;
+        }).listener(listener).build()) {
+            assertThatThrownBy(() -> sink.publish(event("id-1"))).isSameAs(failure);
         }
     }
 
@@ -249,6 +304,29 @@ class RabbitMqCloudEventSinkListenerTest extends RabbitMqTestSupport {
 
     private RabbitMqCloudEventSink.Builder sinkBuilder() {
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        return RabbitMqCloudEventSink.builder(connection(), resolver);
+    }
+
+    // Only destinationFor differs from the topic exchange resolver
+    private RabbitMqCloudEventSink.Builder sinkBuilderResolvingWith(Function<CloudEvent, RabbitMqDestination> resolve) {
+        RabbitMqTopicExchangeDestinationResolver topic =
+                new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        DestinationResolver<RabbitMqDestination> resolver = new DestinationResolver<>() {
+            @Override
+            public RabbitMqDestination destinationFor(CloudEvent cloudEvent) {
+                return resolve.apply(cloudEvent);
+            }
+
+            @Override
+            public Optional<Set<RabbitMqDestination>> destinationsFor(Filter filter) {
+                return topic.destinationsFor(filter);
+            }
+
+            @Override
+            public RabbitMqDestination catchAllDestination() {
+                return topic.catchAllDestination();
+            }
+        };
         return RabbitMqCloudEventSink.builder(connection(), resolver);
     }
 

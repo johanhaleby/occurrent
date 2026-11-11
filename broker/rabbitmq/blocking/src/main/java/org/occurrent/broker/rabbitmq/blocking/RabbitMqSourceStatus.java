@@ -23,11 +23,11 @@ package org.occurrent.broker.rabbitmq.blocking;
 public enum RabbitMqSourceStatus {
 
     /**
-     * The source has not stopped. It consumes while its subscription runs and is ready, and waits otherwise, so this
-     * covers a paused subscription too. Whether the connection is up is a separate question, which
-     * {@code isConnected()} answers.
+     * The source has neither stopped nor been closed. It does not say that a consumer is registered at the broker,
+     * since the source has none while what it delivers to is paused, not yet started or not yet ready. Whether the
+     * connection is up is a separate question, which {@code isConnected()} answers.
      */
-    CONSUMING,
+    OPEN,
 
     /**
      * The source stopped for good on its own, after a failure it cannot recover from, such as a catch-up that failed
