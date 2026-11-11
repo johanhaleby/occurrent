@@ -504,6 +504,26 @@ class SpringTransactionExecutorTest {
         assertThat(attempts).hasValue(1);
     }
 
+    @Test
+    void the_default_executor_runs_the_action_again_after_a_transient_conflict_under_propagation_required_in_a_callers_supports_scope() {
+        // Given
+        StubTransactionManager transactionManager = new StubTransactionManager();
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(transactionManager);
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Throwable thrown = catchThrowable(() -> supports(transactionManager).execute(status -> executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        })));
+
+        // Then
+        assertThat(thrown).as("[failure reaching the caller]").isNull();
+        assertThat(attempts).hasValue(2);
+    }
+
     private static TransactionTemplate supports(PlatformTransactionManager transactionManager) {
         TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
         transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_SUPPORTS);
