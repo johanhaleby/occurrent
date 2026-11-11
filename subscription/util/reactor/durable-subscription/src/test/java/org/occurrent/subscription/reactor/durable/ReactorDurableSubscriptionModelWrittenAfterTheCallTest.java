@@ -1030,8 +1030,11 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             // Then
             assertThat(atTheCall).as("what the subscribe threw at the call").isNull();
             assertThat(subscription.get().waitUntilStarted().toFuture()).as("waiting for the start of the subscription").succeedsWithin(TIMEOUT);
-            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(logged.thrownWith(unread)).as("what was logged with each warning that nothing read where the feed was")
-                    .hasSize(callsThatThrew).containsOnly(threw));
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(logged.thrownWith(unread)).as("warnings that nothing read where the feed was, before the shutdown")
+                    .hasSizeGreaterThanOrEqualTo(callsThatThrew));
+            model.shutdown();
+            assertThat(logged.thrownWith(unread)).as("what was logged with each warning that nothing read where the feed was, up to the shutdown")
+                    .hasSize(callsThatThrew).containsOnly(threw);
         } finally {
             model.shutdown();
         }
