@@ -107,6 +107,7 @@ public class OccurrentRabbitMqAutoConfiguration {
         RabbitMqBrokerProperties.Retry retry = properties.getSink().getRetry();
         return RabbitMqCloudEventSink.builder(connection, resolver)
                 .acknowledgementTimeout(properties.getSink().getAcknowledgementTimeout())
+                .onUnroutable(properties.getSink().getOnUnroutable())
                 .retryStrategy(publishRetryStrategy(retry))
                 .build();
     }

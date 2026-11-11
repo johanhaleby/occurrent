@@ -25,6 +25,8 @@ import org.occurrent.broker.api.blocking.CloudEventForwarder;
 import org.occurrent.broker.api.blocking.CloudEventSink;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.retry.RetryStrategy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -38,16 +40,18 @@ import static java.util.Objects.requireNonNull;
  * so use this one when you have not already written your own {@link CloudEventSink}. It is a complete,
  * confirmed, at-least-once publisher rather than a starting point to copy from.
  * <p>
- * {@link #publish(CloudEvent)} does not return until the broker has both confirmed the message and routed it.
+ * {@link #publish(CloudEvent)} does not return until the broker has confirmed the message and, by default, routed it.
  * Publisher confirms are required, enabled once when {@link #builder(Connection, DestinationResolver)} builds the
  * sink's own {@link Channel}, and a confirm alone is not enough, since RabbitMQ confirms a publish to an exchange
- * with no matching binding and then discards it. Every publish also sets {@code mandatory}, and a
+ * with no matching binding and then discards it. Every publish also sets {@code mandatory}, and by default a
  * {@code basic.return} for it fails the publish with {@link RabbitMqUnroutableEventException} even though the
- * confirm that follows it would otherwise look like success. An acknowledgement timeout, five seconds by default,
- * bounds the wait and fails it with {@link RabbitMqPublishTimeoutException} rather than blocking forever on a
- * broker that never answers, and {@link Builder#acknowledgementTimeout(Duration)} is not offered as something that
- * can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives. A publish that ends this way,
- * one abandoned to an interrupted wait, or one whose channel shuts down mid-publish, is left outstanding on the
+ * confirm that follows it would otherwise look like success. {@link Builder#onUnroutable(RabbitMqUnroutablePolicy)}
+ * can make the sink log a warning for a returned message and continue instead. An acknowledgement timeout, five
+ * seconds by default, bounds the wait and fails it with {@link RabbitMqPublishTimeoutException} rather than
+ * blocking forever on a broker that never answers, and {@link Builder#acknowledgementTimeout(Duration)} is not
+ * offered as something that can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives. A
+ * publish that ends this way, one abandoned to an interrupted wait, or one whose channel shuts down mid-publish, is
+ * left outstanding on the
  * broker's side of that channel (or the channel itself is simply gone), so this sink retires the channel and opens
  * a fresh one underneath it, and a later publish is never kept waiting on an abandoned one, blamed for its eventual
  * nack, or stuck permanently on a channel the broker already closed. That recovery reaches a channel-level
@@ -78,15 +82,20 @@ import static java.util.Objects.requireNonNull;
  */
 public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseable {
 
+    private static final Logger log = LoggerFactory.getLogger(RabbitMqCloudEventSink.class);
+
     private final DestinationResolver<RabbitMqDestination> resolver;
     private final RetryStrategy retryStrategy;
     private final RabbitMqConfirmPublisher publisher;
+    private final RabbitMqUnroutablePolicy unroutablePolicy;
     private volatile boolean shutdown;
 
-    private RabbitMqCloudEventSink(DestinationResolver<RabbitMqDestination> resolver, RetryStrategy retryStrategy, RabbitMqConfirmPublisher publisher) {
+    private RabbitMqCloudEventSink(DestinationResolver<RabbitMqDestination> resolver, RetryStrategy retryStrategy, RabbitMqConfirmPublisher publisher,
+                                   RabbitMqUnroutablePolicy unroutablePolicy) {
         this.resolver = resolver;
         this.retryStrategy = retryStrategy;
         this.publisher = publisher;
+        this.unroutablePolicy = unroutablePolicy;
     }
 
     /**
@@ -112,7 +121,18 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         // overload, so cloudEvent's lazily-serializing data is not serialized a second time on this publish.
         byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
         BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers(), body);
-        publisher.publish(destination.exchange(), destination.routingKey(), properties, body);
+        try {
+            publisher.publish(destination.exchange(), destination.routingKey(), properties, body);
+        } catch (RabbitMqUnroutableEventException e) {
+            // Caught inside the attempt rather than around the retry, so a RetryStrategy that retries everything
+            // never publishes an event again that this policy has already accepted as dropped
+            if (unroutablePolicy == RabbitMqUnroutablePolicy.FAIL) {
+                throw e;
+            }
+            log.warn("The broker returned the event with id \"{}\" and type \"{}\" published to exchange \"{}\" with routing key \"{}\" "
+                            + "because no queue matched it. The sink continues with the next event since its unroutable policy is {}.",
+                    cloudEvent.getId(), cloudEvent.getType(), destination.exchange(), destination.routingKey(), unroutablePolicy);
+        }
     }
 
     /**
@@ -135,6 +155,7 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         private final DestinationResolver<RabbitMqDestination> resolver;
         private Duration acknowledgementTimeout = Duration.ofSeconds(5);
         private RetryStrategy retryStrategy = defaultRetryStrategy();
+        private RabbitMqUnroutablePolicy unroutablePolicy = RabbitMqUnroutablePolicy.FAIL;
 
         private Builder(Connection connection, DestinationResolver<RabbitMqDestination> resolver) {
             this.connection = requireNonNull(connection, "connection cannot be null");
@@ -174,9 +195,21 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
             return this;
         }
 
+        /**
+         * What {@link #publish(CloudEvent)} does when the broker returns a message because no queue is bound for its
+         * routing key. {@link RabbitMqUnroutablePolicy#FAIL} by default, which throws
+         * {@link RabbitMqUnroutableEventException}. {@link RabbitMqUnroutablePolicy#LOG_AND_CONTINUE} logs a warning
+         * and returns instead, so the broker drops that one event and the sink goes on with the next. The policy
+         * applies to every destination this sink publishes to.
+         */
+        public Builder onUnroutable(RabbitMqUnroutablePolicy unroutablePolicy) {
+            this.unroutablePolicy = requireNonNull(unroutablePolicy, RabbitMqUnroutablePolicy.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
         public RabbitMqCloudEventSink build() {
             RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, acknowledgementTimeout);
-            return new RabbitMqCloudEventSink(resolver, retryStrategy, publisher);
+            return new RabbitMqCloudEventSink(resolver, retryStrategy, publisher, unroutablePolicy);
         }
 
         /**

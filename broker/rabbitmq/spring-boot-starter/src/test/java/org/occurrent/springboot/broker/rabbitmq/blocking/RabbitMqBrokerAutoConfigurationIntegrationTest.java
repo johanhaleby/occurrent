@@ -28,6 +28,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSource;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqUnroutableEventException;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.StartAt;
@@ -49,6 +50,8 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Proves the auto-configured sink and a factory-built source round-trip a real event through a real RabbitMQ,
@@ -127,6 +130,40 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                         model.shutdown();
                     }
                 });
+    }
+
+    /**
+     * The sink keeps its unroutable policy private, so the property reaching it is only observable by what an
+     * unroutable publish does. Nothing is bound to the exchange here, so every publish is returned by the broker.
+     */
+    @Test
+    void the_auto_configured_sink_fails_an_unroutable_publish_by_default() {
+        sinkContextRunner().run(context -> assertThatThrownBy(() -> context.getBean(RabbitMqCloudEventSink.class).publish(unroutableEvent()))
+                .isInstanceOf(RabbitMqUnroutableEventException.class));
+    }
+
+    @Test
+    void the_on_unroutable_property_makes_the_auto_configured_sink_log_and_continue_past_an_unroutable_publish() {
+        sinkContextRunner()
+                .withPropertyValues("occurrent.broker.rabbitmq.sink.on-unroutable=log-and-continue")
+                .run(context -> assertThatCode(() -> context.getBean(RabbitMqCloudEventSink.class).publish(unroutableEvent())).doesNotThrowAnyException());
+    }
+
+    private ApplicationContextRunner sinkContextRunner() {
+        return new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OccurrentRabbitMqAutoConfiguration.class))
+                .withUserConfiguration(EnabledConfiguration.class)
+                .withBean(Connection.class, () -> connection, bd -> bd.setDestroyMethodName(""))
+                .withBean(CloudEventTypeMapper.class, ReflectionCloudEventTypeMapper::qualified)
+                .withPropertyValues("occurrent.broker.rabbitmq.exchange=" + exchange);
+    }
+
+    private static CloudEvent unroutableEvent() {
+        return CloudEventBuilder.v1()
+                .withId(UUID.randomUUID().toString())
+                .withSource(URI.create("urn:occurrent:test"))
+                .withType(TestEvent.class.getName())
+                .build();
     }
 
     /**

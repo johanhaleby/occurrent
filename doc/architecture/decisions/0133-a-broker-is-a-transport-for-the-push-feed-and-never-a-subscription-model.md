@@ -25,6 +25,11 @@ Corrected by [ADR 159](0159-six-passages-in-released-adrs-do-not-describe-the-co
 a `StreamSubscriptionFilter` with an empty result, a `MongoFilterSpecification` included, not only the two named
 below.
 
+Amended by [ADR 169](0169-a-rabbitmq-sink-can-log-an-unroutable-event-and-continue.md). A RabbitMQ sink built with
+`RabbitMqUnroutablePolicy.LOG_AND_CONTINUE` logs a returned message and returns normally, instead of treating the return
+as a failed publish as decision 7 says. `FAIL` is still the default, and a parked delivery still fails on a
+return.
+
 ## Context
 
 A production deployment often forwards Occurrent cloud events to RabbitMQ or Kafka and consumes them there instead of
