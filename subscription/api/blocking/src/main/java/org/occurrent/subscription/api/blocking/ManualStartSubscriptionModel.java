@@ -341,6 +341,8 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         }
 
         final Subscription subscribed;
+        // Read before the subscribe, since a paused subscription afterwards means something different for each answer
+        boolean subscribesToAStoppedModel = !delegate.isRunning();
         try {
             Supplier<Subscription> subscribe = () -> delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
             subscribed = deferred.holdALostStart() ? LostStartHold.askedDuringCall(subscribe) : subscribe.get();
@@ -356,8 +358,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             throw new UnknownSubscriptionException(subscriptionId);
         }
         // Subscribing to a stopped model registers a paused subscription rather than a running one, so this is what
-        // makes starting work after stop(). Without it the caller is handed a subscription that never delivers.
-        Subscription subscription = delegate.isPaused(subscriptionId) ? delegate.resumeSubscription(subscriptionId) : subscribed;
+        // makes starting work after stop(). Without it the caller is handed a subscription that never delivers. A
+        // running model that holds a lost start paused has paused it on purpose, and resuming it would only refuse it again
+        boolean pausedByTheStop = subscribesToAStoppedModel || !deferred.holdALostStart();
+        Subscription subscription = pausedByTheStop && delegate.isPaused(subscriptionId) ? delegate.resumeSubscription(subscriptionId) : subscribed;
         reopenAfterStop();
         return subscription;
     }
