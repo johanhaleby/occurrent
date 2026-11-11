@@ -41,7 +41,8 @@ class ReactorCatchupSubscriptionIdsThrowTest {
         ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
         try {
             subscribeAndHandOver(catchup);
-            wrapped.nextCancelThrows = new IllegalStateException("the wrapped cancel throws");
+            IllegalStateException wrappedFailure = new IllegalStateException("the wrapped cancel throws");
+            wrapped.nextCancelThrows = wrappedFailure;
             PutIfAbsentHook.installIn(catchup, "handedOver").afterThePutIfAbsentIn("putBackTheHandover", () -> {
                 throw new IllegalStateException("putting the handover back throws");
             });
@@ -55,7 +56,9 @@ class ReactorCatchupSubscriptionIdsThrowTest {
             Throwable subscribe = catchThrowable(() -> catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)),
                     cloudEvent -> Mono.empty()));
             assertAll(
-                    () -> assertThat(first).as("what the first cancel throws").isNotNull(),
+                    () -> assertThat(first).as("what the first cancel throws").isSameAs(wrappedFailure),
+                    () -> assertThat(first.getSuppressed()).as("what the first cancel's exception suppresses")
+                            .anySatisfy(suppressed -> assertThat(suppressed).hasMessage("putting the handover back throws")),
                     () -> assertThat(second).as("what the second cancel throws").isNull(),
                     () -> assertThat(heldAfterTheCancels).as("the ids the wrapped model holds after the second cancel").doesNotContain(ID),
                     () -> assertThat(subscribe).as("what a subscribe of the id throws once every cancel of it ended").isNull()

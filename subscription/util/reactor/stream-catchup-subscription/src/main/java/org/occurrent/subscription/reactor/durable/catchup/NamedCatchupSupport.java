@@ -1305,10 +1305,15 @@ final class NamedCatchupSupport {
         }
     }
 
-    // A cancel that threw. The cancel ends, and its record is settled, even when putting the handover back throws.
+    // A cancel that threw. The cancel ends, and its record is settled, even when putting the handover back throws. What
+    // putting it back threw is added to failure, so the caller still throws what the cancel threw.
     private void cancelThrew(String subscriptionId, Cancelled cancel, Runnable cancelUnderWayEnds, Throwable failure) {
         try {
             putBackTheHandover(subscriptionId, cancel, failure);
+        } catch (RuntimeException | Error e) {
+            if (e != failure) {
+                failure.addSuppressed(e);
+            }
         } finally {
             cancelUnderWayEnds.run();
             cancelRefused(subscriptionId, cancel.record(), cancel.runsInWrappedModel(), failure);
