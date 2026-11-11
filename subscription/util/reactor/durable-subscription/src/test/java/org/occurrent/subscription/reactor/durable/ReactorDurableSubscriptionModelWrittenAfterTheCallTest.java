@@ -1020,7 +1020,7 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             default -> throw new IllegalArgumentException(startAt);
         };
         String unread = "The wrapped model " + feed.getClass().getName() + " threw when asked where its feed was for subscription " + SUBSCRIPTION_ID
-                        + ". Nothing reads that position, so this is the only report of what it threw.";
+                        + ". Nothing has read that position to report what it threw.";
         AtomicReference<Subscription> subscription = new AtomicReference<>();
 
         try (LoggedByTheModel logged = new LoggedByTheModel()) {

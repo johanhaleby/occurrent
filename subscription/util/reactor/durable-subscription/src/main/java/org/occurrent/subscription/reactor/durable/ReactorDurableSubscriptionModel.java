@@ -1716,7 +1716,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // What asOfNow() took for subscription subscriptionId. threw is what globalCheckpointAsOfNow() threw instead of
     // returning a Mono, which no read again can answer, since the wrapped model never took the moment. A subscription
     // that starts without reading the moment, from a checkpoint for one, would leave threw unreported, so unread() logs
-    // it at WARN, once, unless something read the moment and reported it first.
+    // it at WARN, once, unless something read the moment and reported it first. A dynamic start that opts out and
+    // answers StartAt.now() at a later start reads the moment after unread() logged it, and reports threw again then.
     private static final class Moment {
         private final String subscriptionId;
         private final String wrappedModel;
@@ -1757,10 +1758,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             reported.set(true);
         }
 
-        // Logs threw at WARN, for a moment that nothing reads any more, unless something reported it already
+        // Logs threw at WARN, for a moment that nothing has read so far, unless something reported it already
         void unread() {
             if (threw != null && reported.compareAndSet(false, true)) {
-                log.warn("The wrapped model {} threw when asked where its feed was for subscription {}. Nothing reads that position, so this is the only report of what it threw.",
+                log.warn("The wrapped model {} threw when asked where its feed was for subscription {}. Nothing has read that position to report what it threw.",
                         wrappedModel, subscriptionId, threw);
             }
         }
