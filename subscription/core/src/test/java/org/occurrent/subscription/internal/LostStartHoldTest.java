@@ -148,4 +148,90 @@ class LostStartHoldTest {
         // Then
         assertThat(seenOnOtherThread).isFalse();
     }
+
+    @Test
+    void askedDuringCall_reports_a_subscription_held_paused_inside_the_call() {
+        // When
+        LostStartHold.Answer<String> answer = LostStartHold.askedDuringCall(() -> {
+            LostStartHold.heldPaused();
+            return "result";
+        });
+
+        // Then
+        assertThat(answer.result()).isEqualTo("result");
+        assertThat(answer.heldPaused()).isTrue();
+    }
+
+    @Test
+    void askedDuringCall_reports_a_subscription_held_paused_inside_a_nested_suspendedDuring() {
+        // When
+        LostStartHold.Answer<String> answer = LostStartHold.askedDuringCall(() -> LostStartHold.suspendedDuring(() -> {
+            LostStartHold.heldPaused();
+            return "result";
+        }));
+
+        // Then
+        assertThat(answer.heldPaused()).isTrue();
+    }
+
+    @Test
+    void askedDuringCall_reports_nothing_held_when_heldPaused_is_not_called() {
+        // When
+        LostStartHold.Answer<String> answer = LostStartHold.askedDuringCall(() -> "result");
+
+        // Then
+        assertThat(answer.heldPaused()).isFalse();
+    }
+
+    @Test
+    void a_nested_askedDuringCall_has_a_flag_of_its_own_and_leaves_the_flag_of_the_outer_one() {
+        // Given
+        AtomicReference<LostStartHold.Answer<String>> inner = new AtomicReference<>();
+
+        // When
+        LostStartHold.Answer<String> outer = LostStartHold.askedDuringCall(() -> {
+            inner.set(LostStartHold.askedDuringCall(() -> "inner"));
+            LostStartHold.heldPaused();
+            return "outer";
+        });
+        LostStartHold.Answer<String> outerThatHeldNothing = LostStartHold.askedDuringCall(() -> {
+            LostStartHold.askedDuringCall(() -> {
+                LostStartHold.heldPaused();
+                return "inner";
+            });
+            return "outer";
+        });
+
+        // Then
+        assertThat(inner.get().heldPaused()).as("inner that held nothing").isFalse();
+        assertThat(outer.heldPaused()).as("outer that held").isTrue();
+        assertThat(outerThatHeldNothing.heldPaused()).as("outer when only the inner held").isFalse();
+    }
+
+    @Test
+    void heldPaused_outside_a_call_does_nothing_and_does_not_leak_to_a_later_call() {
+        // When
+        LostStartHold.heldPaused();
+        LostStartHold.Answer<String> later = LostStartHold.askedDuringCall(() -> "result");
+
+        // Then
+        assertThat(later.heldPaused()).isFalse();
+    }
+
+    @Test
+    void the_flag_is_cleared_after_an_askedDuringCall_that_throws() {
+        // Given
+        IllegalStateException failure = new IllegalStateException("fails");
+
+        // When
+        assertThatThrownBy(() -> LostStartHold.askedDuringCall(() -> {
+            LostStartHold.heldPaused();
+            throw failure;
+        })).isSameAs(failure);
+        LostStartHold.Answer<String> later = LostStartHold.askedDuringCall(() -> "result");
+
+        // Then
+        assertThat(later.heldPaused()).isFalse();
+        assertThat(LostStartHold.isAsked()).isFalse();
+    }
 }

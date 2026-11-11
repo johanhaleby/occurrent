@@ -415,6 +415,27 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         );
     }
 
+    @Test
+    void resume_of_a_deferred_subscription_that_asked_for_the_hold_through_a_manual_start_model_over_a_stopped_one_returns_and_leaves_the_consumer_held_paused_with_one_error_when_the_wrapped_model_refuses_it() {
+        // Given
+        strategy.grantOnRegister = true;
+        ManualStartSubscriptionModel manual = ManualStartSubscriptionModel.stoppedByDefault(model);
+        manual.start(true);
+        manual.stop();
+        assertThat(model.isRunning()).as("the competing-consumer model is running").isFalse();
+        wrapped.refusing = true;
+        LostStartHold.askedDuring(() -> manual.subscribe(ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }));
+
+        // When
+        Throwable thrown = catchThrowable(() -> manual.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertHeldPaused();
+        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+    }
+
     private void useAModelBuiltOverAWrappedModelThatIsNotRunning() {
         model.shutdown();
         wrapped = new WrappedModel(false);

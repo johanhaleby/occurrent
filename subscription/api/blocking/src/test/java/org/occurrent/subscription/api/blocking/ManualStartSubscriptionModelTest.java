@@ -170,6 +170,37 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_stopped_wrapped_model_that_holds_a_lost_start_paused_is_not_asked_to_resume_it_when_the_deferred_subscribe_is_made() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        delegate.running = false;
+        delegate.parkOnSubscribe = true;
+        delegate.holdsALostStartPaused = true;
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        LostStartHold.askedDuring(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        }));
+
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.subscribeCalls).as("subscribes in the wrapped model").hasSize(1);
+        assertThat(delegate.resumeCalls).as("resumes in the wrapped model").isEmpty();
+        assertThat(delegate.paused).as("paused in the wrapped model").containsExactly(SUBSCRIPTION_ID);
+    }
+
+    @Test
+    void a_stopped_wrapped_model_that_parks_a_deferred_subscribe_without_holding_a_lost_start_is_asked_to_resume_it() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        delegate.running = false;
+        delegate.parkOnSubscribe = true;
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        LostStartHold.askedDuring(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        }));
+
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.resumeCalls).as("resumes in the wrapped model").containsExactly(SUBSCRIPTION_ID);
+    }
+
+    @Test
     void a_started_subscription_receives_events() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
@@ -1632,6 +1663,7 @@ class ManualStartSubscriptionModelTest {
         final List<Consumer<CloudEvent>> actions = new CopyOnWriteArrayList<>();
 
         boolean parkOnSubscribe = false;
+        boolean holdsALostStartPaused = false;
         boolean failNextSubscribe = false;
         boolean failNextResume = false;
         @Nullable CountDownLatch subscribeEntered = null;
@@ -1662,6 +1694,9 @@ class ManualStartSubscriptionModelTest {
                 throw new IllegalStateException("Cannot subscribe " + subscriptionId);
             }
             holdAskedAtSubscribe.add(LostStartHold.isAsked());
+            if (holdsALostStartPaused) {
+                LostStartHold.heldPaused();
+            }
             subscribeCalls.add(new SubscribeCall(subscriptionId, filter, startAt, action));
             Subscription subscription = new RecordedSubscription(subscriptionId);
             subscriptions.put(subscriptionId, subscription);
