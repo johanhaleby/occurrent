@@ -409,9 +409,15 @@ final class NamedCatchupSupport {
                         if (takenOver != null) {
                             replay.live().open(state);
                         }
+                        // Only a replay that never handed over leaves no subscription behind, so a subscribe of the id
+                        // replays again, unless a takeover in flight took over the subscription the wrapped model holds
+                        boolean takenOverInFlight = takenOver == null && !state.handedOver.get() && !release(subscriptionId, replay.owned());
                         if (state.handedOver.get()) {
                             // Only the pause asked for during the replay can fail once the wrapped model has the subscription
                             log.error("Subscription {} went live once its catch-up replay was done, but pausing it as asked for during the replay failed, so it may not be paused.",
+                                    subscriptionId, throwable);
+                        } else if (takenOverInFlight) {
+                            log.error("The catch-up of subscription {} failed, so its start fails, but the subscription model lost the history from its live start meanwhile and a takeover replay in flight takes the subscription over.",
                                     subscriptionId, throwable);
                         } else if (takenOver == null) {
                             // A failed replay is a dead subscription, reported to whoever waits AND logged: a caller
@@ -423,10 +429,6 @@ final class NamedCatchupSupport {
                         } else {
                             log.error("The catch-up replay for subscription {} after the subscription model lost the history from its live start failed, and the subscription model no longer holds it paused. The catch-up replays again when the subscription model reports that live start lost again, or when the subscription is resumed once it is paused.",
                                     subscriptionId, throwable);
-                        }
-                        // Only a replay that never handed over leaves no subscription behind, so a subscribe of the id replays again
-                        if (takenOver == null && !state.handedOver.get()) {
-                            release(subscriptionId, replay.owned());
                         }
                         failStart(state, subscriptionId, throwable);
                     });
@@ -571,16 +573,22 @@ final class NamedCatchupSupport {
         });
     }
 
-    // Removes the record of a subscribe with catch-up that failed. A takeover in flight here that took over that
-    // subscribe's handover keeps the record, since that takeover resumes the subscription the wrapped model holds
-    // paused, and a loss reported for the subscription is taken over only while the record is there.
-    private void release(String subscriptionId, Owned record) {
+    // Removes the record of a subscribe with catch-up that failed, and the handover of that record. A takeover in flight
+    // here that took over that subscribe's handover keeps both, since that takeover resumes the subscription the
+    // wrapped model holds paused, a loss reported for the subscription is taken over only while the record is there,
+    // and a resume after that takeover failed replays again only while the handover is there. False when a takeover
+    // kept them.
+    private boolean release(String subscriptionId, Owned record) {
+        AtomicBoolean released = new AtomicBoolean();
         settle(subscriptionId, null, () -> {
             CatchupState inFlight = catchingUp.get(subscriptionId);
             if (inFlight == null || inFlight.takesOver == null || inFlight.takesOver.replay().owned() != record) {
                 owned.remove(subscriptionId, record);
+                handedOver.computeIfPresent(subscriptionId, (id, made) -> made.replay().owned() == record ? null : made);
+                released.set(true);
             }
         });
+        return released.get();
     }
 
     // A cancel that threw, or whose Mono from the wrapped model failed. A live record whose subscription the wrapped
@@ -808,8 +816,9 @@ final class NamedCatchupSupport {
                     delegated = takenOver == null ? delegate.subscribe(subscriptionId, replay.liveSubscriptionFilter(), liveStartAt, replay.liveAction()) : resumeAt(subscriptionId, delegate, liveStartAt);
                 } catch (RuntimeException | Error e) {
                     // A takeover puts back the record it took over, so a resume, or a loss of that live start reported
-                    // again, replays again
-                    if (made != null) {
+                    // again, replays again. A subscribe keeps its own handover here, and release(..) removes it unless a
+                    // takeover was registered meanwhile, under the lock of the id that registering a takeover takes.
+                    if (made != null && takenOver != null) {
                         handedOver.compute(subscriptionId, (id, current) -> current == made ? takenOver : current);
                     }
                     throw e;

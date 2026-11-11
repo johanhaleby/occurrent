@@ -42,7 +42,7 @@ class ReactorCatchupTakeoverInFlightTest {
         // and then throws while it still holds the subscription paused for the takeover
         IntrospectableLosingLiveStartModel wrapped = new IntrospectableLosingLiveStartModel();
         ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
-        try {
+        try (ErrorsLoggedByTheCatchup logged = new ErrorsLoggedByTheCatchup()) {
             AtomicReference<Sinks.Empty<Void>> reads = new AtomicReference<>();
             wrapped.loses = LosingLiveStartModel.Loses.ON_ANOTHER_THREAD_WHILE_SUBSCRIBE_WAITS;
             wrapped.losesTheNextOpen();
@@ -65,6 +65,48 @@ class ReactorCatchupTakeoverInFlightTest {
                     () -> assertThat(started).as("what the subscribe's start fails with").hasMessage("the wrapped subscribe throws after it reported the loss of its live start"),
                     () -> assertThat(wrapped.restartedFromThePresent).as("the positions the wrapped model restarted the subscription from on its own").isEmpty(),
                     () -> assertThat(wrapped.takeOversRun).as("how many losses the wrapped model let the catch-up take over").hasValue(2),
+                    () -> assertThat(catchup.isRunning(ID)).as("whether the subscription runs").isTrue(),
+                    () -> assertThat(logged.errors()).as("what the catch-up logged").noneMatch(error -> error.contains("dead until it is subscribed again"))
+                            .anyMatch(error -> error.contains("a takeover replay in flight takes the subscription over"))
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_resume_replays_again_when_a_takeover_registered_before_the_wrapped_subscribe_of_the_handover_threw_fails() {
+        // Given a handover whose wrapped subscribe reports the loss of the live start it opened at, on another thread,
+        // and then throws while it still holds the subscription paused for the takeover
+        IntrospectableLosingLiveStartModel wrapped = new IntrospectableLosingLiveStartModel();
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            AtomicReference<Sinks.Empty<Void>> reads = new AtomicReference<>();
+            wrapped.loses = LosingLiveStartModel.Loses.ON_ANOTHER_THREAD_WHILE_SUBSCRIBE_WAITS;
+            wrapped.losesTheNextOpen();
+            wrapped.beforeTheNextSubscribe = () -> reads.set(reader.blockReads());
+            wrapped.nextSubscribeThrows = new IllegalStateException("the wrapped subscribe throws after it reported the loss of its live start");
+            Subscription subscription = catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                    cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+            catchThrowable(() -> subscription.waitUntilStarted().block(Duration.ofSeconds(5)));
+            Checkpoint lostLiveStart = wrapped.positionOf(ID);
+
+            // When the takeover replay fails, and the subscription is resumed once the reader reads again
+            reader.readsAgain();
+            reads.get().tryEmitError(new IllegalStateException("the takeover's read fails"));
+            awaitNoReplayInFlight(catchup);
+            boolean pausedAfterTheFailure = catchup.isPaused(ID);
+            Throwable resume = catchThrowable(() -> catchup.resumeSubscription(ID).waitUntilStarted().block(Duration.ofSeconds(5)));
+            awaitNoReplayInFlight(catchup);
+
+            // Then the catch-up replays again and resumes the subscription at a new live start, instead of resuming
+            // the wrapped model where it lost the history
+            assertAll(
+                    () -> assertThat(pausedAfterTheFailure).as("whether the subscription was paused once the takeover failed").isTrue(),
+                    () -> assertThat(resume).as("what the resume throws").isNull(),
+                    () -> assertThat(wrapped.resumedWhereItWasHeld).as("how many times the wrapped model resumed the subscription where it held it").hasValue(0),
+                    () -> assertThat(wrapped.heldIds().contains(ID) ? wrapped.positionOf(ID) : null).as("where the wrapped model runs the subscription")
+                            .isNotNull().isNotEqualTo(lostLiveStart),
                     () -> assertThat(catchup.isRunning(ID)).as("whether the subscription runs").isTrue()
             );
         } finally {
