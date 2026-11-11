@@ -22,6 +22,7 @@ import org.occurrent.broker.api.blocking.CloudEventSink;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.api.blocking.DomainEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqInboundMapper;
 import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSink;
 import org.occurrent.springboot.broker.rabbitmq.blocking.RabbitMqBrokerProperties;
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
@@ -115,7 +116,8 @@ public class RabbitMqDomainBrokerConfiguration {
 
     @Bean
     RabbitMqDomainEventSourceFactory occurrentRabbitMqDomainEventSourceFactory(Connection connection, RabbitMqBrokerProperties properties,
-                                                                                ObjectProvider<DestinationResolver<RabbitMqDestination>> resolver) {
-        return new DefaultRabbitMqDomainEventSourceFactory(connection, properties, resolver);
+                                                                                ObjectProvider<DestinationResolver<RabbitMqDestination>> resolver,
+                                                                                ObjectProvider<RabbitMqInboundMapper> inboundMapper) {
+        return new DefaultRabbitMqDomainEventSourceFactory(connection, properties, resolver, inboundMapper);
     }
 }

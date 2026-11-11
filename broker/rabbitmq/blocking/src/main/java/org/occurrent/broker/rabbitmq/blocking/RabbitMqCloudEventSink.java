@@ -88,10 +88,12 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     private final RetryStrategy retryStrategy;
     private final RabbitMqConfirmPublisher publisher;
     private final RabbitMqUnroutablePolicy unroutablePolicy;
+    private final RabbitMqOutboundMapper outboundMapper;
     private volatile boolean shutdown;
 
     private RabbitMqCloudEventSink(DestinationResolver<RabbitMqDestination> resolver, RetryStrategy retryStrategy, RabbitMqConfirmPublisher publisher,
-                                   RabbitMqUnroutablePolicy unroutablePolicy) {
+                                   RabbitMqUnroutablePolicy unroutablePolicy, RabbitMqOutboundMapper outboundMapper) {
+        this.outboundMapper = outboundMapper;
         this.resolver = resolver;
         this.retryStrategy = retryStrategy;
         this.publisher = publisher;
@@ -117,10 +119,16 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
 
     private void publishOnce(CloudEvent cloudEvent) {
         RabbitMqDestination destination = resolver.destinationFor(cloudEvent);
-        // Body computed once and passed into toBasicProperties(..., byte[]) rather than calling the two-argument
-        // overload, so cloudEvent's lazily-serializing data is not serialized a second time on this publish.
-        byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
-        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers(), body);
+        RabbitMqMessage message = outboundMapper.toMessage(cloudEvent, destination);
+        if (message == null) {
+            throw new IllegalStateException("The " + RabbitMqOutboundMapper.class.getSimpleName() + " returned null for the event with id \""
+                    + cloudEvent.getId() + "\" and type \"" + cloudEvent.getType() + "\"");
+        }
+        BasicProperties properties = message.properties();
+        if (properties.getDeliveryMode() == null) {
+            properties = properties.builder().deliveryMode(2).build();
+        }
+        byte[] body = message.body();
         try {
             publisher.publish(destination.exchange(), destination.routingKey(), properties, body);
         } catch (RabbitMqUnroutableEventException e) {
@@ -156,6 +164,7 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         private Duration acknowledgementTimeout = Duration.ofSeconds(5);
         private RetryStrategy retryStrategy = defaultRetryStrategy();
         private RabbitMqUnroutablePolicy unroutablePolicy = RabbitMqUnroutablePolicy.FAIL;
+        private RabbitMqOutboundMapper outboundMapper = RabbitMqOutboundMapper.cloudEventHeaders();
 
         private Builder(Connection connection, DestinationResolver<RabbitMqDestination> resolver) {
             this.connection = requireNonNull(connection, "connection cannot be null");
@@ -207,9 +216,19 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
             return this;
         }
 
+        /**
+         * How the sink turns an event into the message it publishes. {@link RabbitMqOutboundMapper#cloudEventHeaders()}
+         * by default. See {@link RabbitMqOutboundMapper} for what the sink adds to the mapped message and for how a
+         * {@code null} result or an exception from the mapper is handled.
+         */
+        public Builder outboundMapper(RabbitMqOutboundMapper outboundMapper) {
+            this.outboundMapper = requireNonNull(outboundMapper, RabbitMqOutboundMapper.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
         public RabbitMqCloudEventSink build() {
             RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, acknowledgementTimeout);
-            return new RabbitMqCloudEventSink(resolver, retryStrategy, publisher, unroutablePolicy);
+            return new RabbitMqCloudEventSink(resolver, retryStrategy, publisher, unroutablePolicy, outboundMapper);
         }
 
         /**

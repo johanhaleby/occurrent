@@ -21,6 +21,8 @@ import com.rabbitmq.client.ShutdownSignalException;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqInboundMapper;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqOutboundMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqPublishException;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqPublishTimeoutException;
@@ -95,7 +97,8 @@ public class OccurrentRabbitMqAutoConfiguration {
     }
 
     /**
-     * The zero-config {@code CloudEventSink}. {@code @Lazy} so a consume-only deployment, one that never publishes
+     * The zero-config {@code CloudEventSink}, publishing through the application's {@link RabbitMqOutboundMapper} bean
+     * when it declares one. {@code @Lazy} so a consume-only deployment, one that never publishes
      * and so never needs {@code occurrent.broker.rabbitmq.exchange} configured, is never forced to satisfy this
      * bean's {@link DestinationResolver} requirement just because the starter is on the classpath. Instantiated,
      * and so validated, only the first time something actually asks for a {@code CloudEventSink}.
@@ -103,13 +106,18 @@ public class OccurrentRabbitMqAutoConfiguration {
     @Bean
     @Lazy
     @Fallback
-    RabbitMqCloudEventSink occurrentRabbitMqCloudEventSink(Connection connection, DestinationResolver<RabbitMqDestination> resolver, RabbitMqBrokerProperties properties) {
+    RabbitMqCloudEventSink occurrentRabbitMqCloudEventSink(Connection connection, DestinationResolver<RabbitMqDestination> resolver, RabbitMqBrokerProperties properties,
+                                                         ObjectProvider<RabbitMqOutboundMapper> outboundMapperProvider) {
         RabbitMqBrokerProperties.Retry retry = properties.getSink().getRetry();
-        return RabbitMqCloudEventSink.builder(connection, resolver)
+        RabbitMqCloudEventSink.Builder builder = RabbitMqCloudEventSink.builder(connection, resolver)
                 .acknowledgementTimeout(properties.getSink().getAcknowledgementTimeout())
                 .onUnroutable(properties.getSink().getOnUnroutable())
-                .retryStrategy(publishRetryStrategy(retry))
-                .build();
+                .retryStrategy(publishRetryStrategy(retry));
+        RabbitMqOutboundMapper outboundMapper = outboundMapperProvider.getIfAvailable();
+        if (outboundMapper != null) {
+            builder.outboundMapper(outboundMapper);
+        }
+        return builder.build();
     }
 
     /**
@@ -130,7 +138,8 @@ public class OccurrentRabbitMqAutoConfiguration {
     /**
      * Pre-seeds {@link RabbitMqCloudEventSourceFactory} with the connection, the resolver bean if one exists (a
      * source whose {@code occurrent.broker.rabbitmq.source.declare-topology} is {@code false}, or whose caller
-     * supplies its own bindings, needs none), and every {@code occurrent.broker.rabbitmq.source.*} default,
+     * supplies its own bindings, needs none), the {@link RabbitMqInboundMapper} bean if one exists, and every
+     * {@code occurrent.broker.rabbitmq.source.*} default,
      * including a zero-config {@code readinessSource} that defers to whichever
      * {@code CatchupThenPushSubscriptionModel} bean, if any, owns the source's subscription id, see
      * {@link CatchupThenPushReadiness}. Not conditioned on a resolver, and not {@code @Lazy}, since building this
@@ -140,7 +149,8 @@ public class OccurrentRabbitMqAutoConfiguration {
     @Bean
     RabbitMqCloudEventSourceFactory occurrentRabbitMqCloudEventSourceFactory(Connection connection, RabbitMqBrokerProperties properties,
                                                                               ObjectProvider<DestinationResolver<RabbitMqDestination>> resolver,
-                                                                              ApplicationContext applicationContext) {
-        return new DefaultRabbitMqCloudEventSourceFactory(connection, properties, resolver, applicationContext);
+                                                                              ApplicationContext applicationContext,
+                                                                              ObjectProvider<RabbitMqInboundMapper> inboundMapper) {
+        return new DefaultRabbitMqCloudEventSourceFactory(connection, properties, resolver, applicationContext, inboundMapper);
     }
 }
