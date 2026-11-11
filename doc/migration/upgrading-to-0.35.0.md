@@ -1792,10 +1792,10 @@ Otherwise, let the subscribe fail and subscribe the id again once the wrapped mo
 The setting doesn't start a subscription over a model that throws, or whose `Mono` fails on every read. Make such a
 model return a `Mono` instead of throwing. When no read again can give the position, complete the `Mono` empty. The
 contract has that answer for a problem the model can't resolve, and over it the setting starts the subscription as
-0.34.0 did. Fail the `Mono` only for a problem that a read again can resolve. For a subscription from `StartAt.now()`,
-or from a `StartAt.dynamic(..)` function that answers it, `ReactorDurableSubscriptionModel` reads again after each
-failure. For one from the subscription-model default it doesn't, so one failure fails its start when no checkpoint is
-stored.
+0.34.0 did. Fail the `Mono` only for a problem that a read again can resolve. For a subscription from a
+`StartAt.dynamic(..)` function that answers `StartAt.now()`, `ReactorDurableSubscriptionModel` reads again after each
+failure. For one from the subscription-model default, or from a function that answers
+`StartAt.subscriptionModelDefault()`, it doesn't, so one failure fails its start when no checkpoint is stored.
 
 ### Why there is no recipe
 
