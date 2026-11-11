@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.AfterEach;
@@ -36,10 +40,13 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -55,12 +62,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
 /**
  * A live model or a catch-up listener can throw a checked exception without declaring it, which a Kotlin
  * implementation does with a plain {@code throw}. The clean-up after a failed subscribe or a failed resume at a
  * position must run for it as for any other failure, and the failure that started it must reach the caller as it was
- * thrown.
+ * thrown. A listener that throws one when a replay starts holds the replay, and a live model that throws one from a
+ * cancel makes a later resume wait for the replay the cancel ended, both as a {@code RuntimeException} does.
  */
 @DisplayName("StreamCatchupUndeclaredCheckedException")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -74,6 +83,11 @@ class StreamCatchupUndeclaredCheckedExceptionTest {
     private final CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
     private final AtomicReference<Throwable> catchupStartedThrows = new AtomicReference<>();
     private final CountDownLatch deliveryMayReturn = new CountDownLatch(1);
+    private final AtomicInteger deliveries = new AtomicInteger();
+    private final AtomicInteger inAction = new AtomicInteger();
+    private final AtomicInteger mostInAction = new AtomicInteger();
+    private final Logger catchupLogger = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
+    private final LoggedEvents logged = new LoggedEvents();
     private InMemorySubscriptionModel inMemorySubscriptionModel;
     private CloudEventConverter<DomainEvent> cloudEventConverter;
     private InMemoryEventStore eventStore;
@@ -90,10 +104,16 @@ class StreamCatchupUndeclaredCheckedExceptionTest {
         history = List.of(nameDefined(time, "event1"), nameDefined(time, "event2"), nameDefined(time, "event3"));
         history.forEach(this::write);
         liveModel = new HistoryLosingLiveModel();
+        logged.start();
+        catchupLogger.addAppender(logged);
     }
 
     private void create(CheckpointAwareSubscriptionModel live) {
-        catchup = new StreamCatchupSubscriptionModel(live, eventStore, new CatchupSubscriptionModelConfig(100));
+        create(live, new CatchupSubscriptionModelConfig(100));
+    }
+
+    private void create(CheckpointAwareSubscriptionModel live, CatchupSubscriptionModelConfig config) {
+        catchup = new StreamCatchupSubscriptionModel(live, eventStore, config);
         catchup.listenForCatchup(ID, new CatchupListener() {
             @Override
             public void catchupStarted(Object episode) {
@@ -111,6 +131,7 @@ class StreamCatchupUndeclaredCheckedExceptionTest {
 
     @AfterEach
     void shutdown() {
+        catchupLogger.detachAppender(logged);
         deliveryMayReturn.countDown();
         if (catchup != null) {
             catchup.shutdown();
@@ -140,13 +161,130 @@ class StreamCatchupUndeclaredCheckedExceptionTest {
     }
 
     @Test
-    void throws_what_the_live_model_throws_with_the_checked_exception_the_listener_threw_without_declaring_it_as_suppressed_when_a_resume_at_a_checkpoint_puts_the_held_replay_back() throws Exception {
-        // Given a takeover replay that is inside the action
+    void holds_the_replay_and_logs_the_checked_exception_the_listener_threw_without_declaring_it_when_a_subscribe_starts_its_replay() {
+        // Given
+        IOException listenerFailure = new IOException("the listener lost its connection");
+        catchupStartedThrows.set(listenerFailure);
+        create(liveModel);
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action()));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the subscribe").isNull(),
+                () -> assertThat(catchup.hasParkedReplay(ID)).as("the replay is held").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(catchup.isCatchingUp(ID)).as("catching up").isFalse(),
+                () -> assertThat(received).as("received").isEmpty(),
+                () -> assertThat(listenerFailuresLogged()).as("listener failures logged at ERROR").containsExactly("java.io.IOException: the listener lost its connection")
+        );
+    }
+
+    @Test
+    void runs_the_replay_a_subscribe_held_when_the_listener_threw_a_checked_exception_without_declaring_it_once_the_subscription_is_resumed() {
+        // Given
+        catchupStartedThrows.set(new IOException("the listener lost its connection"));
+        create(liveModel);
+        Throwable thrownBySubscribe = catchThrowable(() -> catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action()));
+        catchupStartedThrows.set(null);
+
+        // When
+        Throwable thrownByResume = catchThrowable(() -> catchup.resumeSubscription(ID).waitUntilStarted(Duration.ofSeconds(15)));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrownBySubscribe).as("thrown by the subscribe").isNull(),
+                () -> assertThat(thrownByResume).as("thrown by the resume").isNull(),
+                () -> assertThat(received).as("received").containsExactlyElementsOf(history),
+                () -> assertThat(catchup.hasParkedReplay(ID)).as("the replay is held").isFalse()
+        );
+    }
+
+    @Test
+    void throws_only_what_the_live_model_throws_and_logs_the_checked_exception_the_listener_threw_without_declaring_it_when_a_resume_at_a_checkpoint_puts_the_held_replay_back() throws Exception {
+        // Given
+        IOException liveFailure = new IOException("the live model lost its connection");
+        IOException listenerFailure = new IOException("the listener lost its connection");
+
+        // When
+        Throwable thrown = resumeAtACheckpointWhileTheListenerThrowsAsTheHeldReplayIsPutBack(listenerFailure, liveFailure);
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the resume at a checkpoint").isSameAs(liveFailure),
+                () -> assertThat(thrown.getSuppressed()).as("suppressed").isEmpty(),
+                () -> assertThat(listenerFailuresLogged()).as("listener failures logged at ERROR").containsExactly("java.io.IOException: the listener lost its connection"),
+                () -> assertThat(catchup.hasParkedReplay(ID)).as("the replay is held").isTrue(),
+                () -> assertThat(catchup.isCatchingUp(ID)).as("catching up").isFalse()
+        );
+    }
+
+    @Test
+    void runs_the_held_replay_again_once_the_subscription_is_resumed_when_the_listener_threw_a_checked_exception_without_declaring_it_as_a_resume_at_a_checkpoint_put_it_back() throws Exception {
+        // Given
+        resumeAtACheckpointWhileTheListenerThrowsAsTheHeldReplayIsPutBack(new IOException("the listener lost its connection"), new IOException("the live model lost its connection"));
+        int deliveriesBeforeTheResume = deliveries.get();
+        catchupStartedThrows.set(null);
+
+        // When
+        boolean started = catchup.resumeSubscription(ID).waitUntilStarted(Duration.ofSeconds(15));
+
+        // Then
+        assertAll(
+                () -> assertThat(started).as("the resumed replay handed over").isTrue(),
+                () -> assertThat(deliveries.get()).as("deliveries").isGreaterThan(deliveriesBeforeTheResume),
+                () -> assertThat(catchup.hasParkedReplay(ID)).as("the replay is held").isFalse(),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue()
+        );
+    }
+
+    @Test
+    void does_not_run_the_action_for_a_resume_while_the_replay_a_cancel_ended_is_still_in_it_when_the_live_model_cancel_throws_a_checked_exception_without_declaring_it() throws Exception {
+        // Given a takeover replay that is inside the action, and a live model that fails the cancel while it still holds the subscription paused
+        IOException cancelFailure = new IOException("the live model lost its connection");
+        LiveStartLosingSubscriptionModel takeoverModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false,
+                () -> write(nameDefined(LocalDateTime.now(), "writtenInTheGap")))
+                .beforeTheNextCancel(() -> {
+                    throw sneaky(cancelFailure);
+                });
+        create(takeoverModel, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(new InMemoryCheckpointStorage()).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        CountDownLatch inTheTakeoverReplay = new CountDownLatch(1);
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            mostInAction.accumulateAndGet(inAction.incrementAndGet(), Math::max);
+            try {
+                if (deliveries.incrementAndGet() == history.size() + 1) {
+                    inTheTakeoverReplay.countDown();
+                    awaitUnchecked(deliveryMayReturn);
+                }
+            } finally {
+                inAction.decrementAndGet();
+            }
+        });
+        assertThat(inTheTakeoverReplay.await(10, TimeUnit.SECONDS)).as("whether the takeover replay is in the action").isTrue();
+
+        // When the cancel fails, the model is stopped, and the subscription is resumed
+        Throwable thrown = catchThrowable(() -> catchup.cancelSubscription(ID));
+        catchup.stop();
+        catchup.resumeSubscription(ID);
+
+        // Then the new replay stays out of the action while the cancelled replay is in it
+        assertThat(thrown).as("thrown by the cancel").isSameAs(cancelFailure);
+        await().during(1, TimeUnit.SECONDS).atMost(5, TimeUnit.SECONDS)
+                .untilAsserted(() -> assertThat(mostInAction.get()).as("the most calls of the action in flight at once while the cancelled replay was in it").isEqualTo(1));
+        // And it delivers once the cancelled replay has left the action
+        deliveryMayReturn.countDown();
+        await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> assertThat(deliveries.get()).as("deliveries").isGreaterThan(history.size() + 1));
+        assertThat(mostInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+    }
+
+    // A takeover replay is inside the action when a resume at a checkpoint holds it, the live model then refuses the
+    // resume, and the listener throws as the held replay starts again
+    private Throwable resumeAtACheckpointWhileTheListenerThrowsAsTheHeldReplayIsPutBack(Throwable listenerFailure, Throwable liveFailure) throws Exception {
         LiveStartLosingSubscriptionModel takeoverModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false,
                 () -> write(nameDefined(LocalDateTime.now(), "writtenInTheGap")));
         create(takeoverModel);
         CountDownLatch inTheTakeoverReplay = new CountDownLatch(1);
-        AtomicInteger deliveries = new AtomicInteger();
         catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
             if (deliveries.incrementAndGet() == history.size() + 1) {
                 inTheTakeoverReplay.countDown();
@@ -154,26 +292,31 @@ class StreamCatchupUndeclaredCheckedExceptionTest {
             }
         });
         assertThat(inTheTakeoverReplay.await(10, TimeUnit.SECONDS)).as("whether the takeover replay is in the action").isTrue();
-        IOException liveFailure = new IOException("the live model lost its connection");
-        IOException listenerFailure = new IOException("the listener lost its connection");
         takeoverModel.beforeTheNextResumeAt(() -> {
             throw sneaky(liveFailure);
         });
-
-        // When a resume at a checkpoint holds the replay and the live model then refuses, while the listener throws as the replay would start again
         CompletableFuture<Throwable> resuming = CompletableFuture.supplyAsync(
                 () -> catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(TOKEN))), runnable -> Thread.ofPlatform().daemon().start(runnable));
         await().untilAsserted(() -> assertThat(catchup.isCatchingUp(ID)).as("whether the replay is held by the resume").isFalse());
         catchupStartedThrows.set(listenerFailure);
         deliveryMayReturn.countDown();
-        Throwable thrown = resuming.get(20, TimeUnit.SECONDS);
+        return resuming.get(20, TimeUnit.SECONDS);
+    }
 
-        // Then
-        assertAll(
-                () -> assertThat(thrown).as("thrown by the resume at a checkpoint").isSameAs(liveFailure),
-                () -> assertThat(thrown.getSuppressed()).as("suppressed").containsExactly(listenerFailure),
-                () -> assertThat(catchup.isCatchingUp(ID)).as("catching up").isFalse()
-        );
+    private List<String> listenerFailuresLogged() {
+        return logged.events.stream()
+                .filter(event -> event.getLevel() == Level.ERROR && event.getFormattedMessage().contains("The catch-up listener for subscription " + ID + " failed"))
+                .map(event -> event.getThrowableProxy().getClassName() + ": " + event.getThrowableProxy().getMessage())
+                .toList();
+    }
+
+    private static final class LoggedEvents extends AppenderBase<ILoggingEvent> {
+        private final List<ILoggingEvent> events = new CopyOnWriteArrayList<>();
+
+        @Override
+        protected void append(ILoggingEvent event) {
+            events.add(event);
+        }
     }
 
     private static void awaitUnchecked(CountDownLatch latch) {
