@@ -56,6 +56,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -1421,7 +1422,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
     // Loses the live start it opens at when the test says so and asks its listeners as the Mongo model does.
     // Without a taker, restarts from the present or ends the subscription.
-    static final class LosingLiveStartModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
+    static class LosingLiveStartModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
         private enum State {RUNNING, PAUSED}
 
         // ON_ANOTHER_THREAD_WHILE_SUBSCRIBE_WAITS has subscribe wait for the thread that reports the loss and runs the
@@ -1491,6 +1492,10 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
         Checkpoint positionOf(String subscriptionId) {
             return held.get(subscriptionId).position();
+        }
+
+        Set<String> heldIds() {
+            return Set.copyOf(held.keySet());
         }
 
         // The action the subscription runs, for a test that gives it an event without blocking
