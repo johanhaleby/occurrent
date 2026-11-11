@@ -1839,7 +1839,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // with CheckpointStored instead, since that checkpoint is where the subscription starts and nothing uses this read
     // then. A storage that fails is answered with the read, so the subscription has it where it would have without
     // asking storage first. What globalCheckpointAsOfNow() threw is logged at WARN when storage holds a checkpoint,
-    // since nothing reads the moment then, see Moment.unread.
+    // since nothing reads the moment then, see Moment.unread. A cancel that ends abandoned before storage answers
+    // drops what was thrown unlogged, since nothing reads the position after a cancel.
     private Mono<Checkpoint> capturePositionUnlessStored(String subscriptionId, Mono<Checkpoint> storedAtTheCall, Sinks.Empty<Void> abandoned) {
         Moment moment = asOfNow(subscriptionId);
         Mono<Checkpoint> positionNow = capturePositionNow(subscriptionId, abandoned, moment);
