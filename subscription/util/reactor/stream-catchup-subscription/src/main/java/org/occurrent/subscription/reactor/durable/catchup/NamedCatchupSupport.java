@@ -530,7 +530,9 @@ final class NamedCatchupSupport {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             forgetATakeoverNeverLaunched(subscriptionId);
-            if (!own(subscriptionId, delegate, record)) {
+            // own(..) reads catchingUp only when it replaces a record, and a takeover can be in flight with no record
+            // after a cancel of the id was refused
+            if (catchingUp.containsKey(subscriptionId) || !own(subscriptionId, delegate, record)) {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             record.subscribing = true;
@@ -569,9 +571,16 @@ final class NamedCatchupSupport {
         });
     }
 
-    // Removes the record of a subscribe with catch-up that failed
+    // Removes the record of a subscribe with catch-up that failed. A takeover in flight here that took over that
+    // subscribe's handover keeps the record, since that takeover resumes the subscription the wrapped model holds
+    // paused, and a loss reported for the subscription is taken over only while the record is there.
     private void release(String subscriptionId, Owned record) {
-        settle(subscriptionId, null, () -> owned.remove(subscriptionId, record));
+        settle(subscriptionId, null, () -> {
+            CatchupState inFlight = catchingUp.get(subscriptionId);
+            if (inFlight == null || inFlight.takesOver == null || inFlight.takesOver.replay().owned() != record) {
+                owned.remove(subscriptionId, record);
+            }
+        });
     }
 
     // A cancel that threw, or whose Mono from the wrapped model failed. A live record whose subscription the wrapped
