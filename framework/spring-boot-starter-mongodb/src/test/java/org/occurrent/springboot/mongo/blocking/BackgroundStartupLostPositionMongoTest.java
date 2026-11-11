@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -218,17 +219,42 @@ class BackgroundStartupLostPositionMongoTest {
         }
     }
 
-    private static ConfigurableApplicationContext boot(String database, Class<? extends Broken> broken, boolean healthy, String afterStart) {
+    @Test
+    void start_true_in_manual_mode_returns_holds_the_lost_subscription_paused_with_one_error_and_lets_the_healthy_one_deliver() {
+        Kind kind = Kind.SUBSCRIPTION;
+        // The parameterized test repairs the checkpoint, so the lost position is stored again, and MongoDB still has no history back to it
+        withTemplate(kind.database(), template -> new SpringMongoCheckpointStorage(template, "subscriptions").save(BROKEN, new StringBasedCheckpoint(STORED.get(kind))));
+        assertThat(canResumeFrom(kind.database(), STORED.get(kind))).as("canResumeFrom the checkpoint stored again").isFalse();
+
+        try (ConfigurableApplicationContext manualBoot = boot(kind.database(), kind.inBackground, true, "live-4", "--occurrent.subscription.mode=manual")) {
+            Broken broken = manualBoot.getBean(Broken.class);
+            Healthy healthy = manualBoot.getBean(Healthy.class);
+            SubscriptionModel model = manualBoot.getBean(SubscriptionModel.class);
+            Logs logs = manualBoot.getBean(Logs.class);
+
+            Throwable thrown = catchThrowable(() -> model.start(true));
+
+            assertThat(thrown).as("thrown by start(true)").isNull();
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> assertThat(healthy.received()).as("the healthy subscription").contains("live-4"));
+            assertThat(model.isPaused(BROKEN)).as("the broken subscription is paused").isTrue();
+            assertThat(model.isRunning(BROKEN)).as("the broken subscription is running").isFalse();
+            assertThat(broken.received()).as("what the broken subscription received").isEmpty();
+            assertThat(logs.errorsFor(BROKEN)).as("errors logged for the broken subscription").hasSize(1);
+            assertThat(logs.errorsFor(HEALTHY)).as("errors logged for the healthy subscription").isEmpty();
+        }
+    }
+
+    private static ConfigurableApplicationContext boot(String database, Class<? extends Broken> broken, boolean healthy, String afterStart, String... additionalArguments) {
         SpringApplication application = new SpringApplication(LostPositionApplication.class);
         application.addInitializers(context -> ((GenericApplicationContext) context).registerBean(broken));
-        return application.run(
+        return application.run(Stream.concat(Stream.of(
                 "--spring.application.name=lost-position",
                 "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(database),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=stream,dcb",
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + database,
                 "--test.after-start=" + afterStart,
-                "--test.healthy=" + healthy);
+                "--test.healthy=" + healthy), Stream.of(additionalArguments)).toArray(String[]::new));
     }
 
     private static String storedCheckpoint(String database) {

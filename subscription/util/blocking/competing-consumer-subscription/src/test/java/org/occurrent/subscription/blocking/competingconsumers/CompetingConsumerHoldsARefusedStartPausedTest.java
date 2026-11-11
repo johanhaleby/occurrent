@@ -35,6 +35,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.HistoryLossMessages;
@@ -344,6 +345,46 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
 
         // Then
         assertThat(model.isRunning(ID)).as("running").isTrue();
+    }
+
+    @Test
+    void start_true_of_a_manual_start_model_over_it_returns_and_leaves_a_consumer_held_paused_with_one_error_when_the_wrapped_model_refuses_the_subscribe_that_asked_for_the_hold() {
+        // Given
+        strategy.grantOnRegister = true;
+        wrapped.refusing = true;
+        ManualStartSubscriptionModel manual = ManualStartSubscriptionModel.stoppedByDefault(model);
+        LostStartHold.askedDuring(() -> manual.subscribe(ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }));
+
+        // When
+        Throwable thrown = catchThrowable(() -> manual.start(true));
+
+        // Then
+        assertThat(thrown).as("thrown by start(true)").isNull();
+        assertHeldPaused();
+        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+    }
+
+    @Test
+    void resumes_a_subscription_that_asked_for_the_hold_through_a_manual_start_model_that_was_stopped_when_the_wrapped_model_does_not_refuse() {
+        // Given
+        strategy.grantOnRegister = true;
+        ManualStartSubscriptionModel manual = ManualStartSubscriptionModel.stoppedByDefault(model);
+        manual.start(true);
+        manual.stop();
+        LostStartHold.askedDuring(() -> manual.subscribe(ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }));
+
+        // When
+        Throwable thrown = catchThrowable(() -> manual.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(model.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(model.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
     }
 
     private void useAModelBuiltOverAWrappedModelThatIsNotRunning() {
