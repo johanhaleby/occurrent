@@ -34,7 +34,11 @@ import io.cloudevents.CloudEvent;
  * for, such as a {@link java.util.UUID}, and for a property longer than 255 bytes, such as {@code messageId}. None of
  * these is retried by the sink's default retry strategy. An {@link java.io.IOException} from encoding a header, for
  * example from a custom {@code LongString}, is different. The sink wraps it in a {@link RabbitMqPublishException} and
- * retries it like a failed write.
+ * retries it like a failed write. The default retry strategy has no cap on attempts, so a header that fails to encode
+ * on every attempt keeps the publish retrying, on a new channel each time, until the sink is closed. A
+ * {@link RabbitMqCloudEventSink.Builder#retryStrategy(org.occurrent.retry.RetryStrategy)} with a cap on attempts
+ * bounds it. The Spring Boot starter's sink has no setting for a cap, so an application with such a mapper declares a
+ * {@code CloudEventSink} bean of its own.
  */
 @FunctionalInterface
 public interface RabbitMqOutboundMapper {

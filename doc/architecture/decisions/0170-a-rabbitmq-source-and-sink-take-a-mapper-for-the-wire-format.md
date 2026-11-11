@@ -61,7 +61,11 @@ the retries and the channel recovery as before. That is the reason to use the si
 `messageId` over 255 bytes, fails the publish with the client's own exception, usually an `IllegalArgumentException`,
 which the sink does not retry. An `IOException` from encoding a header, for example from a custom `LongString`, is
 wrapped in a `RabbitMqPublishException` and retried like a failed write. Either way the sink replaces its channel,
-since the client counts that publish as waiting for a confirm the broker never sends.
+since the client counts that publish as waiting for a confirm the broker never sends. The default retry strategy has no
+cap on attempts, as in 0.34.0, so a header that fails to encode on every attempt keeps the publish retrying, on a new
+channel each time, until the sink is closed. A `retryStrategy` with `maxAttempts`, or a `retryIf` that does not retry
+the exception, bounds it. The Spring Boot starter's sink has no setting for a cap, so an application with such a mapper
+declares a `CloudEventSink` bean of its own.
 
 **The sink makes a message persistent when the mapper does not say.** If the mapper does not set `deliveryMode`, the
 sink sets it to 2. A mapper that forgot it would otherwise publish transient messages that a broker restart can drop

@@ -55,7 +55,9 @@ import static java.util.Objects.requireNonNull;
  * left outstanding on the
  * broker's side of that channel (or the channel itself is simply gone), so this sink retires the channel and opens
  * a fresh one underneath it, and a later publish is never kept waiting on an abandoned one, blamed for its eventual
- * nack, or stuck permanently on a channel the broker already closed. That recovery reaches a channel-level
+ * nack, or stuck permanently on a channel the broker already closed. A message the client fails to encode retires
+ * the channel too, since the client counts the publish as waiting for a confirm before it encodes the message. That
+ * recovery reaches a channel-level
  * shutdown. After a connection-level one there is no connection to reopen a channel on until the caller's own
  * {@link Connection} reconnects, which RabbitMQ's client offers as automatic connection recovery. A publish made
  * during that outage fails. Every publish checks that its channel is open before using it and opens a new one when it
@@ -69,7 +71,9 @@ import static java.util.Objects.requireNonNull;
  * serialized channel gives builds more than one sink, each with its own {@link Channel}.
  * <p>
  * A transient failure is retried under {@link Builder#retryStrategy(RetryStrategy)} before a caller sees it,
- * exponential backoff from 100 ms up to 2 seconds by default and no cap on the number of attempts. The retry is not
+ * exponential backoff from 100 ms up to 2 seconds by default and no cap on the number of attempts. That includes an
+ * {@link IOException} from encoding a header that a custom {@link RabbitMqOutboundMapper} set, which can fail the same
+ * way on every attempt, so give such a sink a retry strategy with a cap on attempts. The retry is not
  * a substitute for the acknowledgement wait, since a publish that was never acknowledged is not known to have
  * failed, only unresolved. Per ADR 133, an expired {@link RabbitMqPublishTimeoutException} is for the caller to
  * decide on rather than something this retry absorbs, so the default excludes it, along with

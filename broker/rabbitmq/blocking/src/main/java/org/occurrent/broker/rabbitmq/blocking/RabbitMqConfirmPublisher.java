@@ -50,7 +50,9 @@ import java.util.concurrent.locks.ReentrantLock;
  * would otherwise look like success. A publish that times out waiting for the confirm, or is abandoned to an
  * interrupted wait, is left outstanding on the broker's side of that channel, so this publisher retires the channel
  * and opens a fresh one underneath it, and a later publish is never kept waiting on an abandoned one or blamed for
- * its eventual nack. Each publish carries its own random token in a dedicated header ({@link #RETURN_TOKEN_HEADER}),
+ * its eventual nack. A {@code basicPublish} that throws, for example on a message the client fails to encode,
+ * retires the channel the same way, since the client counts the publish as waiting for a confirm before it encodes
+ * the message. Each publish carries its own random token in a dedicated header ({@link #RETURN_TOKEN_HEADER}),
  * so a {@code basic.return} is matched to the publish it belongs to and never to a different one. That token is
  * deliberately not the AMQP {@code correlationId} property. The parking path in {@link RabbitMqDeliveryFailureAction}
  * republishes a delivery's own original properties through this same publisher, and a caller-supplied

@@ -57,10 +57,11 @@ import static org.mockito.Mockito.when;
 /**
  * A publish never uses a channel it has observed closed, and a reopen that failed on one publish is repaired by the
  * next one that can open a channel. {@code RabbitMqCloudEventSinkChannelRetirementTest} covers the retirement itself
- * and a reopen that succeeds. This covers a reopen that fails, which leaves the closed channel in place, over every
- * way a publish can end in a retirement and every way the reopen can fail. A {@link Channel} mock here refuses to
- * publish once closed, the way a real one does, so a publish that reaches a closed channel fails visibly instead of
- * passing by accident.
+ * and a reopen that succeeds. This covers a reopen that fails, which leaves the closed channel in place, after a
+ * confirm wait that times out, is interrupted or ends in a channel or connection shutdown, for every way the reopen
+ * can fail. A {@code basicPublish} that throws, followed by a reopen that fails, is not covered. A {@link Channel}
+ * mock here refuses to publish once closed, the way a real one does, so a publish that reaches a closed channel
+ * fails visibly instead of passing by accident.
  */
 class RabbitMqConfirmPublisherChannelRepairTest {
 
