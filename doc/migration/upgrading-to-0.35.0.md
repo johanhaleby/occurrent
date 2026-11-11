@@ -104,8 +104,12 @@ other sections compile fine and behave differently, so read them first.
 - [A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs](#a-blocking-cancel-doesnt-wait-for-a-subscribe-whose-startatdynamic-function-runs).
   A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
-  `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached.
-  `ReactorMongoSubscriptionModel` isn't affected. Compiles unchanged.
+  `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Over
+  `ReactorMongoSubscriptionModel` it fails only when MongoDB's reply to `hello` has no `localTime`, which failed the
+  start in 0.34.0 too. Compiles unchanged.
+- [A dynamic `StartAt.now()` that the wrapped model refuses fails `waitUntilStarted()` instead of `subscribe(..)`](#a-dynamic-startatnow-that-the-wrapped-model-refuses-fails-waituntilstarted-instead-of-subscribe).
+  A refusal of the subscribe, for an unsupported filter for example, no longer throws from `subscribe(..)`. Compiles
+  unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 
@@ -1767,11 +1771,14 @@ is affected too:
 
 In 0.34.0 the subscription started in both cases, unless the subscribe waited for such a write back.
 
-`ReactorMongoSubscriptionModel` isn't affected. It fails the read when MongoDB gives no position and never answers
-empty, so the subscription reads again until MongoDB answers. It doesn't throw from `globalCheckpointAsOfNow()`, and
-when its read fails, the same request to MongoDB failed the subscription's opening at the present in 0.34.0 too.
-Neither is the Spring Boot starter, whose `ReactorDurableSubscriptionModel` asks `ReactorMongoSubscriptionModel`,
-directly or through a `ReactorCatchupSubscriptionModel`.
+`ReactorMongoSubscriptionModel` answers empty when MongoDB's reply to `hello` has no `localTime`, so such a
+subscription doesn't start over it. It didn't start in 0.34.0 either, since the model opens its change stream at the
+present from the same reply, and it stopped the subscription with an `IllegalStateException` that says the reply has no
+`localTime`. With `startWhenNoStartPositionCanBeRecorded(true)` the subscription still stops that way. When MongoDB
+can't be reached, the read fails and is read again until MongoDB answers, and the same request to MongoDB failed the
+subscription's opening at the present in 0.34.0 too. The model doesn't throw from `globalCheckpointAsOfNow()`. The
+Spring Boot starter's `ReactorDurableSubscriptionModel` asks `ReactorMongoSubscriptionModel`, directly or through a
+`ReactorCatchupSubscriptionModel`, so the same holds there.
 
 ### What to do
 
@@ -1802,6 +1809,26 @@ failure. For one from the subscription-model default, or from a function that an
 The change is in what happens at runtime, and the code compiles unchanged. A recipe that turned on
 `startWhenNoStartPositionCanBeRecorded` would accept the skipped events for you, for the subscription-model default
 too, on every subscription.
+
+## A dynamic `StartAt.now()` that the wrapped model refuses fails `waitUntilStarted()` instead of `subscribe(..)`
+
+`ReactorDurableSubscriptionModel` hands a subscription whose `StartAt.dynamic(..)` function answers `StartAt.now()` to
+a wrapped model that manages named subscriptions once it has read where the feed was at the call, which is after
+`subscribe(..)` has returned. So when the wrapped model refuses the subscribe, for a filter it doesn't support for
+example, `subscribe(..)` no longer throws. `waitUntilStarted()` of the subscription it returned fails with what the
+wrapped model threw, and an `ERROR` is logged. A subscribe of an id that the wrapped model already reports still throws
+`DuplicateSubscriptionIdException` at the call.
+
+### Who is affected
+
+Code that catches the wrapped model's refusal around `subscribe(..)` for such a subscription. A subscribe that waits
+for a checkpoint that a cancel of the id deleted to be written back was handed over after the call in 0.34.0 already.
+
+### What to do
+
+Handle the refusal where you wait for `waitUntilStarted()`, as 0.34.0 already required for a subscription from the
+subscription-model default. Keep handling `DuplicateSubscriptionIdException` at the call too, since it can come from
+either place.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
