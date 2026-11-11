@@ -44,7 +44,7 @@ public interface RabbitMqSourceListener {
 | `delivered` | The source acknowledged a delivery its subscriber took or filtered out. |
 | `failed` (source) | A delivery went to the delivery failure policy. `failure` is `null` for a `NOT_DELIVERABLE` outcome. |
 | `parked` | The parking destination confirmed a parked copy and the source acknowledged the original. |
-| `redelivered` | The source handed a failed delivery back to the queue under `REDELIVER`. |
+| `redelivered` | The source handed a failed delivery back to the queue, under `REDELIVER` or after a park that failed. |
 
 A listener that throws is logged and ignored, so a broken metrics binding never fails a publish or a delivery.
 

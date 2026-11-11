@@ -94,11 +94,13 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     private final RabbitMqConfirmPublisher publisher;
     private final RabbitMqUnroutablePolicy unroutablePolicy;
     private final RabbitMqOutboundMapper outboundMapper;
+    private final RabbitMqSinkListener listener;
     private volatile boolean shutdown;
 
     private RabbitMqCloudEventSink(DestinationResolver<RabbitMqDestination> resolver, RetryStrategy retryStrategy, RabbitMqConfirmPublisher publisher,
-                                   RabbitMqUnroutablePolicy unroutablePolicy, RabbitMqOutboundMapper outboundMapper) {
+                                   RabbitMqUnroutablePolicy unroutablePolicy, RabbitMqOutboundMapper outboundMapper, RabbitMqSinkListener listener) {
         this.outboundMapper = outboundMapper;
+        this.listener = listener;
         this.resolver = resolver;
         this.retryStrategy = retryStrategy;
         this.publisher = publisher;
@@ -122,8 +124,33 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         retryStrategy.execute(() -> publishOnce(cloudEvent), __ -> !shutdown);
     }
 
+    // A resolver that throws gives no destination to report, so the listener is not called for that attempt
     private void publishOnce(CloudEvent cloudEvent) {
+        long startNanos = System.nanoTime();
         RabbitMqDestination destination = resolver.destinationFor(cloudEvent);
+        try {
+            publishTo(destination, cloudEvent);
+        } catch (RabbitMqUnroutableEventException e) {
+            report("unroutable", () -> listener.unroutable(destination));
+            // Caught inside the attempt rather than around the retry, so a RetryStrategy that retries everything
+            // never publishes an event again that this policy has already accepted as dropped
+            if (unroutablePolicy == RabbitMqUnroutablePolicy.FAIL) {
+                throw e;
+            }
+            log.warn("The broker returned the event with id \"{}\" and type \"{}\" published to exchange \"{}\" with routing key \"{}\" "
+                            + "because no queue matched it. The sink continues with the next event since its unroutable policy is {}.",
+                    cloudEvent.getId(), cloudEvent.getType(), destination.exchange(), destination.routingKey(), unroutablePolicy);
+            return;
+        } catch (Throwable e) {
+            // Throwable, since a mapper written in Kotlin can throw a checked exception. Rethrown unchanged
+            report("failed", () -> listener.failed(destination, e));
+            throw e;
+        }
+        Duration publishTime = Duration.ofNanos(System.nanoTime() - startNanos);
+        report("published", () -> listener.published(destination, publishTime));
+    }
+
+    private void publishTo(RabbitMqDestination destination, CloudEvent cloudEvent) {
         RabbitMqMessage message = outboundMapper.toMessage(cloudEvent, destination);
         if (message == null) {
             throw new IllegalStateException("The " + RabbitMqOutboundMapper.class.getSimpleName() + " returned null for the event with id \""
@@ -133,19 +160,29 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         if (properties.getDeliveryMode() == null) {
             properties = properties.builder().deliveryMode(2).build();
         }
-        byte[] body = message.body();
+        publisher.publish(destination.exchange(), destination.routingKey(), properties, message.body());
+    }
+
+    // Exception rather than RuntimeException, since a listener written in Kotlin can throw a checked exception
+    // through the Java interface. An Error is not caught
+    private void report(String callback, Runnable call) {
         try {
-            publisher.publish(destination.exchange(), destination.routingKey(), properties, body);
-        } catch (RabbitMqUnroutableEventException e) {
-            // Caught inside the attempt rather than around the retry, so a RetryStrategy that retries everything
-            // never publishes an event again that this policy has already accepted as dropped
-            if (unroutablePolicy == RabbitMqUnroutablePolicy.FAIL) {
-                throw e;
+            call.run();
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
             }
-            log.warn("The broker returned the event with id \"{}\" and type \"{}\" published to exchange \"{}\" with routing key \"{}\" "
-                            + "because no queue matched it. The sink continues with the next event since its unroutable policy is {}.",
-                    cloudEvent.getId(), cloudEvent.getType(), destination.exchange(), destination.routingKey(), unroutablePolicy);
+            log.warn("The {} listener threw from {}(..). Ignoring it.", listener.getClass().getName(), callback, e);
         }
+    }
+
+    /**
+     * Whether this sink can publish. {@code false} once {@link #close()} has been called or the {@link Connection}
+     * it was built from is closed, also while an automatic connection recovery is under way. Opens no channel, so a
+     * channel this sink retired after a failed publish is not checked, since the next publish opens a new one.
+     */
+    public boolean isOpen() {
+        return !shutdown && publisher.isConnectionOpen();
     }
 
     /**
@@ -170,6 +207,8 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         private RetryStrategy retryStrategy = defaultRetryStrategy();
         private RabbitMqUnroutablePolicy unroutablePolicy = RabbitMqUnroutablePolicy.FAIL;
         private RabbitMqOutboundMapper outboundMapper = RabbitMqOutboundMapper.cloudEventHeaders();
+        private RabbitMqSinkListener listener = new RabbitMqSinkListener() {
+        };
 
         private Builder(Connection connection, DestinationResolver<RabbitMqDestination> resolver) {
             this.connection = requireNonNull(connection, "connection cannot be null");
@@ -231,9 +270,18 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
             return this;
         }
 
+        /**
+         * Told how each publish attempt ended, for example to count publishes as metrics. Does nothing by default.
+         * See {@link RabbitMqSinkListener} for when each method is called.
+         */
+        public Builder listener(RabbitMqSinkListener listener) {
+            this.listener = requireNonNull(listener, RabbitMqSinkListener.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
         public RabbitMqCloudEventSink build() {
             RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, acknowledgementTimeout);
-            return new RabbitMqCloudEventSink(resolver, retryStrategy, publisher, unroutablePolicy, outboundMapper);
+            return new RabbitMqCloudEventSink(resolver, retryStrategy, publisher, unroutablePolicy, outboundMapper, listener);
         }
 
         /**
