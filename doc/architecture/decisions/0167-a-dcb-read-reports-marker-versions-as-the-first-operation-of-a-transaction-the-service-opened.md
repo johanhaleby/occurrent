@@ -56,12 +56,13 @@ set, `mongos` for example, a read in a transaction reports no versions with it t
 rests on how a replica set reads a transaction.
 
 The blocking and the reactive `GenericDcbApplicationService` read and decide in the executor for every command, as in
-0.34.0. With synchronous subscriptions they set `confirmsAppendBeforeSaving` on every read that asks for versions, and
-`firstOperationOfTransaction` as well when `inTransactionTellingIfOpened` says the attempt opened its transaction. The
-read is the first thing the action does, and an executor's conflict retry runs the action again in a new transaction,
-so the read is the first operation of each attempt. A command whose executor joins a transaction the caller owns reads
-without `firstOperationOfTransaction` and gets no versions, as today. An executor on `PROPAGATION_REQUIRES_NEW` in the
-caller's transaction opens one of its own, so its read gets it.
+0.34.0. With synchronous subscriptions they set `firstOperationOfTransaction` on a read that asks for versions when
+`inTransactionTellingIfOpened` says the attempt opened its transaction, and `confirmsAppendBeforeSaving` alone when it
+says the executor started the synchronization the attempt runs in. The read is the first thing the action does, and an
+executor's conflict retry runs the action again in a new transaction, so the read is the first operation of each
+attempt. A command whose executor joins a transaction the caller owns reads without `firstOperationOfTransaction` and
+gets no versions, as today. An executor on `PROPAGATION_REQUIRES_NEW` in the caller's transaction opens one of its
+own, so its read gets it.
 
 Nothing else sets either component. The `@Snapshot` view, the catch-up, the re-read of the written block and the read
 inside `appendedVersions` don't.
@@ -90,10 +91,10 @@ Versions from the session transaction come from a transaction that hasn't
 committed when the read returns, at the session's default read concern.
 
 In a scope of the caller's with no transaction, an executor that opens none takes part in that scope's
-synchronization, so the session transaction the read binds commits only when the caller's scope ends, after `execute`
-has returned. The confirmation doesn't find the append then, and a snapshot decider there saves no snapshot. The
-session stays bound until that scope ends, as after a plain command, and a MongoDB transaction manager on the same
-database factory counts it as an existing transaction there.
+synchronization and doesn't start it, so the service doesn't mark the read. A session the read bound there would
+stay bound until the caller's scope ends, after `execute` has returned. A decider there reads in a transaction of the
+store's own, as ADR 148 describes. With no session bound for the store's database factory, its append runs in a
+transaction of the store's own too, which the store retries on a conflict, and doesn't join the caller's scope.
 
 The Spring stores retry a write only in a transaction they own. A session bound for their database factory counts as
 one they don't, so a write in it that conflicts fails at once instead of being retried in the transaction the
@@ -167,8 +168,8 @@ transaction the executor joined.
 - A snapshot decider on a service with synchronous subscriptions reads and decides in the executor's transaction, as a
   plain command does. On a replica set it still saves snapshots when the executor opened that transaction, and on a
   Spring executor that opens none outside a scope of the caller's.
-- On a replica set, in a scope of the caller's with no transaction, on an executor that opens none, a snapshot decider
-  saves no snapshot.
+- In a scope of the caller's with no transaction, on an executor that opens none, a snapshot decider reads in a
+  transaction of the store's own, and with no session bound its append doesn't join the caller's scope.
 - On a sharded cluster a read in the executor's transaction reports no versions, so a snapshot decider there saves no
   snapshot and the store refuses a snapshot saved earlier.
 - The versions of such a read come from the executor's transaction, not from a read-only transaction committed at

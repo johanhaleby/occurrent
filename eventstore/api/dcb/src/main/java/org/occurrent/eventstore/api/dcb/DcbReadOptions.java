@@ -191,8 +191,9 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * then commits or rolls back with it. Without this, the store reads on a session of its own there.
      * <p>
      * The versions of such a read come from a transaction that hasn't committed when the read returns, so a write they
-     * count can still roll back. The DCB application services set it on every read that asks for versions when they
-     * dispatch synchronously.
+     * count can still roll back. The session such a read binds stays bound until the synchronization ends, and the store
+     * doesn't retry a conflict on an append in it. The DCB application services set it on a read that asks for versions
+     * when they dispatch synchronously and their transaction executor started the synchronization the read runs in.
      */
     public DcbReadOptions confirmingAppendBeforeSaving() {
         return new DcbReadOptions(positionRange, direction, skip, limit, true, afterVersions, true, firstOperationOfTransaction);

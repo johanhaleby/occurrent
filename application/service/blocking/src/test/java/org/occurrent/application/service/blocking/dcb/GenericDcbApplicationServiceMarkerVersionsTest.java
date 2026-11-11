@@ -438,6 +438,30 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Test
+        void the_read_confirms_the_append_before_saving_when_the_executor_started_the_synchronization_it_runs_in() {
+            var store = new TracingStore(trace);
+
+            transactionalService(store, new TracingExecutor(trace).startingTheSynchronizationWithoutATransaction(), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
+
+            assertThat(store.readOptions).as("[read options]").first().satisfies(options -> assertAll(
+                    () -> assertThat(options).as("options passed").isPresent(),
+                    () -> assertThat(options.orElseThrow().confirmsAppendBeforeSaving()).as("confirms the append before saving").isTrue(),
+                    () -> assertThat(options.orElseThrow().firstOperationOfTransaction()).as("first operation of the transaction").isFalse()));
+        }
+
+        @Test
+        void the_read_carries_neither_mark_when_the_executor_neither_opened_the_transaction_nor_started_the_synchronization() {
+            var store = new TracingStore(trace);
+
+            transactionalService(store, new TracingExecutor(trace).joiningATransactionTheCallerOpened(), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
+
+            assertThat(store.readOptions).as("[read options]").first().satisfies(options -> assertAll(
+                    () -> assertThat(options).as("options passed").isPresent(),
+                    () -> assertThat(options.orElseThrow().confirmsAppendBeforeSaving()).as("confirms the append before saving").isFalse(),
+                    () -> assertThat(options.orElseThrow().versionsRequested()).as("versions requested").isTrue()));
+        }
+
+        @Test
         @SuppressWarnings("removal")
         void a_read_after_a_position_reaches_the_store_from_the_executor_without_either_mark() {
             var store = new TracingStore(trace);
@@ -755,6 +779,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         private boolean runAgainAfterAConflict;
         private boolean infersWhetherItOpened;
         private boolean joinsATransaction;
+        private boolean startsSynchronization;
 
         TracingExecutor(List<String> trace) {
             this.trace = trace;
@@ -771,6 +796,13 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             return this;
         }
 
+        // Opens no transaction and reports starting the synchronization, like a Spring executor on PROPAGATION_SUPPORTS with no caller scope
+        TracingExecutor startingTheSynchronizationWithoutATransaction() {
+            this.joinsATransaction = true;
+            this.startsSynchronization = true;
+            return this;
+        }
+
         // Keeps the default inference and the default isTransactional of false, so it reports not opening the transaction it opens
         TracingExecutor inferringWhetherItOpenedTheTransaction() {
             this.infersWhetherItOpened = true;
@@ -783,7 +815,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             if (infersWhetherItOpened) {
                 return TransactionExecutor.super.inTransactionTellingIfOpened(action);
             }
-            return inTransaction(() -> action.apply(new ExecutorScope(!joinsATransaction, false)));
+            return inTransaction(() -> action.apply(new ExecutorScope(!joinsATransaction, startsSynchronization)));
         }
 
         @Override

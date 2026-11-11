@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.application.service.internal.FailureAfterWrite;
 import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatcher;
@@ -47,6 +48,9 @@ import java.util.function.Function;
  */
 @NullMarked
 public class GenericDcbApplicationService<E> implements DcbApplicationService<E> {
+    // Without synchronous subscriptions no executor runs the attempt
+    private static final ExecutorScope NO_EXECUTOR = new ExecutorScope(false, false);
+
     private final DcbEventStore eventStore;
     private final CloudEventConverter<E> cloudEventConverter;
     private final @Nullable TagGenerator<E> tagGenerator;
@@ -140,10 +144,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
         return Mono.defer(() -> {
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
-            // Given true only when the executor opened the transaction the read runs in and the read is its first operation
-            Function<Boolean, Mono<Decision<E>>> readAndDecide = firstOperationOfTransaction -> Mono.defer(() -> readOptions == null
+            // Given what the executor set up for the attempt the read runs in
+            Function<ExecutorScope, Mono<Decision<E>>> readAndDecide = scope -> Mono.defer(() -> readOptions == null
                             ? eventStore.read(criteria)
-                            : eventStore.read(criteria, dispatchSynchronously ? inExecutor(readOptions, firstOperationOfTransaction) : readOptions))
+                            : eventStore.read(criteria, dispatchSynchronously ? inExecutor(readOptions, scope) : readOptions))
                     .doOnNext(eventStream -> refuseEventBelowFoldedPosition(criteria, options, eventStream))
                     .onErrorMap(DcbSnapshotInvalidException.class, refused -> refused.beforeAppend(functionThatCallsDomainModel))
                     .flatMap(eventStream -> {
@@ -180,8 +184,8 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     ? transactionExecutor.inTransactionTellingIfOpened(scope -> Mono.defer(() -> failureAfterWrite.isHeld()
                             // Before the read, so a run after the stand-in doesn't run the domain function again
                             ? Mono.<Result<E>>empty()
-                            : readAndDecide.apply(scope.openedTransaction()).flatMap(decision -> appendAndDispatch.apply(decision, scope.openedTransaction()))))
-                    : readAndDecide.apply(false).flatMap(decision -> appendAndDispatch.apply(decision, false));
+                            : readAndDecide.apply(scope).flatMap(decision -> appendAndDispatch.apply(decision, scope.openedTransaction()))))
+                    : readAndDecide.apply(NO_EXECUTOR).flatMap(decision -> appendAndDispatch.apply(decision, false));
             // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
             return attempt.onErrorResume(failureAfterWrite::isHeldAfter, failure -> Mono.empty())
                     .retryWhen(retry)
@@ -214,13 +218,17 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         }
     }
 
-    // A read in the executor tells the store that a caller saves at versions only after confirming an append, and whether
-    // the read is the first operation of a transaction the executor opened
-    private static DcbReadOptions inExecutor(DcbReadOptions readOptions, boolean firstOperationOfTransaction) {
+    // A read in the executor tells the store it's the first operation of a transaction the executor opened, or else that
+    // the caller saves at versions only after confirming an append when the executor started the synchronization the read
+    // runs in. A session that a read binds to a synchronization the caller started stays bound until the caller's scope
+    // ends, so that read stays unmarked and the store reads in a transaction of its own
+    private static DcbReadOptions inExecutor(DcbReadOptions readOptions, ExecutorScope scope) {
         if (!readOptions.versionsRequested()) {
             return readOptions;
+        } else if (scope.openedTransaction()) {
+            return readOptions.asFirstOperationOfTransaction();
         }
-        return firstOperationOfTransaction ? readOptions.asFirstOperationOfTransaction() : readOptions.confirmingAppendBeforeSaving();
+        return scope.startedSynchronization() ? readOptions.confirmingAppendBeforeSaving() : readOptions;
     }
 
     @SuppressWarnings("removal")

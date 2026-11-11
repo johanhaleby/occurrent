@@ -969,14 +969,12 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - On a Spring executor that opens no transaction, outside a Spring transaction scope of yours, a Spring MongoDB store
   on a replica set reads them in the session transaction its read binds. The decider's append joins that transaction, so a failing
   handler undoes the append.
-- In a Spring scope of yours with no transaction, on an executor that opens none, that session transaction commits
-  when your scope ends, after `execute` returns, so a decider there saves no snapshot. When a session is already bound
-  there, the decider gets no marker versions from its read, since that session's writes may still abort. The session stays
-  bound until your scope ends, as after a plain `execute`, and a MongoDB transaction manager on the same database
-  factory counts it as an existing transaction there.
-- A versioned read without `confirmingAppendBeforeSaving()`, such as a snapshot decider's on a service without
-  synchronous subscriptions, can read on a transaction of the store's own in a Spring scope of yours with no
-  transaction. It then doesn't see the writes of a session already bound there, and an append in that session checked
+- In a Spring scope of yours with no transaction, on an executor that opens none, the service doesn't mark the read,
+  so a decider there reads in a transaction of the store's own. With no session bound for the store's database factory
+  yet, its append runs in a transaction of the store's own too, which the store retries on a conflict and which doesn't
+  join your scope, so a failing handler doesn't undo it.
+- A versioned read without `confirmingAppendBeforeSaving()`, such as a snapshot decider's, can read on a transaction of
+  the store's own in a Spring scope of yours with no transaction. It then doesn't see the writes of a session already bound there, and an append in that session checked
   against its token can fail its condition.
 - A Spring MongoDB store no longer retries a DCB append or a stream write in a session bound to the synchronization. A
   conflict fails it at once, as in your transaction, instead of a retry in the transaction the conflict aborted.
