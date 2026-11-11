@@ -17,7 +17,11 @@
 package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.GetResponse;
+import com.rabbitmq.client.NoOpMetricsCollector;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
@@ -35,6 +39,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -279,42 +284,53 @@ class RabbitMqCloudEventSourceInboundMapperTest extends RabbitMqTestSupport {
 
     /**
      * Only close() interrupts the worker thread, and a mapper that blocks and is interrupted throws an
-     * InterruptedException after the thread's interrupt flag is cleared. The source puts the flag back, so the park
-     * publish that follows cannot wait for its confirm, and the delivery is put back on the queue instead of being
-     * acknowledged as parked. The parked copy is still written before the confirm wait fails. close() passes its
-     * deadline before it interrupts, so the source skips the park then, and only this test's interrupt reaches it.
-     * Here the mapper throws on the first attempt only, so the delivery is offered again and reaches the subscriber.
-     * With the flag lost, the first attempt would be parked and acknowledged, and the second
-     * attempt would never happen.
+     * InterruptedException after the thread's interrupt flag is cleared. The source puts the flag back before its
+     * failure policy runs. The park publish is the first thing the policy does, so the connection's MetricsCollector
+     * sees the flag on the worker thread there. Whether the publish confirm then notices the interrupt depends on
+     * whether the confirm had already arrived, so the test does not assert what happens to the original delivery.
+     * The parked copy is written before the confirm wait either way, so the test does check that it reaches the
+     * parking queue.
      */
     @Test
-    void a_mapper_that_sneaky_throws_an_InterruptedException_leaves_the_worker_interrupted_so_the_message_is_put_back_on_the_queue_and_offered_again() throws Exception {
+    void a_mapper_that_sneaky_throws_an_InterruptedException_leaves_the_worker_interrupted_when_the_failure_policy_runs() throws Exception {
         String queue = declareAndBindQueue();
-        declareParkingQueue();
+        String parkingQueue = declareParkingQueue();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
-        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
-        model.subscribe("sub", handled::add);
+        model.subscribe("sub", cloudEvent -> {
+        });
         AtomicInteger attempts = new AtomicInteger();
+        AtomicReference<Thread> mapperThread = new AtomicReference<>();
         RabbitMqInboundMapper mapper = (properties, body) -> {
             if (attempts.incrementAndGet() == 1) {
+                mapperThread.set(Thread.currentThread());
                 InboundMapperTestSupport.<RuntimeException>sneakyThrow(new InterruptedException("interrupted while mapping"));
             }
             return plainPublisherMapper().toCloudEvent(properties, body);
         };
+        PublishRecorder publishes = new PublishRecorder();
+        ConnectionFactory connectionFactory = new ConnectionFactory();
+        connectionFactory.setUri(amqpUrl());
+        connectionFactory.setMetricsCollector(publishes);
 
-        try (RabbitMqCloudEventSource source = RabbitMqCloudEventSource.builder(connection(), model, queue)
-                .declareTopology(false)
-                .pollInterval(POLL_INTERVAL)
-                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
-                .parkingDestination(RabbitMqDestination.of(exchange, "parked"))
-                .inboundMapper(mapper)
-                .build()) {
+        try (Connection sourceConnection = connectionFactory.newConnection();
+             RabbitMqCloudEventSource source = RabbitMqCloudEventSource.builder(sourceConnection, model, queue)
+                     .declareTopology(false)
+                     .pollInterval(POLL_INTERVAL)
+                     .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                     .parkingDestination(RabbitMqDestination.of(exchange, "parked"))
+                     .inboundMapper(mapper)
+                     .build()) {
             publishPlainMessage("order-7", 3);
 
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
-            assertThat(attempts).hasValue(2);
+            await().atMost(Duration.ofSeconds(5)).until(() -> !publishes.publishes.isEmpty());
+            PublishRecorder.Publish park = publishes.publishes.get(0);
+            assertThat(park.thread()).isSameAs(mapperThread.get());
+            assertThat(park.interrupted()).isTrue();
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(parkingQueue)).isEqualTo(1));
+            GetResponse parked = adminChannel.basicGet(parkingQueue, true);
+            assertThat(parked).isNotNull();
+            assertThat(parked.getBody()).isEqualTo("{\"orderId\":\"order-7\"}".getBytes(StandardCharsets.UTF_8));
         }
-        assertAcknowledged(queue);
     }
 
     @Test
@@ -395,6 +411,22 @@ class RabbitMqCloudEventSourceInboundMapperTest extends RabbitMqTestSupport {
         @SuppressWarnings("unchecked")
         static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
             throw (T) throwable;
+        }
+    }
+
+    /**
+     * Records, for each publish on the connection, the thread that made it and whether that thread was interrupted.
+     */
+    private static final class PublishRecorder extends NoOpMetricsCollector {
+
+        private final List<Publish> publishes = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void basicPublish(Channel channel) {
+            publishes.add(new Publish(Thread.currentThread(), Thread.currentThread().isInterrupted()));
+        }
+
+        private record Publish(Thread thread, boolean interrupted) {
         }
     }
 }
