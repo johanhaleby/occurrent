@@ -1345,6 +1345,81 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     }
 
     /**
+     * A cancel of the id comes while the wrapped model takes the subscribe that hands a subscription to it, and that
+     * subscribe then throws a checked exception, as Kotlin code can. The subscribe throws what the wrapped model threw,
+     * and the cancel completes.
+     */
+    @Test
+    void a_cancel_while_a_wrapped_model_takes_the_hand_over_completes_once_that_subscribe_throws_a_checked_exception() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        PausableFeed feed = new PausableFeed(false);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        Throwable threw = ThrownAtTheCall.of("checked exception", "subscribe failed in the wrapped model");
+        try {
+            CountDownLatch handingOver = feed.throwFromSubscribe(1, threw);
+            CompletableFuture<Subscription> subscribed = CompletableFuture.supplyAsync(
+                    () -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), action(new CopyOnWriteArrayList<>())), caller);
+            assertThat(handingOver.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("subscribe that hands it over held").isTrue();
+
+            // When
+            Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
+            feed.letGo();
+            Throwable subscribeThrew = catchThrowable(() -> subscribed.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            Throwable cancelFailed = catchThrowable(() -> cancelled.block(TIMEOUT));
+
+            // Then
+            assertThat(subscribeThrew).as("what the subscribe threw").hasCauseReference(threw);
+            assertThat(cancelFailed).as("how the cancel ended").isNull();
+        } finally {
+            feed.letGo();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A cancel of the id comes while the wrapped model takes the subscribe that starts a subscription handed to it again
+     * from an earlier first position, and that subscribe then throws a checked exception, as Kotlin code can. The cancel
+     * completes, and a later subscribe of the id delivers what is written after it.
+     */
+    @Test
+    void a_cancel_while_a_wrapped_model_takes_the_subscribe_that_starts_a_subscription_again_completes_once_that_subscribe_throws_a_checked_exception() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        PausableFeed feed = new PausableFeed(false);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        Throwable threw = ThrownAtTheCall.of("checked exception", "subscribe again failed in the wrapped model");
+        try {
+            loseTheFirstPosition(model, storage, feed, release);
+            CountDownLatch subscribingAgain = feed.throwFromSubscribe(3, threw);
+            subscribeOn(caller, model, new CopyOnWriteArrayList<>());
+            untilHandedOver(feed);
+            release.countDown();
+            assertThat(subscribingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("subscribe that starts it again held").isTrue();
+
+            // When
+            Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
+            feed.letGo();
+            Throwable cancelFailed = catchThrowable(() -> cancelled.block(TIMEOUT));
+            Later later = subscribeAgain(model, feed, caller);
+
+            // Then
+            assertThat(cancelFailed).as("how the cancel ended").isNull();
+            assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                    .containsExactly(later.writtenAfter());
+        } finally {
+            release.countDown();
+            feed.letGo();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
      * Against a wrapped model that lets a subscribe replace the subscription of the id it has, a subscribe of the id is
      * refused while the first position of an earlier one is being recorded. Once that fails, a subscribe of the id
      * starts in the wrapped model and delivers what is written after it.
@@ -2597,6 +2672,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         private final CountDownLatch held = new CountDownLatch(1);
         private final CountDownLatch letGo = new CountDownLatch(1);
         private volatile int heldSubscribe = -1;
+        private volatile @Nullable Throwable thrownByTheHeldSubscribe;
         private volatile int heldCancel = -1;
         private volatile boolean cancelHeldBeforeItRemoves;
         private boolean stopped;
@@ -2609,6 +2685,12 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         private CountDownLatch holdSubscribe(int number) {
             heldSubscribe = number;
             return held;
+        }
+
+        // Held before the subscription is in this model, and throws thrown without declaring it once let go
+        private CountDownLatch throwFromSubscribe(int number, Throwable thrown) {
+            thrownByTheHeldSubscribe = thrown;
+            return holdSubscribe(number);
         }
 
         private CountDownLatch holdCancel(int number, boolean beforeItRemoves) {
@@ -2633,6 +2715,11 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
             int number = subscribes.incrementAndGet();
+            @Nullable Throwable thrown = thrownByTheHeldSubscribe;
+            if (number == heldSubscribe && thrown != null) {
+                holdHere();
+                throw ThrownAtTheCall.undeclared(thrown);
+            }
             Reading reading = new Reading(action, Feed.startOf(startAt, present.get()));
             synchronized (this) {
                 if (!replaces && readings.containsKey(subscriptionId)) {
