@@ -40,6 +40,7 @@ import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
@@ -72,7 +73,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -299,6 +300,16 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public void removeHistoryLossListener(HistoryLossListener listener) {
         subscriptions.removeHistoryLossListener(listener);
+    }
+
+    @Override
+    public void addStartRefusalListener(StartRefusalListener listener) {
+        subscriptions.addStartRefusalListener(listener);
+    }
+
+    @Override
+    public void removeStartRefusalListener(StartRefusalListener listener) {
+        subscriptions.removeStartRefusalListener(listener);
     }
 
     @Override

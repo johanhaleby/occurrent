@@ -2,12 +2,16 @@ package org.occurrent.subscription.blocking.competingconsumers;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.StringJoiner;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static java.util.Objects.requireNonNull;
 
 @NullMarked
 public class CompetingConsumerSubscription implements Subscription {
@@ -15,14 +19,12 @@ public class CompetingConsumerSubscription implements Subscription {
     private final String subscriberId;
     @Nullable
     private final Subscription subscription;
+    private final StartRefusal startRefusal;
 
-    CompetingConsumerSubscription(String subscriptionId, String subscriberId) {
-        this(subscriptionId, subscriberId, null);
-    }
-
-    CompetingConsumerSubscription(String subscriptionId, String subscriberId, @Nullable Subscription subscription) {
+    CompetingConsumerSubscription(String subscriptionId, String subscriberId, StartRefusal startRefusal, @Nullable Subscription subscription) {
         this.subscriptionId = subscriptionId;
         this.subscriberId = subscriberId;
+        this.startRefusal = startRefusal;
         this.subscription = subscription;
     }
 
@@ -62,6 +64,28 @@ public class CompetingConsumerSubscription implements Subscription {
 
     @Override
     public boolean waitUntilStarted(Duration timeout) {
+        startRefusal.throwIfRefused();
         return getSubscription().map(s -> s.waitUntilStarted(timeout)).orElse(true);
+    }
+
+    // Shared by every handle made for one competing consumer, from its subscribe until the model forgets it
+    static final class StartRefusal {
+        // Reported by the wrapped model, until the competing consumer model has acted on it
+        final AtomicReference<@Nullable UnsupportedStartAtException> reported = new AtomicReference<>();
+        private volatile @Nullable UnsupportedStartAtException refused;
+
+        void refused(UnsupportedStartAtException refusal) {
+            refused = refusal;
+        }
+
+        // A copy for every handle that throws it, so a caller adding to what it caught changes nothing another caller gets
+        private void throwIfRefused() {
+            UnsupportedStartAtException refusal = refused;
+            if (refusal != null) {
+                UnsupportedStartAtException copy = new UnsupportedStartAtException(refusal.startAt(), requireNonNull(refusal.getMessage()));
+                copy.initCause(refusal);
+                throw copy;
+            }
+        }
     }
 }

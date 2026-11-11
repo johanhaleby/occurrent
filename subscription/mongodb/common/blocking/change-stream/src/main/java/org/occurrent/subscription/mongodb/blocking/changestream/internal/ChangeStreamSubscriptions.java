@@ -45,6 +45,7 @@ import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions.HistoryLossListener;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions.QuietPositionListener;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -172,6 +173,7 @@ public final class ChangeStreamSubscriptions {
     private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions = new ConcurrentHashMap<>();
     private final List<HistoryLossListener> historyLossListeners = new CopyOnWriteArrayList<>();
     private final List<QuietPositionListener> quietPositionListeners = new CopyOnWriteArrayList<>();
+    private final List<StartRefusalListener> startRefusalListeners = new CopyOnWriteArrayList<>();
     private final TimeRepresentation timeRepresentation;
     private final RetryStrategy retryStrategy;
     private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
@@ -484,15 +486,21 @@ public final class ChangeStreamSubscriptions {
                 // happens next, and a resume asks the start again. Recorded inside the map's atomic update, so whoever reads
                 // the run as gone finds the failure, and without the model's monitor, since whoever holds it may be waiting
                 // for this handle. Waiters are released after the update, so the id is free before a released waiter
-                // throws. A timed wait that runs out during the update can read the failure before that.
+                // throws. A timed wait that runs out during the update can read the failure before that. The start
+                // refusal listeners are told last, and only when this run was still in the map.
+                AtomicBoolean refused = new AtomicBoolean();
                 runningSubscriptions.computeIfPresent(subscriptionId, (__, current) -> {
                     if (current != internalSubscription) {
                         return current;
                     }
                     internalSubscription.recordFailureToStart(unsupportedStartAt);
+                    refused.set(true);
                     return null;
                 });
                 internalSubscription.releaseWaitersOfAFailedStart();
+                if (refused.get()) {
+                    startRefused(subscriptionId, unsupportedStartAt);
+                }
             } else if (isChangeStreamHistoryLost(e)) {
                 if (takenOverAfterHistoryLoss(subscriptionId, internalSubscription, openedAt, e)) {
                     return;
@@ -688,6 +696,27 @@ public final class ChangeStreamSubscriptions {
     public void removeHistoryLossListener(HistoryLossListener listener) {
         requireNonNull(listener, HistoryLossListener.class.getSimpleName() + " cannot be null");
         historyLossListeners.remove(listener);
+    }
+
+    public void addStartRefusalListener(StartRefusalListener listener) {
+        requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
+        startRefusalListeners.add(listener);
+    }
+
+    public void removeStartRefusalListener(StartRefusalListener listener) {
+        requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
+        startRefusalListeners.remove(listener);
+    }
+
+    // Each listener gets a copy, so what one adds to it doesn't show up in what a handle throws or another listener gets
+    private void startRefused(String subscriptionId, UnsupportedStartAtException refusal) {
+        for (StartRefusalListener listener : startRefusalListeners) {
+            try {
+                listener.handleStartRefusal(subscriptionId, copyOf(refusal));
+            } catch (RuntimeException e) {
+                log.error("A listener failed when told that the start position of subscription {} was refused. The subscription stays refused, and the other listeners are told.", subscriptionId, e);
+            }
+        }
     }
 
     public void addQuietPositionListener(QuietPositionListener listener) {
