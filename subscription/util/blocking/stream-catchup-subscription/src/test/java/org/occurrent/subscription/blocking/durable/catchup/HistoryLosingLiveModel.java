@@ -64,6 +64,8 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     };
     private volatile Runnable beforeTheNextResumeAt = () -> {
     };
+    private volatile Runnable beforeTheNextResume = () -> {
+    };
     private volatile boolean defersTheNextAfterPause;
     private volatile @Nullable Runnable deferredAfterPause;
 
@@ -102,6 +104,12 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     // Runs once, at the start of the next resume at a given position and before the subscription is resumed
     HistoryLosingLiveModel beforeTheNextResumeAt(Runnable beforeTheNextResumeAt) {
         this.beforeTheNextResumeAt = beforeTheNextResumeAt;
+        return this;
+    }
+
+    // Runs once, at the start of the next plain resume and before the subscription is resumed
+    HistoryLosingLiveModel beforeTheNextResume(Runnable beforeTheNextResume) {
+        this.beforeTheNextResume = beforeTheNextResume;
         return this;
     }
 
@@ -161,6 +169,10 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        Runnable beforeThisResume = beforeTheNextResume;
+        beforeTheNextResume = () -> {
+        };
+        beforeThisResume.run();
         Open held = paused.remove(subscriptionId);
         if (held == null) {
             throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");

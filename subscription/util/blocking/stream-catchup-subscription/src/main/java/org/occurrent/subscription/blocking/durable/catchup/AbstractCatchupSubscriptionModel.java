@@ -626,17 +626,17 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Runs {@code step} for each of {@code items}, also when an earlier one throws, an {@link Error} included, and then
-     * throws the first {@link Error} when a step threw one, and the first failure otherwise, with the others added as
-     * suppressed. A failure thrown more than once, such as a preallocated {@link OutOfMemoryError}, is thrown and not
-     * added to itself.
+     * Runs {@code step} for each of {@code items}, also when an earlier one throws, an {@link Error} or an undeclared
+     * checked exception included, and then throws the first {@link Error} when a step threw one, and the first failure
+     * otherwise, with the others added as suppressed. A failure thrown more than once, such as a preallocated
+     * {@link OutOfMemoryError}, is thrown and not added to itself.
      */
     static <T> void runEach(Iterable<T> items, Consumer<T> step) {
         List<Throwable> failures = new ArrayList<>();
         for (T item : items) {
             try {
                 step.accept(item);
-            } catch (RuntimeException | Error e) {
+            } catch (Throwable e) {
                 failures.add(e);
             }
         }
@@ -645,10 +645,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
         Throwable thrown = failures.stream().filter(Error.class::isInstance).findFirst().orElse(failures.getFirst());
         failures.forEach(failure -> addSuppressed(thrown, failure));
-        if (thrown instanceof Error error) {
-            throw error;
-        }
-        throw (RuntimeException) thrown;
+        throw thrownAsItIs(thrown);
+    }
+
+    // Throws throwable as it is, a checked exception thrown from Kotlin too, without declaring it. Declared to return,
+    // so a caller can write throw thrownAsItIs(throwable)
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> RuntimeException thrownAsItIs(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     // Throwable.addSuppressed throws when given the failure itself, and that exception would be thrown in its place
@@ -845,7 +849,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 Subscription resumed;
                 try {
                     resumed = repositionable.resumeSubscription(subscriptionId, startAt);
-                } catch (RuntimeException | Error e) {
+                } catch (Throwable e) {
+                    // Throwable, since a live delegate written in Kotlin can throw a checked exception
                     if (dropped != null) {
                         handedOver.putIfAbsent(subscriptionId, dropped);
                     }

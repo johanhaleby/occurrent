@@ -48,6 +48,7 @@ import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.slf4j.LoggerFactory;
 import org.slf4j.helpers.MessageFormatter;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -56,6 +57,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -77,6 +79,7 @@ class StreamCatchupHistoryLossOwnershipTest {
 
     private static final String ID = "subscription";
     private static final String OTHER_ID = "other";
+    private static final String THIRD_ID = "third";
     private static final Checkpoint TOKEN = new StringBasedCheckpoint("token-1");
     private static final Checkpoint LATER_TOKEN = new StringBasedCheckpoint("later-token");
 
@@ -490,6 +493,55 @@ class StreamCatchupHistoryLossOwnershipTest {
     }
 
     @Test
+    void a_loss_of_the_live_start_is_still_taken_over_after_a_resume_at_a_kept_checkpoint_threw_a_checked_exception_without_declaring_it() {
+        // Given a replay that handed over at the live start the live model reads first
+        subscribeFromTheBeginningAndAwaitTheHandOver();
+        IOException liveFailure = new IOException("live model lost its connection");
+        liveModel.beforeTheNextResumeAt(() -> {
+            throw sneaky(liveFailure);
+        });
+        Throwable resumeAtFailure = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(TOKEN)));
+
+        // When the live model loses the history from that live start
+        liveModel.losesTheHistoryOf(ID, new StringBasedCheckpoint("live-start-1"));
+
+        // Then the catch-up takes the loss over instead of pausing the subscription for good
+        assertThat(resumeAtFailure).as("thrown by the resume at a checkpoint").isSameAs(liveFailure);
+        assertThat(errorsLogged()).as("errors logged").isEmpty();
+        // Paused until the takeover replay has handed over again
+        await().untilAsserted(() -> assertThat(catchup.isPaused(ID)).as("paused").isFalse());
+        assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty();
+    }
+
+    @Test
+    void start_resumes_the_other_healthy_paused_subscription_when_resuming_one_throws_a_checked_exception_without_declaring_it() {
+        // Given the terminally failed subscription makes start resume each paused subscription itself, in an order the live model's id set doesn't fix
+        create();
+        catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
+        catchup.subscribe(OTHER_ID, StartAt.checkpoint(TOKEN), action());
+        catchup.subscribe(THIRD_ID, StartAt.checkpoint(TOKEN), action());
+        liveModel.losesTheHistoryOf(ID, LATER_TOKEN);
+        catchup.stop();
+        IOException liveFailure = new IOException("live model lost its connection");
+        liveModel.beforeTheNextResume(() -> {
+            throw sneaky(liveFailure);
+        });
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.start(true));
+
+        // Then
+        assertThat(thrown).isNotNull();
+        List<Throwable> failures = Stream.concat(Stream.of(thrown), Stream.of(thrown.getSuppressed())).toList();
+        assertAll(
+                () -> assertThat(failures).as("failures thrown").hasSize(2).contains(liveFailure).anySatisfy(failure -> assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model that went through").hasSize(1),
+                () -> assertThat(Stream.of(OTHER_ID, THIRD_ID).filter(liveModel::isRunning).count()).as("healthy subscriptions running on the live model").isEqualTo(1),
+                () -> assertThat(liveModel.isPaused(ID)).as("failed subscription paused").isTrue()
+        );
+    }
+
+    @Test
     void start_resumes_the_healthy_paused_subscription_and_leaves_the_terminally_failed_one_paused() {
         // Given
         terminallyFailedAndHealthyPausedSubscriptions();
@@ -739,6 +791,11 @@ class StreamCatchupHistoryLossOwnershipTest {
                 () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
                 () -> assertThat(errorsLogged()).as("errors logged, one for each loss").containsExactly(terminalFailureLog(ID, LATER_TOKEN), terminalFailureLog(ID, TOKEN))
         );
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException sneaky(Throwable throwable) throws E {
+        throw (E) throwable;
     }
 
     private void terminallyPausedAfterALoss() {
