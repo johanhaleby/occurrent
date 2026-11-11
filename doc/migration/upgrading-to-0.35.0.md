@@ -105,8 +105,8 @@ other sections compile fine and behave differently, so read them first.
   A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
   `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Over
-  `ReactorMongoSubscriptionModel` it fails only when MongoDB's reply to `hello` has no `localTime`, which failed the
-  start in 0.34.0 too. Compiles unchanged.
+  `ReactorMongoSubscriptionModel` it fails only when MongoDB's reply to `hello` has no `localTime`, where 0.34.0 didn't
+  start it either. Compiles unchanged.
 - [A dynamic `StartAt.now()` that the wrapped model refuses fails `waitUntilStarted()` instead of `subscribe(..)`](#a-dynamic-startatnow-that-the-wrapped-model-refuses-fails-waituntilstarted-instead-of-subscribe).
   A refusal of the subscribe, for an unsupported filter for example, no longer throws from `subscribe(..)`. Compiles
   unchanged.
@@ -1771,12 +1771,15 @@ is affected too:
 
 In 0.34.0 the subscription started in both cases, unless the subscribe waited for such a write back.
 
-`ReactorMongoSubscriptionModel` answers empty when MongoDB's reply to `hello` has no `localTime`, so such a
-subscription doesn't start over it. It didn't start in 0.34.0 either, since the model opens its change stream at the
-present from the same reply, and it stopped the subscription with an `IllegalStateException` that says the reply has no
-`localTime`. With `startWhenNoStartPositionCanBeRecorded(true)` the subscription still stops that way. When MongoDB
-can't be reached, the read fails and is read again until MongoDB answers, and the same request to MongoDB failed the
-subscription's opening at the present in 0.34.0 too. The model doesn't throw from `globalCheckpointAsOfNow()`. The
+`ReactorMongoSubscriptionModel` answers empty when MongoDB's reply to `hello` has no `localTime`, so such a subscription
+doesn't start over it. It didn't start in 0.34.0 either. The model opened its change stream at the present with the same
+request, and stopped the subscription with an `IllegalStateException` that says the reply has no `localTime`. A
+subscribe that waited for such a write back read the position again after each failure instead, and neither started nor
+failed. With `startWhenNoStartPositionCanBeRecorded(true)` the subscription is handed to the model as `StartAt.now()`.
+It stops with that `IllegalStateException` when the model's own request gets a reply without `localTime` too, and
+otherwise opens where the feed is then and skips what was written since `subscribe(..)`, as that setting accepts. When
+MongoDB can't be reached, the read fails and is read again until MongoDB answers, and the same request to MongoDB failed
+the subscription's opening at the present in 0.34.0 too. The model doesn't throw from `globalCheckpointAsOfNow()`. The
 Spring Boot starter's `ReactorDurableSubscriptionModel` asks `ReactorMongoSubscriptionModel`, directly or through a
 `ReactorCatchupSubscriptionModel`, so the same holds there.
 

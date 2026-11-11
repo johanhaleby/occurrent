@@ -59,6 +59,15 @@ class ReactorMongoSubscriptionModelServerClockTest {
                 .verify(TIMEOUT);
     }
 
+    @Test
+    void global_checkpoint_as_of_now_fails_when_mongodb_returns_no_reply() {
+        ReactorMongoSubscriptionModel model = modelAnswering(Mono.empty());
+
+        StepVerifier.create(model.globalCheckpointAsOfNow())
+                .expectErrorSatisfies(throwable -> assertThat(throwable).hasMessageContaining("returned no reply"))
+                .verify(TIMEOUT);
+    }
+
     private static ReactorMongoSubscriptionModel modelAnswering(Mono<Document> reply) {
         ReactiveMongoOperations mongo = mock(ReactiveMongoOperations.class);
         when(mongo.executeCommand(any(Document.class))).thenReturn(reply);
