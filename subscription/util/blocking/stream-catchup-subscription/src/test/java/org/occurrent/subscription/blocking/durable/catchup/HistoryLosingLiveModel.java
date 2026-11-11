@@ -58,7 +58,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     private final AtomicInteger liveStartsRead = new AtomicInteger();
     private volatile boolean running_ = true;
     private volatile @Nullable Checkpoint lossReportedInsideSubscribe;
-    private volatile @Nullable RuntimeException nextSubscribeThrows;
+    private volatile @Nullable Throwable nextSubscribeThrows;
     private volatile @Nullable RuntimeException nextRepositioningResumeThrows;
     private volatile Runnable betweenTheNextTakeOverPauseAndWhatFollows = () -> {
     };
@@ -85,7 +85,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         return this;
     }
 
-    HistoryLosingLiveModel failingTheNextSubscribeWith(RuntimeException failure) {
+    HistoryLosingLiveModel failingTheNextSubscribeWith(Throwable failure) {
         nextSubscribeThrows = failure;
         return this;
     }
@@ -151,10 +151,10 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         subscribeCalls.add(subscriptionId);
-        RuntimeException failure = nextSubscribeThrows;
+        Throwable failure = nextSubscribeThrows;
         if (failure != null) {
             nextSubscribeThrows = null;
-            throw failure;
+            throw sneaky(failure);
         }
         Open open = new Open(filter, action, startAt);
         Checkpoint insideSubscribe = lossReportedInsideSubscribe;
@@ -200,6 +200,11 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         resumeCalls.add(subscriptionId);
         open(subscriptionId, new Open(held.filter(), held.action(), startAt));
         return handle(subscriptionId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException sneaky(Throwable throwable) throws E {
+        throw (E) throwable;
     }
 
     private void open(String subscriptionId, Open open) {
