@@ -32,7 +32,9 @@ import io.cloudevents.CloudEvent;
  * RabbitMQ client cannot encode fails the publish with the client's own exception, usually an
  * {@link IllegalArgumentException}, also unchanged. That happens for a header value of a type AMQP has no field type
  * for, such as a {@link java.util.UUID}, and for a property longer than 255 bytes, such as {@code messageId}. None of
- * these is retried by the sink's default retry strategy.
+ * these is retried by the sink's default retry strategy. An {@link java.io.IOException} from encoding a header, for
+ * example from a custom {@code LongString}, is different. The sink wraps it in a {@link RabbitMqPublishException} and
+ * retries it like a failed write.
  */
 @FunctionalInterface
 public interface RabbitMqOutboundMapper {

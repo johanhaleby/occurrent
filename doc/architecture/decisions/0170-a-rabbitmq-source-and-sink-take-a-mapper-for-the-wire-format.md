@@ -58,9 +58,10 @@ both source factories when the application declares one.
 publisher confirm, the return handling of [ADR 169](0169-a-rabbitmq-sink-can-log-an-unroutable-event-and-continue.md),
 the retries and the channel recovery as before. That is the reason to use the sink instead of writing a
 `CloudEventSink` from scratch. A message the RabbitMQ client cannot encode, such as one with a `UUID` header value or a
-`messageId` over 255 bytes, fails the publish with the client's own exception, usually an `IllegalArgumentException`.
-The sink replaces its channel, since the client counts that publish as waiting for a confirm the broker never sends,
-and does not retry it.
+`messageId` over 255 bytes, fails the publish with the client's own exception, usually an `IllegalArgumentException`,
+which the sink does not retry. An `IOException` from encoding a header, for example from a custom `LongString`, is
+wrapped in a `RabbitMqPublishException` and retried like a failed write. Either way the sink replaces its channel,
+since the client counts that publish as waiting for a confirm the broker never sends.
 
 **The sink makes a message persistent when the mapper does not say.** If the mapper does not set `deliveryMode`, the
 sink sets it to 2. A mapper that forgot it would otherwise publish transient messages that a broker restart can drop
