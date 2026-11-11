@@ -69,8 +69,9 @@ public class SpringTransactionExecutor implements TransactionExecutor {
 
     /**
      * Retries a conflict between concurrent appends, but only when no transaction was open on entry and the attempt
-     * joined no transaction and ran outside a transaction synchronization the caller started. A store that joins an open
-     * transaction can't retry one itself, and only its owner can start a fresh one. See ADR 0074.
+     * joined no transaction, other than through a savepoint of its own, and ran outside a transaction synchronization the
+     * caller started. A store that joins an open transaction can't retry one itself, and only its owner can start a fresh
+     * one. See ADR 0074.
      * <p>
      * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
      * stands in for exactly that retry once the store has to give it up. Appends of the same type increment the same
@@ -196,8 +197,8 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * synchronization the attempt runs in, so Spring clears it when the attempt ends.
      * <p>
      * The conflict retry doesn't run when a transaction is open on entry, or after an attempt that Spring's
-     * {@link DefaultTransactionStatus} reports as joining a transaction, or that ran in a transaction synchronization the
-     * caller started, such as a caller's scope on {@code PROPAGATION_SUPPORTS}.
+     * {@link DefaultTransactionStatus} reports as joining a transaction without a savepoint of its own, or that ran in a
+     * transaction synchronization the caller started, such as a caller's scope on {@code PROPAGATION_SUPPORTS}.
      * A MongoDB session that a read binds to that synchronization stays bound until the caller's scope ends, so running
      * the action again would run it in the session the conflict aborted. An attempt that starts a synchronization of its
      * own and joins no transaction is retried. A retry policy that isn't a {@link RetryStrategy.Retry} can't be told to
