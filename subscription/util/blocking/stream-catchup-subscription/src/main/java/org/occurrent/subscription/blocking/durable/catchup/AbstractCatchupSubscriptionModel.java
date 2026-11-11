@@ -2544,7 +2544,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             // still hold it paused. Only what this cancel started with or what a cancel that threw kept, never what a
             // subscribe the live delegate's cancel made for the same id on this thread put.
             return subscribed.computeIfPresent(subscriptionId, (id, now) -> now == made || now == current.kept ? null : now) == null;
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
+            // Throwable, since a live model written in Kotlin can throw a checked exception
             if (made != null) {
                 // Before the cancel under way is removed, so one of them always has the replay. Kept in place, also when
                 // a cancel the live delegate's cancel made for the same id on this thread went through.
@@ -3127,7 +3128,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try {
             listener.catchupStarted(attempt);
             return true;
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
+            // Throwable, since a listener written in Kotlin can throw a checked exception
             log.error("The catch-up listener for subscription {} failed when its replay started, so the replay is held and runs again once the subscription is resumed or start(true) is called on this model.", subscriptionId, e);
             return false;
         }
