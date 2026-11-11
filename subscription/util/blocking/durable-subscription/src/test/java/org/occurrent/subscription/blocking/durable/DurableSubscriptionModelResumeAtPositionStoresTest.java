@@ -34,6 +34,7 @@ import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.OptionalLong;
@@ -285,6 +286,28 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
             subscribeAndPause(model);
             IllegalStateException wrappedFailure = new IllegalStateException("the wrapped model could not reopen its feed");
             wrapped.failResumeAtPositionWith = wrappedFailure;
+
+            // When
+            Throwable thrown = catchThrowable(() -> repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isSameAs(wrappedFailure),
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(OLDER)
+            );
+        }
+
+        @Test
+        void puts_back_the_checkpoint_stored_before_when_the_wrapped_model_throws_a_checked_exception_without_declaring_it() {
+            // Given
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            IOException wrappedFailure = new IOException("the wrapped model could not reopen its feed");
+            wrapped.beforeResumeAtPosition = () -> {
+                throw sneaky(wrappedFailure);
+            };
 
             // When
             Throwable thrown = catchThrowable(() -> repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER)));
@@ -566,6 +589,11 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
 
     private static RepositionableSubscriptions repositionableIn(DurableSubscriptionModel model) {
         return RepositionableSubscriptions.findIn(model).orElseThrow();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException sneaky(Throwable throwable) throws E {
+        throw (E) throwable;
     }
 
     /**
