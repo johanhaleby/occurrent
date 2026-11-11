@@ -1040,6 +1040,38 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
         }
     }
 
+    /**
+     * The wrapped model throws when asked where its feed is, for a subscription from the model default with nothing stored.
+     * That start needs the position, so it fails with what was thrown. Only that failure reports the throw, so no WARN says
+     * that nothing read the position.
+     */
+    @Test
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_a_start_from_the_model_default_with_nothing_stored_with_what_it_threw_and_reports_it_once() {
+        // Given
+        NamedFeed feed = new NamedFeed(true);
+        Throwable threw = ThrownAtTheCall.of("error", POSITION_READ_FAILED);
+        feed.throwsAtTheCall = threw;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        AtomicReference<Subscription> subscription = new AtomicReference<>();
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            Throwable atTheCall = catchThrowable(() -> subscription.set(model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty())));
+            Throwable startEnded = catchThrowable(() -> subscription.get().waitUntilStarted().toFuture().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+
+            // Then
+            assertThat(atTheCall).as("what the subscribe threw at the call").isNull();
+            assertThat(startEnded).as("how waiting for the start of the subscription ended").isInstanceOf(ExecutionException.class).hasCauseReference(threw);
+            assertThat(feed.subscriptions).as("subscriptions the wrapped model took").isEmpty();
+            assertThat(logged.at(Level.WARN)).as("warnings logged that nothing read where the feed was")
+                    .noneMatch(message -> message.startsWith("The wrapped model"));
+            assertThat(logged.at(Level.ERROR)).as("errors logged").hasSize(1)
+                    .allSatisfy(message -> assertThat(message).startsWith("Subscription " + SUBSCRIPTION_ID + " could not be started"));
+        } finally {
+            model.shutdown();
+        }
+    }
+
     // Subscribes the id from the model default, which delivers only what is written after the subscribe returned
     private static void assertThatASubscribeFromTheModelDefaultStartsAtItsCall(ReactorDurableSubscriptionModel model, Feed feed, List<String> delivered) {
         long writtenBefore = feed.write();
