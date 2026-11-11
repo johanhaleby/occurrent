@@ -15,6 +15,7 @@ import org.occurrent.subscription.SubscriptionRefusedException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.internal.LostStartHold;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1966,10 +1967,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     } catch (ShutDownMeanwhile e) {
                         // Nothing to try again once this model is shut down
                         throw e;
-                    } catch (CatchupCannotResumeException e) {
-                        // Held paused by giveTheLeaseBackIfItThrows, so nothing tries it again until the user resumes it
-                        throw e;
                     } catch (Throwable e) {
+                        if (HistoryLossMessages.isHistoryLost(e)) {
+                            // Held paused by giveTheLeaseBackIfItThrows, so nothing tries it again until the user resumes it
+                            throw (CatchupCannotResumeException) e;
+                        }
                         // Recorded as competing, so what failed is tried again rather than asked for again, an Error
                         // too, which is then thrown
                         // A stop() that comes after this call pauses it as by the user, as it would have had this call run it
@@ -3241,7 +3243,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             } catch (Throwable e) {
                 SubscriptionLock lock = lockSubscription(subscriptionId);
                 try {
-                    if (holdALostStart && e instanceof CatchupCannotResumeException refused && holdsTheRefusedSubscribePaused(beingMade, refused)) {
+                    if (holdALostStart && HistoryLossMessages.isHistoryLost(e) && holdsTheRefusedSubscribePaused(beingMade, (CatchupCannotResumeException) e)) {
                         return new CompetingConsumerSubscription(subscriptionId, key.subscriberId());
                     }
                     if (recordOrTakeBackAfterAFailedStep(beingMade, e)) {
@@ -3592,6 +3594,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 addSuppressed(refused, unregisterFailure);
             }
         }
+        // A start(false) before any start(..) returned keeps it paused, as it keeps one the user paused
+        pausedBeforeAStartReturned(key.subscriptionId());
         log.error("The wrapped subscription model refused to start or resume a subscription from the position stored for it, so it is held paused and doesn't compete for the lease, since a grant would only be refused again. Resuming it competes for the lease again (subscriberId={}, subscriptionId={})",
                 key.subscriberId(), key.subscriptionId(), refused);
         warnedInThisCall(key, refused);
@@ -4090,7 +4094,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             }
             triedAgainAfter(key, e);
         } catch (CatchupCannotResumeException e) {
-            if (outOfACallOfThisModel) {
+            if (outOfACallOfThisModel || !HistoryLossMessages.isHistoryLost(e)) {
                 throw e;
             }
             // Held paused and logged at ERROR by holdTheRefusedStartPaused, so there is nothing for the strategy to do
@@ -4658,8 +4662,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 reconcileLater(key);
                 throw e;
             }
-            if (e instanceof CatchupCannotResumeException refused) {
-                holdTheRefusedStartPaused(key, previous, refused, true);
+            if (HistoryLossMessages.isHistoryLost(e)) {
+                holdTheRefusedStartPaused(key, previous, (CatchupCannotResumeException) e, true);
                 throw e;
             }
             LaterStops laterStops = stopsAfter(key, e);

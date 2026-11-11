@@ -1479,8 +1479,12 @@ any position other than the beginning could skip that event.
   `NOW` start that no `SubscriptionResumePoints` bean answers for doesn't read the stored token and opens at the
   present. Every reactive subscription is paused as above.
 
-  A subscription with `startupMode = BACKGROUND` on the annotation whose stored resume token is gone is paused as
-  above instead, with an error in the log that names it, and the rest of the application starts. With `startupMode`
+  A subscription with `startupMode = BACKGROUND` on the annotation whose stored resume token is gone is paused
+  instead, with an error in the log that names it, and the rest of the application starts. With
+  `occurrent.subscription.mode=manual` that happens in `start(true)`, which goes on to start the other subscriptions.
+  The node doesn't compete for the lease again until you resume the subscription, as the competing consumers item
+  above describes. A `resumeSubscription(id)` competes again, and throws `CatchupCannotResumeException` when this node
+  gets the lease during the call and the token is still gone. With `startupMode`
   unset the application doesn't start on a node that holds the lease when the subscription registers. While the
   subscription model runs, a node that waits for the lease starts in either mode, and pauses the subscription once it
   gets the lease, as above.

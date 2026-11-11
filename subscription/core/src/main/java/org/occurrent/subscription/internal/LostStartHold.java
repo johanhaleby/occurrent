@@ -52,6 +52,14 @@ public final class LostStartHold {
     }
 
     /**
+     * Runs {@code call} with the hold asked for on this thread, and puts back what was asked before once {@code call}
+     * returns or throws.
+     */
+    public static <T> T askedDuringCall(Supplier<T> call) {
+        return runWith(Boolean.TRUE, call);
+    }
+
+    /**
      * Runs {@code call} with the hold not asked for on this thread, for a model that holds the subscription itself and
      * needs the model it wraps to refuse.
      */

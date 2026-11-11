@@ -1275,8 +1275,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             throw HistoryLossMessages.cannotStartFrom(subscriptionId, at.checkpoint);
         }
         Subscription heldPaused = subscribeLive.apply(true);
-        // The subscribe holds the claim, so no resume of the id comes between the live delegate holding it paused and
-        // the loss being recorded
+        // The subscribe holds the claim, so no resumeSubscription, pause or cancel of the id comes between the live
+        // delegate holding it paused and the loss being recorded. A start(true) takes no claim and can resume it in
+        // that window. MongoDB then reports the loss when the change stream opens, which pauses it again
         Subscribed made = subscribed.get(subscriptionId);
         if (made != null && made.owner() == this && made.historyLost().recordUnlessCleared(made.historyLost().clears(), at.checkpoint)) {
             String lost = at.checkpoint.asString();

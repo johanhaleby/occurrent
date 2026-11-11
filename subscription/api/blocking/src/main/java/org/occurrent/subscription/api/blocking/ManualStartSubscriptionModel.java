@@ -31,6 +31,7 @@ import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.internal.LostStartHold;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -41,6 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 
@@ -283,7 +285,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             synchronized (stateLock) {
                 if (holdPaused || state != State.RUNNING) {
                     // Replaced rather than put, so a cancelSubscription since the claim stays cancelled
-                    registrations.replace(subscriptionId, Registration.STARTING, new Registration.Deferred(filter, startAt, action));
+                    registrations.replace(subscriptionId, Registration.STARTING, new Registration.Deferred(filter, startAt, action, LostStartHold.isAsked()));
                     return new DeferredSubscription(subscriptionId);
                 }
             }
@@ -340,7 +342,8 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
 
         final Subscription subscribed;
         try {
-            subscribed = delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
+            Supplier<Subscription> subscribe = () -> delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
+            subscribed = deferred.holdALostStart() ? LostStartHold.askedDuringCall(subscribe) : subscribe.get();
         } catch (RuntimeException e) {
             // Put it back so a subscription that failed to start can be started again, unless it was cancelled meanwhile
             registrations.replace(subscriptionId, Registration.STARTING, deferred);
@@ -687,7 +690,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     private sealed interface Registration {
         Registration STARTING = new Starting();
 
-        record Deferred(@Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) implements Registration {
+        // holdALostStart keeps a hold that the deferred subscribe asked for through LostStartHold, for the subscribe
+        // that start(true) or resumeSubscription(..) makes in the wrapped model once that call has returned
+        record Deferred(@Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdALostStart) implements Registration {
         }
 
         record Starting() implements Registration {
