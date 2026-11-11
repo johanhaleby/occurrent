@@ -27,7 +27,8 @@ below.
 
 Amended by [ADR 169](0169-a-rabbitmq-sink-can-log-an-unroutable-event-and-continue.md). A RabbitMQ sink built with
 `RabbitMqUnroutablePolicy.LOG_AND_CONTINUE` logs a returned message and returns normally, instead of treating the return
-as a failed publish as below. `FAIL` is still the default, and a parked delivery still fails on a return.
+as a failed publish as decision 7 says. `FAIL` is still the default, and a parked delivery still fails on a
+return.
 
 ## Context
 
