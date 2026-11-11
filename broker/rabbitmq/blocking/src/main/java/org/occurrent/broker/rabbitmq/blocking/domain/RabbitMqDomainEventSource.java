@@ -66,7 +66,8 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Feeds a RabbitMQ queue into a {@link DomainEventFeed}, the domain-level consume side ADR 133 decision 5
- * describes. Rebuilds each message as a {@link CloudEvent} through {@link RabbitMqCloudEventMapper} and calls
+ * describes. Rebuilds each message as a {@link CloudEvent} through its {@link RabbitMqInboundMapper}, by default
+ * the one that reads the headers {@link RabbitMqCloudEventMapper} writes, and calls
  * {@link DomainEventFeed#acceptOrDeferCloudEvent(CloudEvent)}, which is where the matching, the decoding and the delivery
  * all happen. This source does no filtering of its own, since the feed is the only thing that can decide per ADR 133
  * decision 5.
@@ -659,7 +660,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
             if (cloudEvent == null) {
                 throw new IllegalStateException("The " + RabbitMqInboundMapper.class.getSimpleName() + " returned null");
             }
-        } catch (RuntimeException e) {
+        } catch (Exception | AssertionError e) {
             log.debug("Failed to rebuild a CloudEvent from a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;

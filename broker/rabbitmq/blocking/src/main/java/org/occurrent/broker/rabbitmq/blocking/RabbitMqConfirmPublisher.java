@@ -163,7 +163,15 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
             if (!channel.isOpen()) {
                 retireChannel();
             }
-            channel.basicPublish(exchange, routingKey, true, correlated, body);
+            try {
+                channel.basicPublish(exchange, routingKey, true, correlated, body);
+            } catch (IllegalArgumentException e) {
+                // A header value or property the client cannot encode. The channel already counts this publish as
+                // awaiting a confirm the broker never sends, so the next publish on it would time out.
+                // Rethrown unwrapped, so the default retry predicate does not retry a message that never encodes
+                retireChannelPreserving(e);
+                throw e;
+            }
             // waitForConfirms, not waitForConfirmsOrDie: the latter closes this publisher's own long-lived channel
             // on a nack or a timeout, which would fail every later publish on it too. A nack is reported through
             // the boolean return instead.

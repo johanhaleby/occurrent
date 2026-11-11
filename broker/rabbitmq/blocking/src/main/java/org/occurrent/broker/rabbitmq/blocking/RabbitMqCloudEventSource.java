@@ -56,7 +56,8 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Feeds a RabbitMQ queue into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
- * describes. Rebuilds each message as a {@link CloudEvent} through {@link RabbitMqCloudEventMapper}, hands it to
+ * describes. Rebuilds each message as a {@link CloudEvent} through its {@link RabbitMqInboundMapper}, by default
+ * the one that reads the headers {@link RabbitMqCloudEventMapper} writes, hands it to
  * {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)}, and acknowledges only once the {@link RoutingOutcome}
  * that call returns says the event was actually consumed.
  * <p>
@@ -634,7 +635,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             if (cloudEvent == null) {
                 throw new IllegalStateException("The " + RabbitMqInboundMapper.class.getSimpleName() + " returned null");
             }
-        } catch (RuntimeException e) {
+        } catch (Exception | AssertionError e) {
             log.debug("Failed to rebuild a CloudEvent from a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;

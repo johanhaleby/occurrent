@@ -35,8 +35,8 @@ import java.util.concurrent.TimeoutException;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Publishes a {@link CloudEvent} to RabbitMQ, in the CloudEvents binary content mode
- * {@link RabbitMqCloudEventMapper} defines. Bring-your-own-sink is the primary way to use the broker modules at all,
+ * Publishes a {@link CloudEvent} to RabbitMQ, by default in the CloudEvents binary content mode
+ * {@link RabbitMqCloudEventMapper} defines, or in the format a {@link RabbitMqOutboundMapper} set on the builder writes. Bring-your-own-sink is the primary way to use the broker modules at all,
  * so use this one when you have not already written your own {@link CloudEventSink}. It is a complete,
  * confirmed, at-least-once publisher rather than a starting point to copy from.
  * <p>

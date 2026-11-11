@@ -25,7 +25,7 @@ import io.cloudevents.CloudEvent;
  * publishes, and sets {@code deliveryMode} to 2 (persistent) when the returned properties leave it {@code null}.
  * An explicit {@code deliveryMode} is kept. The headers of the {@link RabbitMqDestination} reach the message only if
  * the mapper puts them there. The mapper runs once per publish attempt, so it must not have side
- * effects. A mapper that returns {@code null} fails the publish with an {@link IllegalStateException}, and an
+ * effects, and it runs outside the sink's publish lock, so it must be safe to call from several threads. A mapper that returns {@code null} fails the publish with an {@link IllegalStateException}, and an
  * exception the mapper throws reaches the caller of {@link RabbitMqCloudEventSink#publish(CloudEvent)} unchanged.
  * Neither is retried by the sink's default retry strategy.
  */

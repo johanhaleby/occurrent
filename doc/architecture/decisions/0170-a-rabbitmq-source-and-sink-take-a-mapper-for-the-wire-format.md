@@ -74,7 +74,8 @@ takes the same path a failed `toCloudEvent` takes today, so it is parked or rede
 **Decision 4 of ADR 133 holds for the default mappers only.** A custom mapper owns the wire format, and with it whether
 `streamid`, `streamversion`, `position` and `dcbtags` reach the other side. An inbound mapper that sets the `streamid`
 and `streamversion` extensions from application headers gives a handler a full `EventMetadata`, so `@StreamId` and
-`@StreamVersion` work. With one that does not, they are empty. In `RabbitMqDomainEventSource` the inbound mapper runs
+`@StreamVersion` work. With one that does not, a handler that reads them fails on every message, so each delivery goes
+to the delivery failure policy. In `RabbitMqDomainEventSource` the inbound mapper runs
 before the `CloudEventConverter`, so the converter must resolve the `type` the mapper sets.
 
 ### Alternatives
