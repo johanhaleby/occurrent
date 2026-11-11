@@ -101,8 +101,9 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWith
  * A DCB read that asks for marker versions runs in a read-only snapshot transaction of its own, bounded by
  * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a session the caller bound with
  * {@link ClientSessionHolder} it reports no marker versions, since that transaction's writes may still abort, and a read
- * after marker versions is refused, unless the session has a transaction active, {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} says the read is the
- * transaction's first operation and the store runs on a replica set. Then it reads the versions in that transaction. The store answers {@link DcbAppendConfirmation} with a majority read on the
+ * after marker versions is refused, unless the session has a transaction active and {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} says the read is the
+ * transaction's first operation. Then it reads the versions in that transaction on a replica set, and in a read-only
+ * snapshot transaction of its own anywhere else. The store answers {@link DcbAppendConfirmation} with a majority read on the
  * primary that joins no session.
  */
 @NullMarked
@@ -440,9 +441,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // transaction of the store's own, never with the transaction options configured for writes, and commits it once by
     // hand. The majority commit makes sure the snapshot was majority-committed. Inside a caller's session it reports no
     // versions, since the session's own increments may still abort and a later append would reuse them, unless the
-    // caller says the read is the first operation of the session's transaction and the store runs on a replica set. Then
-    // it reads in that transaction, and a failure fails the read so the transaction's owner can retry. A failure outside a
-    // session reports no versions instead of failing the read. A read after versions can't fall back to a full read
+    // caller says the read is the first operation of the session's transaction. Then on a replica set it reads in that
+    // transaction, and a failure fails the read so the transaction's owner can retry. Anywhere else it reads in a
+    // transaction of its own. A failure in a transaction of its own reports no versions instead of failing the read. A read after versions can't fall back to a full read
     // without double-applying events, so it is refused in both cases.
     private DcbEventStream readWithMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
@@ -459,10 +460,13 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         ClientSession ambientSession = ClientSessionHolder.get();
         if (ambientSession != null) {
-            if (options.firstOperationOfTransaction() && runsOnReplicaSet && ambientSession.hasActiveTransaction()) {
+            if (!options.firstOperationOfTransaction() || !ambientSession.hasActiveTransaction()) {
+                return markerVersionsUnavailable(criteria, options, "The read runs inside a session or transaction the caller owns, whose writes may still abort", null);
+            }
+            if (runsOnReplicaSet) {
                 return readMarkerVersionsInSession(ambientSession, criteria, options);
             }
-            return markerVersionsUnavailable(criteria, options, "The read runs inside a session or transaction the caller owns, whose writes may still abort", null);
+            // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes
         }
 
         final ClientSession clientSession;

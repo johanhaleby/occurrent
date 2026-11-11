@@ -975,12 +975,14 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   [#1307](https://github.com/johanhaleby/occurrent/issues/1307).
 - A DCB application service with synchronous subscriptions reads and decides inside its transaction executor, as in
   0.34.0. When the executor opens the transaction, the service tells the store through `DcbReadOptions` that its read
-  is the first operation of that transaction, and a MongoDB store on a replica set reads the marker versions in it, so
-  a decider there saves snapshots. On a sharded cluster it reports none, so a decider there saves no snapshot and the
-  store refuses a snapshot saved earlier.
+  is the first operation of that transaction, and a MongoDB store reports the marker versions, so a decider there saves
+  snapshots. On a replica set the store reads them in that transaction. On a sharded cluster it reads them in a
+  read-only transaction of its own, on a second session, and the decider's append still runs in the executor's
+  transaction.
 - On a Spring executor that opens no transaction, outside a Spring transaction scope of yours, a Spring MongoDB store
-  on a replica set reads them in the session transaction its read binds. The decider's append joins that transaction, so a failing
-  handler undoes the append.
+  on a replica set reads them in the session transaction its read binds. On a sharded cluster it reads them in a
+  transaction of its own and then binds a session transaction. The decider's append joins the bound transaction, so a
+  failing handler undoes the append.
 - In a Spring scope of yours with no transaction, on an executor that opens none, the service doesn't mark the read,
   so a decider there reads in a transaction of the store's own. With no session bound for the store's database factory
   yet, its append runs in a transaction of the store's own too, which the store retries on a conflict and which doesn't
@@ -1077,8 +1079,8 @@ subscriptions behaves as before.
   With `noTransaction()` and no transaction of yours the events are stored. With a Spring executor over the Spring
   MongoDB stores a write to a stream often rolled back, even on `PROPAGATION_NOT_SUPPORTED`, `PROPAGATION_SUPPORTS` or
   `PROPAGATION_NEVER`, and there a retry that used to work is gone. When `execute` runs outside every Spring transaction
-  scope of yours, a DCB append on `PROPAGATION_NOT_SUPPORTED` rolls back as a write to a stream does, and on a
-  replica set a snapshot decider's does too. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`, which opens
+  scope of yours, a DCB append on `PROPAGATION_NOT_SUPPORTED` rolls back as a write to a stream does, and a snapshot
+  decider's does too. In a Spring scope of yours on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`, which opens
   no transaction, the append of a plain `execute` rolls back too when you don't catch the failure inside that scope.
   [ADR 165](../architecture/decisions/0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) has a table of the cases I ran.
 - If your executor opens a transaction, override `isTransactional()` so the retry stays. Answer for the moment of the call,

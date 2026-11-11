@@ -130,11 +130,12 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * template's {@link org.springframework.data.mongodb.MongoDatabaseFactory}, bounded by
  * {@link EventStoreConfig.Builder#markerVersionsCommitTimeout(Duration)}. Inside a Spring-managed transaction it reports
  * no marker versions, since that transaction's writes may still abort, and a read after marker versions is refused.
- * {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} can say the read is the first operation of the transaction,
- * and on a replica set the store then reads the versions in that transaction. It can also say the caller confirms an
- * append before saving. With synchronization active, no transaction and no session bound yet, the store on a replica
- * set then reads the versions in the session transaction the read binds. An append in that synchronization joins that
- * transaction, and the store doesn't retry its conflict. With a session already bound, such a read reports no versions,
+ * {@link org.occurrent.eventstore.api.dcb.DcbReadOptions} can say the read is the first operation of the transaction.
+ * The store then reads the versions in that transaction on a replica set, and in a read-only snapshot transaction of
+ * its own anywhere else. It can also say the caller confirms an append before saving. With synchronization active, no
+ * transaction and no session bound yet, the store then binds a session transaction to the synchronization. On a replica
+ * set the read is its first operation, and anywhere else the store reads in a transaction of its own first. An append
+ * in that synchronization joins the bound transaction, and the store doesn't retry its conflict. With a session already bound, such a read reports no versions,
  * and a read after marker versions is refused. The store answers {@link DcbAppendConfirmation} with a majority read on
  * the primary from
  * {@link org.springframework.data.mongodb.MongoDatabaseFactory#getMongoDatabase()}, which joins no session. A store
@@ -338,11 +339,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // snapshot transaction on a session of the store's own, never through the configured TransactionTemplate, and commits
     // it once by hand. The majority commit makes sure the snapshot was majority-committed. Inside a Spring-managed
     // transaction it reports no versions, since the transaction's own increments may still abort and a later append would
-    // reuse them, unless the caller says the read is the transaction's first operation and the store runs on a replica
-    // set. Then it reads in that transaction. With synchronization active and no transaction, a caller that confirms an append
-    // before saving reads through a session already bound, which may hold writes that abort later, and gets no versions.
-    // With no session bound yet it reads through the template on a replica set, which binds a session transaction the
-    // read is the first operation of, so an append in the synchronization joins it. Where it reads
+    // reuse them, unless the caller says the read is the transaction's first operation. Then it reads in that transaction
+    // on a replica set, and in a snapshot transaction of its own anywhere else. With synchronization active and no
+    // transaction, a caller that confirms an append before saving reads through a session already bound, which may hold
+    // writes that abort later, and gets no versions. With no session bound yet it reads through the template on a replica
+    // set, which binds a session transaction the read is the first operation of, so an append in the synchronization
+    // joins it. Anywhere else it reads in a transaction of its own and then binds the session transaction itself. Where it reads
     // versions in a transaction it doesn't own, a failure fails the read so the transaction's owner can retry. Otherwise a
     // failure reports no versions instead of failing the read. A read after versions can't fall back to a full read
     // without double-applying events, so markerVersionsUnavailable refuses it.
@@ -360,10 +362,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
 
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            if (options.firstOperationOfTransaction() && runsOnReplicaSet) {
-                return readMarkerVersionsWith(mongoTemplate, criteria, options);
+            if (!options.firstOperationOfTransaction()) {
+                return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
             }
-            return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
+            // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes
+            return runsOnReplicaSet ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
         }
         if (options.confirmsAppendBeforeSaving() && TransactionSynchronizationManager.isSynchronizationActive()) {
             if (TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) != null) {
@@ -372,8 +375,15 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             if (runsOnReplicaSet) {
                 return readMarkerVersionsWith(mongoTemplate, criteria, options);
             }
+            DcbEventStream eventStream = readInOwnTransaction(criteria, options);
+            // Binds the session transaction an append in the synchronization joins, as the read through the template does on a replica set
+            MongoDatabaseUtils.getDatabase(mongoTemplate.getMongoDatabaseFactory(), ALWAYS);
+            return eventStream;
         }
+        return readInOwnTransaction(criteria, options);
+    }
 
+    private DcbEventStream readInOwnTransaction(DcbCriteria criteria, DcbReadOptions options) {
         final ClientSession clientSession;
         try {
             clientSession = mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build());

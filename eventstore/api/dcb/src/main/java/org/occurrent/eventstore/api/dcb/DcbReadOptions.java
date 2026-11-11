@@ -185,12 +185,13 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
     /**
      * Returns a copy of these options that asks for marker versions, as {@link #withVersions()} does, and tells the store
      * that you save no snapshot at the versions this read reports, and save at an append's versions only after
-     * {@link DcbAppendConfirmation} confirms that append. A Spring MongoDB store on a replica set then reads in a session
-     * transaction of Spring's transaction synchronization when one is active, no transaction is, and no session is bound
-     * for its database yet. The read is that transaction's first operation, and an append in the same synchronization
-     * then commits or rolls back with it. Without this, the store reads on a session of its own there.
+     * {@link DcbAppendConfirmation} confirms that append. A Spring MongoDB store then binds a session transaction to
+     * Spring's transaction synchronization when one is active, no transaction is, and no session is bound for its database
+     * yet, and an append in the same synchronization commits or rolls back with it. On a replica set the read is that
+     * transaction's first operation. Anywhere else the store reads on a session of its own before it binds the
+     * transaction. Without this, the store reads on a session of its own there and binds nothing.
      * <p>
-     * The versions of such a read come from a transaction that hasn't committed when the read returns, so a write they
+     * On a replica set the versions of such a read come from a transaction that hasn't committed when the read returns, so a write they
      * count can still roll back. The session such a read binds stays bound until the synchronization ends, and the store
      * doesn't retry a conflict on an append in it. The DCB application services set it on a read that asks for versions
      * when they dispatch synchronously and their transaction executor started the synchronization the read runs in.
@@ -204,6 +205,8 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * the read is the first operation of the transaction it runs in. It implies {@link #confirmingAppendBeforeSaving()}. A MongoDB store reports no versions for a read in a
      * transaction, since the transaction's own writes may still abort, unless this is set. With it set, a MongoDB store on
      * a replica set reads the markers, the head and the events in that transaction and reports versions from them.
+     * Anywhere else it reads them in a read-only transaction of its own, on a second session, and reports versions from
+     * that.
      * <p>
      * Set it only when you opened the transaction the read runs in and have made no DCB write in it before the read.
      * Versions that count a write the transaction later aborts are handed out again to other events, and a snapshot saved

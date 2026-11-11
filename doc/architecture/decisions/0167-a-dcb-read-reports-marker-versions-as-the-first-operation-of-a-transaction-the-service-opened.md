@@ -52,8 +52,10 @@ When `firstOperationOfTransaction` is set and the store finds a transaction acti
 the marker documents, the consistency token, the position counter and the events in that transaction, and reports
 versions from them. It doesn't open a session of its own and doesn't commit anything, and the transaction commits with
 the options the executor uses. Without it, a read in a transaction reports no versions as today. Anywhere but a replica
-set, `mongos` for example, a read in a transaction reports no versions with it too, since the safety argument below
-rests on how a replica set reads a transaction.
+set, `mongos` for example, the safety argument below for a read in the transaction doesn't hold, since it rests on how
+a replica set reads a transaction. There the store reads with it in the read-only snapshot transaction of its own that
+ADR 148 describes, on a second session, and reports versions from that. Nothing has run in the executor's transaction
+yet, so that read misses none of its writes. The append still runs in the executor's transaction.
 
 The blocking and the reactive `GenericDcbApplicationService` read and decide in the executor for every command, as in
 0.34.0. With synchronous subscriptions they set `firstOperationOfTransaction` on a read that asks for versions when
@@ -78,7 +80,10 @@ when the executor returns. A plain command has read that way since 0.34.0, so a 
 
 The Spring stores now read through the template when `confirmsAppendBeforeSaving` is set, synchronization is active,
 no transaction is, no session is bound for the store's database factory yet, and the store runs on a replica set. The
-read is then the first operation of the session transaction it binds, and it reports versions from it. When a session
+read is then the first operation of the session transaction it binds, and it reports versions from it. Anywhere but
+a replica set the store reads in a transaction of its own, as ADR 148 describes, and then binds the session transaction
+through `MongoDatabaseUtils` or `ReactiveMongoDatabaseUtils`. An append in the scope joins it there too, so a failing
+handler undoes the append. When a session
 is already bound, for example by an earlier read in the same scope, such a read reports no versions, or is refused
 after saved versions, as inside a transaction. A read on a session of its own wouldn't see that session's writes, and
 an append checked against its token could fail its condition on them.
@@ -130,6 +135,9 @@ conflict aborted.
    commits before `execute` returns is not caught, and the snapshot skips that append's events. The Spring executors
    and `NativeMongoTransactionExecutor` run nothing before the action.
 
+Anywhere but a replica set the read runs in the store's own read-only transaction at `snapshot`, committed at majority,
+so ADR 148's argument covers there what points 2 and 4 cover on a replica set.
+
 Point 2 rests on how WiredTiger reads a transaction, and on the write conflict when that fails, and point 4 on MongoDB
 aborting open transactions on a stepdown, which its documentation says for `rs.stepDown`, and replicating the oplog in
 order. Neither is tested here. Point 3 is the argument ADR 148 already relies on.
@@ -152,6 +160,11 @@ transaction the executor joined.
 - Each of those stores gets a test that this read runs in the transaction. The test appends in a transaction it opens
   and then reads with the option, and the versions count the append's marker increment, which a read on a session of
   the store's own doesn't see. That breaks the option's contract on purpose.
+- The sharded-cluster test of each of those stores gets a read with `firstOperationOfTransaction` in a transaction the
+  test opens. It reports versions, an append in the transaction rolls back with it, and the read's snapshot transaction
+  runs on a session other than the transaction's. The Spring stores' sharded-cluster tests also cover a read with
+  `confirmsAppendBeforeSaving` in the scope with synchronization and no transaction. It binds a session, and an append
+  after it is gone when the scope throws.
 - Each Spring store gets a test for the scope with synchronization and no transaction. A read with
   `confirmsAppendBeforeSaving` reports versions, and an append after it in the scope is gone when the scope throws. A
   read without it reports versions too, and the append stays. A second read with it, after an append in the scope, reports
@@ -166,13 +179,13 @@ transaction the executor joined.
 ## Consequences
 
 - A snapshot decider on a service with synchronous subscriptions reads and decides in the executor's transaction, as a
-  plain command does. On a replica set it still saves snapshots when the executor opened that transaction, and on a
-  Spring executor that opens none outside a scope of the caller's.
+  plain command does. It still saves snapshots when the executor opened that transaction, and on a Spring executor that
+  opens none outside a scope of the caller's.
 - In a scope of the caller's with no transaction, on an executor that opens none, a snapshot decider reads in a
   transaction of the store's own, and with no session bound its append doesn't join the caller's scope.
-- On a sharded cluster a read in the executor's transaction reports no versions, so a snapshot decider there saves no
-  snapshot and the store refuses a snapshot saved earlier.
-- The versions of such a read come from the executor's transaction, not from a read-only transaction committed at
+- On a sharded cluster such a read runs in a read-only transaction of the store's own beside the executor's
+  transaction, so a command whose read the service marks uses a second session there.
+- On a replica set the versions of such a read come from the executor's transaction, not from a read-only transaction committed at
   majority. The bound `markerVersionsCommitTimeout` doesn't apply to it. Whether the save is safe now rests on the
   confirmation, as the save after an append always did.
 - In a caller's transaction nothing changes, and #1307 stays open.

@@ -17,9 +17,15 @@
 package org.occurrent.eventstore.mongodb.nativedriver;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
+import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.event.CommandListener;
+import com.mongodb.event.CommandStartedEvent;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonDocument;
+import org.bson.BsonString;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,20 +36,30 @@ import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.util.List;
+import java.util.Queue;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.tag;
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEvent;
+import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithId;
 
 /**
  * What the native store answers to a conditional append when it runs against a mongos.
@@ -69,6 +85,10 @@ class MongoEventStoreDcbShardedClusterTest {
 
     private MongoEventStoreConformanceFixture fixture;
     private DcbEventStore eventStore;
+    private MongoClient transactionalClient;
+    private MongoEventStore transactionalStore;
+    private final AtomicBoolean recordingCommands = new AtomicBoolean();
+    private final Queue<BsonDocument> commands = new ConcurrentLinkedQueue<>();
 
     @BeforeEach
     void create_the_event_store() {
@@ -76,10 +96,28 @@ class MongoEventStoreDcbShardedClusterTest {
         assertThat(hello(database).get("msg")).as("The container must be a mongos, or nothing below tests the sharded case").isEqualTo("isdbgrid");
         fixture = new MongoEventStoreConformanceFixture(new ConnectionString(mongos.getConnectionString() + "/" + database));
         eventStore = fixture.dcbEventStore();
+        CommandListener commandRecorder = new CommandListener() {
+            @Override
+            public void commandStarted(CommandStartedEvent event) {
+                if (recordingCommands.get()) {
+                    commands.add(event.getCommand().clone());
+                }
+            }
+        };
+        transactionalClient = MongoClients.create(MongoClientSettings.builder()
+                .applyConnectionString(new ConnectionString(mongos.getConnectionString()))
+                .addCommandListener(commandRecorder)
+                .build());
+        transactionalStore = new MongoEventStore(transactionalClient, database, "events", new EventStoreConfig.Builder()
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM, DCB)
+                .build());
     }
 
     @AfterEach
     void close_the_event_store() {
+        ClientSessionHolder.remove();
+        transactionalClient.close();
         fixture.close();
     }
 
@@ -136,6 +174,57 @@ class MongoEventStoreDcbShardedClusterTest {
         assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent(TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)))
                 .as("A matching event is refused too, as it is whenever a marker moved")
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+    }
+
+    @Test
+    void reports_marker_versions_for_a_read_that_is_the_first_operation_of_a_transaction_and_rolls_back_an_append_in_it_with_the_transaction() {
+        transactionalStore.append(List.of(taggedEventWithId("before", TICKET_SOLD, CONCERT_K1)));
+        AtomicReference<DcbEventStream> read = new AtomicReference<>();
+
+        inTransactionThatRollsBack(() -> {
+            read.set(transactionalStore.read(TICKETS_OF_K1, DcbReadOptions.fromBeginning().asFirstOperationOfTransaction()));
+            transactionalStore.append(List.of(taggedEventWithId("own", TICKET_SOLD, CONCERT_K1)));
+        });
+
+        assertThat(read.get().markerVersions()).as("a mongos reads the versions in a snapshot transaction of the store's own").isPresent();
+        assertThat(transactionalStore.read(TICKETS_OF_K1).events()).as("the append ran in the transaction, which rolled back").extracting(CloudEvent::getId).containsExactly("before");
+        transactionalStore.append(List.of(taggedEventWithId("later", TICKET_SOLD, CONCERT_K1)));
+        assertThat(transactionalStore.read(TICKETS_OF_K1, DcbReadOptions.afterVersions(read.get().markerVersions().orElseThrow())).events())
+                .extracting(CloudEvent::getId).containsExactly("later");
+    }
+
+    @Test
+    void reads_the_versions_for_a_read_that_is_the_first_operation_of_a_transaction_in_a_session_beside_the_one_of_the_transaction() {
+        transactionalStore.append(List.of(taggedEventWithId("before", TICKET_SOLD, CONCERT_K1)));
+
+        recordingCommands.set(true);
+        inTransactionThatRollsBack(() -> {
+            transactionalStore.read(TICKETS_OF_K1, DcbReadOptions.fromBeginning().asFirstOperationOfTransaction());
+            transactionalStore.append(List.of(taggedEventWithId("own", TICKET_SOLD, CONCERT_K1)));
+        });
+        recordingCommands.set(false);
+
+        BsonDocument sessionOfTheTransaction = commands.stream().filter(command -> command.containsKey("abortTransaction"))
+                .map(command -> command.getDocument("lsid")).findFirst().orElseThrow();
+        assertThat(commands.stream().filter(command -> command.containsKey("readConcern")
+                        && command.getDocument("readConcern").getString("level", new BsonString("")).getValue().equals("snapshot"))
+                .map(command -> command.getDocument("lsid")))
+                .as("the snapshot transaction of the read runs in a session of its own")
+                .isNotEmpty()
+                .doesNotContain(sessionOfTheTransaction);
+    }
+
+    private void inTransactionThatRollsBack(Runnable body) {
+        try (ClientSession session = transactionalClient.startSession()) {
+            session.startTransaction();
+            ClientSessionHolder.set(session);
+            try {
+                body.run();
+            } finally {
+                ClientSessionHolder.remove();
+                session.abortTransaction();
+            }
+        }
     }
 
     private static Document hello(String database) {
