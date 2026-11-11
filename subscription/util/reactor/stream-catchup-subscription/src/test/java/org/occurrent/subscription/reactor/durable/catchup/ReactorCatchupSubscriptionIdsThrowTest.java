@@ -85,6 +85,40 @@ class ReactorCatchupSubscriptionIdsThrowTest {
     }
 
     @Test
+    void a_cancel_whose_wrapped_cancel_throws_throws_the_error_that_putting_the_handover_back_throws_and_still_ends() {
+        // Given a subscription handed over, whose wrapped cancel throws once
+        IntrospectableLosingLiveStartModel wrapped = new IntrospectableLosingLiveStartModel();
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            IllegalStateException wrappedFailure = new IllegalStateException("the wrapped cancel throws");
+            wrapped.nextCancelThrows = wrappedFailure;
+            Error putBackFailure = new Error("putting the handover back throws an Error");
+            PutIfAbsentHook.installIn(catchup, "handedOver").afterThePutIfAbsentIn("putBackTheHandover", () -> {
+                throw putBackFailure;
+            });
+
+            // When that cancel throws, and a second cancel ends
+            Throwable first = catchThrowable(() -> catchup.cancelSubscription(ID));
+            Throwable second = catchThrowable(() -> catchup.cancelSubscription(ID).block(Duration.ofSeconds(5)));
+            Set<String> heldAfterTheCancels = wrapped.heldIds();
+
+            // Then the first cancel throws the Error, and a subscribe of the id goes through
+            Throwable subscribe = catchThrowable(() -> catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                    cloudEvent -> Mono.empty()));
+            assertAll(
+                    () -> assertThat(first).as("what the first cancel throws").isSameAs(putBackFailure),
+                    () -> assertThat(first.getSuppressed()).as("what the Error suppresses").contains(wrappedFailure),
+                    () -> assertThat(second).as("what the second cancel throws").isNull(),
+                    () -> assertThat(heldAfterTheCancels).as("the ids the wrapped model holds after the second cancel").doesNotContain(ID),
+                    () -> assertThat(subscribe).as("what a subscribe of the id throws once every cancel of it ended").isNull()
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_cancel_whose_wrapped_cancel_fails_puts_the_handover_back_when_asking_for_the_ids_throws_so_a_later_loss_of_the_live_start_is_taken_over() {
         // Given a subscription handed over, whose wrapped cancel fails, and whose wrapped model throws once when asked
         // for its ids as the handover is put back
