@@ -25,10 +25,11 @@ import org.occurrent.subscription.RoutingOutcome;
  * an application can count them, for example as metrics. Set it with the {@code listener} method on the source's
  * builder. Every method does nothing by default, so a listener implements only the ones it needs.
  * <p>
- * The source calls the listener from the thread that handles its deliveries, and {@link #redelivered(String)} from
- * the thread that polls the subscription, so two calls can run at once and a listener must be thread-safe. A listener
- * that throws is logged at {@code warn} and ignored, and the source goes on as if it had returned. A listener should
- * still return quickly, since the next delivery waits for it.
+ * The source calls the listener from the thread that handles its deliveries and from the thread that polls the
+ * subscription, so two calls can run at once and a listener must be thread-safe. A listener that throws is logged at
+ * {@code warn} and ignored, and the source goes on as if it had returned. A listener should still return quickly.
+ * The next delivery waits for it, and {@link #parked(String)} and {@link #redelivered(String)} are called while the
+ * source holds the lock its poll and {@code close()} also take.
  * <p>
  * A delivery the source holds back and hands to the broker again because the subscription is not ready for it, a
  * {@link RoutingOutcome#DEFERRED} or {@link RoutingOutcome#UNAVAILABLE} outcome, is not reported, since nothing
