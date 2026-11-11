@@ -95,8 +95,7 @@ class StartPositionSupport {
             case DEFAULT -> StartAt.dynamic(ctx -> {
                 // Do not let the catch-up model run its default (replay from the beginning); delegate to the parent
                 // live subscription instead by returning null to the catch-up layer.
-                boolean isCatchupSubscription = CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                return isCatchupSubscription ? null : StartAt.subscriptionModelDefault();
+                return isCatchupLayer(ctx) ? null : StartAt.subscriptionModelDefault();
             });
             case BEGINNING -> replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), resumeBehavior);
         };
@@ -129,22 +128,27 @@ class StartPositionSupport {
     // NOW is where the subscription starts the first time. Under DEFAULT a restart continues from the stored position,
     // which a plain StartAt.now() leaves to the durable layer. Under SAME_AS_START_AT every start is NOW, so the
     // competing consumer and durable layers are told to stay out, as replayThenResumeAgnostic does for a replay start.
+    // The catch-up layer stays out too, since a resume there replays from a catch-up position found in storage.
     private StartAt nowThenResume(ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case DEFAULT -> StartAt.now();
-            case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
-                return delegatesItsStart(ctx) ? null : StartAt.now();
-            });
+            case SAME_AS_START_AT -> StartAt.dynamic(ctx -> leavesNowToTheLiveModel(ctx) ? null : StartAt.now());
         };
     }
 
     private DcbStartAt dcbNowThenResume(ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case DEFAULT -> DcbStartAt.now();
-            case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> {
-                return delegatesItsStart(ctx) ? null : DcbStartAt.now();
-            });
+            case SAME_AS_START_AT -> DcbStartAt.dynamic(ctx -> leavesNowToTheLiveModel(ctx) ? null : DcbStartAt.now());
         };
+    }
+
+    private static boolean leavesNowToTheLiveModel(SubscriptionModelContext ctx) {
+        return delegatesItsStart(ctx) || isCatchupLayer(ctx);
+    }
+
+    private static boolean isCatchupLayer(SubscriptionModelContext ctx) {
+        return CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
     }
 
     void applyStartupWorkarounds() {
@@ -257,8 +261,7 @@ class StartPositionSupport {
                     // By default, we don't want to run the "default" behavior of the CatchupSubscriptionModel, which is to
                     // start streaming from the beginning of time. We want to instruct the CatchupSubscriptionModel to simply
                     // delegate to the parent subscription, which is what we do if we return null.
-                    boolean isCatchupSubscription = CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                    return isCatchupSubscription ? null : StartAt.subscriptionModelDefault();
+                    return isCatchupLayer(ctx) ? null : StartAt.subscriptionModelDefault();
                 });
             };
         };
@@ -275,7 +278,7 @@ class StartPositionSupport {
         }
         return StartAt.dynamic(context -> {
             @Nullable StartAt built = startAt.get(context);
-            if (built == null && !CatchupSubscriptionModel.class.isAssignableFrom(context.subscriptionModelType())) {
+            if (built == null && !isCatchupLayer(context)) {
                 return null;
             }
             @Nullable String resumePoint = resumePoints.resumePointFor(subscriptionId);
@@ -290,7 +293,7 @@ class StartPositionSupport {
         }
         return DcbStartAt.dynamic(context -> {
             @Nullable DcbStartAt built = resolve(startAt, context);
-            if (built == null) {
+            if (built == null && !isCatchupLayer(context)) {
                 return null;
             }
             @Nullable String resumePoint = resumePoints.resumePointFor(subscriptionId);
