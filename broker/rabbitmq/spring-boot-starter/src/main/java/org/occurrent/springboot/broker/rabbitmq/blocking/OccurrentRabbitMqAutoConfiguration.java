@@ -138,8 +138,8 @@ public class OccurrentRabbitMqAutoConfiguration {
     /**
      * Pre-seeds {@link RabbitMqCloudEventSourceFactory} with the connection, the resolver bean if one exists (a
      * source whose {@code occurrent.broker.rabbitmq.source.declare-topology} is {@code false}, or whose caller
-     * supplies its own bindings, needs none), the {@link RabbitMqInboundMapper} bean if one exists, which then reads
-     * the messages of every source the factory builds, and every
+     * supplies its own bindings, needs none), the {@link RabbitMqInboundMapper} bean if one exists, which every
+     * builder the factory returns starts with, and every
      * {@code occurrent.broker.rabbitmq.source.*} default,
      * including a zero-config {@code readinessSource} that defers to whichever
      * {@code CatchupThenPushSubscriptionModel} bean, if any, owns the source's subscription id, see

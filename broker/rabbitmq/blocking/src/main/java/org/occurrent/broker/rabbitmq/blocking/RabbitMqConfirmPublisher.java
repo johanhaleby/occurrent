@@ -165,10 +165,15 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
             }
             try {
                 channel.basicPublish(exchange, routingKey, true, correlated, body);
-            } catch (IllegalArgumentException e) {
-                // A header value or property the client cannot encode. The channel already counts this publish as
-                // awaiting a confirm the broker never sends, so the next publish on it would time out.
-                // Rethrown unwrapped, so the default retry predicate does not retry a message that never encodes
+            } catch (ShutdownSignalException e) {
+                // Retired once, by the shutdown catch below
+                throw e;
+            } catch (IOException | RuntimeException | Error e) {
+                // The client counts the publish as awaiting a confirm before it encodes the message. After any failure
+                // here, such as a UUID header value, a null header name or a messageId over 255 bytes, the channel
+                // still waits for a confirm the broker never sends, and the next publish on it would time out.
+                // A RuntimeException is rethrown unwrapped, so the default retry predicate does not retry a message
+                // that never encodes
                 retireChannelPreserving(e);
                 throw e;
             }
@@ -218,9 +223,10 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
         }
     }
 
-    // Called under publishLock, after waitForConfirms has ended without confirming or denying the publish, by
-    // timeout or by interruption. The RabbitMQ client leaves that publish's delivery tag outstanding on the channel
-    // forever, so a later publish on the same channel would wait on it too and could inherit its eventual nack.
+    // Called under publishLock, after a publish whose outcome the broker will never report, because waitForConfirms
+    // ended by timeout or by interruption, the channel shut down, or the client could not encode the message. The
+    // RabbitMQ client leaves that publish's delivery tag outstanding on the channel forever, so a later publish on
+    // the same channel would wait on it too and could inherit its eventual nack.
     // Retiring the channel and opening a fresh one keeps that abandoned publish's outcome from ever being
     // attributed to a later, unrelated one.
     //
@@ -240,10 +246,10 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
     }
 
     // A failure to reopen the channel here is attached to primaryFailure as suppressed rather than thrown in its
-    // place, so the caller of this publish still sees the failure it actually asked about (a timeout or an
-    // interruption), not this secondary one. If reopening fails, the channel field is left pointing at the channel
-    // this call just retired, whose close is still running on its own thread. The next publish finds it closed, or
-    // fails on it, and retires it again, which retries the reopen.
+    // place, so the caller of this publish still sees the failure it actually asked about, not this secondary one.
+    // If reopening fails, the channel field is left pointing at the channel this call just retired, whose close is
+    // still running on its own thread. The next publish finds it closed, or fails on it, and retires it again, which
+    // retries the reopen.
     private void retireChannelPreserving(Throwable primaryFailure) {
         try {
             retireChannel();

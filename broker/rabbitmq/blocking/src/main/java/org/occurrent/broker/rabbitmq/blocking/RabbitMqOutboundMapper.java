@@ -24,10 +24,15 @@ import io.cloudevents.CloudEvent;
  * The sink adds the header {@code x-occurrent-rabbitmq-confirm-publisher-return-token} to every message it
  * publishes, and sets {@code deliveryMode} to 2 (persistent) when the returned properties leave it {@code null}.
  * An explicit {@code deliveryMode} is kept. The headers of the {@link RabbitMqDestination} reach the message only if
- * the mapper puts them there. The mapper runs once per publish attempt, so it must not have side
- * effects, and it runs outside the sink's publish lock, so it must be safe to call from several threads. A mapper that returns {@code null} fails the publish with an {@link IllegalStateException}, and an
- * exception the mapper throws reaches the caller of {@link RabbitMqCloudEventSink#publish(CloudEvent)} unchanged.
- * Neither is retried by the sink's default retry strategy.
+ * the mapper puts them there. The mapper runs once per publish attempt, so it must not have side effects, and it
+ * runs outside the sink's publish lock, so it must be safe to call from several threads.
+ * <p>
+ * A mapper that returns {@code null} fails the publish with an {@link IllegalStateException}, and an exception the
+ * mapper throws reaches the caller of {@link RabbitMqCloudEventSink#publish(CloudEvent)} unchanged. A message the
+ * RabbitMQ client cannot encode fails the publish with the client's own exception, usually an
+ * {@link IllegalArgumentException}, also unchanged. That happens for a header value of a type AMQP has no field type
+ * for, such as a {@link java.util.UUID}, and for a property longer than 255 bytes, such as {@code messageId}. None of
+ * these is retried by the sink's default retry strategy.
  */
 @FunctionalInterface
 public interface RabbitMqOutboundMapper {

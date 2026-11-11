@@ -36,9 +36,10 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Publishes a {@link CloudEvent} to RabbitMQ, by default in the CloudEvents binary content mode
- * {@link RabbitMqCloudEventMapper} defines, or in the format a {@link RabbitMqOutboundMapper} set on the builder writes. Bring-your-own-sink is the primary way to use the broker modules at all,
- * so use this one when you have not already written your own {@link CloudEventSink}. It is a complete,
- * confirmed, at-least-once publisher rather than a starting point to copy from.
+ * {@link RabbitMqCloudEventMapper} defines, or in the format a {@link RabbitMqOutboundMapper} set on the builder
+ * writes. Bring-your-own-sink is the primary way to use the broker modules at all, so use this one when you have
+ * not already written your own {@link CloudEventSink}. It is a complete, confirmed, at-least-once publisher rather
+ * than a starting point to copy from.
  * <p>
  * {@link #publish(CloudEvent)} does not return until the broker has confirmed the message and, by default, routed it.
  * Publisher confirms are required, enabled once when {@link #builder(Connection, DestinationResolver)} builds the

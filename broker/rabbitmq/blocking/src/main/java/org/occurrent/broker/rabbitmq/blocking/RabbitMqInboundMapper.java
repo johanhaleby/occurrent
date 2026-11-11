@@ -27,8 +27,9 @@ import io.cloudevents.CloudEvent;
  * delivery failure policy.
  * <p>
  * The mapper must not modify {@code properties} or {@code body}. They are the delivery itself, and a parked delivery
- * is published from them. A source calls its mapper from the RabbitMQ client's consumer thread, and the Spring Boot
- * starter gives one mapper bean to every source it builds, so a mapper must be safe to call from several threads.
+ * is published from them. A source calls its mapper from its own worker thread, one delivery at a time, but the
+ * Spring Boot starter starts every source builder it hands out with the same mapper bean, so a mapper must be safe to
+ * call from several threads.
  */
 @FunctionalInterface
 public interface RabbitMqInboundMapper {

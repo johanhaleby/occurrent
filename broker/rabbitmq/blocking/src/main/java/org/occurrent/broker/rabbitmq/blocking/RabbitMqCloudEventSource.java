@@ -636,6 +636,10 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
                 throw new IllegalStateException("The " + RabbitMqInboundMapper.class.getSimpleName() + " returned null");
             }
         } catch (Exception | AssertionError e) {
+            if (e instanceof InterruptedException) {
+                // A sneaky throw, since the mapper declares no checked exception. Only close() interrupts this thread
+                Thread.currentThread().interrupt();
+            }
             log.debug("Failed to rebuild a CloudEvent from a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
