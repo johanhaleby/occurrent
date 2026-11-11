@@ -804,6 +804,9 @@ committed with it. It now commits on its own, before the append writes its event
   share. An append that loses throws a `DataIntegrityViolationException` or a `TransientDataAccessException`, and your
   transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it when they
   opened it outside a Spring transaction scope of yours.
+- In a Spring scope of yours with no transaction, a read through the store's template can bind a MongoDB session to
+  that scope. A stream `write` or a DCB append in that session no longer retries a conflict, since the conflict aborted
+  the session's transaction. It fails at once, as in your transaction.
 - On a replica set, with transaction synchronization active, as it is by default, a read in your transaction reports, in
   `lastSequencePosition()`, the head as of the first operation in your transaction's MongoDB session on the store's
   database factory. It also returns your transaction's own appends, and those it started after that operation are at
@@ -922,6 +925,15 @@ An executor built on a template or operator that opens no transaction has no com
 
 Handle the duplicate in the unit of work only when its write is outside the transaction, and let a duplicate from a write inside the transaction reach the caller instead of catching it. Or make the write through a template that joins the transaction, so that a
 rival's insert surfaces as a labelled conflict and is retried.
+
+### In a Spring scope of yours with no transaction
+
+In a Spring transaction scope of yours that has no transaction, such as a `TransactionTemplate` on
+`PROPAGATION_SUPPORTS`, `SpringTransactionExecutor` no longer runs a unit of work again after it ran in your scope's
+synchronization. The conflict reaches you, as it already did with `SpringReactiveTransactionExecutor`. A MongoDB session
+that a read binds to your scope stays bound until your scope ends, so a second run would use the session the conflict
+aborted. With a retry policy that isn't a `RetryStrategy.Retry`, the executor runs the unit of work once whenever your
+scope is active. To get the retry back, retry around your scope, so the next attempt binds a new session.
 
 ## DCB snapshots resume from marker versions
 
