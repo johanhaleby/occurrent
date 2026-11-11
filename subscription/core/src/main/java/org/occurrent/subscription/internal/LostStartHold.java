@@ -28,13 +28,17 @@ import static java.util.Objects.requireNonNull;
  * stored for it. The Spring Boot starter asks it for a subscription with {@code startupMode = BACKGROUND}, so one
  * subscription with a lost position doesn't stop the application from starting. A blocking catch-up holds such a
  * subscription paused and logs the loss at {@code ERROR}. A competing-consumer model holds it paused as if the user
- * had paused it. Nothing else reads it, so a subscribe that isn't asked refuses as before.
+ * had paused it. A manual-start model keeps it with a subscribe it defers, and asks it again for the subscribe it makes
+ * once the subscription is started, which can be on another thread. Nothing else reads it, so a subscribe that isn't
+ * asked refuses as before.
  * <p>
- * Read on the subscribing thread only. A call that a model makes on a thread of its own never sees it.
+ * Read on the thread that subscribes. A call that a model makes on a thread of its own never sees it.
  */
 public final class LostStartHold {
 
     private static final ThreadLocal<Boolean> ASKED = new ThreadLocal<>();
+    // Set by the model that holds a subscription paused, for the askedDuringCall under way on this thread
+    private static final ThreadLocal<boolean[]> HELD = new ThreadLocal<>();
 
     private LostStartHold() {
     }
@@ -53,10 +57,42 @@ public final class LostStartHold {
 
     /**
      * Runs {@code call} with the hold asked for on this thread, and puts back what was asked before once {@code call}
-     * returns or throws.
+     * returns or throws. The answer says whether a model held a subscription paused on this thread during
+     * {@code call}, see {@link #heldPaused()}.
      */
-    public static <T> T askedDuringCall(Supplier<T> call) {
-        return runWith(Boolean.TRUE, call);
+    public static <T> Answer<T> askedDuringCall(Supplier<T> call) {
+        requireNonNull(call, "call cannot be null");
+        boolean @Nullable [] before = HELD.get();
+        boolean[] held = new boolean[1];
+        HELD.set(held);
+        try {
+            T result = runWith(Boolean.TRUE, call);
+            return new Answer<>(result, held[0]);
+        } finally {
+            if (before == null) {
+                HELD.remove();
+            } else {
+                HELD.set(before);
+            }
+        }
+    }
+
+    /**
+     * Records that the model calling it held a subscription paused because its position is lost, for the
+     * {@link #askedDuringCall(Supplier)} under way on this thread. Does nothing outside one.
+     */
+    public static void heldPaused() {
+        boolean @Nullable [] held = HELD.get();
+        if (held != null) {
+            held[0] = true;
+        }
+    }
+
+    /**
+     * Returned by {@link #askedDuringCall(Supplier)}, with what {@code call} returned and whether a model held a
+     * subscription paused on this thread during it.
+     */
+    public record Answer<T>(T result, boolean heldPaused) {
     }
 
     /**

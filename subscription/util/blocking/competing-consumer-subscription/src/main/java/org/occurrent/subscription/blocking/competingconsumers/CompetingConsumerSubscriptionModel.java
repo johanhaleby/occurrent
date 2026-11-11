@@ -86,8 +86,9 @@ import static java.util.Objects.requireNonNull;
  * subscription is made, or this model is stopped, {@code subscribe} throws the refusal and the subscription id is free
  * again. When this node gets the lease later, the refusal is logged as a warning and the lease is given back. The
  * subscription stays registered, so it fails the same way every time this node gets the lease, and the id stays taken.
- * A {@link CatchupCannotResumeException} is handled differently. A catch-up throws it when it no longer has the history
- * back to the position stored for the subscription, and throws it again on every later try. When this node gets the
+ * A {@link CatchupCannotResumeException} that a catch-up throws because it no longer has the history back to the
+ * position stored for the subscription is handled differently, since it is thrown again on every later try. Any other
+ * {@code CatchupCannotResumeException} is handled as any other refusal. When this node gets the
  * lease later and the wrapped model throws it, the subscription is paused as if the user had paused it, the refusal is
  * logged at {@code ERROR}, and the lease is given back. This node doesn't compete for the lease again until the
  * subscription is resumed.
@@ -3575,7 +3576,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     /**
-     * The wrapped model refused to start or resume a consumer with {@link CatchupCannotResumeException}, which a
+     * The wrapped model refused to start or resume a consumer with the {@link CatchupCannotResumeException} that a
      * catch-up throws once it no longer has the history back to the position stored for the subscription, and keeps
      * throwing until the user acts. A later grant would only be refused again, so the consumer is held as if the user
      * had paused it, which gives up its lease and competes for it again only once the user resumes it. A consumer that
@@ -3596,6 +3597,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
         // A start(false) before any start(..) returned keeps it paused, as it keeps one the user paused
         pausedBeforeAStartReturned(key.subscriptionId());
+        LostStartHold.heldPaused();
         log.error("The wrapped subscription model refused to start or resume a subscription from the position stored for it, so it is held paused and doesn't compete for the lease, since a grant would only be refused again. Resuming it competes for the lease again (subscriberId={}, subscriptionId={})",
                 key.subscriberId(), key.subscriptionId(), refused);
         warnedInThisCall(key, refused);
@@ -4627,7 +4629,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * A {@code stop()} that comes after the call, one that refused it included, pauses the consumer as by the user once
      * it is applied to it, as it would have paused it had the call run first.
      * <p>
-     * A {@link CatchupCannotResumeException} is the exception. The wrapped model throws it again for every later try
+     * A {@link CatchupCannotResumeException} for a position the catch-up no longer has the history back to is the
+     * exception. The wrapped model throws it again for every later try
      * until the user acts, so a grant would only try it and give the lease back again, on this node and every other.
      * The consumer is held paused as by the user instead, its registration is given up, and the refusal is logged at
      * {@code ERROR}, see holdTheRefusedStartPaused.

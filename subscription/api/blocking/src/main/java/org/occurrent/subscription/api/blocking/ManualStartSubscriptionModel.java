@@ -341,11 +341,19 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         }
 
         final Subscription subscribed;
+        final boolean heldPaused;
         // Read before the subscribe, since a paused subscription afterwards means something different for each answer
         boolean subscribesToAStoppedModel = !delegate.isRunning();
         try {
             Supplier<Subscription> subscribe = () -> delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
-            subscribed = deferred.holdALostStart() ? LostStartHold.askedDuringCall(subscribe) : subscribe.get();
+            if (deferred.holdALostStart()) {
+                LostStartHold.Answer<Subscription> answer = LostStartHold.askedDuringCall(subscribe);
+                subscribed = answer.result();
+                heldPaused = answer.heldPaused();
+            } else {
+                subscribed = subscribe.get();
+                heldPaused = false;
+            }
         } catch (RuntimeException e) {
             // Put it back so a subscription that failed to start can be started again, unless it was cancelled meanwhile
             registrations.replace(subscriptionId, Registration.STARTING, deferred);
@@ -358,10 +366,11 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             throw new UnknownSubscriptionException(subscriptionId);
         }
         // Subscribing to a stopped model registers a paused subscription rather than a running one, so this is what
-        // makes starting work after stop(). Without it the caller is handed a subscription that never delivers. A
-        // running model that holds a lost start paused has paused it on purpose, and resuming it would only refuse it again
-        boolean pausedByTheStop = subscribesToAStoppedModel || !deferred.holdALostStart();
-        Subscription subscription = pausedByTheStop && delegate.isPaused(subscriptionId) ? delegate.resumeSubscription(subscriptionId) : subscribed;
+        // makes starting work after stop(). Without it the caller is handed a subscription that never delivers. A model
+        // that held a lost start paused, or a running one asked to, paused it on purpose, and a resume would only refuse
+        // it again. A running model can hold it from a lease callback on another thread, which heldPaused doesn't see
+        boolean mayHaveBeenHeld = heldPaused || deferred.holdALostStart() && !subscribesToAStoppedModel;
+        Subscription subscription = !mayHaveBeenHeld && delegate.isPaused(subscriptionId) ? delegate.resumeSubscription(subscriptionId) : subscribed;
         reopenAfterStop();
         return subscription;
     }
