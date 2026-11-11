@@ -25,6 +25,7 @@ import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSource;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqUnroutablePolicy;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.factory.UnsatisfiedDependencyException;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -147,6 +148,21 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
         contextRunner.withBean(Connection.class, () -> mock(Connection.class)).run(context ->
                 assertThatThrownBy(() -> context.getBean(RabbitMqCloudEventSink.class))
                         .isInstanceOf(UnsatisfiedDependencyException.class));
+    }
+
+    @Test
+    void the_sink_unroutable_policy_defaults_to_FAIL() {
+        contextRunner.withBean(Connection.class, () -> mock(Connection.class)).run(context ->
+                assertThat(context.getBean(RabbitMqBrokerProperties.class).getSink().getOnUnroutable()).isEqualTo(RabbitMqUnroutablePolicy.FAIL));
+    }
+
+    @Test
+    void the_sink_unroutable_policy_binds_from_the_on_unroutable_property_in_kebab_case() {
+        contextRunner
+                .withBean(Connection.class, () -> mock(Connection.class))
+                .withPropertyValues("occurrent.broker.rabbitmq.sink.on-unroutable=log-and-continue")
+                .run(context ->
+                        assertThat(context.getBean(RabbitMqBrokerProperties.class).getSink().getOnUnroutable()).isEqualTo(RabbitMqUnroutablePolicy.LOG_AND_CONTINUE));
     }
 
     @Test
