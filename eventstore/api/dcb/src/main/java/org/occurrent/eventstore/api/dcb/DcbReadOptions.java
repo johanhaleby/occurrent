@@ -189,7 +189,7 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * Spring's transaction synchronization when one is active, no transaction is, and no session is bound for its database
      * yet, and an append in the same synchronization commits or rolls back with it. On a replica set the read is that
      * transaction's first operation. Anywhere else the store reads on a session of its own before it binds the
-     * transaction. Without this, the store reads on a session of its own there and binds nothing.
+     * transaction. Without this, the store reads on a session of its own there.
      * <p>
      * On a replica set the versions of such a read come from a transaction that hasn't committed when the read returns, so a write they
      * count can still roll back. The session such a read binds stays bound until the synchronization ends, and the store

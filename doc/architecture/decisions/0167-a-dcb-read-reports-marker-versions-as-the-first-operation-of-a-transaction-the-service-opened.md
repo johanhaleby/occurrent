@@ -136,7 +136,9 @@ conflict aborted.
    and `NativeMongoTransactionExecutor` run nothing before the action.
 
 Anywhere but a replica set the read runs in the store's own read-only transaction at `snapshot`, committed at majority,
-so ADR 148's argument covers there what points 2 and 4 cover on a replica set.
+so ADR 148's argument covers there what points 2 and 4 cover on a replica set. Point 3 doesn't hold there, since the
+read and the append run in different transactions. An event committed between them moves a query marker, and there the
+append's condition refuses when any query marker moved since the read (ADR 149), so the append fails and nothing is saved.
 
 Point 2 rests on how WiredTiger reads a transaction, and on the write conflict when that fails, and point 4 on MongoDB
 aborting open transactions on a stepdown, which its documentation says for `rs.stepDown`, and replicating the oplog in

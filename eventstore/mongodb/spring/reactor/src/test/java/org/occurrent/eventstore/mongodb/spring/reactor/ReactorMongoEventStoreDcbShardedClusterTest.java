@@ -25,6 +25,7 @@ import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import org.bson.BsonDocument;
 import org.bson.BsonString;
+import org.bson.BsonValue;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -243,6 +244,27 @@ class ReactorMongoEventStoreDcbShardedClusterTest {
         assertThat(read.get().markerVersions()).isPresent();
         assertThat(sessionBoundAfterRead).as("the read binds a session to the scope").isTrue();
         assertThat(transactionalStore.read(TICKETS_OF_K1).block().events()).as("the append joined the session transaction the read bound, which rolled back").extracting(CloudEvent::getId).containsExactly("before");
+    }
+
+    @Test
+    void reads_the_versions_for_a_read_that_confirms_an_append_before_saving_in_a_transaction_beside_the_one_it_binds() {
+        append("before");
+
+        recordingCommands.set(true);
+        catchThrowable(() -> inScopeWithoutTransaction(transactionalStore.read(TICKETS_OF_K1, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving())
+                .then(transactionalStore.append(List.of(taggedEventWithId("own", TICKET_SOLD, CONCERT_K1))))
+                .then(Mono.error(new IllegalStateException("scope fails after the append")))).block());
+        recordingCommands.set(false);
+
+        // The driver pools server sessions, so the bound session can reuse the lsid of the read's closed one
+        List<BsonValue> boundTransaction = commands.stream().filter(command -> command.containsKey("abortTransaction"))
+                .map(command -> List.<BsonValue>of(command.getDocument("lsid"), command.get("txnNumber"))).findFirst().orElseThrow();
+        assertThat(commands.stream().filter(command -> command.containsKey("readConcern")
+                        && command.getDocument("readConcern").getString("level", new BsonString("")).getValue().equals("snapshot"))
+                .map(command -> List.<BsonValue>of(command.getDocument("lsid"), command.get("txnNumber"))))
+                .as("the read runs in a snapshot transaction beside the one it binds")
+                .isNotEmpty()
+                .doesNotContain(boundTransaction);
     }
 
     @Test
