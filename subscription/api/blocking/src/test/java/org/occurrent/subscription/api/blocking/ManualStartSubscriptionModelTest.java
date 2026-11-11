@@ -201,6 +201,35 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_deferred_subscription_that_asked_for_the_hold_is_resumed_when_a_stop_paused_it_during_its_subscribe_without_the_wrapped_model_reporting_a_held_lost_start() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        delegate.parkOnSubscribe = true;
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        LostStartHold.askedDuring(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        }));
+        assertThat(delegate.isRunning()).as("wrapped model running before the subscribe").isTrue();
+
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.resumeCalls).as("resumes in the wrapped model").containsExactly(SUBSCRIPTION_ID);
+        assertThat(delegate.isRunning(SUBSCRIPTION_ID)).as("running in the wrapped model").isTrue();
+    }
+
+    @Test
+    void start_true_resumes_a_deferred_subscription_that_asked_for_the_hold_when_a_stop_paused_it_during_its_subscribe_without_the_wrapped_model_reporting_a_held_lost_start() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        delegate.parkOnSubscribe = true;
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        LostStartHold.askedDuring(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        }));
+
+        model.start(true);
+
+        assertThat(delegate.resumeCalls).as("resumes in the wrapped model").containsExactly(SUBSCRIPTION_ID);
+        assertThat(delegate.isRunning(SUBSCRIPTION_ID)).as("running in the wrapped model").isTrue();
+    }
+
+    @Test
     void a_started_subscription_receives_events() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
