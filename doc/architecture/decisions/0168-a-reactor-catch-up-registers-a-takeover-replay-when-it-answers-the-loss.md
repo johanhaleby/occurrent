@@ -16,10 +16,12 @@ subscription reads as paused, and a `resumeSubscription(id)` of the catch-up run
 of resuming the wrapped model at the lost live start.
 
 In occurrent 0.34.0 the reactor catch-up recorded the takeover the same way, and registered the takeover's replay as
-the one in flight for the id only in `afterPause`. A `pauseSubscription(id)` of the catch-up in between found no replay
-in flight and went to the wrapped model. `ReactorMongoSubscriptionModel` held the subscription paused already, so it
-threw `SubscriptionNotRunningException` and the pause was refused. Once `afterPause` ran, the takeover's replay resumed
-the subscription at its new live start.
+the one in flight for the id only in `afterPause`. A `pauseSubscription(id)` of the catch-up between the answer and
+`afterPause` found no replay in flight and went to the wrapped model. `ReactorMongoSubscriptionModel` asked the listener
+outside its monitor and paused the subscription afterwards. A pause that reached it before its own pause found the
+subscription running and paused it, and `ReactorMongoSubscriptionModel` then dropped the takeover. From its own pause
+until `afterPause`, it held the subscription paused already, so it threw `SubscriptionNotRunningException` and the
+pause was refused. Once `afterPause` ran, the takeover's replay resumed the subscription at its new live start.
 
 ## Decision
 
