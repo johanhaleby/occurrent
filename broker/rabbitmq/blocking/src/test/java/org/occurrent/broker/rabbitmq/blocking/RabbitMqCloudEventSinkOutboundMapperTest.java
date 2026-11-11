@@ -22,11 +22,14 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.retry.RetryStrategy;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.time.Duration;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -172,6 +175,83 @@ class RabbitMqCloudEventSinkOutboundMapperTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * The AMQP client throws an IllegalArgumentException from basicPublish for a header value it cannot encode, after
+     * it has counted the publish as awaiting a confirm the broker never sends. Without retiring the channel, the next
+     * valid publish waited out the whole acknowledgement timeout and failed although its message was delivered.
+     */
+    @Test
+    void a_header_value_the_client_cannot_encode_fails_that_publish_with_an_IllegalArgumentException_and_the_next_valid_publish_succeeds_within_the_acknowledgement_timeout() throws Exception {
+        String queue = declareAndBindQueue();
+        RabbitMqOutboundMapper mapper = (cloudEvent, destination) -> {
+            if ("id-bad".equals(cloudEvent.getId())) {
+                Map<String, Object> headers = new HashMap<>();
+                headers.put("orderId", UUID.randomUUID());
+                return new RabbitMqMessage(new BasicProperties.Builder().headers(headers).build(), new byte[]{1});
+            }
+            return RabbitMqOutboundMapper.cloudEventHeaders().toMessage(cloudEvent, destination);
+        };
+
+        try (RabbitMqCloudEventSink sink = sinkWithAcknowledgementTimeout(mapper, Duration.ofSeconds(2))) {
+            assertThatThrownBy(() -> sink.publish(event("id-bad"))).isExactlyInstanceOf(IllegalArgumentException.class);
+
+            long start = System.nanoTime();
+            sink.publish(event("id-good"));
+            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("the valid publish must not wait out the acknowledgement timeout").isLessThan(Duration.ofSeconds(1));
+
+            GetResponse response = adminChannel.basicGet(queue, true);
+            assertThat(response).as("the valid message should be on the queue").isNotNull();
+            assertThat(response.getProps().getHeaders().get("cloudEvents_id")).hasToString("id-good");
+            assertThat(adminChannel.basicGet(queue, true)).as("the message that could not be encoded was not published").isNull();
+        }
+    }
+
+    @Test
+    void a_messageId_over_255_bytes_fails_that_publish_with_an_IllegalArgumentException_and_the_next_valid_publish_succeeds_within_the_acknowledgement_timeout() throws Exception {
+        String queue = declareAndBindQueue();
+        RabbitMqOutboundMapper mapper = (cloudEvent, destination) -> {
+            if ("id-bad".equals(cloudEvent.getId())) {
+                return new RabbitMqMessage(new BasicProperties.Builder().messageId("x".repeat(300)).build(), new byte[]{1});
+            }
+            return RabbitMqOutboundMapper.cloudEventHeaders().toMessage(cloudEvent, destination);
+        };
+
+        try (RabbitMqCloudEventSink sink = sinkWithAcknowledgementTimeout(mapper, Duration.ofSeconds(2))) {
+            assertThatThrownBy(() -> sink.publish(event("id-bad"))).isExactlyInstanceOf(IllegalArgumentException.class);
+
+            long start = System.nanoTime();
+            sink.publish(event("id-good"));
+            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("the valid publish must not wait out the acknowledgement timeout").isLessThan(Duration.ofSeconds(1));
+
+            GetResponse response = adminChannel.basicGet(queue, true);
+            assertThat(response).as("the valid message should be on the queue").isNotNull();
+            assertThat(response.getProps().getHeaders().get("cloudEvents_id")).hasToString("id-good");
+        }
+    }
+
+    @Test
+    void the_mapper_is_called_again_for_each_retried_publish_attempt() throws Exception {
+        String queue = declareAndBindQueue();
+        AtomicInteger calls = new AtomicInteger();
+        RabbitMqOutboundMapper mapper = (cloudEvent, destination) -> {
+            if (calls.incrementAndGet() == 1) {
+                throw new IllegalStateException("first attempt fails");
+            }
+            return RabbitMqOutboundMapper.cloudEventHeaders().toMessage(cloudEvent, destination);
+        };
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+
+        try (RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection(), resolver)
+                .retryStrategy(RetryStrategy.fixed(10).maxAttempts(3)).outboundMapper(mapper).build()) {
+            sink.publish(event("id-1"));
+
+            assertThat(calls).hasValue(2);
+            GetResponse response = adminChannel.basicGet(queue, true);
+            assertThat(response).isNotNull();
+            assertThat(response.getProps().getHeaders().get("cloudEvents_id")).hasToString("id-1");
+        }
+    }
+
     @Test
     void outboundMapper_refuses_null() {
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
@@ -183,6 +263,11 @@ class RabbitMqCloudEventSinkOutboundMapperTest extends RabbitMqTestSupport {
     private RabbitMqCloudEventSink sink(RabbitMqOutboundMapper mapper) {
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
         return RabbitMqCloudEventSink.builder(connection(), resolver).outboundMapper(mapper).build();
+    }
+
+    private RabbitMqCloudEventSink sinkWithAcknowledgementTimeout(RabbitMqOutboundMapper mapper, Duration acknowledgementTimeout) {
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        return RabbitMqCloudEventSink.builder(connection(), resolver).acknowledgementTimeout(acknowledgementTimeout).outboundMapper(mapper).build();
     }
 
     private String declareAndBindQueue() throws Exception {

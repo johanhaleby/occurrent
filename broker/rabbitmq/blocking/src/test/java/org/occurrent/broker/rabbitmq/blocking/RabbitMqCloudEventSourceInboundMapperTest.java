@@ -25,6 +25,7 @@ import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
+import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -116,7 +117,7 @@ class RabbitMqCloudEventSourceInboundMapperTest extends RabbitMqTestSupport {
                 .parkingDestination(RabbitMqDestination.of(exchange, "parked"))
                 .inboundMapper(mapper)
                 .build()) {
-            publishPlainMessage("order-7", 3);
+            publishDefaultMappableMessage("order-7");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(parkingQueue)).isEqualTo(1));
             GetResponse parked = adminChannel.basicGet(parkingQueue, true);
@@ -142,7 +143,7 @@ class RabbitMqCloudEventSourceInboundMapperTest extends RabbitMqTestSupport {
                 .parkingDestination(RabbitMqDestination.of(exchange, "parked"))
                 .inboundMapper((properties, body) -> null)
                 .build()) {
-            publishPlainMessage("order-7", 3);
+            publishDefaultMappableMessage("order-7");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(parkingQueue)).isEqualTo(1));
             GetResponse parked = adminChannel.basicGet(parkingQueue, true);
@@ -235,6 +236,48 @@ class RabbitMqCloudEventSourceInboundMapperTest extends RabbitMqTestSupport {
     }
 
     @Test
+    void a_mapper_that_sneaky_throws_a_checked_exception_parks_the_message_acknowledges_the_original_and_the_source_keeps_consuming() throws Exception {
+        assertSourceKeepsConsumingAfterMapperFailure(() -> InboundMapperTestSupport.<RuntimeException>sneakyThrow(new IOException("cannot parse the body")));
+    }
+
+    @Test
+    void a_mapper_that_throws_an_AssertionError_parks_the_message_acknowledges_the_original_and_the_source_keeps_consuming() throws Exception {
+        assertSourceKeepsConsumingAfterMapperFailure(() -> {
+            throw new AssertionError("mapper invariant violated");
+        });
+    }
+
+    private void assertSourceKeepsConsumingAfterMapperFailure(Runnable failure) throws Exception {
+        String queue = declareAndBindQueue();
+        String parkingQueue = declareParkingQueue();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", handled::add);
+        RabbitMqInboundMapper mapper = (properties, body) -> {
+            if ("message-order-bad".equals(properties.getMessageId())) {
+                failure.run();
+            }
+            return plainPublisherMapper().toCloudEvent(properties, body);
+        };
+
+        try (RabbitMqCloudEventSource source = RabbitMqCloudEventSource.builder(connection(), model, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(RabbitMqDestination.of(exchange, "parked"))
+                .inboundMapper(mapper)
+                .build()) {
+            publishPlainMessage("order-bad", 1);
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(parkingQueue)).isEqualTo(1));
+
+            publishPlainMessage("order-8", 2);
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
+            assertThat(handled.get(0).getExtension("streamid")).isEqualTo("order-8");
+        }
+        assertAcknowledged(queue);
+    }
+
+    @Test
     void inboundMapper_refuses_null() {
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         RabbitMqCloudEventSource.Builder builder = RabbitMqCloudEventSource.builder(connection(), model, "queue");
@@ -257,6 +300,19 @@ class RabbitMqCloudEventSourceInboundMapperTest extends RabbitMqTestSupport {
                 .withExtension("streamid", String.valueOf(properties.getHeaders().get("streamId")))
                 .withExtension("streamversion", ((Number) properties.getHeaders().get("streamVersion")).longValue())
                 .build();
+    }
+
+    private void publishDefaultMappableMessage(String streamId) throws Exception {
+        CloudEvent event = CloudEventBuilder.v1()
+                .withId("id-" + streamId)
+                .withSource(URI.create("urn:test"))
+                .withType(OrderPlaced.class.getName())
+                .withDataContentType("application/json")
+                .withData(("{\"orderId\":\"" + streamId + "\"}").getBytes(StandardCharsets.UTF_8))
+                .build();
+        RabbitMqMessage message = RabbitMqOutboundMapper.cloudEventHeaders().toMessage(event, RabbitMqDestination.of(exchange, ROUTING_KEY));
+        assertThat(RabbitMqInboundMapper.cloudEventHeaders().toCloudEvent(message.properties(), message.body())).as("the default mapper accepts this message").isEqualTo(event);
+        adminChannel.basicPublish(exchange, ROUTING_KEY, message.properties(), message.body());
     }
 
     private void publishPlainMessage(String streamId, int streamVersion) throws Exception {
@@ -293,5 +349,12 @@ class RabbitMqCloudEventSourceInboundMapperTest extends RabbitMqTestSupport {
     }
 
     private static final class OrderPlaced {
+    }
+
+    private static final class InboundMapperTestSupport {
+        @SuppressWarnings("unchecked")
+        static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
+            throw (T) throwable;
+        }
     }
 }
