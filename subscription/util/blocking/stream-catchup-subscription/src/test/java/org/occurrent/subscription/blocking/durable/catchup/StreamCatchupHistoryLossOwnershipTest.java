@@ -45,6 +45,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.LostStartHold;
 import org.slf4j.LoggerFactory;
 import org.slf4j.helpers.MessageFormatter;
 
@@ -796,6 +797,143 @@ class StreamCatchupHistoryLossOwnershipTest {
     @SuppressWarnings("unchecked")
     private static <E extends Throwable> RuntimeException sneaky(Throwable throwable) throws E {
         throw (E) throwable;
+    }
+
+    @Test
+    void throws_CatchupCannotResumeException_from_subscribePaused_when_a_live_start_checkpoint_is_older_than_the_history_of_the_live_model() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        create();
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.subscribePaused(ID, null, StartAt.checkpoint(TOKEN), action()));
+
+        // Then
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertAll(
+                () -> assertThat(liveModel.subscribePausedCalls).as("paused subscribes on the live model").isEmpty(),
+                () -> assertThat(liveModel.isPaused(ID)).as("paused on the live model").isFalse(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+    }
+
+    @Test
+    void holds_a_lost_live_start_paused_with_one_error_when_the_hold_is_asked_for_subscribe() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        create();
+
+        // When
+        Throwable thrown = catchThrowable(() -> LostStartHold.askedDuring(() -> catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action())));
+
+        // Then
+        assertThat(thrown).as("thrown by the subscribe").isNull();
+        assertHeldPausedAfterALostLiveStart();
+        assertThat(liveModel.subscribePausedCalls).as("paused subscribes on the live model").containsExactly(ID);
+        assertThat(liveModel.subscribeCalls).as("running subscribes on the live model").isEmpty();
+    }
+
+    @Test
+    void holds_a_lost_live_start_paused_with_one_error_when_the_hold_is_asked_for_subscribePaused() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        create();
+
+        // When
+        Throwable thrown = catchThrowable(() -> LostStartHold.askedDuring(() -> catchup.subscribePaused(ID, null, StartAt.checkpoint(TOKEN), action())));
+
+        // Then
+        assertThat(thrown).as("thrown by the subscribe").isNull();
+        assertHeldPausedAfterALostLiveStart();
+        assertThat(liveModel.subscribePausedCalls).as("paused subscribes on the live model").containsExactly(ID);
+    }
+
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_a_lost_live_start_held_paused() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        create();
+        LostStartHold.askedDuring(() -> catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action()));
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertAll(
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").isEmpty(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").hasSize(1)
+        );
+    }
+
+    @Test
+    void runs_a_lost_live_start_held_paused_and_delivers_a_later_event_when_resumed_at_a_checkpoint_the_live_model_has_the_history_back_to() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        create();
+        LostStartHold.askedDuring(() -> catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action()));
+        DomainEvent later = nameDefined(LocalDateTime.now(), "later");
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN)));
+        liveModel.deliver(ID, cloudEventConverter.toCloudEvents(List.of(later)).get(0));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(received).as("events delivered").containsExactly(later),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged, only the one for the loss").hasSize(1)
+        );
+    }
+
+    @Test
+    void a_live_start_the_live_model_has_the_history_back_to_runs_also_when_the_hold_is_asked() {
+        // Given
+        create();
+
+        // When
+        LostStartHold.askedDuring(() -> catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action()));
+
+        // Then
+        assertAll(
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+    }
+
+    @Test
+    void is_not_held_by_a_hold_asked_for_an_earlier_subscribe_that_has_returned() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        create();
+        LostStartHold.askedDuring(() -> catchup.subscribe(OTHER_ID, StartAt.checkpoint(TOKEN), action()));
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action()));
+
+        // Then
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID);
+        assertThat(catchup.isPaused(ID)).as("paused").isFalse();
+    }
+
+    private void assertHeldPausedAfterALostLiveStart() {
+        assertAll(
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isFalse(),
+                () -> assertThat(liveModel.isPaused(ID)).as("paused on the live model").isTrue(),
+                () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, TOKEN)),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(signals).as("catch-up signals, so no replay ran").isEmpty(),
+                () -> assertThat(received).as("events delivered").isEmpty(),
+                () -> assertThat(saved).as("positions stored").isEmpty(),
+                () -> assertThat(storage.read(ID)).as("stored position").isNull()
+        );
     }
 
     private void terminallyPausedAfterALoss() {

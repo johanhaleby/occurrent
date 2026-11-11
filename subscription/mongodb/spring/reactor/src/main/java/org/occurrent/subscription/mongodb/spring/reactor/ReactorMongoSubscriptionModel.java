@@ -863,15 +863,25 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * It can also receive the events written up to 16 seconds before the call, plus the time the reply took to reach
      * the client.
      * <p>
-     * Fails when the server can't be reached, and when its reply has no clock to read. When the driver's cluster time
-     * can't be used, the answer is the start of the second the server's clock showed at the call, and it can be later
-     * than the call, so that a subscription started from it skips the events written in between. That happens when the
-     * server's clock is stepped forward between the call and the reply, after a failover to a replica set member whose
-     * clock is ahead, and when the question goes to a {@code mongos} whose clock is ahead of the shard that writes.
+     * Fails when the server can't be reached. Completes empty when the reply to {@code hello} has no {@code localTime},
+     * and logs a {@code WARN} that shows the reply. A subscription of this model that opens at the present stops on such
+     * a reply instead of restarting, and an empty answer is how
+     * {@link CheckpointAwareSubscriptionModel#globalCheckpointAsOfNow()} reports a problem the model can't resolve.
+     * <p>
+     * When the driver's cluster time can't be used, the answer is the start of the second the server's clock showed at
+     * the call, and it can be later than the call, so that a subscription started from it skips the events written in
+     * between. That happens when the server's clock is stepped forward between the call and the reply, after a failover
+     * to a replica set member whose clock is ahead, and when the question goes to a {@code mongos} whose clock is ahead
+     * of the shard that writes.
      */
     @Override
     public Mono<Checkpoint> globalCheckpointAsOfNow() {
-        return operationTimeAsOf(presentNow()).map(MongoOperationTimeCheckpoint::new);
+        return operationTimeAsOf(presentNow())
+                .<Checkpoint>map(MongoOperationTimeCheckpoint::new)
+                .onErrorResume(NoServerClockException.class, noServerClock -> {
+                    log.warn("globalCheckpointAsOfNow() answers empty, since MongoDB gives no position. {}", noServerClock.getMessage());
+                    return Mono.empty();
+                });
     }
 
     /**
