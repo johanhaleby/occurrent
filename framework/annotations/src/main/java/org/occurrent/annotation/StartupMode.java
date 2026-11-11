@@ -25,7 +25,10 @@ public enum StartupMode {
     /**
      * Occurrent determines the startup mode from the subscription's other properties (such as its start position and
      * resume behavior). It uses {@link #BACKGROUND} when the subscription needs to replay historic events before
-     * subscribing to new ones, otherwise it uses {@link #WAIT_UNTIL_STARTED}.
+     * subscribing to new ones, otherwise it uses {@link #WAIT_UNTIL_STARTED}. The pause that {@link #BACKGROUND}
+     * describes for a position the subscription model no longer has the history back to applies only when
+     * {@code BACKGROUND} is set explicitly, not when {@code DEFAULT} picks it, so with {@code DEFAULT} such a
+     * subscription can stop the application from starting.
      */
     DEFAULT,
     /**
@@ -41,6 +44,12 @@ public enum StartupMode {
      * useful when the subscription starts from an earlier point (such as the beginning of time) with many events to
      * replay, and you do not want to block application startup while it catches up. It replays historic events in the
      * background and then switches to continuous mode.
+     * <p>
+     * In the blocking Spring Boot starter, a subscription that sets {@code BACKGROUND} explicitly is paused, with an
+     * error in the log that names it, when the subscription model refuses the position stored for it because the
+     * history back to that position is gone, so the rest of the application starts. To run it again, stop every
+     * instance of the application, delete or replace the checkpoint stored for the subscription, and start the
+     * application again.
      */
     BACKGROUND
 }

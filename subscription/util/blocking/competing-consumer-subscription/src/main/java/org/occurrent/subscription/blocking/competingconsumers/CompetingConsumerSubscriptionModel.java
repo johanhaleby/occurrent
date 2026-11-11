@@ -3598,7 +3598,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         // A start(false) before any start(..) returned keeps it paused, as it keeps one the user paused
         pausedBeforeAStartReturned(key.subscriptionId());
         LostStartHold.heldPaused();
-        log.error("The wrapped subscription model refused to start or resume a subscription from the position stored for it, so it is held paused and doesn't compete for the lease, since a grant would only be refused again. Resuming it competes for the lease again (subscriberId={}, subscriptionId={})",
+        log.error("The wrapped subscription model refused to start or resume a subscription from the position stored for it, because the history back to that position is gone, so it is held paused and doesn't compete for the lease, since a grant would only be refused again. A resume or a restart is refused the same way while that position is stored, so stop every instance of the application and delete or replace the checkpoint stored for the subscription (subscriberId={}, subscriptionId={})",
                 key.subscriberId(), key.subscriptionId(), refused);
         warnedInThisCall(key, refused);
     }
@@ -4052,9 +4052,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * came earlier, since the try starts only once the subscribe has returned.
      * <p>
      * A callback on the strategy's own thread that a {@code stop()} overtook is left to a try too, since nothing failed
-     * that the strategy could report. A {@link CatchupCannotResumeException} doesn't reach the strategy either, since
-     * the consumer it refused is held paused and logged at {@code ERROR} already. Any other failure reaches the
-     * strategy. One out of a call of this model's own,
+     * that the strategy could report. A {@link CatchupCannotResumeException} for a position the wrapped model no longer
+     * has the history back to doesn't reach the strategy either, since the consumer it refused is held paused and
+     * logged at {@code ERROR} already. Any other failure reaches the strategy, including any other
+     * {@link CatchupCannotResumeException}. One out of a call of this model's own,
      * which holds the lock already, throws into that call, which decides what to do about it.
      * <p>
      * A callback that has the lock applies each {@code start(..)} and {@code stop()} handed over for the subscription

@@ -420,9 +420,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         if (resumeSubscriptionsAutomatically) {
             // Nothing new can be stored as deferred once the transition above is taken, so this walk sees every
             // deferred registration, and a registration racing this method starts itself when it sees the running
-            // state. Fails on the first subscription that cannot start, leaving the rest registered. A partially
-            // started model is the honest outcome, and swallowing the failure to start the others would hide a
-            // broken subscription.
+            // state. Fails on the first subscription that throws, leaving the rest registered. A subscription that
+            // asked for a lost start to be held and that a wrapped model held paused doesn't throw, so the walk goes
+            // on past it. A partially started model is the honest outcome, and swallowing the failure to start the
+            // others would hide a broken subscription.
             for (String subscriptionId : registrationOrder) {
                 if (registrations.get(subscriptionId) instanceof Registration.Deferred) {
                     resumeSubscription(subscriptionId);
