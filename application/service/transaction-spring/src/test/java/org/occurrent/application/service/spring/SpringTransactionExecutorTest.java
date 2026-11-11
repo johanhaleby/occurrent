@@ -33,6 +33,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.SavepointManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.TransactionSystemException;
@@ -602,6 +603,74 @@ class SpringTransactionExecutorTest {
     }
 
     @Test
+    void the_default_executor_runs_the_action_again_in_a_callers_supports_scope_on_a_transaction_manager_whose_status_isnt_springs_default_one() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new WrappingTransactionManager(new StubTransactionManager()));
+        TransactionTemplate callersScope = new TransactionTemplate(new StubTransactionManager());
+        callersScope.setPropagationBehavior(TransactionDefinition.PROPAGATION_SUPPORTS);
+        AtomicInteger attempts = new AtomicInteger();
+        List<ExecutorScope> scopes = new ArrayList<>();
+
+        // When
+        Throwable thrown = catchThrowable(() -> callersScope.executeWithoutResult(status -> executor.inTransactionTellingIfOpened(scope -> {
+            scopes.add(scope);
+            if (attempts.incrementAndGet() == 1) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        })));
+
+        // Then
+        assertThat(thrown).as("[failure reaching the caller]").isNull();
+        assertThat(attempts).hasValue(2);
+        assertThat(scopes).allMatch(ExecutorScope::startedSynchronization);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_under_propagation_supports_on_a_transaction_manager_whose_status_isnt_springs_default_one() {
+        // Given
+        TransactionTemplate transactionTemplate = new TransactionTemplate(new WrappingTransactionManager(new StubTransactionManager()));
+        transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_SUPPORTS);
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(transactionTemplate);
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Throwable thrown = catchThrowable(() -> executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        }));
+
+        // Then
+        assertThat(thrown).as("[failure reaching the caller]").isNull();
+        assertThat(attempts).hasValue(2);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_in_a_savepoint_of_its_own_in_a_transaction_a_caller_opened_without_synchronization() {
+        // Given
+        BindingTransactionManager transactionManager = new BindingTransactionManager();
+        transactionManager.setTransactionSynchronization(AbstractPlatformTransactionManager.SYNCHRONIZATION_NEVER);
+        TransactionTemplate nested = new TransactionTemplate(transactionManager);
+        nested.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(nested);
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Throwable thrown = catchThrowable(() -> new TransactionTemplate(transactionManager).execute(status -> executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        })));
+
+        // Then
+        assertThat(thrown).as("[failure reaching the caller]").isNull();
+        assertThat(attempts).hasValue(2);
+    }
+
+    @Test
     void the_default_executor_runs_the_action_after_its_transaction_failed_to_start_under_propagation_required_in_a_callers_supports_scope() {
         // Given
         StubTransactionManager transactionManager = new StubTransactionManager();
@@ -787,9 +856,28 @@ class SpringTransactionExecutorTest {
     private static final class BindingTransactionManager extends AbstractPlatformTransactionManager {
         private static final Object RESOURCE_KEY = BindingTransactionManager.class;
 
+        BindingTransactionManager() {
+            setNestedTransactionAllowed(true);
+        }
+
         @Override
         protected Object doGetTransaction() {
-            return new Object();
+            return new SavepointTransaction();
+        }
+
+        private static final class SavepointTransaction implements SavepointManager {
+            @Override
+            public Object createSavepoint() {
+                return new Object();
+            }
+
+            @Override
+            public void rollbackToSavepoint(Object savepoint) {
+            }
+
+            @Override
+            public void releaseSavepoint(Object savepoint) {
+            }
         }
 
         @Override
@@ -854,6 +942,40 @@ class SpringTransactionExecutorTest {
             SynchronizingStatus(boolean newSynchronization) {
                 super(true);
                 this.newSynchronization = newSynchronization;
+            }
+        }
+    }
+
+    // Returns the status of the manager it wraps inside one that isn't a DefaultTransactionStatus, as
+    // ChainedTransactionManager does, so the status keeps the default hasTransaction()
+    private static final class WrappingTransactionManager implements PlatformTransactionManager {
+        private final PlatformTransactionManager wrapped;
+
+        WrappingTransactionManager(PlatformTransactionManager wrapped) {
+            this.wrapped = wrapped;
+        }
+
+        @Override
+        public TransactionStatus getTransaction(@Nullable TransactionDefinition definition) {
+            return new WrappedStatus(wrapped.getTransaction(definition));
+        }
+
+        @Override
+        public void commit(TransactionStatus status) {
+            wrapped.commit(((WrappedStatus) status).wrapped);
+        }
+
+        @Override
+        public void rollback(TransactionStatus status) {
+            wrapped.rollback(((WrappedStatus) status).wrapped);
+        }
+
+        private static final class WrappedStatus extends SimpleTransactionStatus {
+            private final TransactionStatus wrapped;
+
+            WrappedStatus(TransactionStatus wrapped) {
+                super(wrapped.isNewTransaction());
+                this.wrapped = wrapped;
             }
         }
     }
