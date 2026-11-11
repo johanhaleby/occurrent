@@ -887,7 +887,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try {
             runEach(inTheWay, ReplayInTheWay::putBack);
         } catch (Throwable putBackFailure) {
-            // Throwable, since runEach rethrows a checked exception a listener written in Kotlin threw
+            // Throwable, since runEach rethrows what a step threw as it was thrown
             addSuppressed(e, putBackFailure);
         }
     }
@@ -2764,7 +2764,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 }
             });
         } catch (Throwable e) {
-            // Throwable, since runEach rethrows a checked exception a listener written in Kotlin threw
+            // Throwable, since runEach rethrows what a step threw as it was thrown
             putBackFailure = e;
         }
         String whatChanged = putBackFailure != null ? "A catch-up replay this call held for the subscription couldn't be run again, and the suppressed exception says why."
