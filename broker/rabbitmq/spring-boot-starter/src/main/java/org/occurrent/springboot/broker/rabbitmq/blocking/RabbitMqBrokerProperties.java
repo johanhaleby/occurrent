@@ -18,8 +18,8 @@ package org.occurrent.springboot.broker.rabbitmq.blocking;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
-import org.occurrent.broker.rabbitmq.blocking.RabbitMqUnroutablePolicy;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqUnroutablePolicy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
