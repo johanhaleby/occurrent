@@ -96,7 +96,7 @@ session stays bound until that scope ends, as after a plain command, and a Mongo
 database factory counts it as an existing transaction there.
 
 The Spring stores retry a write only in a transaction they own. A session bound for their database factory counts as
-one they don't, so a DCB append in it that conflicts fails at once instead of being retried in the transaction the
+one they don't, so a write in it that conflicts fails at once instead of being retried in the transaction the
 conflict aborted.
 
 ### Why the versions are safe to save
@@ -166,8 +166,7 @@ transaction the executor joined.
 
 - A snapshot decider on a service with synchronous subscriptions reads and decides in the executor's transaction, as a
   plain command does. On a replica set it still saves snapshots when the executor opened that transaction, and on a
-  Spring executor that opens none outside a scope of the caller's. It pays none of the three costs in the context that a plain command
-  doesn't pay.
+  Spring executor that opens none outside a scope of the caller's.
 - On a replica set, in a scope of the caller's with no transaction, on an executor that opens none, a snapshot decider
   saves no snapshot.
 - On a sharded cluster a read in the executor's transaction reports no versions, so a snapshot decider there saves no

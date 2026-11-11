@@ -978,8 +978,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   synchronous subscriptions, can read on a transaction of the store's own in a Spring scope of yours with no
   transaction. It then doesn't see the writes of a session already bound there, and an append in that session checked
   against its token can fail its condition.
-- A Spring MongoDB store no longer retries a DCB append in a session bound to the synchronization. A conflict fails it
-  at once, as in your transaction, instead of a retry in the transaction the conflict aborted.
+- A Spring MongoDB store no longer retries a DCB append or a stream write in a session bound to the synchronization. A
+  conflict fails it at once, as in your transaction, instead of a retry in the transaction the conflict aborted.
 - `DcbReadOptions.confirmingAppendBeforeSaving()` and `asFirstOperationOfTransaction()` say something about the caller
   that the store can't check. Set them on a read of your own only when you keep the contract their javadoc states.
 - In a transaction you own, on a blocking service, an exception from your domain function no longer marks that
