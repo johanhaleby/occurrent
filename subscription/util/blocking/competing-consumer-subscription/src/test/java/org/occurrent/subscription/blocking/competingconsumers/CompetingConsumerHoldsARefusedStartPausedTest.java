@@ -445,12 +445,14 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         model.onConsumeProhibited(ID, NODE);
         wrapped.refusing = true;
         wrapped.refusingAResumeAsAHistoryLoss = true;
+        wrapped.callNames.clear();
 
         // When
         Throwable thrown = grantTheLease();
 
         // Then
         assertThat(thrown).as("thrown by the grant to the strategy").isNull();
+        assertThat(wrapped.callNames).as("calls into the wrapped model").containsExactly("resumeSubscription");
         assertHeldPaused();
         assertThat(errorsLogged()).as("errors logged").hasSize(1);
     }
