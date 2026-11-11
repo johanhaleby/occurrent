@@ -1364,12 +1364,14 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             assertThat(handingOver.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("subscribe that hands it over held").isTrue();
 
             // When
-            Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
+            CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+            boolean cancelEndedBeforeTheThrow = cancelled.isDone();
             feed.letGo();
             Throwable subscribeThrew = catchThrowable(() -> subscribed.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
-            Throwable cancelFailed = catchThrowable(() -> cancelled.block(TIMEOUT));
+            Throwable cancelFailed = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
 
             // Then
+            assertThat(cancelEndedBeforeTheThrow).as("cancel ended while the subscribe was held").isFalse();
             assertThat(subscribeThrew).as("what the subscribe threw").hasCauseReference(threw);
             assertThat(cancelFailed).as("how the cancel ended").isNull();
         } finally {
@@ -1402,12 +1404,14 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             assertThat(subscribingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("subscribe that starts it again held").isTrue();
 
             // When
-            Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
+            CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+            boolean cancelEndedBeforeTheThrow = cancelled.isDone();
             feed.letGo();
-            Throwable cancelFailed = catchThrowable(() -> cancelled.block(TIMEOUT));
+            Throwable cancelFailed = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
             Later later = subscribeAgain(model, feed, caller);
 
             // Then
+            assertThat(cancelEndedBeforeTheThrow).as("cancel ended while the subscribe was held").isFalse();
             assertThat(cancelFailed).as("how the cancel ended").isNull();
             assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
                     .containsExactly(later.writtenAfter());
