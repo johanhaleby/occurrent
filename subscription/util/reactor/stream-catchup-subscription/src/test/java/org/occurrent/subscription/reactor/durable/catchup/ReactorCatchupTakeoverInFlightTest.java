@@ -1,5 +1,6 @@
 package org.occurrent.subscription.reactor.durable.catchup;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupListener;
@@ -16,7 +17,9 @@ import org.occurrent.subscription.reactor.durable.catchup.ReactorStreamCatchupSu
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import java.lang.reflect.Field;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
@@ -103,6 +106,31 @@ class ReactorCatchupTakeoverInFlightTest {
         }
     }
 
+    @Test
+    void a_subscribe_with_catch_up_refused_while_a_takeover_registered_during_a_refused_cancel_is_in_flight_takes_away_the_record_it_put() {
+        // Given a takeover replay in flight with no record of the id, which a refused cancel took away
+        IntrospectableLosingLiveStartModel wrapped = new IntrospectableLosingLiveStartModel();
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            takeoverInFlightAfterARefusedCancel(wrapped, catchup);
+            Object recordBefore = recordOf(catchup);
+
+            // When a subscribe with catch-up puts its own record and then finds that replay in flight
+            Throwable subscribe = catchThrowable(() -> catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                    cloudEvent -> Mono.empty()));
+
+            // Then it is refused and takes that record away again
+            assertAll(
+                    () -> assertThat(catchup.isCatchingUp(ID)).as("whether a replay of the id is in flight").isTrue(),
+                    () -> assertThat(recordBefore).as("the record of the id before the subscribe").isNull(),
+                    () -> assertThat(subscribe).as("what the subscribe with catch-up throws").isInstanceOf(DuplicateSubscriptionIdException.class),
+                    () -> assertThat(recordOf(catchup)).as("the record of the id after the refused subscribe").isNull()
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
     // Hands a subscription over, then has a cancel of it refused. As that cancel puts the handover back, the wrapped
     // model loses the history from the live start, which registers a takeover replay waiting on the reader, and then
     // ends the subscription on its own. Returns what lets the reader read again.
@@ -121,6 +149,16 @@ class ReactorCatchupTakeoverInFlightTest {
         wrapped.cancelCompletesWhen = Mono.empty();
         assertThat(cancel).as("what the cancel fails with").hasMessage("the wrapped cancel fails");
         return reads;
+    }
+
+    private static @Nullable Object recordOf(ReactorStreamCatchupSubscriptionModel catchup) {
+        try {
+            Field owned = NamedCatchupSupport.class.getDeclaredField("owned");
+            owned.setAccessible(true);
+            return ((Map<?, ?>) owned.get(catchup.namedSubscriptions)).get(ID);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private ReactorStreamCatchupSubscriptionModel catchupOver(IntrospectableLosingLiveStartModel wrapped) {
