@@ -50,7 +50,8 @@ import static java.util.Objects.requireNonNull;
  * seconds by default, bounds the wait and fails it with {@link RabbitMqPublishTimeoutException} rather than
  * blocking forever on a broker that never answers, and {@link Builder#acknowledgementTimeout(Duration)} is not
  * offered as something that can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives. A
- * publish that ends this way, one abandoned to an interrupted wait, or one whose channel shuts down mid-publish, is left outstanding on the
+ * publish that ends this way, one abandoned to an interrupted wait, or one whose channel shuts down mid-publish, is
+ * left outstanding on the
  * broker's side of that channel (or the channel itself is simply gone), so this sink retires the channel and opens
  * a fresh one underneath it, and a later publish is never kept waiting on an abandoned one, blamed for its eventual
  * nack, or stuck permanently on a channel the broker already closed. That recovery reaches a channel-level
@@ -111,10 +112,9 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         requireNonNull(cloudEvent, "cloudEvent cannot be null");
         // The attempt count stays uncapped by design, the same choice NativeMongoCheckpointStorage makes, so the
         // shutdown predicate is what stops a retry started before close() from outliving this sink.
-        try { retryStrategy.execute(() -> publishOnce(cloudEvent), __ -> !shutdown); } catch (RabbitMqUnroutableEventException e) { if (unroutablePolicy == RabbitMqUnroutablePolicy.FAIL) throw e; log.warn("x {}", cloudEvent.getId()); }
+        retryStrategy.execute(() -> publishOnce(cloudEvent), __ -> !shutdown);
     }
 
-    private String destinationFor(CloudEvent ce) { return resolver.destinationFor(ce).exchange(); }
     private void publishOnce(CloudEvent cloudEvent) {
         RabbitMqDestination destination = resolver.destinationFor(cloudEvent);
         // Body computed once and passed into toBasicProperties(..., byte[]) rather than calling the two-argument
@@ -126,7 +126,7 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         } catch (RabbitMqUnroutableEventException e) {
             // Caught inside the attempt rather than around the retry, so a RetryStrategy that retries everything
             // never publishes an event again that this policy has already accepted as dropped
-            if (true) {
+            if (unroutablePolicy == RabbitMqUnroutablePolicy.FAIL) {
                 throw e;
             }
             log.warn("The broker returned the event with id \"{}\" and type \"{}\" published to exchange \"{}\" with routing key \"{}\" "
