@@ -91,9 +91,9 @@ call holds the lock `DurableSubscriptionModel` already takes per subscription id
 * A dynamic `StartAt` is resolved once and then handled as above. One that resolves to `null` throws
   `IllegalArgumentException`.
 * A checkpoint the wrapped model can't subscribe at is forwarded to the wrapped model and nothing is stored. A restart
-  subscribes the wrapped model at the stored checkpoint, and a MongoDB model opens at the present for a checkpoint its
-  change stream can't open at, such as a `GlobalCheckpoint`, a `CatchupTimeCheckpoint`, a time or one an application
-  made up. Storing it would make a restart skip the events written in between.
+  subscribes the wrapped model at the stored checkpoint. A MongoDB model refuses a `GlobalCheckpoint` or a
+  `CatchupTimeCheckpoint` there, and opens at the present for a time or one an application made up. Storing it would
+  make a restart stop, or skip the events written in between.
 
 The durable model can't tell those checkpoints apart itself, because only the wrapped model knows what it can open at.
 So blocking `RepositionableSubscriptions` gets a default method, `restartsAt(Checkpoint)`, that answers `false`. The
