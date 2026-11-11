@@ -1306,14 +1306,14 @@ Four cases still lose events, as they did in 0.34.0:
 
 Code that subscribes a MongoDB subscription model directly at a checkpoint a catch-up stored, or delivered with a
 replayed event, in a `StartAt` that names it or from a dynamic start that returns it. A
-resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, isn't refused. The blocking models go on
-from the position the subscription has read to. The reactor model opens at the moment of the resume, for such a
-checkpoint and for a dynamic position that returns one, as it did in 0.34.0, and can skip what was written while the
-subscription was paused.
+resume at such a checkpoint, `resumeSubscription(subscriptionId, startAt)`, isn't refused. The models go on from the
+position the subscription has read to, for such a checkpoint and each time a dynamic position returns one. In 0.34.0
+the reactor model opened at the moment of the resume instead, and skipped what was written while the subscription was
+paused.
 
 The function `subscribe(..)` was given is another matter. When no change stream has opened yet, a resume can still ask
-that function, and it's refused when the function returns one of these checkpoints. On the blocking models that
-includes `resumeSubscription(subscriptionId, startAt)` at such a checkpoint, or at a dynamic position that returns one.
+that function, and it's refused when the function returns one of these checkpoints. That includes
+`resumeSubscription(subscriptionId, startAt)` at such a checkpoint, or at a dynamic position that returns one.
 
 A blocking `DurableSubscriptionModel` hands the MongoDB model a dynamic start that returns the checkpoint in its
 `CheckpointStorage`. A subscription whose storage holds a catch-up's checkpoint now stops in the same
