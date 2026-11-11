@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
@@ -95,6 +96,27 @@ class DurableSubscriptionModelUndeclaredCheckedExceptionTest {
         );
     }
 
+    @Test
+    void keeps_the_subscription_when_recording_the_first_position_throws_a_checked_exception_without_declaring_it_after_an_evaluation_stored_the_position() {
+        IOException unreachable = new IOException("the position source is unreachable");
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        HoldsTheStartPositionUnevaluated wrapped = new HoldsTheStartPositionUnevaluated();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("global");
+        wrapped.failGlobalCheckpointWith = unreachable;
+        wrapped.evaluateBeforeFailing = true;
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+
+        assertAll(
+                () -> assertThat(thrown).as("thrown").isNull(),
+                () -> assertThat(wrapped.cancelled).as("subscriptions cancelled in the wrapped model").isEmpty(),
+                () -> assertThat(wrapped.isRunning(SUBSCRIPTION_ID)).as("held by the wrapped model").isTrue(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored checkpoint").isEqualTo(new StringBasedCheckpoint("global"))
+        );
+    }
+
     @SuppressWarnings("unchecked")
     private static <E extends Throwable> RuntimeException sneaky(Throwable throwable) throws E {
         throw (E) throwable;
@@ -126,7 +148,8 @@ class DurableSubscriptionModelUndeclaredCheckedExceptionTest {
 
     /**
      * Holds the subscription without evaluating its start position, so the first position is recorded by the
-     * subscribing thread once the subscribe has returned. Throws the failures it is given without declaring them.
+     * subscribing thread once the subscribe has returned. Throws the failures it is given without declaring them, and
+     * fails only the subscribing thread's {@code globalCheckpoint()}, so an evaluation on another thread gets the position.
      */
     private static final class HoldsTheStartPositionUnevaluated implements CheckpointAwareSubscriptionModel {
         final List<String> cancelled = new CopyOnWriteArrayList<>();
@@ -134,9 +157,16 @@ class DurableSubscriptionModelUndeclaredCheckedExceptionTest {
         volatile @Nullable Checkpoint globalCheckpoint;
         volatile @Nullable Throwable failGlobalCheckpointWith;
         volatile @Nullable Throwable failCancelWith;
+        // Evaluates the start position on another thread, which stores it, before the subscribing thread's
+        // globalCheckpoint() fails
+        volatile boolean evaluateBeforeFailing;
+        private volatile @Nullable StartAt startAt;
+        private volatile @Nullable Thread subscribingThread;
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            this.startAt = startAt;
+            subscribingThread = Thread.currentThread();
             held.add(subscriptionId);
             return new Subscription() {
                 @Override
@@ -164,10 +194,25 @@ class DurableSubscriptionModelUndeclaredCheckedExceptionTest {
         @Override
         public @Nullable Checkpoint globalCheckpoint() {
             Throwable failure = failGlobalCheckpointWith;
-            if (failure != null) {
+            if (failure != null && Thread.currentThread() == subscribingThread) {
+                if (evaluateBeforeFailing) {
+                    evaluateOnAnotherThread();
+                }
                 throw sneaky(failure);
             }
             return globalCheckpoint;
+        }
+
+        private void evaluateOnAnotherThread() {
+            StartAt toEvaluate = startAt;
+            Thread evaluation = new Thread(() -> toEvaluate.get(new SubscriptionModelContext(HoldsTheStartPositionUnevaluated.class)));
+            evaluation.start();
+            try {
+                evaluation.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
         }
 
         @Override

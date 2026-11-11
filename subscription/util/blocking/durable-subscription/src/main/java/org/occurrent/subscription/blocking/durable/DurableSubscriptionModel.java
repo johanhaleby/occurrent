@@ -1164,7 +1164,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         void recordOnceAccepted() {
             try {
                 settle();
-            } catch (RuntimeException refusal) {
+            } catch (Exception refusal) {
+                // Exception, since a wrapped model or a storage written in Kotlin can throw a checked exception
                 if (endUnlessSettled()) {
                     throw refusal;
                 }
