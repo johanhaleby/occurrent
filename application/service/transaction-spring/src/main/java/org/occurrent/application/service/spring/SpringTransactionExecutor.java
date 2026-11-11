@@ -217,10 +217,11 @@ public class SpringTransactionExecutor implements TransactionExecutor {
             inCallersScope.set(joinedTransaction || TransactionSynchronizationManager.isSynchronizationActive() && !scope.startedSynchronization());
             return action.apply(scope);
         };
+        // An attempt whose transaction failed to start ran nothing in the caller's scope, so it can run again
         BooleanSupplier beforeAttempt = () -> {
             boolean synchronizationActive = TransactionSynchronizationManager.isSynchronizationActive();
             synchronizationActiveBefore.set(synchronizationActive);
-            inCallersScope.set(synchronizationActive);
+            inCallersScope.set(false);
             return synchronizationActive;
         };
         Function<Predicate<Throwable>, Predicate<Throwable>> outsideCallersScope = retryable -> throwable -> !inCallersScope.get() && retryable.test(throwable);
