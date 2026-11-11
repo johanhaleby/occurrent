@@ -36,6 +36,7 @@ import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -242,6 +243,20 @@ class SpringMongoEventStoreDcbShardedClusterTest {
         assertThat(read.get().markerVersions()).isPresent();
         assertThat(sessionBoundAfterRead).as("the read binds a session to the scope").isTrue();
         assertThat(transactionalStore.read(TICKETS_OF_K1).events()).as("the append joined the session transaction the read bound, which rolled back").extracting(CloudEvent::getId).containsExactly("before");
+    }
+
+    @Test
+    void reads_after_saved_marker_versions_as_the_first_operation_of_a_transaction() {
+        transactionalStore.append(List.of(taggedEventWithId("before", TICKET_SOLD, CONCERT_K1)));
+        DcbMarkerVersions saved = transactionalStore.read(TICKETS_OF_K1, DcbReadOptions.fromBeginning().withVersions()).markerVersions().orElseThrow();
+        transactionalStore.append(List.of(taggedEventWithId("later", TICKET_SOLD, CONCERT_K1)));
+        AtomicReference<DcbEventStream> read = new AtomicReference<>();
+
+        Throwable failure = catchThrowable(() -> inTransactionThatRollsBack(() -> read.set(transactionalStore.read(TICKETS_OF_K1, DcbReadOptions.afterVersions(saved).asFirstOperationOfTransaction()))));
+
+        assertThat(failure).as("the store refuses no read after saved versions that is the first operation of the transaction").isNull();
+        assertThat(read.get().events()).as("a mongos resumes after the saved versions in a snapshot transaction of the store's own").extracting(CloudEvent::getId).containsExactly("later");
+        assertThat(read.get().markerVersions()).isPresent();
     }
 
     private void inTransactionThatRollsBack(Runnable body) {

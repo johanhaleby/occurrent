@@ -37,6 +37,7 @@ import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -54,6 +55,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
@@ -212,6 +214,20 @@ class MongoEventStoreDcbShardedClusterTest {
                 .as("the snapshot transaction of the read runs in a session of its own")
                 .isNotEmpty()
                 .doesNotContain(sessionOfTheTransaction);
+    }
+
+    @Test
+    void reads_after_saved_marker_versions_as_the_first_operation_of_a_transaction() {
+        transactionalStore.append(List.of(taggedEventWithId("before", TICKET_SOLD, CONCERT_K1)));
+        DcbMarkerVersions saved = transactionalStore.read(TICKETS_OF_K1, DcbReadOptions.fromBeginning().withVersions()).markerVersions().orElseThrow();
+        transactionalStore.append(List.of(taggedEventWithId("later", TICKET_SOLD, CONCERT_K1)));
+        AtomicReference<DcbEventStream> read = new AtomicReference<>();
+
+        Throwable failure = catchThrowable(() -> inTransactionThatRollsBack(() -> read.set(transactionalStore.read(TICKETS_OF_K1, DcbReadOptions.afterVersions(saved).asFirstOperationOfTransaction()))));
+
+        assertThat(failure).as("the store refuses no read after saved versions that is the first operation of the transaction").isNull();
+        assertThat(read.get().events()).as("a mongos resumes after the saved versions in a snapshot transaction of the store's own").extracting(CloudEvent::getId).containsExactly("later");
+        assertThat(read.get().markerVersions()).isPresent();
     }
 
     private void inTransactionThatRollsBack(Runnable body) {
