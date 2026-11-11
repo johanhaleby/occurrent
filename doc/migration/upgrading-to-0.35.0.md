@@ -145,6 +145,9 @@ other sections compile fine and behave differently, so read them first.
   server where the feed is each time it registers and needs the answer only when no checkpoint is stored, so when it
   waits for its start, which is the default in `auto` subscription mode, the application does not start when no
   checkpoint is stored and the MongoDB server cannot answer. Compiles unchanged.
+- [A subscription with no start position resumes from a catch-up's checkpoint](#a-subscription-with-no-start-position-resumes-from-a-catch-ups-checkpoint).
+  On the blocking stack a subscription with `startAt` unset no longer skips the events written while the application
+  was down when a catch-up's replay stopped before it went live. Compiles unchanged.
 
 ### Brokers
 
@@ -1324,9 +1327,10 @@ that function, and it's refused when the function returns one of these checkpoin
 
 A blocking `DurableSubscriptionModel` hands the MongoDB model a dynamic start that returns the checkpoint in its
 `CheckpointStorage`. A subscription whose storage holds a catch-up's checkpoint now stops in the same
-way, where it skipped the history before. A Spring Boot starter subscription gets there when a catch-up's replay stopped
-before it went live and the subscription's start then changed to `DEFAULT`, as
-[#1346](https://github.com/johanhaleby/occurrent/issues/1346) describes. `ReactorDurableSubscriptionModel` hands the
+way, where it skipped the history before. A blocking Spring Boot subscription with `startAt` unset doesn't get there,
+since it resumes from such a checkpoint, see
+[A subscription with no start position resumes from a catch-up's checkpoint](#a-subscription-with-no-start-position-resumes-from-a-catch-ups-checkpoint).
+`ReactorDurableSubscriptionModel` hands the
 reactor model the stored checkpoint itself, so a subscription at the model default whose storage holds one of these
 stops too, its handle fails with the `UnsupportedStartAtException`, and the checkpoint stays in storage.
 
@@ -1474,16 +1478,15 @@ any position other than the beginning could skip that event.
     `@Snapshot` with no start attribute is one of them.
   - `startAt = BEGINNING_OF_TIME`, `startAtISO8601` and `startAtTimeEpochMillis` on `@StreamSubscription`, under the
     default `resumeBehavior`.
-  - `startAt = DEFAULT` on `@DcbSubscription`, on a `@Projection` that returns a `DcbProjection` and on a `@Snapshot`
-    that returns a `DcbSnapshotView`, whatever the `resumeBehavior`. So a `@DcbSubscription` or a `@Projection` that
-    returns a `DcbProjection` is one of them when it has no start attribute. Under the default `resumeBehavior`
-    their `startAt = BEGINNING` reads it too, and so do `startAtDcbPosition` on `@DcbSubscription` and
-    `startAtGlobalPosition` on the other two.
+  - `startAt = DEFAULT` on every annotation, whatever the `resumeBehavior`. So every subscription with no start
+    attribute is one of them, apart from a `@Snapshot`, which starts at `BEGINNING` and is in the first item. On a
+    `@DcbSubscription`, a `@Projection` that returns a `DcbProjection` and a `@Snapshot` that returns a
+    `DcbSnapshotView`, under the default `resumeBehavior`, `startAt = BEGINNING` reads it too, and so do
+    `startAtDcbPosition` on `@DcbSubscription` and `startAtGlobalPosition` on the other two.
   - Every start, `NOW` and `DEFAULT` included, when a `SubscriptionResumePoints` bean answers a resume token for the
     subscription.
 
-  Any other blocking subscription with `startAt = DEFAULT` is paused as above instead, and the application starts. A
-  `NOW` start that no `SubscriptionResumePoints` bean answers for doesn't read the stored token and opens at the
+  A `NOW` start that no `SubscriptionResumePoints` bean answers for doesn't read the stored token and opens at the
   present. Every reactive subscription is paused as above.
 
   A subscription with `startupMode = BACKGROUND` on the annotation whose stored resume token is gone is paused
@@ -1697,6 +1700,46 @@ On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription 
 checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
 written while the application was down, and runs on every instance. Delete the old checkpoint of a subscription you
 later switch to `DEFAULT`, or it resumes from that position.
+
+## A subscription with no start position resumes from a catch-up's checkpoint
+
+On the blocking starter, a subscription with `startAt` unset didn't resume from a checkpoint that a catch-up stored. A
+catch-up stores a `GlobalCheckpoint` or a `CatchupTimeCheckpoint` while it replays, and that checkpoint stays in storage
+when the replay stops before it goes live. In 0.34.0 the subscription then opened the change stream at the present, and
+skipped every event written before it, the ones written while the application was down included, with no error. It now
+resumes the replay from that checkpoint and goes live after it.
+
+### Who is affected
+
+Every application on the blocking starter with one of these, when a catch-up stored its checkpoint:
+
+- a `@Subscription`, `@StreamSubscription` or `@Saga` with no `startAt`
+- a `@Projection` with no `startAt` that doesn't return a `DcbProjection`
+- a `@Snapshot` with `startAt = DEFAULT` that doesn't return a `DcbSnapshotView`
+
+Storage holds such a checkpoint when the subscription ran from `startAt = BEGINNING`, a global position or a time, the
+application stopped before the replay went live, and the start was changed to `DEFAULT` before the next boot. A
+competing-consumer node that takes such a subscription over reads the same checkpoint.
+
+The reactive starter, a `@DcbSubscription`, and a projection or snapshot over DCB already resumed from it.
+
+### What changes
+
+- With a catch-up's checkpoint stored, the subscription replays from it and then goes live, so it's delivered the
+  events written since, each once.
+- With nothing stored, it starts at the present without a replay, as before.
+- With a live checkpoint stored, it resumes from it, as before. When MongoDB no longer has the history back to that
+  checkpoint, the start throws `CatchupCannotResumeException` and the application doesn't start, the same as a
+  `BEGINNING` start that restarts from its checkpoint. With `startupMode = BACKGROUND` the subscription is paused
+  instead, see
+  [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
+- A `@Projection` with `recordAppliedAppends = true` and no `startAt` no longer gets the startup warning that its
+  recordings never reset, since it can replay.
+
+### What to do
+
+Nothing, unless the handler can't take the events the replay delivers. The replay can run long when the checkpoint is
+far behind. To start at the present instead, delete the stored checkpoint before the next boot.
 
 ## A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs
 
