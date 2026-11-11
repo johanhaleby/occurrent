@@ -36,6 +36,7 @@ import java.time.Duration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -152,9 +153,14 @@ class RabbitMqCloudEventSinkTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * The routing key is deliberately different from the event type, so a warning that dropped either one would
+     * fail this test instead of being covered by the other.
+     */
     @Test
-    void publish_logs_a_warning_naming_the_event_the_exchange_and_the_routing_key_for_an_unroutable_event_under_LOG_AND_CONTINUE() throws Exception {
-        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+    void publish_logs_a_warning_naming_the_event_id_the_event_type_the_exchange_and_the_routing_key_for_an_unroutable_event_under_LOG_AND_CONTINUE() throws Exception {
+        RabbitMqTopicExchangeDestinationResolver resolver = spy(new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified()));
+        doReturn(RabbitMqDestination.of(exchange, "routing.key.nobody.binds")).when(resolver).destinationFor(any());
         try (RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection(), resolver).onUnroutable(RabbitMqUnroutablePolicy.LOG_AND_CONTINUE).build()) {
             CloudEvent cloudEvent = CloudEventBuilder.v1().withId("id-4").withSource(URI.create("urn:test")).withType(NobodyListens.class.getName()).build();
 
@@ -162,9 +168,30 @@ class RabbitMqCloudEventSinkTest extends RabbitMqTestSupport {
 
             assertThat(logged.list).singleElement().satisfies(event -> {
                 assertThat(event.getLevel()).isEqualTo(Level.WARN);
-                assertThat(event.getFormattedMessage()).contains("id-4", exchange, NobodyListens.class.getName());
+                assertThat(event.getFormattedMessage()).contains(
+                        "id \"id-4\"",
+                        "type \"" + NobodyListens.class.getName() + "\"",
+                        "exchange \"" + exchange + "\"",
+                        "routing key \"routing.key.nobody.binds\"");
             });
         }
+    }
+
+    /**
+     * Only a return is accepted under {@link RabbitMqUnroutablePolicy#LOG_AND_CONTINUE}. A publish on a closed sink
+     * is a failure that is not a return, so it has to keep throwing, and nothing is logged as if it were dropped.
+     */
+    @Test
+    void publish_still_throws_a_RabbitMqPublishException_that_is_not_an_unroutable_return_under_LOG_AND_CONTINUE_when_the_failure_is_not_a_return() throws Exception {
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection(), resolver).onUnroutable(RabbitMqUnroutablePolicy.LOG_AND_CONTINUE).build();
+        sink.close();
+        CloudEvent cloudEvent = CloudEventBuilder.v1().withId("id-6").withSource(URI.create("urn:test")).withType(OrderPlaced.class.getName()).build();
+
+        assertThatThrownBy(() -> sink.publish(cloudEvent))
+                .isInstanceOf(RabbitMqPublishException.class)
+                .isNotInstanceOf(RabbitMqUnroutableEventException.class);
+        assertThat(logged.list).isEmpty();
     }
 
     @Test
