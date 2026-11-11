@@ -25,6 +25,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatcher;
 import org.occurrent.application.service.reactor.ReactiveTransactionExecutor;
@@ -767,8 +768,8 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
         // Opens the transaction it begins unless told to join
         @Override
-        public <T> Mono<T> inTransactionTellingIfOpened(Function<Boolean, Mono<T>> action) {
-            return inTransaction(() -> Mono.defer(() -> action.apply(!joinsATransaction)));
+        public <T> Mono<T> inTransactionTellingIfOpened(Function<ExecutorScope, Mono<T>> action) {
+            return inTransaction(() -> Mono.defer(() -> action.apply(new ExecutorScope(!joinsATransaction, false))));
         }
 
         @Override

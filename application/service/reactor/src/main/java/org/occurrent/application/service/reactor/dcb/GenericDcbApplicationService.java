@@ -177,10 +177,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             // transaction executor to open, and the append keeps its prior semantics. The append's condition holds the read's
             // token, and a failed condition goes to the retry around this, which can read and decide again.
             Mono<Result<E>> attempt = dispatchSynchronously
-                    ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> Mono.defer(() -> failureAfterWrite.isHeld()
+                    ? transactionExecutor.inTransactionTellingIfOpened(scope -> Mono.defer(() -> failureAfterWrite.isHeld()
                             // Before the read, so a run after the stand-in doesn't run the domain function again
                             ? Mono.<Result<E>>empty()
-                            : readAndDecide.apply(openedTransaction).flatMap(decision -> appendAndDispatch.apply(decision, openedTransaction))))
+                            : readAndDecide.apply(scope.openedTransaction()).flatMap(decision -> appendAndDispatch.apply(decision, scope.openedTransaction()))))
                     : readAndDecide.apply(false).flatMap(decision -> appendAndDispatch.apply(decision, false));
             // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
             return attempt.onErrorResume(failureAfterWrite::isHeldAfter, failure -> Mono.empty())

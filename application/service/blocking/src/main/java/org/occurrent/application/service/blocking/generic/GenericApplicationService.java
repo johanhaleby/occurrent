@@ -176,7 +176,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             // Without synchronous subscriptions there is nothing extra to make atomic, so the write keeps exactly the
             // semantics it had before this feature and applications that do not use it pay no transaction overhead.
             try {
-                return failureAfterWrite.attemptOrFailure(dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(readDecideWrite) : readDecideWrite.apply(false));
+                return failureAfterWrite.attemptOrFailure(dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(scope -> readDecideWrite.apply(scope.openedTransaction())) : readDecideWrite.apply(false));
             } catch (Throwable thrown) {
                 // The retry gets the failure itself, so its listeners and error mapper see it. When it's held, nothing says a
                 // transaction of this attempt undid the write, and the shutdown predicate stops the retry on it.

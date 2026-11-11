@@ -28,6 +28,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatcher;
@@ -137,8 +138,8 @@ class ReactiveGenericDcbApplicationServiceSynchronousSubscriptionsTest {
     void tells_the_dispatcher_there_is_a_transaction_when_the_executor_tells_the_attempt_that_it_opened_one() {
         ReactiveTransactionExecutor executor = new JoiningExecutor(false) {
             @Override
-            public <T> Mono<T> inTransactionTellingIfOpened(Function<Boolean, Mono<T>> action) {
-                return inTransaction(() -> action.apply(true));
+            public <T> Mono<T> inTransactionTellingIfOpened(Function<ExecutorScope, Mono<T>> action) {
+                return inTransaction(() -> action.apply(new ExecutorScope(true, false)));
             }
         };
 

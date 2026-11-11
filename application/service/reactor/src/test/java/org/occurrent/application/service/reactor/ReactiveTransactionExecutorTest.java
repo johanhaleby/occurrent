@@ -16,6 +16,7 @@
 
 package org.occurrent.application.service.reactor;
 
+import org.occurrent.application.service.ExecutorScope;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -45,7 +46,7 @@ class ReactiveTransactionExecutorTest {
             }
         };
 
-        assertThat(executor.<Boolean>inTransactionTellingIfOpened(Mono::just).block()).isTrue();
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(scope -> Mono.just(scope.openedTransaction())).block()).isTrue();
     }
 
     @Test
@@ -62,7 +63,7 @@ class ReactiveTransactionExecutorTest {
             }
         };
 
-        assertThat(executor.<Boolean>inTransactionTellingIfOpened(Mono::just).block()).isFalse();
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(scope -> Mono.just(scope.openedTransaction())).block()).isFalse();
     }
 
     @Test
@@ -79,6 +80,11 @@ class ReactiveTransactionExecutorTest {
             }
         };
 
-        assertThat(executor.<Boolean>inTransactionTellingIfOpened(Mono::just).block()).isFalse();
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(scope -> Mono.just(scope.openedTransaction())).block()).isFalse();
+    }
+
+    @Test
+    void the_default_tells_the_action_that_this_call_started_no_synchronization() {
+        assertThat(ReactiveTransactionExecutor.noTransaction().<Boolean>inTransactionTellingIfOpened(scope -> Mono.just(scope.startedSynchronization())).block()).isFalse();
     }
 }

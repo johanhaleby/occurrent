@@ -206,7 +206,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     // A failure of the domain function goes through the executor unless the executor reports a transaction both
                     // before and inside the action and didn't open it
                     boolean transactionalBefore = transactionExecutor.isTransactional();
-                    Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> {
+                    Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransactionTellingIfOpened(scope -> {
                         if (failureAfterWrite.isHeld()) {
                             // Before the read, so a run after the stand-in doesn't run the domain function again
                             return new Attempt<>(Optional.empty(), List.of());
@@ -215,17 +215,17 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                         failureAfterWrite.keepBeforeWrite(null);
                         final Optional<Decision<E>> decision;
                         try {
-                            decision = readAndDecide.apply(openedTransaction);
+                            decision = readAndDecide.apply(scope.openedTransaction());
                         } catch (Throwable failure) {
                             // Throwable, since a domain function in Kotlin can throw a checked exception
-                            if (openedTransaction || !transactionalBefore || !isTransactionalInside(failure)) {
+                            if (scope.openedTransaction() || !transactionalBefore || !isTransactionalInside(failure)) {
                                 throw FailureAfterWrite.<RuntimeException>sneakyThrow(failure);
                             }
                             // Going around the executor keeps the failure from marking a transaction it joined rollback-only
                             failureAfterWrite.keepBeforeWrite(failure);
                             return new Attempt<>(Optional.empty(), List.of());
                         }
-                        return decision.map(it -> appendAndDispatch.apply(it, openedTransaction)).orElseGet(() -> new Attempt<>(Optional.empty(), List.of()));
+                        return decision.map(it -> appendAndDispatch.apply(it, scope.openedTransaction())).orElseGet(() -> new Attempt<>(Optional.empty(), List.of()));
                     });
                     return failureAfterWrite.attemptOrFailure(attempt);
                 }

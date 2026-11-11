@@ -156,7 +156,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                                     });
                         })));
             });
-            Mono<Result<E>> attempt = dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(readDecideWriteUnit) : readDecideWriteUnit.apply(false);
+            Mono<Result<E>> attempt = dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(scope -> readDecideWriteUnit.apply(scope.openedTransaction())) : readDecideWriteUnit.apply(false);
             // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
             return attempt.onErrorResume(failureAfterWrite::isHeldAfter, failure -> Mono.empty())
                     .retryWhen(retry)

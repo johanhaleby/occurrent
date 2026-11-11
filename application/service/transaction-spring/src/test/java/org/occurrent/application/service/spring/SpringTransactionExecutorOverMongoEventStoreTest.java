@@ -28,6 +28,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
@@ -316,14 +317,14 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
     void the_action_is_told_that_the_executor_opened_a_transaction_when_none_is_open() {
         var executor = new SpringTransactionExecutor(transactionManager);
 
-        assertThat(executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)).isTrue();
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(ExecutorScope::openedTransaction)).isTrue();
     }
 
     @Test
     void the_action_is_told_that_the_executor_opened_a_transaction_under_propagation_requires_new_in_the_callers_transaction() {
         var executor = new SpringTransactionExecutor(templateWith(TransactionDefinition.PROPAGATION_REQUIRES_NEW));
 
-        boolean opened = requireNonNull(new TransactionTemplate(transactionManager).execute(status -> executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)));
+        boolean opened = requireNonNull(new TransactionTemplate(transactionManager).execute(status -> executor.<Boolean>inTransactionTellingIfOpened(ExecutorScope::openedTransaction)));
 
         assertThat(opened).isTrue();
     }
@@ -332,7 +333,7 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
     void the_action_is_told_that_the_executor_opened_no_transaction_when_it_joins_the_callers() {
         var executor = new SpringTransactionExecutor(transactionManager);
 
-        boolean opened = requireNonNull(new TransactionTemplate(transactionManager).execute(status -> executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)));
+        boolean opened = requireNonNull(new TransactionTemplate(transactionManager).execute(status -> executor.<Boolean>inTransactionTellingIfOpened(ExecutorScope::openedTransaction)));
 
         assertThat(opened).isFalse();
     }
@@ -341,7 +342,7 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
     void the_action_is_told_that_the_executor_opened_no_transaction_under_propagation_not_supported() {
         var executor = new SpringTransactionExecutor(templateWith(TransactionDefinition.PROPAGATION_NOT_SUPPORTED));
 
-        assertThat(executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)).isFalse();
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(ExecutorScope::openedTransaction)).isFalse();
     }
 
     // Subscription a throws and b records the ids it receives

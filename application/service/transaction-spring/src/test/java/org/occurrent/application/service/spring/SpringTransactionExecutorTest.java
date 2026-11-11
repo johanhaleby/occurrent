@@ -25,6 +25,7 @@ import org.bson.BsonString;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
@@ -43,6 +44,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SpringTransactionExecutorTest {
@@ -435,6 +437,77 @@ class SpringTransactionExecutorTest {
         // Then
         assertThat(result).isEqualTo("done");
         assertThat(attempts).hasValue(6);
+    }
+
+    @Test
+    void the_action_is_told_that_the_executor_started_the_synchronization_under_propagation_supports_with_no_caller_scope() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(supports(new StubTransactionManager()));
+
+        // When
+        ExecutorScope scope = executor.inTransactionTellingIfOpened(it -> it);
+
+        // Then
+        assertThat(scope).isEqualTo(new ExecutorScope(false, true));
+    }
+
+    @Test
+    void the_action_is_told_that_the_executor_started_no_synchronization_under_propagation_supports_in_a_callers_supports_scope() {
+        // Given
+        StubTransactionManager transactionManager = new StubTransactionManager();
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(supports(transactionManager));
+
+        // When
+        ExecutorScope scope = supports(transactionManager).execute(status -> executor.inTransactionTellingIfOpened(it -> it));
+
+        // Then
+        assertThat(scope).isEqualTo(new ExecutorScope(false, false));
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_after_a_transient_conflict_under_propagation_supports_with_no_caller_scope() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(supports(new StubTransactionManager()));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        String result = executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        });
+
+        // Then
+        assertThat(result).isEqualTo("done");
+        assertThat(attempts).hasValue(2);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_and_gives_a_transient_conflict_to_the_caller_in_a_callers_supports_scope() {
+        // Given
+        StubTransactionManager transactionManager = new StubTransactionManager();
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(supports(transactionManager));
+        AtomicInteger attempts = new AtomicInteger();
+        TransientDataAccessResourceException conflict = new TransientDataAccessResourceException("conflict");
+
+        // When
+        Throwable thrown = catchThrowable(() -> supports(transactionManager).execute(status -> executor.inTransaction(() -> {
+            if (attempts.incrementAndGet() > 1) {
+                throw new AssertionError("the action ran again after " + conflict);
+            }
+            throw conflict;
+        })));
+
+        // Then
+        assertThat(thrown).isSameAs(conflict);
+        assertThat(attempts).hasValue(1);
+    }
+
+    private static TransactionTemplate supports(PlatformTransactionManager transactionManager) {
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_SUPPORTS);
+        return transactionTemplate;
     }
 
     // The callback fails the test if it runs a second time, so a retry that should not happen fails on this
