@@ -25,6 +25,7 @@ import org.bson.BsonString;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -36,11 +37,16 @@ import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -524,6 +530,67 @@ class SpringTransactionExecutorTest {
         assertThat(attempts).hasValue(2);
     }
 
+    @Test
+    void an_executor_whose_retry_policy_isnt_a_retry_runs_the_action_once_in_a_callers_supports_scope() {
+        // Given
+        StubTransactionManager transactionManager = new StubTransactionManager();
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(supports(transactionManager), new RunsUpToThreeTimes());
+        AtomicInteger attempts = new AtomicInteger();
+        TransientDataAccessResourceException conflict = new TransientDataAccessResourceException("conflict");
+
+        // When
+        Throwable thrown = catchThrowable(() -> supports(transactionManager).execute(status -> executor.inTransaction(() -> {
+            attempts.incrementAndGet();
+            throw conflict;
+        })));
+
+        // Then
+        assertThat(attempts).hasValue(1);
+        assertThat(thrown).isSameAs(conflict);
+    }
+
+    @Test
+    void an_executor_runs_the_action_once_when_it_joins_a_transaction_that_a_caller_opened_without_synchronization() {
+        // Given
+        BindingTransactionManager callersTransactionManager = new BindingTransactionManager();
+        callersTransactionManager.setTransactionSynchronization(AbstractPlatformTransactionManager.SYNCHRONIZATION_NEVER);
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new BindingTransactionManager(), RetryStrategy.fixed(1).maxAttempts(3));
+        AtomicInteger attempts = new AtomicInteger();
+        TransientDataAccessResourceException conflict = new TransientDataAccessResourceException("conflict");
+
+        // When
+        Throwable thrown = catchThrowable(() -> new TransactionTemplate(callersTransactionManager).execute(status -> executor.inTransaction(() -> {
+            attempts.incrementAndGet();
+            throw conflict;
+        })));
+
+        // Then
+        assertThat(attempts).hasValue(1);
+        assertThat(thrown).isSameAs(conflict);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_on_a_transaction_manager_whose_status_isnt_springs_default_one() {
+        // Given
+        SpringTransactionExecutor executor = new SpringTransactionExecutor(new SynchronizingTransactionManager());
+        AtomicInteger attempts = new AtomicInteger();
+        List<ExecutorScope> scopes = new ArrayList<>();
+
+        // When
+        Throwable thrown = catchThrowable(() -> executor.inTransactionTellingIfOpened(scope -> {
+            scopes.add(scope);
+            if (attempts.incrementAndGet() == 1) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        }));
+
+        // Then
+        assertThat(thrown).as("[failure reaching the caller]").isNull();
+        assertThat(attempts).hasValue(2);
+        assertThat(scopes).allMatch(ExecutorScope::startedSynchronization);
+    }
+
     private static TransactionTemplate supports(PlatformTransactionManager transactionManager) {
         TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
         transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_SUPPORTS);
@@ -590,7 +657,7 @@ class SpringTransactionExecutorTest {
         }
 
         void failNextCommits(TransactionSystemException... commitFailures) {
-            this.commitFailures.addAll(java.util.List.of(commitFailures));
+            this.commitFailures.addAll(List.of(commitFailures));
         }
 
         @Override
@@ -612,6 +679,98 @@ class SpringTransactionExecutorTest {
 
         @Override
         protected void doRollback(DefaultTransactionStatus status) {
+        }
+    }
+
+    // A retry policy of the application's own, which this executor can't give a retry predicate
+    private static final class RunsUpToThreeTimes implements RetryStrategy {
+        @Override
+        public <T extends @Nullable Object> T execute(Supplier<T> supplier) {
+            for (int run = 1; ; run++) {
+                try {
+                    return supplier.get();
+                } catch (RuntimeException e) {
+                    if (run == 3) {
+                        throw e;
+                    }
+                }
+            }
+        }
+    }
+
+    // Binds its transaction as a resource and joins one already bound, also when the manager that bound it doesn't
+    // synchronize, as MongoTransactionManager does with a session
+    private static final class BindingTransactionManager extends AbstractPlatformTransactionManager {
+        private static final Object RESOURCE_KEY = BindingTransactionManager.class;
+
+        @Override
+        protected Object doGetTransaction() {
+            return new Object();
+        }
+
+        @Override
+        protected boolean isExistingTransaction(Object transaction) {
+            return TransactionSynchronizationManager.hasResource(RESOURCE_KEY);
+        }
+
+        @Override
+        protected void doBegin(Object transaction, TransactionDefinition definition) {
+            TransactionSynchronizationManager.bindResource(RESOURCE_KEY, transaction);
+        }
+
+        @Override
+        protected void doCommit(DefaultTransactionStatus status) {
+        }
+
+        @Override
+        protected void doRollback(DefaultTransactionStatus status) {
+        }
+
+        @Override
+        protected void doSetRollbackOnly(DefaultTransactionStatus status) {
+        }
+
+        @Override
+        protected void doCleanupAfterCompletion(Object transaction) {
+            TransactionSynchronizationManager.unbindResourceIfPossible(RESOURCE_KEY);
+        }
+    }
+
+    // Starts a synchronization when none is active and returns a status that isn't a DefaultTransactionStatus, as
+    // ChainedTransactionManager does
+    private static final class SynchronizingTransactionManager implements PlatformTransactionManager {
+        @Override
+        public TransactionStatus getTransaction(@Nullable TransactionDefinition definition) {
+            boolean newSynchronization = !TransactionSynchronizationManager.isSynchronizationActive();
+            if (newSynchronization) {
+                TransactionSynchronizationManager.initSynchronization();
+            }
+            return new SynchronizingStatus(newSynchronization);
+        }
+
+        @Override
+        public void commit(TransactionStatus status) {
+            complete(status);
+        }
+
+        @Override
+        public void rollback(TransactionStatus status) {
+            complete(status);
+        }
+
+        private static void complete(TransactionStatus status) {
+            if (((SynchronizingStatus) status).newSynchronization) {
+                TransactionSynchronizationManager.clear();
+            }
+        }
+
+        private static final class SynchronizingStatus extends SimpleTransactionStatus {
+            private final boolean newSynchronization;
+
+            SynchronizingStatus(boolean newSynchronization) {
+                super(true);
+                this.newSynchronization = newSynchronization;
+            }
         }
     }
 }

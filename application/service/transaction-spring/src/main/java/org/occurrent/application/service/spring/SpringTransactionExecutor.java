@@ -40,6 +40,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -66,8 +67,8 @@ import java.util.function.Supplier;
 public class SpringTransactionExecutor implements TransactionExecutor {
 
     /**
-     * Retries a conflict between concurrent appends, but only when no transaction was open on entry and the attempt ran
-     * outside a transaction synchronization the caller started. A store that joins an open transaction can't retry one
+     * Retries a conflict between concurrent appends, but only when no transaction was open on entry and the attempt
+     * joined no transaction and ran outside a transaction synchronization the caller started. A store that joins an open transaction can't retry one
      * itself, and only its owner can start a fresh one. See ADR 0074.
      * <p>
      * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
@@ -190,10 +191,12 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * action is told this executor started the synchronization only when the status says its
      * {@link TransactionTemplate} started it for this attempt, so Spring clears it when the attempt ends.
      * <p>
-     * The conflict retry doesn't run when a transaction is open on entry, or after an attempt that ran in a transaction
-     * synchronization the caller started, such as a caller's scope on {@code PROPAGATION_SUPPORTS}. A MongoDB session
-     * that a read binds to that synchronization stays bound until the caller's scope ends, so running the action again
-     * would run it in the session the conflict aborted. An attempt that starts a synchronization of its own is retried.
+     * The conflict retry doesn't run when a transaction is open on entry, or after an attempt that joined a transaction or
+     * ran in a transaction synchronization the caller started, such as a caller's scope on {@code PROPAGATION_SUPPORTS}.
+     * A MongoDB session that a read binds to that synchronization stays bound until the caller's scope ends, so running
+     * the action again would run it in the session the conflict aborted. An attempt that starts a synchronization of its
+     * own and joins no transaction is retried. A retry policy that isn't a {@link RetryStrategy.Retry} can't be told to
+     * stop, so with one the action runs once when a synchronization is active on entry.
      */
     @Override
     public <T> T inTransactionTellingIfOpened(Function<ExecutorScope, T> action) {
@@ -202,28 +205,42 @@ public class SpringTransactionExecutor implements TransactionExecutor {
             // A transaction is already open, so this executor takes it as the caller's and runs the action once, also on a
             // propagation that opens a new one. A conflict aborts a joined transaction, which only its owner can start
             // again, so the error goes to that owner. See ADR 0074.
-            return transactionTemplate.execute(status -> action.apply(scopeOf(status)));
+            return transactionTemplate.execute(status -> action.apply(scopeOf(status, true)));
         }
-        // A session a read binds to a caller's synchronization stays bound until the caller's scope ends, so an attempt
-        // that ran in that synchronization isn't run again
-        AtomicBoolean inCallersSynchronization = new AtomicBoolean();
+        // A session a read binds to a caller's synchronization stays bound until the caller's scope ends, and a joined
+        // transaction is started again only by whoever opened it, so an attempt that ran in either isn't run again
+        AtomicBoolean synchronizationActiveBefore = new AtomicBoolean();
+        AtomicBoolean inCallersScope = new AtomicBoolean();
         Function<TransactionStatus, T> attempt = status -> {
-            ExecutorScope scope = scopeOf(status);
-            inCallersSynchronization.set(TransactionSynchronizationManager.isSynchronizationActive() && !scope.startedSynchronization());
+            ExecutorScope scope = scopeOf(status, synchronizationActiveBefore.get());
+            boolean joinedTransaction = status.hasTransaction() && !status.isNewTransaction();
+            inCallersScope.set(joinedTransaction || TransactionSynchronizationManager.isSynchronizationActive() && !scope.startedSynchronization());
             return action.apply(scope);
         };
-        Function<Predicate<Throwable>, Predicate<Throwable>> outsideCallersSynchronization = retryable -> throwable -> !inCallersSynchronization.get() && retryable.test(throwable);
+        BooleanSupplier beforeAttempt = () -> {
+            boolean synchronizationActive = TransactionSynchronizationManager.isSynchronizationActive();
+            synchronizationActiveBefore.set(synchronizationActive);
+            inCallersScope.set(synchronizationActive);
+            return synchronizationActive;
+        };
+        Function<Predicate<Throwable>, Predicate<Throwable>> outsideCallersScope = retryable -> throwable -> !inCallersScope.get() && retryable.test(throwable);
         if (!stopAfterDefaultDeadline) {
-            RetryStrategy retry = conflictRetry instanceof RetryStrategy.Retry conflictRetryWithPredicate ? conflictRetryWithPredicate.mapRetryPredicate(outsideCallersSynchronization) : conflictRetry;
-            return retry.execute(() -> {
-                inCallersSynchronization.set(TransactionSynchronizationManager.isSynchronizationActive());
+            if (!(conflictRetry instanceof RetryStrategy.Retry conflictRetryWithPredicate)) {
+                // A policy with no retry predicate can't be stopped after an attempt in the caller's scope
+                return beforeAttempt.getAsBoolean() ? transactionTemplate.execute(attempt::apply) : conflictRetry.execute(() -> {
+                    beforeAttempt.getAsBoolean();
+                    return transactionTemplate.execute(attempt::apply);
+                });
+            }
+            return conflictRetryWithPredicate.mapRetryPredicate(outsideCallersScope).execute(() -> {
+                beforeAttempt.getAsBoolean();
                 return transactionTemplate.execute(attempt::apply);
             });
         }
         AtomicInteger failedCommits = new AtomicInteger();
-        return DEFAULT_CONFLICT_RETRY.mapRetryPredicate(withinDeadline()).mapRetryPredicate(outsideCallersSynchronization).execute(() -> {
+        return DEFAULT_CONFLICT_RETRY.mapRetryPredicate(withinDeadline()).mapRetryPredicate(outsideCallersScope).execute(() -> {
             AtomicReference<Throwable> actionFailure = new AtomicReference<>();
-            inCallersSynchronization.set(TransactionSynchronizationManager.isSynchronizationActive());
+            beforeAttempt.getAsBoolean();
             try {
                 return transactionTemplate.execute(status -> {
                     try {
@@ -239,10 +256,14 @@ public class SpringTransactionExecutor implements TransactionExecutor {
         });
     }
 
-    // Spring's own status says whether this attempt's getTransaction started the synchronization, which an entry check
-    // can't tell for a propagation that suspends the caller's synchronization and starts its own
-    private static ExecutorScope scopeOf(TransactionStatus status) {
-        return new ExecutorScope(status.isNewTransaction(), status instanceof DefaultTransactionStatus defaultStatus && defaultStatus.isNewSynchronization());
+    // Spring's own status says whether this attempt's getTransaction started the synchronization, also for a propagation
+    // that suspends the caller's synchronization and starts its own. For a status of another transaction manager, such as
+    // ChainedTransactionManager, only a synchronization that became active during the attempt tells
+    private static ExecutorScope scopeOf(TransactionStatus status, boolean synchronizationActiveBefore) {
+        boolean startedSynchronization = status instanceof DefaultTransactionStatus defaultStatus
+                ? defaultStatus.isNewSynchronization()
+                : !synchronizationActiveBefore && TransactionSynchronizationManager.isSynchronizationActive();
+        return new ExecutorScope(status.isNewTransaction(), startedSynchronization);
     }
 
     private static TransactionSystemException commitFailed(TransactionSystemException failure, AtomicInteger failedCommits) {
