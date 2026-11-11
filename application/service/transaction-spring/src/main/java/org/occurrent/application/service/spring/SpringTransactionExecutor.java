@@ -68,8 +68,8 @@ public class SpringTransactionExecutor implements TransactionExecutor {
 
     /**
      * Retries a conflict between concurrent appends, but only when no transaction was open on entry and the attempt
-     * joined no transaction and ran outside a transaction synchronization the caller started. A store that joins an open transaction can't retry one
-     * itself, and only its owner can start a fresh one. See ADR 0074.
+     * joined no transaction and ran outside a transaction synchronization the caller started. A store that joins an open
+     * transaction can't retry one itself, and only its owner can start a fresh one. See ADR 0074.
      * <p>
      * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
      * stands in for exactly that retry once the store has to give it up. Appends of the same type increment the same
