@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
@@ -756,11 +757,11 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
         // Opens the transaction it begins
         @Override
-        public <T> T inTransactionTellingIfOpened(Function<Boolean, T> action) {
+        public <T> T inTransactionTellingIfOpened(Function<ExecutorScope, T> action) {
             if (infersWhetherItOpened) {
                 return TransactionExecutor.super.inTransactionTellingIfOpened(action);
             }
-            return inTransaction(() -> action.apply(true));
+            return inTransaction(() -> action.apply(new ExecutorScope(true, false)));
         }
 
         @Override

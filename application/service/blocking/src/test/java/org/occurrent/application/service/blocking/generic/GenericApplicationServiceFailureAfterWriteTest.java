@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.blocking.ExecuteOptions;
@@ -594,8 +595,8 @@ class GenericApplicationServiceFailureAfterWriteTest {
     private static final class SaysItOpensTransaction extends OpensTransaction {
 
         @Override
-        public <T> T inTransactionTellingIfOpened(Function<Boolean, T> action) {
-            return inTransaction(() -> action.apply(true));
+        public <T> T inTransactionTellingIfOpened(Function<ExecutorScope, T> action) {
+            return inTransaction(() -> action.apply(new ExecutorScope(true, false)));
         }
     }
 

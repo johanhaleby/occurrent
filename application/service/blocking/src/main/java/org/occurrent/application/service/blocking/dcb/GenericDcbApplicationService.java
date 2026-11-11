@@ -201,7 +201,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     // A failure of the domain function goes through the executor unless the executor reports a transaction both
                     // before and inside the action and didn't open it
                     boolean transactionalBefore = transactionExecutor.isTransactional();
-                    Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> {
+                    Attempt<Optional<DcbAppendResult>, List<E>> attempt = transactionExecutor.inTransactionTellingIfOpened(scope -> {
                         if (failureAfterWrite.isHeld()) {
                             // Before the read, so a run after the stand-in doesn't run the domain function again
                             return new Attempt<>(Optional.empty(), List.of());
@@ -213,14 +213,14 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                             decision = readAndDecide.get();
                         } catch (Throwable failure) {
                             // Throwable, since a domain function in Kotlin can throw a checked exception
-                            if (openedTransaction || !transactionalBefore || !isTransactionalInside(failure)) {
+                            if (scope.openedTransaction() || !transactionalBefore || !isTransactionalInside(failure)) {
                                 throw FailureAfterWrite.<RuntimeException>sneakyThrow(failure);
                             }
                             // Going around the executor keeps the failure from marking a transaction it joined rollback-only
                             failureAfterWrite.keepBeforeWrite(failure);
                             return new Attempt<>(Optional.empty(), List.of());
                         }
-                        return decision.map(it -> appendAndDispatch.apply(it, openedTransaction)).orElseGet(() -> new Attempt<>(Optional.empty(), List.of()));
+                        return decision.map(it -> appendAndDispatch.apply(it, scope.openedTransaction())).orElseGet(() -> new Attempt<>(Optional.empty(), List.of()));
                     });
                     return failureAfterWrite.attemptOrFailure(attempt);
                 }
@@ -235,7 +235,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
                 // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
                 // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0074.
-                return failureAfterWrite.attemptOrFailure(dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> appendAndDispatch.apply(decision.get(), openedTransaction)) : appendAndDispatch.apply(decision.get(), false));
+                return failureAfterWrite.attemptOrFailure(dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(scope -> appendAndDispatch.apply(decision.get(), scope.openedTransaction())) : appendAndDispatch.apply(decision.get(), false));
             } catch (Throwable thrown) {
                 // The retry gets the failure itself, so its listeners and error mapper see it. When it's held, nothing says a
                 // transaction of this attempt undid the write, and the shutdown predicate stops the retry on it. A failure kept

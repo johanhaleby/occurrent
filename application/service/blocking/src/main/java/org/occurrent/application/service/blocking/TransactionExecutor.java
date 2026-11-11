@@ -17,6 +17,7 @@
 package org.occurrent.application.service.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.application.service.ExecutorScope;
 
 import java.util.Objects;
 import java.util.function.Function;
@@ -68,17 +69,18 @@ public interface TransactionExecutor {
 
     /**
      * Runs {@code action} as {@link #inTransaction(Supplier)} does, and tells it whether this call opened the transaction
-     * it runs in. The default infers that from {@link #isTransactional()} answering {@code false} here and {@code true}
-     * inside. Override this when the implementation can tell, for example when it can suspend a transaction the caller
-     * opened and open its own, which that inference reports as joining. See ADR 165.
+     * it runs in and whether it started the transaction synchronization it runs in. The default infers the transaction
+     * from {@link #isTransactional()} answering {@code false} here and {@code true} inside, and reports that it started
+     * no synchronization. Override this when the implementation can tell, for example when it can suspend a transaction
+     * the caller opened and open its own, which that inference reports as joining. See ADR 165.
      *
-     * @param action The unit of work to run, given {@code true} if this call opened the transaction it runs in.
+     * @param action The unit of work to run, given what this call set up for it.
      * @param <T>    The result type produced by the action.
      * @return The value returned by the action.
      */
-    default <T> T inTransactionTellingIfOpened(Function<Boolean, T> action) {
+    default <T> T inTransactionTellingIfOpened(Function<ExecutorScope, T> action) {
         boolean openBefore = isTransactional();
-        return inTransaction(() -> action.apply(!openBefore && isTransactional()));
+        return inTransaction(() -> action.apply(new ExecutorScope(!openBefore && isTransactional(), false)));
     }
 
     /**

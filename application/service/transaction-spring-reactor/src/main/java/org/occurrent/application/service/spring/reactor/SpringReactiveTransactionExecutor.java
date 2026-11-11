@@ -19,10 +19,13 @@ package org.occurrent.application.service.spring.reactor;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.service.reactor.ReactiveTransactionExecutor;
 import org.springframework.dao.TransientDataAccessException;
+import org.springframework.transaction.ReactiveTransaction;
 import org.springframework.transaction.ReactiveTransactionManager;
 import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.reactive.GenericReactiveTransaction;
 import org.springframework.transaction.reactive.TransactionContextManager;
 import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
@@ -66,7 +69,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
 
     /**
      * Retries a conflict between concurrent appends, such as two contending on the same partition stream or on the
-     * same conflict marker, but only when this executor opened the transaction. The event store joins this
+     * same conflict marker, but only when the subscriber context holds no transaction context of a caller's. The event store joins this
      * transaction rather than opening its own, so it cannot retry a conflict itself: an aborted transaction can only
      * be started again by whoever owns it. Attempt count and backoff match the event store's own transient-conflict
      * retry, which this stands in for. The waiting matches the blocking {@code SpringTransactionExecutor} (ADR 0053),
@@ -138,7 +141,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * once for one command.
      *
      * @param transactionManager The reactive transaction manager to use.
-     * @param conflictRetry      The retry spec to apply when this executor opens the transaction.
+     * @param conflictRetry      The retry spec to apply when the caller has no transaction scope active.
      */
     public SpringReactiveTransactionExecutor(ReactiveTransactionManager transactionManager, Retry conflictRetry) {
         this(TransactionalOperator.create(Objects.requireNonNull(transactionManager, "transactionManager cannot be null")), conflictRetry);
@@ -150,7 +153,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * covers.
      *
      * @param transactionalOperator The transactional operator to run work through.
-     * @param conflictRetry         The retry spec to apply when this executor opens the transaction.
+     * @param conflictRetry         The retry spec to apply when the caller has no transaction scope active.
      */
     public SpringReactiveTransactionExecutor(TransactionalOperator transactionalOperator, Retry conflictRetry) {
         this(transactionalOperator, conflictRetry, false);
@@ -163,7 +166,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
     }
 
     /**
-     * The conflict-retry spec applied when this executor opens the transaction: 320 retries with exponential backoff
+     * The conflict-retry spec applied when the caller has no transaction scope active: 320 retries with exponential backoff
      * from 10ms to 500ms, about two minutes of waiting, matching the blocking executor and the event store's own
      * transient-conflict retry. It counts retries only. An executor built without a retry of its own adds a
      * 120 second deadline per subscription and a cap of three failed commits on top, which this spec does not include
@@ -178,17 +181,24 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
     @Override
     public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
         Objects.requireNonNull(action, "action cannot be null");
-        return inTransactionTellingIfOpened(openedTransaction -> action.get());
+        return inTransactionTellingIfOpened(scope -> action.get());
     }
 
     /**
      * Asks the transaction status rather than inferring it from {@link #isTransactional()}, since a caller-supplied
-     * {@link TransactionalOperator} on {@code PROPAGATION_REQUIRES_NEW} opens a transaction with one already open.
+     * {@link TransactionalOperator} on {@code PROPAGATION_REQUIRES_NEW} opens a transaction with one already open. The
+     * action is told this executor started the synchronization only when the status says its
+     * {@link TransactionalOperator} started it for this attempt.
+     * <p>
+     * The conflict retry runs only when the subscriber context holds no transaction context. A caller's
+     * {@link TransactionalOperator} puts one there on every propagation, also on one with no transaction, such as
+     * {@code PROPAGATION_SUPPORTS}. Inside it the action runs once and a conflict goes to the caller, since a MongoDB
+     * session that a read binds to the caller's scope stays bound until that scope ends.
      */
     @Override
-    public <T> Mono<T> inTransactionTellingIfOpened(Function<Boolean, Mono<T>> action) {
+    public <T> Mono<T> inTransactionTellingIfOpened(Function<ExecutorScope, Mono<T>> action) {
         Objects.requireNonNull(action, "action cannot be null");
-        Mono<T> transaction = transactionalOperator.execute(status -> Mono.defer(() -> action.apply(status.isNewTransaction()))).singleOrEmpty();
+        Mono<T> transaction = transactionalOperator.execute(status -> Mono.defer(() -> action.apply(scopeOf(status)))).singleOrEmpty();
         // currentContext() signals an error when the subscriber context carries no transaction. Spring keeps that
         // exception type private, so match it by simple name rather than swallowing every error: anything else means
         // we cannot tell who owns the transaction, and guessing "nobody" would restore the futile retry.
@@ -198,9 +208,9 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                         ? Mono.just(false)
                         : Mono.error(throwable))
                 .flatMap(ownedByCaller -> ownedByCaller
-                        // A transaction is already open, so this executor takes it as the caller's and runs the action
-                        // once, also on a propagation that opens a new one. A conflict aborts a joined transaction, which
-                        // only its owner can start again, so the error goes to that owner. See ADR 0074.
+                        // A caller's operator put the context here, with or without a transaction, so the caller owns
+                        // this scope and the action runs once, also on a propagation that opens a new transaction. Only
+                        // the owner of a scope can start it again, so the error goes to the caller. See ADR 0074.
                         ? transaction
                         : Mono.defer(() -> {
                             if (!stopAfterDefaultDeadline) {
@@ -208,12 +218,18 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                             }
                             AtomicInteger failedCommits = new AtomicInteger();
                             AtomicReference<Throwable> actionFailure = new AtomicReference<>();
-                            return transactionalOperator.execute(status -> Mono.defer(() -> action.apply(status.isNewTransaction()))
+                            return transactionalOperator.execute(status -> Mono.defer(() -> action.apply(scopeOf(status)))
                                             .doOnError(actionFailure::set))
                                     .singleOrEmpty()
                                     .onErrorMap(TransactionSystemException.class, failure -> failure == actionFailure.get() ? failure : commitFailed(failure, failedCommits))
                                     .retryWhen(withinDeadline());
                         }));
+    }
+
+    // Spring's own status says whether this attempt's transaction started the synchronization, which an entry check
+    // can't tell for a propagation that suspends the caller's synchronization and starts its own
+    private static ExecutorScope scopeOf(ReactiveTransaction status) {
+        return new ExecutorScope(status.isNewTransaction(), status instanceof GenericReactiveTransaction genericStatus && genericStatus.isNewSynchronization());
     }
 
     private static TransactionSystemException commitFailed(TransactionSystemException failure, AtomicInteger failedCommits) {

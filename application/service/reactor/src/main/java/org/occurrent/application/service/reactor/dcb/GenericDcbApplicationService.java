@@ -177,16 +177,16 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     // that costs nothing, since a store already reports no marker versions in the open transaction.
                     // An executor that doesn't allow a read before it gets the read here too, for example under a caller's scope
                     // that has synchronization but no transaction, where a read would bind a session the executor then fails on.
-                    return transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> Mono.defer(() -> failureAfterWrite.isHeld()
+                    return transactionExecutor.inTransactionTellingIfOpened(scope -> Mono.defer(() -> failureAfterWrite.isHeld()
                             // Before the read, so a run after the stand-in doesn't run the domain function again
                             ? Mono.<Result<E>>empty()
-                            : readAndDecide.flatMap(decision -> appendAndDispatch.apply(decision, openedTransaction))));
+                            : readAndDecide.flatMap(decision -> appendAndDispatch.apply(decision, scope.openedTransaction()))));
                 }
                 // The read and the decision run outside the transaction, since a store reports no marker versions inside one. The
                 // append's condition holds this read's token, and a failed condition goes to the retry around this, which can read
                 // and decide again. Enter the transaction executor only when synchronous dispatch must commit atomically with the
                 // append. Otherwise the append keeps exactly its prior semantics and no transaction overhead is added.
-                return readAndDecide.flatMap(decision -> dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(openedTransaction -> appendAndDispatch.apply(decision, openedTransaction)) : appendAndDispatch.apply(decision, false));
+                return readAndDecide.flatMap(decision -> dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(scope -> appendAndDispatch.apply(decision, scope.openedTransaction())) : appendAndDispatch.apply(decision, false));
             });
             // Nothing says a transaction of this attempt undid the write, so running the command again could write the events twice. The retry must not see this.
             return attempt.onErrorResume(failureAfterWrite::isHeldAfter, failure -> Mono.empty())

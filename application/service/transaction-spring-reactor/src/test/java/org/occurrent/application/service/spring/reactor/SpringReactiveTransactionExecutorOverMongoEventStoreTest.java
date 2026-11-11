@@ -29,6 +29,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatcher;
@@ -290,14 +291,14 @@ class SpringReactiveTransactionExecutorOverMongoEventStoreTest {
     void the_action_is_told_that_the_executor_opened_a_transaction_when_none_is_open() {
         var executor = new SpringReactiveTransactionExecutor(transactionManager);
 
-        assertThat(executor.<Boolean>inTransactionTellingIfOpened(Mono::just).block(TIMEOUT)).isTrue();
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(scope -> Mono.just(scope.openedTransaction())).block(TIMEOUT)).isTrue();
     }
 
     @Test
     void the_action_is_told_that_the_executor_opened_a_transaction_under_propagation_requires_new_in_the_callers_transaction() {
         var executor = new SpringReactiveTransactionExecutor(operatorWith(TransactionDefinition.PROPAGATION_REQUIRES_NEW));
 
-        Boolean opened = TransactionalOperator.create(transactionManager).transactional(executor.<Boolean>inTransactionTellingIfOpened(Mono::just)).block(TIMEOUT);
+        Boolean opened = TransactionalOperator.create(transactionManager).transactional(executor.<Boolean>inTransactionTellingIfOpened(scope -> Mono.just(scope.openedTransaction()))).block(TIMEOUT);
 
         assertThat(opened).isTrue();
     }
@@ -306,7 +307,7 @@ class SpringReactiveTransactionExecutorOverMongoEventStoreTest {
     void the_action_is_told_that_the_executor_opened_no_transaction_when_it_joins_the_callers() {
         var executor = new SpringReactiveTransactionExecutor(transactionManager);
 
-        Boolean opened = TransactionalOperator.create(transactionManager).transactional(executor.<Boolean>inTransactionTellingIfOpened(Mono::just)).block(TIMEOUT);
+        Boolean opened = TransactionalOperator.create(transactionManager).transactional(executor.<Boolean>inTransactionTellingIfOpened(scope -> Mono.just(scope.openedTransaction()))).block(TIMEOUT);
 
         assertThat(opened).isFalse();
     }
@@ -315,7 +316,7 @@ class SpringReactiveTransactionExecutorOverMongoEventStoreTest {
     void the_action_is_told_that_the_executor_opened_no_transaction_under_propagation_not_supported() {
         var executor = new SpringReactiveTransactionExecutor(operatorWith(TransactionDefinition.PROPAGATION_NOT_SUPPORTED));
 
-        assertThat(executor.<Boolean>inTransactionTellingIfOpened(Mono::just).block(TIMEOUT)).isFalse();
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(scope -> Mono.just(scope.openedTransaction())).block(TIMEOUT)).isFalse();
     }
 
     @Test

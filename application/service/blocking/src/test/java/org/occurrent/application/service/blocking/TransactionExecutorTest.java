@@ -16,6 +16,7 @@
 
 package org.occurrent.application.service.blocking;
 
+import org.occurrent.application.service.ExecutorScope;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -48,7 +49,7 @@ class TransactionExecutorTest {
             }
         };
 
-        assertThat(executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)).isTrue();
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(ExecutorScope::openedTransaction)).isTrue();
     }
 
     @Test
@@ -65,11 +66,16 @@ class TransactionExecutorTest {
             }
         };
 
-        assertThat(executor.<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)).isFalse();
+        assertThat(executor.<Boolean>inTransactionTellingIfOpened(ExecutorScope::openedTransaction)).isFalse();
     }
 
     @Test
     void the_action_is_told_that_this_call_opened_no_transaction_when_none_is_in_force() {
-        assertThat(TransactionExecutor.noTransaction().<Boolean>inTransactionTellingIfOpened(openedTransaction -> openedTransaction)).isFalse();
+        assertThat(TransactionExecutor.noTransaction().<Boolean>inTransactionTellingIfOpened(ExecutorScope::openedTransaction)).isFalse();
+    }
+
+    @Test
+    void the_default_tells_the_action_that_this_call_started_no_synchronization() {
+        assertThat(TransactionExecutor.noTransaction().<Boolean>inTransactionTellingIfOpened(ExecutorScope::startedSynchronization)).isFalse();
     }
 }

@@ -802,8 +802,8 @@ committed with it. It now commits on its own, before the append writes its event
   reads them has to change.
 - Two appends in transactions of yours no longer conflict on the counter, only on a marker or a partition stream they
   share. An append that loses throws a `DataIntegrityViolationException` or a `TransientDataAccessException`, and your
-  transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it when
-  they opened it.
+  transaction has to be retried. `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry it only when
+  they opened it outside every Spring transaction scope of yours.
 - On a replica set, with transaction synchronization active, as it is by default, a read in your transaction reports, in
   `lastSequencePosition()`, the head as of the first operation in your transaction's MongoDB session on the store's
   database factory. It also returns your transaction's own appends, and those it started after that operation are at
@@ -880,8 +880,8 @@ describes it.
 
 ## The default transaction executors retry on a MongoDB error label
 
-The default `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry a transaction they opened when it
-loses a conflict. In 0.34.0 that meant any `DataIntegrityViolationException`, because Spring translates MongoDB's write
+The default `SpringTransactionExecutor` and `SpringReactiveTransactionExecutor` retry a transaction they opened outside
+every Spring transaction scope of yours when it loses a conflict. In 0.34.0 that meant any `DataIntegrityViolationException`, because Spring translates MongoDB's write
 conflict to it. That also matched a duplicate key and a validation failure, which no new transaction can get past, so
 the unit of work ran 15 times on the blocking executor and 16 on the reactive one before the error reached the caller. The 0.35.0 budget is 240 attempts, so the same
 predicate would have run it for two minutes.
