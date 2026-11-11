@@ -387,6 +387,34 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         );
     }
 
+    @Test
+    void a_second_start_true_of_a_manual_start_model_over_it_after_a_stop_returns_and_leaves_every_consumer_that_asked_for_the_hold_held_paused_while_the_wrapped_model_still_refuses() {
+        // Given
+        String other = "other";
+        strategy.grantOnRegister = true;
+        wrapped.refusing = true;
+        ManualStartSubscriptionModel manual = ManualStartSubscriptionModel.stoppedByDefault(model);
+        LostStartHold.askedDuring(() -> manual.subscribe(ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }));
+        manual.start(true);
+        manual.stop();
+        LostStartHold.askedDuring(() -> manual.subscribe(other, null, StartAt.subscriptionModelDefault(), __ -> {
+        }));
+
+        // When
+        Throwable thrown = catchThrowable(() -> manual.start(true));
+
+        // Then
+        assertThat(thrown).as("thrown by the second start(true)").isNull();
+        assertAll(
+                () -> assertThat(model.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(model.isRunning(ID)).as("running").isFalse(),
+                () -> assertThat(model.isPaused(other)).as("paused, registered after the stop").isTrue(),
+                () -> assertThat(model.isRunning(other)).as("running, registered after the stop").isFalse(),
+                () -> assertThat(strategy.holders).as("holding the lease").isEmpty()
+        );
+    }
+
     private void useAModelBuiltOverAWrappedModelThatIsNotRunning() {
         model.shutdown();
         wrapped = new WrappedModel(false);
