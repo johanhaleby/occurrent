@@ -28,6 +28,7 @@ import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.ClassUtils;
@@ -109,6 +110,9 @@ public class SpringTransactionExecutor implements TransactionExecutor {
 
     private static final int MAX_FAILED_COMMITS = 3;
 
+    private static final TransactionSynchronization CALLERS_SYNCHRONIZATION_MARKER = new TransactionSynchronization() {
+    };
+
     private final TransactionTemplate transactionTemplate;
     private final RetryStrategy conflictRetry;
     private final boolean stopAfterDefaultDeadline;
@@ -188,11 +192,12 @@ public class SpringTransactionExecutor implements TransactionExecutor {
     /**
      * Asks the transaction status rather than inferring it from {@link #isTransactional()}, since a caller-supplied
      * {@link TransactionTemplate} on {@code PROPAGATION_REQUIRES_NEW} opens a transaction with one already open. The
-     * action is told this executor started the synchronization only when the status says its
-     * {@link TransactionTemplate} started it for this attempt, so Spring clears it when the attempt ends.
+     * action is told this executor started the synchronization only when its {@link TransactionTemplate} started the
+     * synchronization the attempt runs in, so Spring clears it when the attempt ends.
      * <p>
-     * The conflict retry doesn't run when a transaction is open on entry, or after an attempt that joined a transaction or
-     * ran in a transaction synchronization the caller started, such as a caller's scope on {@code PROPAGATION_SUPPORTS}.
+     * The conflict retry doesn't run when a transaction is open on entry, or after an attempt that Spring's
+     * {@link DefaultTransactionStatus} reports as joining a transaction, or that ran in a transaction synchronization the
+     * caller started, such as a caller's scope on {@code PROPAGATION_SUPPORTS}.
      * A MongoDB session that a read binds to that synchronization stays bound until the caller's scope ends, so running
      * the action again would run it in the session the conflict aborted. An attempt that starts a synchronization of its
      * own and joins no transaction is retried. A retry policy that isn't a {@link RetryStrategy.Retry} can't be told to
@@ -205,23 +210,21 @@ public class SpringTransactionExecutor implements TransactionExecutor {
             // A transaction is already open, so this executor takes it as the caller's and runs the action once, also on a
             // propagation that opens a new one. A conflict aborts a joined transaction, which only its owner can start
             // again, so the error goes to that owner. See ADR 0074.
-            return transactionTemplate.execute(status -> action.apply(scopeOf(status, true)));
+            markCallersSynchronization();
+            return transactionTemplate.execute(status -> action.apply(scopeOf(status)));
         }
         // A session a read binds to a caller's synchronization stays bound until the caller's scope ends, and a joined
         // transaction is started again only by whoever opened it, so an attempt that ran in either isn't run again
-        AtomicBoolean synchronizationActiveBefore = new AtomicBoolean();
         AtomicBoolean inCallersScope = new AtomicBoolean();
         Function<TransactionStatus, T> attempt = status -> {
-            ExecutorScope scope = scopeOf(status, synchronizationActiveBefore.get());
-            boolean joinedTransaction = status.hasTransaction() && !status.isNewTransaction();
-            inCallersScope.set(joinedTransaction || TransactionSynchronizationManager.isSynchronizationActive() && !scope.startedSynchronization());
+            ExecutorScope scope = scopeOf(status);
+            inCallersScope.set(joinedTransaction(status) || TransactionSynchronizationManager.isSynchronizationActive() && !scope.startedSynchronization());
             return action.apply(scope);
         };
+        // An attempt whose transaction failed to start ran nothing in the caller's scope, so it can run again
         BooleanSupplier beforeAttempt = () -> {
-            boolean synchronizationActive = TransactionSynchronizationManager.isSynchronizationActive();
-            synchronizationActiveBefore.set(synchronizationActive);
-            inCallersScope.set(synchronizationActive);
-            return synchronizationActive;
+            inCallersScope.set(false);
+            return markCallersSynchronization();
         };
         Function<Predicate<Throwable>, Predicate<Throwable>> outsideCallersScope = retryable -> throwable -> !inCallersScope.get() && retryable.test(throwable);
         if (!stopAfterDefaultDeadline) {
@@ -256,14 +259,27 @@ public class SpringTransactionExecutor implements TransactionExecutor {
         });
     }
 
-    // Spring's own status says whether this attempt's getTransaction started the synchronization, also for a propagation
-    // that suspends the caller's synchronization and starts its own. For a status of another transaction manager, such as
-    // ChainedTransactionManager, only a synchronization that became active during the attempt tells
-    private static ExecutorScope scopeOf(TransactionStatus status, boolean synchronizationActiveBefore) {
-        boolean startedSynchronization = status instanceof DefaultTransactionStatus defaultStatus
-                ? defaultStatus.isNewSynchronization()
-                : !synchronizationActiveBefore && TransactionSynchronizationManager.isSynchronizationActive();
+    // Registers the marker in the caller's synchronization, if one is active, so an attempt that still finds it runs in
+    // the caller's synchronization whatever status its transaction manager returns
+    private static boolean markCallersSynchronization() {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return false;
+        }
+        TransactionSynchronizationManager.registerSynchronization(CALLERS_SYNCHRONIZATION_MARKER);
+        return true;
+    }
+
+    private static ExecutorScope scopeOf(TransactionStatus status) {
+        boolean startedSynchronization = TransactionSynchronizationManager.isSynchronizationActive()
+                && !TransactionSynchronizationManager.getSynchronizations().contains(CALLERS_SYNCHRONIZATION_MARKER);
         return new ExecutorScope(status.isNewTransaction(), startedSynchronization);
+    }
+
+    // Only Spring's own status says reliably whether the attempt joined a transaction, since the default hasTransaction()
+    // answers true, as ChainedTransactionManager's status does. A savepoint of the attempt's own is rolled back alone
+    private static boolean joinedTransaction(TransactionStatus status) {
+        return status instanceof DefaultTransactionStatus defaultStatus
+                && defaultStatus.hasTransaction() && !defaultStatus.isNewTransaction() && !defaultStatus.hasSavepoint();
     }
 
     private static TransactionSystemException commitFailed(TransactionSystemException failure, AtomicInteger failedCommits) {
