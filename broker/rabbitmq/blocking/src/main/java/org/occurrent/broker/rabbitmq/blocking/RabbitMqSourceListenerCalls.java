@@ -23,8 +23,8 @@ import org.slf4j.LoggerFactory;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Calls a {@link RabbitMqSourceListener} for one queue, logging and ignoring whatever it throws, so a broken listener
- * never fails a delivery. What {@link RabbitMqCloudEventSource}, {@code RabbitMqDomainEventSource} and
+ * Calls a {@link RabbitMqSourceListener} for one queue, logging and ignoring whatever it throws apart from a
+ * {@link VirtualMachineError}, so a broken listener never fails a delivery. What {@link RabbitMqCloudEventSource}, {@code RabbitMqDomainEventSource} and
  * {@link RabbitMqDeliveryFailureAction} share. Public only because the two sources live in different packages. Not
  * part of the supported API.
  */
