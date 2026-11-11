@@ -40,7 +40,8 @@ every return and can log it under `LOG_AND_CONTINUE`. The metrics planned in
 
 **The policy applies inside one publish attempt, before the `RetryStrategy` sees anything.** A retry strategy that
 retries every exception would otherwise publish an event again after the policy had already accepted it as dropped.
-Under `LOG_AND_CONTINUE` a return never reaches the retry strategy, so the event is published exactly once.
+Under `LOG_AND_CONTINUE` a return never reaches the retry strategy, so a return never makes the sink publish the event
+again.
 
 **A parked delivery still fails on a return.** The parking path of a RabbitMQ source uses its own publisher and
 ignores this policy. If a park went nowhere, acknowledging the original would lose the event, which is what ADR 133
