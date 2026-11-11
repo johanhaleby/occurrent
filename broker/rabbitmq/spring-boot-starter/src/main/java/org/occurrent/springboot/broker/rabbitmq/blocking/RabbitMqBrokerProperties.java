@@ -71,7 +71,8 @@ public class RabbitMqBrokerProperties {
 
         /**
          * {@code RabbitMqCloudEventSink.Builder#onUnroutable(RabbitMqUnroutablePolicy)}.
-         * {@link RabbitMqUnroutablePolicy#FAIL} by default, matching that builder's own default.
+         * {@link RabbitMqUnroutablePolicy#FAIL} by default, matching that builder's own default. See
+         * {@link RabbitMqUnroutablePolicy#LOG_AND_CONTINUE} for what that policy drops for good.
          */
         private RabbitMqUnroutablePolicy onUnroutable = RabbitMqUnroutablePolicy.FAIL;
 

@@ -37,6 +37,10 @@ public enum RabbitMqUnroutablePolicy {
      * {@link RabbitMqCloudEventSink#publish(io.cloudevents.CloudEvent)} as if the message was routed. The broker
      * drops the message. Use it on an exchange where events are published for whoever wants them, so an event type
      * that no queue is bound for yet doesn't stop the sink from forwarding the events after it.
+     * <p>
+     * The sink never publishes a dropped event again, so a queue bound later doesn't receive it. The policy covers
+     * every routing key the sink publishes to, so a typo in a routing key or in a queue's binding key is also logged
+     * and dropped.
      */
     LOG_AND_CONTINUE
 }

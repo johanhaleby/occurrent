@@ -56,6 +56,10 @@ RabbitMqUnroutablePolicy>` can be added later without breaking anything, once th
 
 An application that publishes to an open exchange can set `LOG_AND_CONTINUE`, and an event type without a queue no
 longer stops the forwarding of the events after it. The broker drops that event, and the warning in the log is the only
-trace of it.
+trace of it. The sink never publishes it again, so a queue bound for that routing key later doesn't receive it.
+
+The policy covers every routing key the sink publishes to. A typo in a routing key, or in the binding key of the queue
+meant to receive it, is logged and dropped the same way as an event type nobody consumes yet, instead of failing as it
+does under `FAIL`.
 
 Nothing changes for an application that sets nothing. `FAIL` is the default and behaves like 0.34.0.
