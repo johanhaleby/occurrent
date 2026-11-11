@@ -85,6 +85,11 @@ import static java.util.Objects.requireNonNull;
  * subscription is made, or this model is stopped, {@code subscribe} throws the refusal and the subscription id is free
  * again. When this node gets the lease later, the refusal is logged as a warning and the lease is given back. The
  * subscription stays registered, so it fails the same way every time this node gets the lease, and the id stays taken.
+ * A {@link CatchupCannotResumeException} is handled differently. A catch-up throws it when it no longer has the history
+ * back to the position stored for the subscription, and throws it again on every later try. When this node gets the
+ * lease later and the wrapped model throws it, the subscription is paused as if the user had paused it, the refusal is
+ * logged at {@code ERROR}, and the lease is given back. This node doesn't compete for the lease again until the
+ * subscription is resumed.
  * A MongoDB subscription model refuses a dynamic start position on the handle, after {@code subscribe} has returned, so
  * this model doesn't see that refusal. It holds the lease and the id, and the subscription delivers nothing. A pause, a
  * stop or a lost lease gives the lease back, and the subscription then delivers nothing either, and this model may log
