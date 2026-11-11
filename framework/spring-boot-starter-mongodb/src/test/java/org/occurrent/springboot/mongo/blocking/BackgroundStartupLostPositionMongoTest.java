@@ -141,14 +141,28 @@ class BackgroundStartupLostPositionMongoTest {
         SAGA(SagaInBackground.class, SagaUnset.class),
         STREAM_SNAPSHOT(StreamSnapshotInBackground.class, StreamSnapshotUnset.class),
         AGNOSTIC_SNAPSHOT(AgnosticSnapshotInBackground.class, AgnosticSnapshotUnset.class),
-        DCB_SNAPSHOT(DcbSnapshotInBackground.class, DcbSnapshotUnset.class);
+        DCB_SNAPSHOT(DcbSnapshotInBackground.class, DcbSnapshotUnset.class),
+        // startAt left at its default. A catch-up reads the stored live token, so a lost one is refused as for BEGINNING
+        SUBSCRIPTION_DEFAULT(SubscriptionDefaultInBackground.class, SubscriptionDefaultUnset.class, false),
+        STREAM_SUBSCRIPTION_DEFAULT(StreamSubscriptionDefaultInBackground.class, StreamSubscriptionDefaultUnset.class, false),
+        AGNOSTIC_PROJECTION_DEFAULT(AgnosticProjectionDefaultInBackground.class, AgnosticProjectionDefaultUnset.class, false),
+        STREAM_PROJECTION_DEFAULT(StreamProjectionDefaultInBackground.class, StreamProjectionDefaultUnset.class, false),
+        SAGA_DEFAULT(SagaDefaultInBackground.class, SagaDefaultUnset.class, false),
+        AGNOSTIC_SNAPSHOT_DEFAULT(AgnosticSnapshotDefaultInBackground.class, AgnosticSnapshotDefaultUnset.class, false);
 
         private final Class<? extends Broken> inBackground;
         private final Class<? extends Broken> unset;
+        // A start at the beginning replays the earlier events once the checkpoint is gone, a start at the default does not
+        private final boolean replaysHistoryWithoutACheckpoint;
 
         Kind(Class<? extends Broken> inBackground, Class<? extends Broken> unset) {
+            this(inBackground, unset, true);
+        }
+
+        Kind(Class<? extends Broken> inBackground, Class<? extends Broken> unset, boolean replaysHistoryWithoutACheckpoint) {
             this.inBackground = inBackground;
             this.unset = unset;
+            this.replaysHistoryWithoutACheckpoint = replaysHistoryWithoutACheckpoint;
         }
 
         String database() {
@@ -214,7 +228,8 @@ class BackgroundStartupLostPositionMongoTest {
             Broken broken = repairedBoot.getBean(Broken.class);
             SubscriptionModel model = repairedBoot.getBean(SubscriptionModel.class);
 
-            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> assertThat(broken.received()).as("the repaired subscription").contains("live-2", "live-3"));
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> assertThat(broken.received()).as("the repaired subscription")
+                    .contains(kind.replaysHistoryWithoutACheckpoint ? new String[]{"live-2", "live-3"} : new String[]{"live-3"}));
             assertThat(model.isPaused(BROKEN)).as("the repaired subscription is paused").isFalse();
         }
     }
@@ -547,6 +562,91 @@ class BackgroundStartupLostPositionMongoTest {
         @Snapshot(id = BROKEN, startAt = StartPosition.BEGINNING)
         DcbSnapshotView<Named, TestEvent> snapshot() {
             return new DcbSnapshotView<>(recordingSnapshot(this::record), DcbCriteria.tagsAnyOf(Tag.parse(DCB_TAG)));
+        }
+    }
+
+    static class SubscriptionDefaultInBackground extends Broken {
+        @Subscription(id = BROKEN, startupMode = StartupMode.BACKGROUND)
+        void on(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class SubscriptionDefaultUnset extends Broken {
+        @Subscription(id = BROKEN)
+        void on(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class StreamSubscriptionDefaultInBackground extends Broken {
+        @StreamSubscription(id = BROKEN, startupMode = StartupMode.BACKGROUND)
+        void on(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class StreamSubscriptionDefaultUnset extends Broken {
+        @StreamSubscription(id = BROKEN)
+        void on(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class AgnosticProjectionDefaultInBackground extends Broken {
+        @Projection(id = BROKEN, startupMode = StartupMode.BACKGROUND, capability = Capability.AGNOSTIC)
+        org.occurrent.dsl.projection.Projection<Seen, TestEvent, String> projection() {
+            return recordingProjection(this::record);
+        }
+    }
+
+    static class AgnosticProjectionDefaultUnset extends Broken {
+        @Projection(id = BROKEN, capability = Capability.AGNOSTIC)
+        org.occurrent.dsl.projection.Projection<Seen, TestEvent, String> projection() {
+            return recordingProjection(this::record);
+        }
+    }
+
+    static class StreamProjectionDefaultInBackground extends Broken {
+        @Projection(id = BROKEN, startupMode = StartupMode.BACKGROUND, capability = Capability.STREAM)
+        org.occurrent.dsl.projection.Projection<Seen, TestEvent, String> projection() {
+            return recordingProjection(this::record);
+        }
+    }
+
+    static class StreamProjectionDefaultUnset extends Broken {
+        @Projection(id = BROKEN, capability = Capability.STREAM)
+        org.occurrent.dsl.projection.Projection<Seen, TestEvent, String> projection() {
+            return recordingProjection(this::record);
+        }
+    }
+
+    static class SagaDefaultInBackground extends Broken {
+        @Saga(id = BROKEN, startupMode = StartupMode.BACKGROUND)
+        org.occurrent.dsl.saga.Saga<TestEvent, Named, Observed> saga() {
+            return recordingSaga(this::record);
+        }
+    }
+
+    static class SagaDefaultUnset extends Broken {
+        @Saga(id = BROKEN)
+        org.occurrent.dsl.saga.Saga<TestEvent, Named, Observed> saga() {
+            return recordingSaga(this::record);
+        }
+    }
+
+    // A snapshot's startAt defaults to BEGINNING, so DEFAULT has to be asked for
+    static class AgnosticSnapshotDefaultInBackground extends Broken {
+        @Snapshot(id = BROKEN, startAt = StartPosition.DEFAULT, startupMode = StartupMode.BACKGROUND, capability = Capability.AGNOSTIC)
+        SnapshotView<Named, TestEvent> snapshot() {
+            return recordingSnapshot(this::record);
+        }
+    }
+
+    static class AgnosticSnapshotDefaultUnset extends Broken {
+        @Snapshot(id = BROKEN, startAt = StartPosition.DEFAULT, capability = Capability.AGNOSTIC)
+        SnapshotView<Named, TestEvent> snapshot() {
+            return recordingSnapshot(this::record);
         }
     }
 
