@@ -23,10 +23,12 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -144,6 +146,76 @@ class RabbitMqCloudEventSinkListenerTest extends RabbitMqTestSupport {
         }).listener(listener).build()) {
             assertThatThrownBy(() -> sink.publish(event("id-1"))).isSameAs(failure);
         }
+    }
+
+    @ParameterizedTest
+    @MethodSource("errorsThatAreNotVirtualMachineErrors")
+    void a_listener_that_throws_an_Error_from_published_does_not_fail_the_publish(Error error) throws Exception {
+        String queue = declareAndBindQueue();
+        RabbitMqSinkListener listener = new RabbitMqSinkListener() {
+            @Override
+            public void published(RabbitMqDestination destination, Duration publishTime) {
+                throw error;
+            }
+        };
+
+        try (RabbitMqCloudEventSink sink = sinkBuilder().listener(listener).build()) {
+            assertThatCode(() -> sink.publish(event("id-1"))).doesNotThrowAnyException();
+        }
+
+        GetResponse response = adminChannel.basicGet(queue, true);
+        assertThat(response).as("the event was published").isNotNull();
+    }
+
+    @Test
+    void a_listener_that_throws_an_Error_from_unroutable_does_not_fail_the_publish_under_LOG_AND_CONTINUE() throws Exception {
+        RabbitMqSinkListener listener = new RabbitMqSinkListener() {
+            @Override
+            public void unroutable(RabbitMqDestination destination) {
+                throw new AssertionError("broken metrics binding");
+            }
+        };
+
+        try (RabbitMqCloudEventSink sink = sinkBuilder().onUnroutable(RabbitMqUnroutablePolicy.LOG_AND_CONTINUE).listener(listener).build()) {
+            assertThatCode(() -> sink.publish(event("id-1"))).doesNotThrowAnyException();
+        }
+    }
+
+    @Test
+    void a_listener_that_throws_an_Error_from_failed_leaves_the_publish_failure_unchanged() throws Exception {
+        IllegalArgumentException failure = new IllegalArgumentException("cannot map this event");
+        RabbitMqSinkListener listener = new RabbitMqSinkListener() {
+            @Override
+            public void failed(RabbitMqDestination destination, Throwable failure) {
+                throw new AssertionError("broken metrics binding");
+            }
+        };
+
+        try (RabbitMqCloudEventSink sink = sinkBuilder().outboundMapper((cloudEvent, destination) -> {
+            throw failure;
+        }).listener(listener).build()) {
+            assertThatThrownBy(() -> sink.publish(event("id-1"))).isSameAs(failure);
+        }
+    }
+
+    @Test
+    void a_VirtualMachineError_from_published_reaches_the_caller_of_publish() throws Exception {
+        declareAndBindQueue();
+        InternalError error = new InternalError("the JVM is going down");
+        RabbitMqSinkListener listener = new RabbitMqSinkListener() {
+            @Override
+            public void published(RabbitMqDestination destination, Duration publishTime) {
+                throw error;
+            }
+        };
+
+        try (RabbitMqCloudEventSink sink = sinkBuilder().listener(listener).build()) {
+            assertThatThrownBy(() -> sink.publish(event("id-1"))).isSameAs(error);
+        }
+    }
+
+    private static Stream<Error> errorsThatAreNotVirtualMachineErrors() {
+        return Stream.of(new AssertionError("broken metrics binding"), new NoSuchMethodError("io.micrometer.core.instrument.Counter.increment"));
     }
 
     @Test

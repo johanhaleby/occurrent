@@ -206,10 +206,12 @@ public class OccurrentRabbitMqAutoConfiguration {
      */
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(CompositeHealthContributor.class)
-    @ConditionalOnEnabledHealthIndicator("rabbitMqBroker")
     static class HealthConfiguration {
 
+        // On the method, since Spring loads every condition class on the configuration class before evaluating any,
+        // which fails without spring-boot-health before @ConditionalOnClass can skip it
         @Bean
+        @ConditionalOnEnabledHealthIndicator("rabbitMqBroker")
         @ConditionalOnMissingBean(name = "rabbitMqBroker")
         CompositeHealthContributor rabbitMqBroker(ConfigurableListableBeanFactory beanFactory) {
             return new RabbitMqBrokerHealthContributor(beanFactory);

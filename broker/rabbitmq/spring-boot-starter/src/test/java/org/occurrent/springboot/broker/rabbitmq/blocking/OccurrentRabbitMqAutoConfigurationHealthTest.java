@@ -34,6 +34,7 @@ import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthContributor;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.health.contributor.Status;
+import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.assertj.AssertableApplicationContext;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -127,6 +128,39 @@ class OccurrentRabbitMqAutoConfigurationHealthTest {
             sink.close();
 
             assertThat(indicator(context, "occurrentRabbitMqCloudEventSink").health().getStatus()).isEqualTo(Status.DOWN);
+        });
+    }
+
+    @Test
+    void the_contributor_is_absent_when_management_health_rabbitMqBroker_enabled_is_false() {
+        contextRunner.withPropertyValues("management.health.rabbitMqBroker.enabled=false").run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).doesNotHaveBean("rabbitMqBroker");
+        });
+    }
+
+    @Test
+    void the_contributor_is_absent_when_management_health_defaults_enabled_is_false() {
+        contextRunner.withPropertyValues("management.health.defaults.enabled=false").run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).doesNotHaveBean("rabbitMqBroker");
+        });
+    }
+
+    @Test
+    void the_contributor_is_present_when_defaults_are_disabled_but_rabbitMqBroker_is_enabled() {
+        contextRunner.withPropertyValues("management.health.defaults.enabled=false", "management.health.rabbitMqBroker.enabled=true").run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).hasBean("rabbitMqBroker");
+        });
+    }
+
+    @Test
+    void the_context_starts_without_a_health_contributor_when_spring_boot_health_is_not_on_the_classpath() {
+        contextRunner.withClassLoader(new FilteredClassLoader("org.springframework.boot.health")).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).doesNotHaveBean("rabbitMqBroker");
+            assertThat(context).hasSingleBean(RabbitMqCloudEventSink.class);
         });
     }
 

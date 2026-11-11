@@ -157,7 +157,7 @@ class RabbitMqCloudEventSourceListenerTest extends RabbitMqTestSupport {
     }
 
     @Test
-    void a_listener_that_throws_from_every_callback_does_not_stop_delivery() throws Exception {
+    void a_listener_that_throws_an_exception_from_delivered_does_not_stop_delivery() throws Exception {
         String queue = declareAndBindQueue();
         RabbitMqSourceListener listener = new RabbitMqSourceListener() {
             @Override
@@ -176,6 +176,101 @@ class RabbitMqCloudEventSourceListenerTest extends RabbitMqTestSupport {
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(2));
         }
 
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
+    }
+
+    @Test
+    void a_listener_that_throws_an_AssertionError_from_delivered_does_not_stop_the_source() throws Exception {
+        String queue = declareAndBindQueue();
+        ThrowingRabbitMqSourceListener listener = new ThrowingRabbitMqSourceListener(() -> new AssertionError("broken metrics binding"), "delivered");
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", handled::add);
+
+        try (RabbitMqCloudEventSource source = sourceBuilder(model, queue, listener).build()) {
+            publishMessage("id-1");
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
+            publishMessage("id-2");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(2));
+            assertThat(source.status()).isEqualTo(RabbitMqSourceStatus.CONSUMING);
+        }
+
+        assertThat(listener.callbacks()).containsExactly("delivered", "delivered");
+    }
+
+    @Test
+    void a_listener_that_throws_an_Error_from_redelivered_does_not_stop_the_source_under_REDELIVER() throws Exception {
+        String queue = declareAndBindQueue();
+        ThrowingRabbitMqSourceListener listener = new ThrowingRabbitMqSourceListener(() -> new NoSuchMethodError("broken metrics binding"), "redelivered");
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        AtomicInteger attempts = new AtomicInteger();
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", cloudEvent -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new IllegalStateException("handler fails the first time");
+            }
+            handled.add(cloudEvent);
+        });
+
+        try (RabbitMqCloudEventSource source = sourceBuilder(model, queue, listener).onDeliveryFailure(DeliveryFailurePolicy.REDELIVER).build()) {
+            publishMessage("id-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
+            assertThat(source.status()).isEqualTo(RabbitMqSourceStatus.CONSUMING);
+        }
+
+        assertThat(listener.callbacks()).containsSubsequence("failed", "redelivered", "delivered");
+    }
+
+    @Test
+    void a_listener_that_throws_an_Error_from_every_callback_does_not_stop_a_redelivered_failure() throws Exception {
+        String queue = declareAndBindQueue();
+        ThrowingRabbitMqSourceListener listener = ThrowingRabbitMqSourceListener.fromEveryCallback(() -> new AssertionError("broken metrics binding"));
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        AtomicInteger attempts = new AtomicInteger();
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", cloudEvent -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new IllegalStateException("handler fails the first time");
+            }
+            handled.add(cloudEvent);
+        });
+
+        try (RabbitMqCloudEventSource source = sourceBuilder(model, queue, listener).onDeliveryFailure(DeliveryFailurePolicy.REDELIVER).build()) {
+            publishMessage("id-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
+        }
+
+        assertThat(listener.callbacks()).containsExactly("failed", "redelivered", "delivered");
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
+    }
+
+    @Test
+    void a_listener_that_throws_an_Error_from_every_callback_does_not_stop_a_parked_failure_or_the_next_delivery() throws Exception {
+        String queue = declareAndBindQueue();
+        declareParkingQueue();
+        ThrowingRabbitMqSourceListener listener = ThrowingRabbitMqSourceListener.fromEveryCallback(() -> new AssertionError("broken metrics binding"));
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", cloudEvent -> {
+            if (cloudEvent.getId().equals("id-1")) {
+                throw new IllegalStateException("handler fails the first event");
+            }
+            handled.add(cloudEvent);
+        });
+
+        try (RabbitMqCloudEventSource source = sourceBuilder(model, queue, listener)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK).parkingDestination(RabbitMqDestination.of(exchange, "parked")).build()) {
+            publishMessage("id-1");
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(listener.callbacks()).contains("parked"));
+            publishMessage("id-2");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
+        }
+
+        assertThat(listener.callbacks()).containsExactly("failed", "parked", "delivered");
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
     }
 
