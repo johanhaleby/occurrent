@@ -584,7 +584,7 @@ final class NamedCatchupSupport {
             CatchupState inFlight = catchingUp.get(subscriptionId);
             if (inFlight == null || inFlight.takesOver == null || inFlight.takesOver.replay().owned() != record) {
                 owned.remove(subscriptionId, record);
-                handedOver.computeIfPresent(subscriptionId, (id, made) -> made.replay().owned() == record ? null : made);
+                forgetTheHandoverOf(subscriptionId, record);
                 released.set(true);
             }
         });
@@ -593,13 +593,15 @@ final class NamedCatchupSupport {
 
     // A cancel that threw, or whose Mono from the wrapped model failed. A live record whose subscription the wrapped
     // model can run stays while the wrapped model holds the id or can't tell, so that subscription keeps reaching this
-    // model, and goes as in own(..) once the wrapped model holds nothing. A record whose replay this cancel stopped
-    // before it handed over goes at once, since what the wrapped model holds under the id then is what a cancelled
-    // subscribe left. That is settled as when a cancel ends, since with no settle the id can stay held for good.
+    // model, and goes with its handover as in own(..) once the wrapped model holds nothing. A record whose replay this
+    // cancel stopped before it handed over goes at once, since what the wrapped model holds under the id then is what a
+    // cancelled subscribe left. That is settled as when a cancel ends, since with no settle the id can stay held for
+    // good.
     private void cancelRefused(String subscriptionId, @Nullable Owned record, boolean runsInWrappedModel, @Nullable Throwable failure) {
         settle(subscriptionId, failure, () -> {
             if (record != null && !record.cancelled && (!runsInWrappedModel || !holdsOrCannotTell(subscriptionId, failure))) {
                 owned.remove(subscriptionId, record);
+                forgetTheHandoverOf(subscriptionId, record);
             }
         });
     }
@@ -697,8 +699,14 @@ final class NamedCatchupSupport {
             return false;
         }
         // Forgets the handover of the subscription replaced here
-        handedOver.computeIfPresent(subscriptionId, (id, made) -> made.replay().owned() == existing ? null : made);
+        forgetTheHandoverOf(subscriptionId, existing);
         return true;
+    }
+
+    // Called under the per-id lock once record no longer owns the id, so a later subscription of the id at the same
+    // live start never finds that handover
+    private void forgetTheHandoverOf(String subscriptionId, Owned record) {
+        handedOver.computeIfPresent(subscriptionId, (id, made) -> made.replay().owned() == record ? null : made);
     }
 
     // Whether the wrapped model runs the id or holds it paused. A model that lists its ids answers from that list, since

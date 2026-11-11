@@ -3,6 +3,7 @@ package org.occurrent.subscription.reactor.durable.catchup;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
@@ -29,7 +30,8 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscriptionIdsThrowTest.awaitNoReplayInFlight;
 
-// A takeover replay in flight for a subscription whose subscribe failed, or whose cancel was refused
+// A takeover replay in flight for a subscription whose subscribe failed, or whose cancel was refused, and the handover
+// a refused cancel puts back
 class ReactorCatchupTakeoverInFlightTest {
     private static final String ID = "sub";
 
@@ -167,6 +169,41 @@ class ReactorCatchupTakeoverInFlightTest {
                     () -> assertThat(recordBefore).as("the record of the id before the subscribe").isNull(),
                     () -> assertThat(subscribe).as("what the subscribe with catch-up throws").isInstanceOf(DuplicateSubscriptionIdException.class),
                     () -> assertThat(recordOf(catchup)).as("the record of the id after the refused subscribe").isNull()
+            );
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_refused_cancel_that_takes_away_the_record_forgets_the_handover_so_a_later_subscription_straight_to_live_at_that_live_start_is_paused_for_good_when_it_loses_it() {
+        // Given a refused cancel of a subscription handed over, whose wrapped model ends the subscription on its own
+        // right after that cancel put the handover back
+        IntrospectableLosingLiveStartModel wrapped = new IntrospectableLosingLiveStartModel();
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            Subscription subscription = catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                    cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+            subscription.waitUntilStarted().block(Duration.ofSeconds(5));
+            Checkpoint liveStart = wrapped.positionOf(ID);
+            wrapped.cancelCompletesWhen = Mono.error(new IllegalStateException("the wrapped cancel fails"));
+            PutIfAbsentHook.installIn(catchup, "handedOver").afterThePutIfAbsentIn("putBackTheHandover", () -> wrapped.endsTheSubscriptionOnItsOwn(ID));
+            Throwable cancel = catchThrowable(() -> catchup.cancelSubscription(ID).block(Duration.ofSeconds(5)));
+            wrapped.cancelCompletesWhen = Mono.empty();
+
+            // When a subscribe straight to live opens at that live start, and the wrapped model loses the history from it
+            Throwable straight = catchThrowable(() -> catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(liveStart),
+                    cloudEvent -> Mono.empty()));
+            wrapped.losesTheHistoryFrom(ID, liveStart);
+            Throwable resume = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+            // Then the loss pauses that subscription for good, instead of being taken over with nothing to run
+            assertAll(
+                    () -> assertThat(cancel).as("what the cancel fails with").hasMessage("the wrapped cancel fails"),
+                    () -> assertThat(straight).as("what the subscribe straight to live throws").isNull(),
+                    () -> assertThat(resume).as("what a resume after the loss throws")
+                            .isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(liveStart.asString()),
+                    () -> assertThat(wrapped.resumedWhereItWasHeld).as("how many times the wrapped model resumed the subscription where it held it").hasValue(0)
             );
         } finally {
             catchup.shutdown();
