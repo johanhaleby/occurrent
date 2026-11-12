@@ -1716,8 +1716,9 @@ resumes the replay from that checkpoint and goes live after it.
 
 Every application on the blocking starter with one of these, when a catch-up stored its checkpoint:
 
-- a `@Subscription`, `@StreamSubscription` or `@Saga` with no `startAt`
-- a `@Projection` with no `startAt` that doesn't return a `DcbProjection`
+- a `@Subscription` or `@StreamSubscription` with no `startAt`
+- a `@Saga` with no `startAt` that reads the event store rather than a push feed
+- a `@Projection` with no `startAt` that reads the event store and doesn't return a `DcbProjection`
 - a `@Snapshot` with `startAt = DEFAULT` that doesn't return a `DcbSnapshotView`
 
 Storage holds such a checkpoint when the subscription ran from `startAt = BEGINNING`, a global position or a time, the
@@ -1729,7 +1730,8 @@ The reactive starter, a `@DcbSubscription`, and a projection or snapshot over DC
 ### What changes
 
 - With a catch-up's checkpoint stored, the subscription replays from it and then goes live, so it's delivered the
-  events written since, each once.
+  events written since. It resumes the way a `BEGINNING` start that restarts from that checkpoint does, and the
+  catch-up refuses it in the same cases.
 - With nothing stored, it starts at the present without a replay, as before.
 - With a live checkpoint stored, it resumes from it, as before. When MongoDB no longer has the history back to that
   checkpoint, the start throws `CatchupCannotResumeException` and the application doesn't start, the same as a
@@ -1737,7 +1739,7 @@ The reactive starter, a `@DcbSubscription`, and a projection or snapshot over DC
   instead, see
   [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now).
 - A `@Projection` with `recordAppliedAppends = true` and no `startAt` no longer gets the startup warning that its
-  recordings never reset, since it can replay.
+  recordings never reset, since it replays when a catch-up stored its checkpoint.
 
 ### What to do
 

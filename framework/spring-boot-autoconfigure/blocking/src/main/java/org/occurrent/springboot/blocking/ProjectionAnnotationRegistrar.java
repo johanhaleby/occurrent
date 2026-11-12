@@ -441,9 +441,9 @@ class ProjectionAnnotationRegistrar {
     // projection: NOW with resumeBehavior SAME_AS_START_AT, whose start keeps no position on Occurrent's durable and
     // competing consumer models and bypasses the catch-up layer, so neither a restart nor a resume reads a position a
     // catch-up stored. An application-supplied model of another type that keeps a position is not told to opt out, and
-    // this check cannot see one. DEFAULT, and NOW with the default resumeBehavior, both start at the model default, and
-    // a restart that finds a catch-up's checkpoint in storage resumes from it and replays (issue 1418, ADR 166 on the
-    // reactor stack). A SubscriptionResumePoints bean can replace the start with a checkpoint, so the case does not hold
+    // this check cannot see one. DEFAULT starts at the model default and NOW with the default resumeBehavior resumes
+    // from a stored position, so a restart of either that finds a catch-up's checkpoint in storage resumes from it and
+    // replays (issue 1418, ADR 166 on the reactor stack). A SubscriptionResumePoints bean can replace the start with a checkpoint, so the case does not hold
     // while one is declared.
     private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation) {
         if (applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable() != null) {
