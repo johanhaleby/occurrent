@@ -21,6 +21,8 @@ import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqBuildFailureClassifier;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSource;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqInboundMapper;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqSourceListener;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.Logger;
@@ -38,10 +40,16 @@ class DefaultRabbitMqCloudEventSourceFactory implements RabbitMqCloudEventSource
     private final RabbitMqBrokerProperties properties;
     private final ObjectProvider<DestinationResolver<RabbitMqDestination>> resolverProvider;
     private final ApplicationContext applicationContext;
+    private final ObjectProvider<RabbitMqInboundMapper> inboundMapperProvider;
+    private final ObjectProvider<RabbitMqSourceListener> listenerProvider;
 
     DefaultRabbitMqCloudEventSourceFactory(Connection connection, RabbitMqBrokerProperties properties,
                                             ObjectProvider<DestinationResolver<RabbitMqDestination>> resolverProvider,
-                                            ApplicationContext applicationContext) {
+                                            ApplicationContext applicationContext,
+                                            ObjectProvider<RabbitMqInboundMapper> inboundMapperProvider,
+                                            ObjectProvider<RabbitMqSourceListener> listenerProvider) {
+        this.inboundMapperProvider = requireNonNull(inboundMapperProvider);
+        this.listenerProvider = requireNonNull(listenerProvider);
         this.connection = requireNonNull(connection);
         this.properties = requireNonNull(properties);
         this.resolverProvider = requireNonNull(resolverProvider);
@@ -62,6 +70,14 @@ class DefaultRabbitMqCloudEventSourceFactory implements RabbitMqCloudEventSource
         DestinationResolver<RabbitMqDestination> resolver = resolverProvider.getIfAvailable();
         if (resolver != null) {
             builder.resolver(resolver);
+        }
+        RabbitMqInboundMapper inboundMapper = inboundMapperProvider.getIfAvailable();
+        if (inboundMapper != null) {
+            builder.inboundMapper(inboundMapper);
+        }
+        RabbitMqSourceListener listener = listenerProvider.getIfAvailable();
+        if (listener != null) {
+            builder.listener(listener);
         }
         sourceProperties.getParkingDestination().toDestination().ifPresent(builder::parkingDestination);
         return builder;

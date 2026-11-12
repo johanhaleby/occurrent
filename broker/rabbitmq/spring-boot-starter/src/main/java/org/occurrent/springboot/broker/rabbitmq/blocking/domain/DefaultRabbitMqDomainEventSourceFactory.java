@@ -20,6 +20,8 @@ import com.rabbitmq.client.Connection;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqBuildFailureClassifier;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqInboundMapper;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqSourceListener;
 import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSource;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.retry.RetryStrategy;
@@ -37,9 +39,15 @@ class DefaultRabbitMqDomainEventSourceFactory implements RabbitMqDomainEventSour
     private final Connection connection;
     private final RabbitMqBrokerProperties properties;
     private final ObjectProvider<DestinationResolver<RabbitMqDestination>> resolverProvider;
+    private final ObjectProvider<RabbitMqInboundMapper> inboundMapperProvider;
+    private final ObjectProvider<RabbitMqSourceListener> listenerProvider;
 
     DefaultRabbitMqDomainEventSourceFactory(Connection connection, RabbitMqBrokerProperties properties,
-                                             ObjectProvider<DestinationResolver<RabbitMqDestination>> resolverProvider) {
+                                             ObjectProvider<DestinationResolver<RabbitMqDestination>> resolverProvider,
+                                             ObjectProvider<RabbitMqInboundMapper> inboundMapperProvider,
+                                             ObjectProvider<RabbitMqSourceListener> listenerProvider) {
+        this.inboundMapperProvider = requireNonNull(inboundMapperProvider);
+        this.listenerProvider = requireNonNull(listenerProvider);
         this.connection = requireNonNull(connection);
         this.properties = requireNonNull(properties);
         this.resolverProvider = requireNonNull(resolverProvider);
@@ -58,6 +66,14 @@ class DefaultRabbitMqDomainEventSourceFactory implements RabbitMqDomainEventSour
         DestinationResolver<RabbitMqDestination> resolver = resolverProvider.getIfAvailable();
         if (resolver != null) {
             builder.resolver(resolver);
+        }
+        RabbitMqInboundMapper inboundMapper = inboundMapperProvider.getIfAvailable();
+        if (inboundMapper != null) {
+            builder.inboundMapper(inboundMapper);
+        }
+        RabbitMqSourceListener listener = listenerProvider.getIfAvailable();
+        if (listener != null) {
+            builder.listener(listener);
         }
         sourceProperties.getParkingDestination().toDestination().ifPresent(builder::parkingDestination);
         return builder;

@@ -43,6 +43,7 @@ import org.occurrent.springboot.common.OccurrentProperties.ProjectionProperties.
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
@@ -257,7 +258,7 @@ class ProjectionAnnotationRegistrar {
             // itself does not require the wider Subscribable contract, only the capability lookup.
             SubscriptionModelCapability capability = fluxSubscriptionModel instanceof SubscriptionModelCapability c ? c : null;
             CatchupResolution recordingResolution = annotation.recordAppliedAppends() ? resolveCatchupModel(id, capability) : null;
-            warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution, capability));
+            warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution));
             Object store = resolveStore(annotation, id);
             boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
             subscribeCall.subscribe(() -> "@Projection '%s'".formatted(id), LateSubscriber.startIsFixed(annotatedStart), () -> {
@@ -292,7 +293,7 @@ class ProjectionAnnotationRegistrar {
                 StartAt startAt = startPositionSupport.withResumePoint(id, annotatedStart);
                 startPositionSupport.applyStartupWorkarounds();
                 CatchupResolution recordingResolution = annotation.recordAppliedAppends() ? resolveCatchupModel(id, subscribable) : null;
-                warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution, subscribable));
+                warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution));
                 Object store = resolveStore(annotation, id);
                 boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
                 subscribeCall.subscribe(() -> "@Projection '%s'".formatted(id), LateSubscriber.startIsFixed(annotatedStart), () -> {
@@ -489,9 +490,9 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
-    // ADR 132 decision 9's third case: a composition that can replay and can report its phase, but is wired so it
-    // is never asked to (the resolved start position never replays, or the composition has no catch-up layer at
-    // all). Recording still proceeds, since decision 9 allows it, but nothing ever clears it automatically.
+    // ADR 132 decision 9's third case, a composition that can replay and can report its phase but is wired so it is
+    // never asked to, its durable-only case, a composition with no catch-up layer at all, or a push projection with
+    // catchup = NONE. Recording still proceeds, since decision 9 allows it, but nothing ever clears it automatically.
     // verifiedNeverReplays must already be a fact this registrar can stand behind (see verifiedNeverReplays(...)
     // below), never an inference from an unobservable composition's assumed behavior, so a false positive here
     // never happens.
@@ -501,41 +502,28 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
-    // The three sound cases the recordAppliedAppends-never-resets warning may fire on for an event-store
+    // The two sound cases the recordAppliedAppends-never-resets warning may fire on for an event-store
     // (DCB/agnostic/stream) projection, per the epic's doctrine that a fact about a composition comes from the
     // owner that composed it, never from a probe or an annotation-only predicate:
-    //   1. NOW with resumeBehavior SAME_AS_START_AT, which is StartAt.now() on every start, a documented,
-    //      composition-independent contract every Subscribable must honor, true regardless of what the composition
-    //      can do.
-    //   2. The composition structurally has no catch-up layer at all (ADR 132 decision 9's third case), a known
-    //      fact resolveCatchupModel's ComposedCatchupModel branch already verified, not an unobserved absence.
-    //   3. DEFAULT, where the auto-configuration that composed this model registered, through ComposedCatchupModel,
-    //      that its own DEFAULT bypasses catch-up, and capability is that exact composition. True for Occurrent's
-    //      shipped Mongo composition (issue 865), never assumed for an application-supplied one, whose own DEFAULT
-    //      semantics are its own to declare, and never assumed for a projection running on some other model the
-    //      context also holds, which the holder was never told anything about (issue 996).
-    // NOW with the default resumeBehavior is the model default (the reactor StartPositionSupport.nowThenResume and
-    // its DCB counterpart), so it is case 3 and not case 1. A model default resumes from a stored checkpoint and, on an application-supplied model, may
-    // replay. DEFAULT on a composition with no registered fact stays silent. This registrar cannot verify it either way.
-    private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable CatchupResolution recordingResolution,
-                                         @Nullable SubscriptionModelCapability capability) {
-        org.occurrent.annotation.StartPosition startAt = annotation.startAt();
-        if (startAt == org.occurrent.annotation.StartPosition.NOW && annotation.resumeBehavior() == org.occurrent.annotation.ResumeBehavior.SAME_AS_START_AT) {
+    //   1. The composition structurally has no catch-up layer at all (the durable-only case of ADR 132 decision 9), a
+    //      known fact resolveCatchupModel's ComposedCatchupModel branch already verified, not an unobserved absence.
+    //   2. NOW with resumeBehavior SAME_AS_START_AT, which is StartAt.now() on every start. On the stream composition
+    //      ReactiveNowStartAtLeftOverCheckpointMongoTest boots, neither a restart nor a resume replays from a catch-up
+    //      checkpoint in storage. An application-supplied model that resumes from a stored
+    //      position anyway is not seen here.
+    // DEFAULT, and NOW with the default resumeBehavior, both start at the model default (StartPositionSupport's
+    // nowThenResume and its DCB counterpart). A restart resumes from the stored checkpoint, and on the shipped
+    // Mongo composition that replays when a catch-up stored the checkpoint (ADR 166), so neither is case 2. A
+    // SubscriptionResumePoints bean can replace the start with a checkpoint, so case 2 does not hold while one is
+    // declared.
+    private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable CatchupResolution recordingResolution) {
+        if (recordingResolution != null && recordingResolution.structurallyNeverCatchesUp()) {
             return true;
         }
-        boolean structurallyNeverReplays = recordingResolution != null && recordingResolution.structurallyNeverCatchesUp();
-        if (structurallyNeverReplays) {
-            return true;
+        if (applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable() != null) {
+            return false;
         }
-        boolean startsAtTheModelDefault = startAt == org.occurrent.annotation.StartPosition.DEFAULT || startAt == org.occurrent.annotation.StartPosition.NOW;
-        if (startsAtTheModelDefault && annotation.startAtGlobalPosition() < 0) {
-            // startAtGlobalPosition >= 0 overrides DEFAULT and replays from that position regardless
-            // (generateAgnosticStartAt/generateDcbStartAt check it first), so it must be excluded here too, or a
-            // projection that genuinely replays from an explicit position would get the never-replays warning.
-            ComposedCatchupModel holder = applicationContext.getBeanProvider(ComposedCatchupModel.class).getIfAvailable();
-            return holder != null && holder.isDefaultKnownLiveOnlyFor(capability);
-        }
-        return false;
+        return annotation.startAt() == org.occurrent.annotation.StartPosition.NOW && annotation.resumeBehavior() == org.occurrent.annotation.ResumeBehavior.SAME_AS_START_AT;
     }
 
     // Wraps update so it records every applied append. Caller only calls this once it has already decided recording

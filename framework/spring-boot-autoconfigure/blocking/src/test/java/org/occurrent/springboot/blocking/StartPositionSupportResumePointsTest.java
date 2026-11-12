@@ -273,7 +273,7 @@ class StartPositionSupportResumePointsTest {
 
     @ParameterizedTest
     @EnumSource(Annotation.class)
-    void with_a_bean_that_answers_null_a_same_as_start_at_now_start_resolves_to_now_for_the_catch_up(Annotation annotation) {
+    void with_a_bean_that_answers_null_a_same_as_start_at_now_start_answers_null_to_the_catch_up_so_the_live_model_starts_it_at_the_present(Annotation annotation) {
         // Given
         StartPositionSupport support = supportAnswering(null);
         Object start = start(annotation, support, StartPosition.NOW, ResumeBehavior.SAME_AS_START_AT);
@@ -282,7 +282,7 @@ class StartPositionSupportResumePointsTest {
         @Nullable StartAt catchup = resolve(start, CatchupSubscriptionModel.class);
 
         // Then
-        assertThat(catchup).isNotNull().matches(StartAt::isNow);
+        assertThat(catchup).isNull();
     }
 
     private List<@Nullable StartAt> resolveForEveryModel(Object start) {

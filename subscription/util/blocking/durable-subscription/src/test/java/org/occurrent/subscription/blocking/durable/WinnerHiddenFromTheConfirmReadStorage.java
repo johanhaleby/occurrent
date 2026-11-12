@@ -34,15 +34,31 @@ final class WinnerHiddenFromTheConfirmReadStorage implements CheckpointStorage {
 
     enum ConfirmRead {FAILS, FINDS_NOTHING}
 
+    /** Fails the confirm read with a checked exception it doesn't declare, as a storage written in Kotlin can */
+    static WinnerHiddenFromTheConfirmReadStorage failingWithAnUndeclaredCheckedException(Checkpoint positionTheOtherNodeStores, Throwable failure) {
+        return new WinnerHiddenFromTheConfirmReadStorage(ConfirmRead.FAILS, positionTheOtherNodeStores, failure);
+    }
+
     private final ConfirmRead confirmRead;
     private final Checkpoint positionTheOtherNodeStores;
+    private final @Nullable Throwable undeclaredFailure;
     private @Nullable Checkpoint stored;
     private boolean answersReads = true;
     private int readsThatHidTheStoredPosition = 0;
 
     WinnerHiddenFromTheConfirmReadStorage(ConfirmRead confirmRead, Checkpoint positionTheOtherNodeStores) {
+        this(confirmRead, positionTheOtherNodeStores, null);
+    }
+
+    private WinnerHiddenFromTheConfirmReadStorage(ConfirmRead confirmRead, Checkpoint positionTheOtherNodeStores, @Nullable Throwable undeclaredFailure) {
         this.confirmRead = confirmRead;
         this.positionTheOtherNodeStores = positionTheOtherNodeStores;
+        this.undeclaredFailure = undeclaredFailure;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException sneaky(Throwable throwable) throws E {
+        throw (E) throwable;
     }
 
     synchronized void answersReadsAgain() {
@@ -60,6 +76,9 @@ final class WinnerHiddenFromTheConfirmReadStorage implements CheckpointStorage {
         }
         readsThatHidTheStoredPosition++;
         if (confirmRead == ConfirmRead.FAILS) {
+            if (undeclaredFailure != null) {
+                throw sneaky(undeclaredFailure);
+            }
             throw new IllegalStateException("Checkpoint storage cannot be reached");
         }
         return null;

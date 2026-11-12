@@ -43,6 +43,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.AppliedAppendRecordingRegistry;
 import org.occurrent.springboot.common.PolledCatchupSignals;
 import org.occurrent.springboot.common.PushCatchupStatusImpl;
+import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
@@ -436,34 +437,19 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
-    // The two sound cases the recordAppliedAppends-never-resets warning may fire on for a DCB/agnostic/stream
-    // projection, per the epic's doctrine that a fact about a composition comes from the owner that composed it,
-    // never from a probe or an annotation-only predicate:
-    //   1. An explicit NOW, StartAt.now() is a documented, composition-independent contract every Subscribable
-    //      must honor, true regardless of what the composition can do.
-    //   2. DEFAULT, where the auto-configuration that composed this stack's default model registered, through
-    //      ComposedDefaultStartPosition, that its own DEFAULT bypasses catch-up, and capability is that exact
-    //      composition. True for Occurrent's shipped Mongo composition (issue 865), never assumed for an
-    //      application-supplied one, whose own DEFAULT semantics are its own to declare, and never assumed for a
-    //      projection running on a Subscriptions/StreamSubscriptions/DcbSubscriptions replacement that wraps a
-    //      different composition than the one the fact was registered for (issue 871).
-    // Unlike the reactor stack, ReplayAwareSubscriptions.findIn already unwraps a wrapper chain here (ADR 132
-    // decision 8), so there is no separate "structurally no catch-up layer" fact distinct from "unknown composition"
-    // to draw on for this path, both collapse to the same empty capability lookup. DEFAULT on a composition with no
-    // registered fact, and BEGINNING/a global position on a composition whose capability cannot be read, both stay
-    // silent. This registrar cannot verify either one.
-    private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable SubscriptionModelCapability capability) {
-        if (annotation.startAt() == org.occurrent.annotation.StartPosition.NOW) {
-            return true;
+    // The one sound case the recordAppliedAppends-never-resets warning may fire on for a DCB/agnostic/stream
+    // projection: NOW with resumeBehavior SAME_AS_START_AT, whose start keeps no position on Occurrent's durable and
+    // competing consumer models and bypasses the catch-up layer, so neither a restart nor a resume reads a position a
+    // catch-up stored. An application-supplied model of another type that keeps a position is not told to opt out, and
+    // this check cannot see one. DEFAULT starts at the model default and NOW with the default resumeBehavior resumes
+    // from a stored position, so a restart of either that finds a catch-up's checkpoint in storage resumes from it and
+    // replays (issue 1418, ADR 166 on the reactor stack). A SubscriptionResumePoints bean can replace the start with a
+    // checkpoint, so the case does not hold while one is declared.
+    private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation) {
+        if (applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable() != null) {
+            return false;
         }
-        if (annotation.startAt() == org.occurrent.annotation.StartPosition.DEFAULT && annotation.startAtGlobalPosition() < 0) {
-            // startAtGlobalPosition >= 0 overrides DEFAULT and replays from that position regardless
-            // (generateAgnosticStartAt/generateDcbStartAt check it first), so it must be excluded here too, or a
-            // projection that genuinely replays from an explicit position would get the never-replays warning.
-            ComposedDefaultStartPosition holder = applicationContext.getBeanProvider(ComposedDefaultStartPosition.class).getIfAvailable();
-            return holder != null && holder.isDefaultKnownLiveOnlyFor(capability);
-        }
-        return false;
+        return annotation.startAt() == org.occurrent.annotation.StartPosition.NOW && annotation.resumeBehavior() == ResumeBehavior.SAME_AS_START_AT;
     }
 
     // Wraps materializedView in the applied-append recorder when the annotation asks for it, told about its
@@ -477,7 +463,7 @@ class ProjectionAnnotationRegistrar {
         if (!annotation.recordAppliedAppends()) {
             return materializedView;
         }
-        warnIfRecordingNeverResets(id, true, verifiedNeverReplays(annotation, capability));
+        warnIfRecordingNeverResets(id, true, verifiedNeverReplays(annotation));
         return wrapForRecording(annotation, id, materializedView, ReplayAwareSubscriptions.findIn(capability).orElse(null), true);
     }
 
@@ -664,10 +650,12 @@ class ProjectionAnnotationRegistrar {
             MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, dcbSubscriptions.subscriptionModel());
             DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
             startPositionSupport.applyStartupWorkarounds();
-            var subscription = dcbSubscriptions.subscribeWithMetadata(id, dcbProjection.criteria(), startAt, (dcbMetadata, event) -> materializedView.update(dcbMetadata.eventMetadata(), event));
-            if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
-                subscription.waitUntilStarted();
-            }
+            BackgroundStartup.subscribe(annotation.startupMode(), () -> {
+                var subscription = dcbSubscriptions.subscribeWithMetadata(id, dcbProjection.criteria(), startAt, (dcbMetadata, event) -> materializedView.update(dcbMetadata.eventMetadata(), event));
+                if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
+                    subscription.waitUntilStarted();
+                }
+            });
         } else if (descriptor instanceof Projection<?, ?, ?> raw) {
             Projection<S, E, ID> projection = (Projection<S, E, ID>) raw;
             // Resolved once, in the same place it always was, before any subscription bean: a raw return type with
@@ -695,17 +683,17 @@ class ProjectionAnnotationRegistrar {
             if (stream) {
                 StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
                 MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, streamSubscriptions.getSubscriptionModel());
-                streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
+                BackgroundStartup.subscribe(annotation.startupMode(), () -> streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
                     materializedView.update(metadata, event);
                     return Unit.INSTANCE;
-                });
+                }));
             } else {
                 Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
                 MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, subscriptions.getSubscriptionModel());
-                subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
+                BackgroundStartup.subscribe(annotation.startupMode(), () -> subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
                     materializedView.update(metadata, event);
                     return Unit.INSTANCE;
-                });
+                }));
             }
         } else {
             throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));

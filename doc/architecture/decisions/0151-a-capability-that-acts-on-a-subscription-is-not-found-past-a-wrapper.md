@@ -4,7 +4,7 @@ Date: 2026-10-24
 
 ## Status
 
-Accepted. #1251 and #1253.
+Accepted. #1251 and #1253. Amended by #1430, which adds `StartRefusalReportingSubscriptions` to the list.
 
 Amends [ADR 118](0118-a-subscription-model-capability-marker-replaces-object-in-the-of-lookups.md) and
 [ADR 119](0119-subscription-model-capability-gains-instance-side-lookups.md), where both
@@ -46,6 +46,11 @@ to it.
   questions about subscriptions.
 * `QuietPositionReportingSubscriptions`, which adds and removes a listener that is told positions. Another listener
   changes no wrapper's state.
+* `StartRefusalReportingSubscriptions`, added in #1430, which adds and removes a listener that is told about a start
+  the MongoDB model has already refused. The listener can't change what the MongoDB model did. The
+  `CompetingConsumerSubscriptionModel` gives back its own lease when it is told, so the state that changes belongs to
+  the model that added the listener. It has to hear the refusal from the MongoDB model under a
+  `DurableSubscriptionModel` or a `CatchupSubscriptionModel`.
 * `Pushable`, which takes events in at the bottom of the stack. They reach every wrapper's action on the way up as
   usual.
 * `HistoryLossReportingSubscriptions`. Its listener can answer `TakeOver` and so act on a subscription, which makes it
@@ -91,9 +96,9 @@ call holds the lock `DurableSubscriptionModel` already takes per subscription id
 * A dynamic `StartAt` is resolved once and then handled as above. One that resolves to `null` throws
   `IllegalArgumentException`.
 * A checkpoint the wrapped model can't subscribe at is forwarded to the wrapped model and nothing is stored. A restart
-  subscribes the wrapped model at the stored checkpoint, and a MongoDB model opens at the present for a checkpoint its
-  change stream can't open at, such as a `GlobalCheckpoint`, a `CatchupTimeCheckpoint`, a time or one an application
-  made up. Storing it would make a restart skip the events written in between.
+  subscribes the wrapped model at the stored checkpoint. A MongoDB model refuses a `GlobalCheckpoint` or a
+  `CatchupTimeCheckpoint` there, and opens at the present for a time or one an application made up. Storing it would
+  make a restart stop, or skip the events written in between.
 
 The durable model can't tell those checkpoints apart itself, because only the wrapped model knows what it can open at.
 So blocking `RepositionableSubscriptions` gets a default method, `restartsAt(Checkpoint)`, that answers `false`. The

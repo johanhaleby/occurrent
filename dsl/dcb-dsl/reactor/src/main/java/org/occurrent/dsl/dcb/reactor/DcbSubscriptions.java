@@ -51,7 +51,8 @@ import static java.util.Objects.requireNonNull;
  * {@link FluxSubscriptionModel}, so what a start such as {@link DcbStartAt#beginning()} does depends on that model. A
  * model composed with {@code ReactorDcbCatchupSubscriptionModel} replays history from that position before going live.
  * {@code ReactorMongoSubscriptionModel} has no DCB catch-up and refuses such a start with an
- * {@link org.occurrent.subscription.UnsupportedStartAtException}, as {@link DcbSubscriptionModel} describes.
+ * {@link org.occurrent.subscription.UnsupportedStartAtException}, also when a dynamic start returns it, as
+ * {@link DcbSubscriptionModel} describes.
  * <p>
  * The {@link #subscribe(String, DcbCriteria, Function)} and {@link #subscribeWithMetadata(String, DcbCriteria, BiFunction)}
  * methods below are the named, lifecycle-managed counterpart to the {@link Flux}-returning methods above, mirroring
