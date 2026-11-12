@@ -287,20 +287,20 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * decided by whatever feeds the subscription, and {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what
      * that can be.
      * <p>
-     * The first failure is a warning, and after that it is logged at ERROR once per {@link #unroutableErrorInterval()}
-     * for as long as the event keeps being offered, rather than every time the source offers it. That interval is the
-     * quarantine budget when one is configured, and a fixed five-minute default otherwise, so an operator alerting on
-     * ERROR is paged on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
-     * offering the event. A model that does not offer a refused delivery again gets only the first WARN.
-     * See {@link #unroutableErrorInterval()} for why. An event carrying no redelivery key is named by its CloudEvent
-     * id and source instead.
+     * The first failure is a warning, and after that it is logged at ERROR at most once per
+     * {@link #unroutableErrorInterval()} rather than every time the source offers it, as long as each offer comes within
+     * twice that interval of the one before. That interval is the quarantine budget when one is configured, and a fixed
+     * five-minute default otherwise, so an operator alerting on ERROR is paged on a subscription model this saga cannot
+     * quarantine anything on, for as long as that model keeps offering the event that often. A model that offers it more
+     * than twice the interval apart gets a WARN on every offer, and one that does not offer a refused delivery again
+     * gets only the first WARN. See {@link #unroutableErrorInterval()} for why. An event with no redelivery key is named
+     * by its CloudEvent id and source instead.
      * <p>
-     * An event that is not offered again for twice that interval is forgotten, because one repaired on another node
-     * after a competing consumer's lease moved, or given up on by a retry strategy, never routes here to be dropped. If
-     * it does come back after that, it is warned about as a new failure, with its time measured from then. A model that
-     * offers the event a little less often than the interval still gets an ERROR on every offer. One that offers it
-     * less often than twice the interval gets a WARN on every offer instead. The other forgotten events are dropped at
-     * most once per interval, by whichever refusal comes first after it.
+     * An event that is not offered again for more than twice that interval is forgotten, because one repaired on another
+     * node after a competing consumer's lease moved, or given up on by a retry strategy, never routes here to be
+     * dropped. If it does come back after that, it is warned about as a new failure, with its time measured from then. A
+     * model that offers the event a little less often than the interval still gets an ERROR on every offer. The other
+     * forgotten events are dropped at most once per interval, by whichever refusal comes first after it.
      */
     private void refuseUnroutableDelivery(EventMeta meta, CloudEvent cloudEvent, Throwable failure) {
         if (!SagaExecutionSupport.isAttributableToTheInstance(failure)) {
