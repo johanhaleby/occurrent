@@ -4180,8 +4180,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     // A blocking call that throws an InterruptedException clears the interrupt flag, so a catch that doesn't throw it on
-    // sets the flag again for the caller of this model. A thread this model started is left as it is, since this model
-    // never interrupts it, and the flag would only end the loop that tries the failure again there.
+    // sets the flag again for the caller of this model. A thread this model started gets no flag, since this model never
+    // interrupts it, and on the threads that try a failure again the flag would end that loop.
     private void interruptAgainIfInterrupted(Exception failure) {
         if (failure instanceof InterruptedException && !onAThreadOfItsOwn.get()) {
             Thread.currentThread().interrupt();
