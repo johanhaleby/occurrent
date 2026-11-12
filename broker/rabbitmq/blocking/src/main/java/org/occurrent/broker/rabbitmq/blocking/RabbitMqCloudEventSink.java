@@ -35,10 +35,11 @@ import java.util.concurrent.TimeoutException;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Publishes a {@link CloudEvent} to RabbitMQ, in the CloudEvents binary content mode
- * {@link RabbitMqCloudEventMapper} defines. Bring-your-own-sink is the primary way to use the broker modules at all,
- * so use this one when you have not already written your own {@link CloudEventSink}. It is a complete,
- * confirmed, at-least-once publisher rather than a starting point to copy from.
+ * Publishes a {@link CloudEvent} to RabbitMQ, by default in the CloudEvents binary content mode
+ * {@link RabbitMqCloudEventMapper} defines, or in the format a {@link RabbitMqOutboundMapper} set on the builder
+ * writes. Bring-your-own-sink is the primary way to use the broker modules at all, so use this one when you have
+ * not already written your own {@link CloudEventSink}. It is a complete, confirmed, at-least-once publisher rather
+ * than a starting point to copy from.
  * <p>
  * {@link #publish(CloudEvent)} does not return until the broker has confirmed the message and, by default, routed it.
  * Publisher confirms are required, enabled once when {@link #builder(Connection, DestinationResolver)} builds the
@@ -54,7 +55,9 @@ import static java.util.Objects.requireNonNull;
  * left outstanding on the
  * broker's side of that channel (or the channel itself is simply gone), so this sink retires the channel and opens
  * a fresh one underneath it, and a later publish is never kept waiting on an abandoned one, blamed for its eventual
- * nack, or stuck permanently on a channel the broker already closed. That recovery reaches a channel-level
+ * nack, or stuck permanently on a channel the broker already closed. A message the client fails to encode retires
+ * the channel too, since the client counts the publish as waiting for a confirm before it encodes the message. That
+ * recovery reaches a channel-level
  * shutdown. After a connection-level one there is no connection to reopen a channel on until the caller's own
  * {@link Connection} reconnects, which RabbitMQ's client offers as automatic connection recovery. A publish made
  * during that outage fails. Every publish checks that its channel is open before using it and opens a new one when it
@@ -68,7 +71,9 @@ import static java.util.Objects.requireNonNull;
  * serialized channel gives builds more than one sink, each with its own {@link Channel}.
  * <p>
  * A transient failure is retried under {@link Builder#retryStrategy(RetryStrategy)} before a caller sees it,
- * exponential backoff from 100 ms up to 2 seconds by default and no cap on the number of attempts. The retry is not
+ * exponential backoff from 100 ms up to 2 seconds by default and no cap on the number of attempts. That includes an
+ * {@link IOException} from encoding a header that a custom {@link RabbitMqOutboundMapper} set, which can fail the same
+ * way on every attempt, so give such a sink a retry strategy with a cap on attempts. The retry is not
  * a substitute for the acknowledgement wait, since a publish that was never acknowledged is not known to have
  * failed, only unresolved. Per ADR 133, an expired {@link RabbitMqPublishTimeoutException} is for the caller to
  * decide on rather than something this retry absorbs, so the default excludes it, along with
@@ -88,10 +93,12 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     private final RetryStrategy retryStrategy;
     private final RabbitMqConfirmPublisher publisher;
     private final RabbitMqUnroutablePolicy unroutablePolicy;
+    private final RabbitMqOutboundMapper outboundMapper;
     private volatile boolean shutdown;
 
     private RabbitMqCloudEventSink(DestinationResolver<RabbitMqDestination> resolver, RetryStrategy retryStrategy, RabbitMqConfirmPublisher publisher,
-                                   RabbitMqUnroutablePolicy unroutablePolicy) {
+                                   RabbitMqUnroutablePolicy unroutablePolicy, RabbitMqOutboundMapper outboundMapper) {
+        this.outboundMapper = outboundMapper;
         this.resolver = resolver;
         this.retryStrategy = retryStrategy;
         this.publisher = publisher;
@@ -117,10 +124,16 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
 
     private void publishOnce(CloudEvent cloudEvent) {
         RabbitMqDestination destination = resolver.destinationFor(cloudEvent);
-        // Body computed once and passed into toBasicProperties(..., byte[]) rather than calling the two-argument
-        // overload, so cloudEvent's lazily-serializing data is not serialized a second time on this publish.
-        byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
-        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers(), body);
+        RabbitMqMessage message = outboundMapper.toMessage(cloudEvent, destination);
+        if (message == null) {
+            throw new IllegalStateException("The " + RabbitMqOutboundMapper.class.getSimpleName() + " returned null for the event with id \""
+                    + cloudEvent.getId() + "\" and type \"" + cloudEvent.getType() + "\"");
+        }
+        BasicProperties properties = message.properties();
+        if (properties.getDeliveryMode() == null) {
+            properties = properties.builder().deliveryMode(2).build();
+        }
+        byte[] body = message.body();
         try {
             publisher.publish(destination.exchange(), destination.routingKey(), properties, body);
         } catch (RabbitMqUnroutableEventException e) {
@@ -156,6 +169,7 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         private Duration acknowledgementTimeout = Duration.ofSeconds(5);
         private RetryStrategy retryStrategy = defaultRetryStrategy();
         private RabbitMqUnroutablePolicy unroutablePolicy = RabbitMqUnroutablePolicy.FAIL;
+        private RabbitMqOutboundMapper outboundMapper = RabbitMqOutboundMapper.cloudEventHeaders();
 
         private Builder(Connection connection, DestinationResolver<RabbitMqDestination> resolver) {
             this.connection = requireNonNull(connection, "connection cannot be null");
@@ -207,9 +221,19 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
             return this;
         }
 
+        /**
+         * How the sink turns an event into the message it publishes. {@link RabbitMqOutboundMapper#cloudEventHeaders()}
+         * by default. See {@link RabbitMqOutboundMapper} for what the sink adds to the mapped message and for how a
+         * {@code null} result or an exception from the mapper is handled.
+         */
+        public Builder outboundMapper(RabbitMqOutboundMapper outboundMapper) {
+            this.outboundMapper = requireNonNull(outboundMapper, RabbitMqOutboundMapper.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
         public RabbitMqCloudEventSink build() {
             RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, acknowledgementTimeout);
-            return new RabbitMqCloudEventSink(resolver, retryStrategy, publisher, unroutablePolicy);
+            return new RabbitMqCloudEventSink(resolver, retryStrategy, publisher, unroutablePolicy, outboundMapper);
         }
 
         /**

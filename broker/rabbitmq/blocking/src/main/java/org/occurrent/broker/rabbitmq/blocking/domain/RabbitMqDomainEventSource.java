@@ -34,6 +34,7 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqConsumerRecovery;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryFailureAction;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryWorker;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqInboundMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTeardown;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopology;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
@@ -65,7 +66,8 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Feeds a RabbitMQ queue into a {@link DomainEventFeed}, the domain-level consume side ADR 133 decision 5
- * describes. Rebuilds each message as a {@link CloudEvent} through {@link RabbitMqCloudEventMapper} and calls
+ * describes. Rebuilds each message as a {@link CloudEvent} through its {@link RabbitMqInboundMapper}, by default
+ * the one that reads the headers {@link RabbitMqCloudEventMapper} writes, and calls
  * {@link DomainEventFeed#acceptOrDeferCloudEvent(CloudEvent)}, which is where the matching, the decoding and the delivery
  * all happen. This source does no filtering of its own, since the feed is the only thing that can decide per ADR 133
  * decision 5.
@@ -234,6 +236,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     private final ScheduledExecutorService scheduler;
     private final RabbitMqDeliveryWorker worker;
     private final Duration closeTimeout;
+    private final RabbitMqInboundMapper inboundMapper;
 
     private final Lock consumeLock = new ReentrantLock();
     private final AtomicReference<@Nullable String> consumerTag = new AtomicReference<>();
@@ -289,6 +292,13 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
     // mocked Channel. Nothing here talks to a broker, the builder's own start(..) does that.
     RabbitMqDomainEventSource(DomainEventFeed<E> feed, Channel consumeChannel, String queue, int prefetchCount,
                                        Duration pollInterval, RabbitMqDeliveryFailureAction failureAction, Duration closeTimeout) {
+        this(feed, consumeChannel, queue, prefetchCount, pollInterval, failureAction, closeTimeout, RabbitMqInboundMapper.cloudEventHeaders());
+    }
+
+    RabbitMqDomainEventSource(DomainEventFeed<E> feed, Channel consumeChannel, String queue, int prefetchCount,
+                                       Duration pollInterval, RabbitMqDeliveryFailureAction failureAction, Duration closeTimeout,
+                                       RabbitMqInboundMapper inboundMapper) {
+        this.inboundMapper = inboundMapper;
         this.feed = feed;
         this.consumeChannel = consumeChannel;
         this.queue = queue;
@@ -646,8 +656,15 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         long deliveryTag = delivery.getEnvelope().getDeliveryTag();
         CloudEvent cloudEvent;
         try {
-            cloudEvent = RabbitMqCloudEventMapper.toCloudEvent(delivery.getProperties(), delivery.getBody());
-        } catch (RuntimeException e) {
+            cloudEvent = inboundMapper.toCloudEvent(delivery.getProperties(), delivery.getBody());
+            if (cloudEvent == null) {
+                throw new IllegalStateException("The " + RabbitMqInboundMapper.class.getSimpleName() + " returned null");
+            }
+        } catch (Exception | AssertionError e) {
+            if (e instanceof InterruptedException) {
+                // A sneaky throw, since the mapper declares no checked exception. Only close() interrupts this thread
+                Thread.currentThread().interrupt();
+            }
             log.debug("Failed to rebuild a CloudEvent from a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
@@ -976,6 +993,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
         private int prefetchCount = 1;
         private Duration closeTimeout = Duration.ofSeconds(30);
         private RetryStrategy retryStrategy;
+        private RabbitMqInboundMapper inboundMapper = RabbitMqInboundMapper.cloudEventHeaders();
 
         private Builder(Connection connection, DomainEventFeed<E> feed, String queue) {
             this.connection = requireNonNull(connection, "connection cannot be null");
@@ -1128,6 +1146,18 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
             return this;
         }
 
+        /**
+         * How the source turns a delivered message into a {@link CloudEvent}, before the feed's
+         * {@code CloudEventConverter} turns that into a domain event. {@link RabbitMqInboundMapper#cloudEventHeaders()}
+         * by default. The converter must resolve the {@code type} of the mapped event. An exception from the mapper,
+         * or a {@code null} result, is handled as a failed delivery by
+         * {@link #onDeliveryFailure(DeliveryFailurePolicy)}.
+         */
+        public Builder<E> inboundMapper(RabbitMqInboundMapper inboundMapper) {
+            this.inboundMapper = requireNonNull(inboundMapper, RabbitMqInboundMapper.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
         public RabbitMqDomainEventSource<E> build() {
             if (declareTopology && bindings == null && resolver == null) {
                 throw new IllegalStateException("A resolver(...), or explicit bindings(...), is required unless declareTopology(false) is set");
@@ -1157,7 +1187,7 @@ public final class RabbitMqDomainEventSource<E> implements AutoCloseable {
             RabbitMqDomainEventSource<E> source = null;
             try {
                 failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
-                source = new RabbitMqDomainEventSource<>(feed, channel, queue, prefetchCount, pollInterval, failureAction, closeTimeout);
+                source = new RabbitMqDomainEventSource<>(feed, channel, queue, prefetchCount, pollInterval, failureAction, closeTimeout, inboundMapper);
                 source.start(this, destinations);
                 return source;
             } catch (RuntimeException e) {
