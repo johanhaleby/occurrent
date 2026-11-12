@@ -1469,7 +1469,9 @@ When that cancel reaches `ReactorMongoSubscriptionModel` or `ReactorDurableSubsc
 `subscribe(..)` took the id there, the model registers nothing for it, and `waitUntilStarted()` on the
 `Subscription` that `subscribe(..)` returned fails with `SubscriptionNotRunningException`. In 0.34.0 that subscription
 ran and `waitUntilStarted()` completed. Both models take the id before they call the function, so only a cancel from
-another thread can get there first.
+another thread can get there first. A subclass of either model, a Spring proxy that subclasses it included, keeps
+0.34.0's behaviour here. The catch-up can't tell whether the subclass overrides
+`subscribe(String, SubscriptionFilter, StartAt, Function)`, so it calls that method as before.
 
 If another thread can cancel a subscribe whose start you wait for, `waitUntilStarted()` can fail with one of these
 because of that cancel:
@@ -1485,8 +1487,8 @@ because of that cancel:
 when your application cancelled the id.
 
 Another wrapped model can still register the cancelled `subscribe(..)` after the cancel. So can a subclass of
-`ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel` that overrides
-`subscribe(String, SubscriptionFilter, StartAt, Function)`, since the catch-up calls that override as before. When the
+`ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel`, whether or not it overrides
+`subscribe(String, SubscriptionFilter, StartAt, Function)`. When the
 wrapped `subscribe(..)` returns holding the id, the catch-up cancels the id there again, unless a subscribe of the id
 made after the cancel took it there. That cancel waits until no other subscribe of the id is under way. Until that
 second cancel has completed, a subscribe of the id throws `DuplicateSubscriptionIdException` whenever the wrapped model

@@ -48,4 +48,16 @@ class ReactorMongoSubscriptionModelCancelledSubscribeTest {
         // Then
         assertThat(thrown).as("what the call threw").isInstanceOf(SubscriptionModelShutdownException.class);
     }
+
+    @Test
+    void stands_in_for_the_named_subscribe_for_the_shipped_model() {
+        assertThat(new ReactorMongoSubscriptionModel(mock(ReactiveMongoOperations.class), "events", TimeRepresentation.RFC_3339_STRING).standsInForSubscribe())
+                .as("whether the shipped model stands in for its named subscribe").isTrue();
+    }
+
+    @Test
+    void does_not_stand_in_for_the_named_subscribe_for_a_subclass_that_overrides_nothing() {
+        assertThat(new ReactorMongoSubscriptionModel(mock(ReactiveMongoOperations.class), "events", TimeRepresentation.RFC_3339_STRING) {
+        }.standsInForSubscribe()).as("whether a subclass overriding nothing stands in for the named subscribe").isFalse();
+    }
 }

@@ -34,9 +34,8 @@ import java.util.function.Function;
  * model first, when there is nothing here to cancel yet.
  * <p>
  * A catch-up over a model that doesn't implement this interface lets the cancelled subscribe register, and cancels the
- * id in that model again once the subscribe has returned. So does a catch-up over a subclass that overrides
- * {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, see
- * {@link #standsInForSubscribe(CancellableRegistration)}.
+ * id in that model again once the subscribe has returned. So does a catch-up over a subclass of a model that
+ * implements this interface, see {@link #standsInForSubscribe()}.
  */
 @NullMarked
 public interface CancellableRegistration {
@@ -57,29 +56,19 @@ public interface CancellableRegistration {
                                      Function<CloudEvent, Mono<Void>> action, BooleanSupplier cancelled);
 
     /**
-     * Whether no subclass of the topmost class of {@code model} that implements this interface overrides
-     * {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, so calling the {@code subscribe(..)} of this
-     * interface skips no override. That topmost class subscribes in both {@code subscribe(..)} methods the same way, as
-     * this interface asks. It answers {@code false} when a subclass overrides that {@code subscribe(..)}, also when the
-     * subclass declares this interface again or overrides the {@code subscribe(..)} of this interface too. A caller then
-     * calls the override, and the subclass keeps the cleanup a model that doesn't implement this interface gets. A
-     * subclass that overrides only the {@code subscribe(..)} of this interface answers {@code true}.
+     * Whether a caller can call the {@code subscribe(..)} of this interface in place of
+     * {@code subscribe(String, SubscriptionFilter, StartAt, Function)}. The model answers {@code true} only for its own
+     * class. A subclass can override {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, and calling the
+     * {@code subscribe(..)} of this interface would skip that override. Reflection over the class hierarchy can't show
+     * whether the subclass's {@code subscribe(..)} of this interface runs that override, so a subclass of the model, a
+     * proxy that subclasses it included, answers {@code false}. A caller
+     * then calls {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, and the model gets the cleanup a model
+     * that doesn't implement this interface gets.
      *
-     * @param model The model to call.
      * @return {@code true} when the {@code subscribe(..)} of this interface can be called in place of the one of
-     * {@code SubscriptionModel}.
+     * {@code SubscriptionModel}, {@code false} unless the model overrides this method.
      */
-    static boolean standsInForSubscribe(CancellableRegistration model) {
-        Class<?> declaringSubscribe;
-        try {
-            declaringSubscribe = model.getClass().getMethod("subscribe", String.class, SubscriptionFilter.class, StartAt.class, Function.class).getDeclaringClass();
-        } catch (NoSuchMethodException e) {
-            return false;
-        }
-        Class<?> topmostImplementing = model.getClass();
-        while (topmostImplementing.getSuperclass() != null && CancellableRegistration.class.isAssignableFrom(topmostImplementing.getSuperclass())) {
-            topmostImplementing = topmostImplementing.getSuperclass();
-        }
-        return declaringSubscribe.isAssignableFrom(topmostImplementing);
+    default boolean standsInForSubscribe() {
+        return false;
     }
 }

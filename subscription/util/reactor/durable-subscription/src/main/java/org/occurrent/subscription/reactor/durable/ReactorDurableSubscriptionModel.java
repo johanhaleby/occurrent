@@ -530,6 +530,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return requireNonNull(subscribe(subscriptionId, filter, startAt, action, () -> false));
     }
 
+    // Internal, see CancellableRegistration. Only for this class, since a subclass can override the named subscribe(..)
+    @Override
+    public boolean standsInForSubscribe() {
+        return getClass() == ReactorDurableSubscriptionModel.class;
+    }
+
     // Internal, see CancellableRegistration. Asks cancelled where this model takes the id, under the lock its
     // cancelSubscription(..) takes there. A cancel after that ends the subscribe as any cancel of a subscribe under way
     // does.

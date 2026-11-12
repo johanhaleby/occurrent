@@ -317,6 +317,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return requireNonNull(subscribe(subscriptionId, filter, startAt, action, () -> false));
     }
 
+    // Internal, see CancellableRegistration. Only for this class, since a subclass can override the named subscribe(..)
+    @Override
+    public boolean standsInForSubscribe() {
+        return getClass() == ReactorMongoSubscriptionModel.class;
+    }
+
     // Internal, see CancellableRegistration
     @Override
     public @Nullable Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action,

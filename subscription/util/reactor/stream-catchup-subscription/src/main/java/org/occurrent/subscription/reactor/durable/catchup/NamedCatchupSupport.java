@@ -106,8 +106,8 @@ import static java.util.Objects.requireNonNull;
  * subscribe when the cancel reaches it first, and the subscribe then returns a {@link Subscription} whose
  * {@code waitUntilStarted()} fails with {@link SubscriptionNotRunningException}. A wrapped model that doesn't implement it
  * can register the subscribe after the cancel, so the id is cancelled there again once the wrapped {@code subscribe(..)}
- * returned holding it, unless a later subscribe took the id there. A subclass of either model that overrides
- * {@code subscribe(String, SubscriptionFilter, StartAt, Function)} has that override called, and gets the same second
+ * returned holding it, unless a later subscribe took the id there. A subclass of either model, a proxy that subclasses
+ * it included, has its {@code subscribe(String, SubscriptionFilter, StartAt, Function)} called, and gets the same second
  * cancel as a model that doesn't implement {@code CancellableRegistration}. These calls still run with a lock held.
  * <ul>
  * <li>The handover runs the wrapped {@code subscribe(..)}, or {@code resumeSubscription(id, startAt)} for a takeover,
@@ -135,8 +135,7 @@ final class NamedCatchupSupport {
 
     private final CheckpointAwareSubscriptionModel wrapped;
     private final @Nullable SubscriptionModel named;
-    // The wrapped model when its subscribe(..) of CancellableRegistration runs the code of its named subscribe(..), so
-    // not for a subclass that overrides the named one
+    // The wrapped model when it answers true to standsInForSubscribe(), so not a subclass of either shipped model
     private final @Nullable CancellableRegistration cancellable;
     private final Class<?> modelClass;
     private final ConcurrentMap<String, CatchupState> catchingUp = new ConcurrentHashMap<>();
@@ -183,7 +182,7 @@ final class NamedCatchupSupport {
         this.wrapped = requireNonNull(wrapped);
         this.modelClass = requireNonNull(modelClass);
         this.named = wrapped instanceof SubscriptionModel subscriptionModel ? subscriptionModel : null;
-        this.cancellable = named instanceof CancellableRegistration registration && CancellableRegistration.standsInForSubscribe(registration) ? registration : null;
+        this.cancellable = named instanceof CancellableRegistration registration && registration.standsInForSubscribe() ? registration : null;
         HistoryLossReportingSubscriptions reporting = wrapped instanceof SubscriptionModelCapability capabilities ? HistoryLossReportingSubscriptions.findIn(capabilities).orElse(null) : null;
         RepositionableSubscriptions resumesAtPosition = wrapped instanceof SubscriptionModelCapability capabilities ? RepositionableSubscriptions.findIn(capabilities).orElse(null) : null;
         boolean takesOver = named != null && reporting != null && resumesAtPosition != null;
