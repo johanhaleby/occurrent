@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Drives one saga against one subscription and its own timer poller: it loads the instance, runs the pure
@@ -119,11 +120,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // anything, so a recovery is announced again if it stops a second time.
     private final Set<String> refusalAnnounced = ConcurrentHashMap.newKeySet();
     // The deliveries the saga could not work out an instance for, keyed by redelivery key, or by CloudEvent id and source
-    // for an event carrying none. Only the logging reads it, so a delivery the source re-offers every few milliseconds
-    // is logged once per interval rather than at that cadence. Dropped when the event routes, or once it has gone
-    // UNROUTABLE_FORGOTTEN_AFTER_INTERVALS intervals without being offered, since one repaired on another node never
-    // routes here.
+    // for an event carrying none. The logging reads it, so a delivery the source re-offers every few milliseconds is
+    // logged once per interval rather than at that cadence. Dropped when the event routes. One not offered for
+    // UNROUTABLE_FORGOTTEN_AFTER_INTERVALS intervals is dropped by a later refusal instead, since one repaired on another
+    // node never routes here. So what stays after the last refusal is what was refused in the three intervals before it.
     private final ConcurrentHashMap<String, UnroutableDelivery> unroutableDeliveries = new ConcurrentHashMap<>();
+    // When a refusal last dropped the forgotten deliveries, so the map is scanned at most once per interval. A source
+    // that parks every event it cannot deliver gives a broken converter one entry per event, and scanning all of them
+    // on every refusal costs the square of that.
+    private final AtomicReference<@Nullable Instant> unroutableSweptAt = new AtomicReference<>();
     // The extension names already reported as unreadable, so the warning is said once per name rather than per event.
     private final Set<String> unreadableExtensionsWarned = ConcurrentHashMap.newKeySet();
     // The streams already warned about, so a stream replaying thousands of old events says it once. Capped, because a
@@ -294,7 +299,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * after a competing consumer's lease moved, or given up on by a retry strategy, never routes here to be dropped. If
      * it does come back after that, it is warned about as a new failure, with its time measured from then. A model that
      * offers the event a little less often than the interval still gets an ERROR on every offer. One that offers it
-     * less often than twice the interval gets a WARN on every offer instead.
+     * less often than twice the interval gets a WARN on every offer instead. The other forgotten events are dropped at
+     * most once per interval, by whichever refusal comes first after it.
      */
     private void refuseUnroutableDelivery(EventMeta meta, CloudEvent cloudEvent, Throwable failure) {
         if (!SagaExecutionSupport.isAttributableToTheInstance(failure)) {
@@ -303,17 +309,19 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         String redeliveryKey = unroutableKey(meta, cloudEvent);
         Instant now = clock.get();
         Duration interval = unroutableErrorInterval();
-        // Halves the elapsed time rather than doubling the interval, which overflows for a very long budget
-        unroutableDeliveries.values().removeIf(delivery ->
-                Duration.between(delivery.lastOfferedAt(), now).dividedBy(UNROUTABLE_FORGOTTEN_AFTER_INTERVALS).compareTo(interval) > 0);
+        Instant sweptAt = unroutableSweptAt.get();
+        if ((sweptAt == null || Duration.between(sweptAt, now).compareTo(interval) >= 0) && unroutableSweptAt.compareAndSet(sweptAt, now)) {
+            unroutableDeliveries.values().removeIf(delivery -> forgotten(delivery, now, interval));
+        }
         // Atomic per key, so two concurrent refusals of one event log one WARN and at most one ERROR per interval
         UnroutableDelivery[] before = new UnroutableDelivery[1];
         boolean[] errorDue = new boolean[1];
         unroutableDeliveries.compute(redeliveryKey, (key, existing) -> {
-            before[0] = existing;
-            if (existing == null) {
+            // Checked here as well, because the forgotten entries are dropped at most once per interval, so the refused event's own entry can still be here
+            if (existing == null || forgotten(existing, now, interval)) {
                 return new UnroutableDelivery(now, now, now);
             }
+            before[0] = existing;
             errorDue[0] = Duration.between(existing.lastLoggedAt(), now).compareTo(interval) >= 0;
             return new UnroutableDelivery(existing.firstFailedAt(), errorDue[0] ? now : existing.lastLoggedAt(), now);
         });
@@ -344,6 +352,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      */
     Duration unroutableErrorInterval() {
         return config.quarantineAfter().orElse(UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE);
+    }
+
+    // Halves the elapsed time rather than doubling the interval, which overflows for a very long budget
+    private static boolean forgotten(UnroutableDelivery delivery, Instant now, Duration interval) {
+        return Duration.between(delivery.lastOfferedAt(), now).dividedBy(UNROUTABLE_FORGOTTEN_AFTER_INTERVALS).compareTo(interval) > 0;
     }
 
     int rememberedUnroutableDeliveries() {
