@@ -40,6 +40,10 @@ Amended on 2026-10-24 by
 stream id with its version, or the global position. It is the stream id with its version alone, and a stored failure
 record whose input is `position:N` counts as no failure record.
 
+[ADR 174](0174-a-saga-forgets-an-unroutable-event-it-has-not-been-offered-for-two-intervals.md) changes how often the
+unroutable-delivery `ERROR` in Decision point 3 repeats, for [#1063](https://github.com/johanhaleby/occurrent/issues/1063).
+A model that offers a refused event more than twice the interval apart gets a `WARN` on every offer instead.
+
 ## Context
 
 `SagaExecution.onCloudEvent` runs the saga and catches nothing. `SagaExecutionSupport.process` calls
