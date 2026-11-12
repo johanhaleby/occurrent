@@ -302,6 +302,8 @@ From 0.35.0 a wrapper is unwrapped only for a capability that a wrapper's own st
 * `QuietPositionReportingSubscriptions`, which adds and removes a listener that is told positions.
 * `Pushable`, which takes events in at the bottom of the stack.
 * `HistoryLossReportingSubscriptions`, which a catch-up model reaches under a durable model.
+* `StartRefusalReportingSubscriptions`, which a competing consumer model reaches under a durable or catch-up model,
+  so it can give back the lease of a subscription whose start the MongoDB model refused.
 
 Every other capability is found only on a model that implements it. That is `RepositionableSubscriptions`,
 `Subscribable`, `CancellableSubscriptions`, `SubscriptionModelLifeCycle`, `SubscriptionModel`,
@@ -1340,10 +1342,14 @@ stops too, its handle fails with the `UnsupportedStartAtException`, and the chec
 A `TimeBasedCheckpoint` isn't refused. A catch-up writes one when it can't get a global position, and reads it back. A
 `DurableSubscriptionModel` with no catch-up around it and one of these in its storage still opens at the present.
 
-A `CompetingConsumerSubscriptionModel` wrapping one of these models doesn't see a refusal of a dynamic start, since it
-comes after `subscribe(..)` has returned. The node holds the lease and the subscription id, and it delivers nothing. A
-pause, a stop or a lost lease gives the lease back, and the node then delivers nothing either, and may log warnings as
-it tries to resume the subscription. Cancel the subscription to free the id.
+A `CompetingConsumerSubscriptionModel` wrapping `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` hears
+of a refusal of a dynamic start through `StartRefusalReportingSubscriptions`, also through a `DurableSubscriptionModel`
+in between, although the refusal comes after `subscribe(..)` has returned. The node that got the lease gives it back,
+frees the subscription id and logs the refusal at `ERROR`. The handle that node's `subscribe(..)` returned answers
+`true` from `waitUntilStarted(..)` while it waits for the lease, as a waiting competing consumer always does, and throws
+the `UnsupportedStartAtException` once the refusal has come. A refused node doesn't compete for the subscription again,
+so once every node that subscribed it has been refused, the subscription runs on no node and its lease stays free.
+Subscribe it again with the same id, on any node, with a start position the model accepts.
 
 ### What to do
 

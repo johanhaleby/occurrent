@@ -90,7 +90,7 @@ class SubscriptionModelCapabilityTest {
 
     static Stream<Named<Class<? extends SubscriptionModelCapability>>> observingCapabilities() {
         return Stream.of(IntrospectableSubscriptions.class, ReplayAwareSubscriptions.class, HistoryRetainingSubscriptions.class,
-                QuietPositionReportingSubscriptions.class, Pushable.class, HistoryLossReportingSubscriptions.class).map(type -> Named.of(type.getSimpleName(), type));
+                QuietPositionReportingSubscriptions.class, StartRefusalReportingSubscriptions.class, Pushable.class, HistoryLossReportingSubscriptions.class).map(type -> Named.of(type.getSimpleName(), type));
     }
 
     static Stream<Named<Class<? extends SubscriptionModelCapability>>> actingCapabilities() {
@@ -212,7 +212,7 @@ class SubscriptionModelCapabilityTest {
         Class<?>[] interfaces = {CheckpointAwareSubscriptionModel.class, StreamSubscriptionModel.class, DcbSubscriptionModel.class,
                 RepositionableSubscriptions.class, IntrospectableSubscriptions.class, ReplayAwareSubscriptions.class,
                 HistoryRetainingSubscriptions.class, QuietPositionReportingSubscriptions.class, Pushable.class,
-                HistoryLossReportingSubscriptions.class};
+                HistoryLossReportingSubscriptions.class, StartRefusalReportingSubscriptions.class};
         return (CheckpointAwareSubscriptionModel) Proxy.newProxyInstance(CheckpointAwareSubscriptionModel.class.getClassLoader(), interfaces, (proxy, method, args) -> {
             if (method.isDefault()) {
                 return InvocationHandler.invokeDefault(proxy, method, args);

@@ -21,7 +21,7 @@ import java.util.Optional;
 /**
  * Marker supertype for every blocking subscription model capability. {@link Subscribable}, {@link CancellableSubscriptions},
  * {@link Pushable}, {@link RepositionableSubscriptions}, {@link ReplayAwareSubscriptions}, {@link IntrospectableSubscriptions},
- * {@link HistoryRetainingSubscriptions}, {@link HistoryLossReportingSubscriptions}, {@link CommitOrderedSubscriptions} and {@link SubscriptionModelWrapper} all extend it, so a whole {@link SubscriptionModel} is one transitively, without
+ * {@link HistoryRetainingSubscriptions}, {@link HistoryLossReportingSubscriptions}, {@link StartRefusalReportingSubscriptions}, {@link CommitOrderedSubscriptions} and {@link SubscriptionModelWrapper} all extend it, so a whole {@link SubscriptionModel} is one transitively, without
  * declaring it directly.
  * <p>
  * It exists so a method that accepts "whatever partial or complete subscription model a caller happens to hold" has a
@@ -37,6 +37,7 @@ import java.util.Optional;
  * @see IntrospectableSubscriptions#findIn(SubscriptionModelCapability)
  * @see HistoryRetainingSubscriptions#findIn(SubscriptionModelCapability)
  * @see HistoryLossReportingSubscriptions#findIn(SubscriptionModelCapability)
+ * @see StartRefusalReportingSubscriptions#findIn(SubscriptionModelCapability)
  * @see CommitOrderedSubscriptions#findIn(SubscriptionModelCapability)
  */
 public interface SubscriptionModelCapability {
@@ -48,9 +49,9 @@ public interface SubscriptionModelCapability {
      * <p>
      * This object answers when it implements {@code type}. Past that, a {@link SubscriptionModelWrapper} is unwrapped
      * only for {@link IntrospectableSubscriptions}, {@link ReplayAwareSubscriptions}, {@link HistoryRetainingSubscriptions},
-     * {@link QuietPositionReportingSubscriptions} and {@link Pushable}, which observe subscriptions or take events in at
-     * the bottom of the stack, and for {@link HistoryLossReportingSubscriptions}, which a catch-up model reaches under a
-     * durable model. Every other capability acts on a subscription, such as {@link Subscribable},
+     * {@link QuietPositionReportingSubscriptions}, {@link StartRefusalReportingSubscriptions} and {@link Pushable}, which
+     * observe subscriptions or take events in at the bottom of the stack, and for {@link HistoryLossReportingSubscriptions},
+     * which a catch-up model reaches under a durable model. Every other capability acts on a subscription, such as {@link Subscribable},
      * {@link CancellableSubscriptions} and {@link RepositionableSubscriptions}, and is answered only by a model that
      * implements it, since a wrapper that keeps state for a subscription would otherwise never hear about the action
      * taken on the model beneath it. A wrapper is found for such a capability by implementing it. The same holds for
@@ -81,13 +82,14 @@ public interface SubscriptionModelCapability {
         return capability(type).isPresent();
     }
 
-    // Each of these only observes subscriptions or takes events in, except HistoryLossReportingSubscriptions, whose
+    // Each of these only observes subscriptions or takes events in, StartRefusalReportingSubscriptions too since its
+    // listener is told about a start the model already refused, except HistoryLossReportingSubscriptions, whose
     // listener can take a subscription over, but a catch-up model has to reach it under a durable model (ADR 151).
     // CommitOrderedSubscriptions is left out on purpose, since a wrapper can break commit order (a catch-up handover, a
     // thread pool, a listener that parks deliveries) and so declares it only by implementing it
     private static boolean isUnwrappedFor(Class<?> type) {
         return type == IntrospectableSubscriptions.class || type == ReplayAwareSubscriptions.class
                 || type == HistoryRetainingSubscriptions.class || type == QuietPositionReportingSubscriptions.class
-                || type == Pushable.class || type == HistoryLossReportingSubscriptions.class;
+                || type == StartRefusalReportingSubscriptions.class || type == Pushable.class || type == HistoryLossReportingSubscriptions.class;
     }
 }

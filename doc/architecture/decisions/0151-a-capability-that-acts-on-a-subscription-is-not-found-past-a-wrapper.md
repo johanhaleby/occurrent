@@ -4,7 +4,7 @@ Date: 2026-10-24
 
 ## Status
 
-Accepted. #1251 and #1253.
+Accepted. #1251 and #1253. Amended by #1430, which adds `StartRefusalReportingSubscriptions` to the list.
 
 Amends [ADR 118](0118-a-subscription-model-capability-marker-replaces-object-in-the-of-lookups.md) and
 [ADR 119](0119-subscription-model-capability-gains-instance-side-lookups.md), where both
@@ -46,6 +46,11 @@ to it.
   questions about subscriptions.
 * `QuietPositionReportingSubscriptions`, which adds and removes a listener that is told positions. Another listener
   changes no wrapper's state.
+* `StartRefusalReportingSubscriptions`, added in #1430, which adds and removes a listener that is told about a start
+  the MongoDB model has already refused. The listener can't change what the MongoDB model did. The
+  `CompetingConsumerSubscriptionModel` gives back its own lease when it is told, so the state that changes belongs to
+  the model that added the listener. It has to hear the refusal from the MongoDB model under a
+  `DurableSubscriptionModel` or a `CatchupSubscriptionModel`.
 * `Pushable`, which takes events in at the bottom of the stack. They reach every wrapper's action on the way up as
   usual.
 * `HistoryLossReportingSubscriptions`. Its listener can answer `TakeOver` and so act on a subscription, which makes it
