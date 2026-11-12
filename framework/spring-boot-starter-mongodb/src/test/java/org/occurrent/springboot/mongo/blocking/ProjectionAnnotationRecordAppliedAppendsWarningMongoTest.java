@@ -22,6 +22,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.Projection;
+import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
@@ -52,13 +53,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The end-to-end pairing this falsifier suite's own withheld post-reset tests depend on, from the real shipped
- * Spring Boot Mongo composition rather than {@code ProjectionAnnotationRecordAppliedAppendsWarningTest}'s
- * mocked {@code Subscribable} (issue #865 / PR #869): the default start position warns naming the projection, and
- * {@code startAt = StartPosition.BEGINNING}, the configuration
- * {@code ProjectionAnnotationRecordAppliedAppendsResetMongoTest} actually uses, does not. Not a re-test of the
- * wiring's truth table, that unit test module already covers every branch; this only pins that the real starter
- * reaches the same two outcomes.
+ * The never-replays warning for projections with recordAppliedAppends, checked against the real Spring Boot Mongo
+ * starter instead of the mocked Subscribable in ProjectionAnnotationRecordAppliedAppendsWarningTest (issue 865, PR 869,
+ * issue 1418). A projection with startAt = NOW and resumeBehavior = SAME_AS_START_AT warns and names the projection.
+ * A projection with startAt unset does not warn, since a restart that finds a catch-up checkpoint resumes from it and
+ * replays. startAt = BEGINNING does not warn either, and is the configuration
+ * ProjectionAnnotationRecordAppliedAppendsResetMongoTest uses.
  */
 @DisplayName("Projection annotation (recordAppliedAppends, MongoDB, never-replays warning)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -87,12 +87,19 @@ class ProjectionAnnotationRecordAppliedAppendsWarningMongoTest {
     }
 
     @Test
-    void the_default_start_position_warns_naming_the_projection_on_the_real_shipped_composition() {
+    void the_default_start_position_does_not_warn_on_the_real_shipped_composition_because_a_restart_resumes_from_a_catch_up_checkpoint() {
         String output = bootConsoleOutput(DefaultStartApplication.class, "record-applied-appends-warning-default");
+
+        assertThat(output).doesNotContain("never replays");
+    }
+
+    @Test
+    void start_at_now_with_resume_behavior_same_as_start_at_warns_naming_the_projection_on_the_real_shipped_composition() {
+        String output = bootConsoleOutput(NowSameAsStartAtApplication.class, "record-applied-appends-warning-now-same-as-start-at");
 
         assertThat(output)
                 .contains("WARN")
-                .contains("warning-default-counter")
+                .contains("warning-now-same-as-start-at-counter")
                 .contains("recordAppliedAppends = true")
                 .contains("never replays");
     }
@@ -169,6 +176,34 @@ class ProjectionAnnotationRecordAppliedAppendsWarningMongoTest {
         }
     }
 
+    @SpringBootApplication
+    @EnableOccurrent
+    static class NowSameAsStartAtApplication {
+        @Bean
+        CloudEventTypeMapper<TestEvent> testEventCloudEventTypeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter(CloudEventTypeMapper<TestEvent> typeMapper) {
+            return new JacksonCloudEventConverter.Builder<TestEvent>(new ObjectMapper(), URI.create("urn:occurrent:record-applied-appends-warning-test"))
+                    .typeMapper(typeMapper)
+                    .idMapper(TestEvent::eventId)
+                    .timeMapper(event -> event.timestamp().toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
+                    .build();
+        }
+
+        @Bean
+        CounterStore counterStore() {
+            return new CounterStore();
+        }
+
+        @Bean
+        NowSameAsStartAtProjection nowSameAsStartAtProjection() {
+            return new NowSameAsStartAtProjection();
+        }
+    }
+
     static class DefaultStartProjection {
         @Projection(id = "warning-default-counter", recordAppliedAppends = true, storeName = "counterStore")
         org.occurrent.dsl.projection.Projection<Counter, TestEvent, String> counter() {
@@ -181,6 +216,16 @@ class ProjectionAnnotationRecordAppliedAppendsWarningMongoTest {
 
     static class BeginningStartProjection {
         @Projection(id = "warning-beginning-counter", recordAppliedAppends = true, storeName = "counterStore", startAt = StartPosition.BEGINNING)
+        org.occurrent.dsl.projection.Projection<Counter, TestEvent, String> counter() {
+            return org.occurrent.dsl.projection.Projection.<Counter, TestEvent, String>builder(new Counter(0))
+                    .id(event -> "counter")
+                    .on(Counted.class, (state, event) -> new Counter(state.count() + 1))
+                    .build();
+        }
+    }
+
+    static class NowSameAsStartAtProjection {
+        @Projection(id = "warning-now-same-as-start-at-counter", recordAppliedAppends = true, storeName = "counterStore", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
         org.occurrent.dsl.projection.Projection<Counter, TestEvent, String> counter() {
             return org.occurrent.dsl.projection.Projection.<Counter, TestEvent, String>builder(new Counter(0))
                     .id(event -> "counter")

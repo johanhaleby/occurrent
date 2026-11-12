@@ -165,6 +165,43 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         );
     }
 
+    @Test
+    void a_pause_of_a_replaying_subscription_that_reads_the_catch_up_before_a_shutdown_sets_its_flag_and_locks_it_after_throws_SubscriptionModelShutdownException() {
+        ShutDownLikeMongo overtaken = new ShutDownLikeMongo();
+        ReactorStreamCatchupSubscriptionModel model = new ReactorStreamCatchupSubscriptionModel(overtaken, new NeverEndingReplay());
+        CatchingUpHook hook = CatchingUpHook.installIn(model);
+        model.subscribe("replaying", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+
+        // The shutdown sets its flag and hasn't cancelled the catch-up yet
+        hook.afterTheReadIn("pauseSubscription", model.namedSubscriptions::beginShutdown);
+        Throwable thrown = catchThrowable(() -> model.pauseSubscription("replaying"));
+        boolean pausedByTheRefusedPause = model.isPaused("replaying");
+        model.shutdown();
+
+        assertAll(
+                () -> assertThat(thrown).as("what the pause throws")
+                        .isInstanceOf(SubscriptionModelShutdownException.class).hasMessage("Cannot pause subscription replaying because the subscription model is shutdown."),
+                () -> assertThat(pausedByTheRefusedPause).as("whether the catch-up reads paused before the shutdown cancels it").isFalse()
+        );
+    }
+
+    @Test
+    void a_resume_of_a_parked_subscription_that_reads_the_catch_up_before_a_shutdown_sets_its_flag_and_locks_it_after_throws_SubscriptionModelShutdownException() {
+        ShutDownLikeMongo overtaken = new ShutDownLikeMongo();
+        ReactorStreamCatchupSubscriptionModel model = new ReactorStreamCatchupSubscriptionModel(overtaken, new NeverEndingReplay());
+        CatchingUpHook hook = CatchingUpHook.installIn(model);
+        model.stop();
+        model.subscribe("parked", FILTER, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+
+        // The shutdown sets its flag and hasn't cancelled the catch-up yet
+        hook.afterTheReadIn("resumeHoldingIdLock", model.namedSubscriptions::beginShutdown);
+        Throwable thrown = catchThrowable(() -> model.resumeSubscription("parked"));
+        model.shutdown();
+
+        assertThat(thrown).as("what the resume throws")
+                .isInstanceOf(SubscriptionModelShutdownException.class).hasMessage("Cannot resume subscription parked because the subscription model is shutdown.");
+    }
+
     // The shutdown sets its flag once the start has released the lock it starts the wrapped model under, and reaches
     // the parked subscription only after the start has gone through the parked subscriptions
     @Test
@@ -225,14 +262,18 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         }
     }
 
-    // Takes the place of the map of catch-ups in flight and runs a hook right after the nth read of it. That puts the
-    // hook between a call reading a catch-up and acting on it, which no thread schedule reaches every time.
+    // Takes the place of the map of catch-ups in flight and runs a hook right after the nth read of it, or right after
+    // the first read of it that a given method of the catch-up makes itself. That puts the hook between a call reading a
+    // catch-up and acting on it, which no thread schedule reaches every time. Naming the method keeps the hook in place
+    // when a read is added elsewhere in the call.
     @SuppressWarnings({"rawtypes", "unchecked"})
     private static final class CatchingUpHook extends ConcurrentHashMap {
         private final AtomicInteger getsLeft = new AtomicInteger();
         private final AtomicInteger valuesLeft = new AtomicInteger();
         private final AtomicReference<@Nullable Runnable> afterGet = new AtomicReference<>();
         private final AtomicReference<@Nullable Runnable> afterValues = new AtomicReference<>();
+        private final AtomicReference<@Nullable String> readIn = new AtomicReference<>();
+        private final AtomicReference<@Nullable Runnable> afterRead = new AtomicReference<>();
 
         static CatchingUpHook installIn(ReactorStreamCatchupSubscriptionModel model) {
             CatchingUpHook hook = new CatchingUpHook();
@@ -251,6 +292,11 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
             afterGet.set(hook);
         }
 
+        void afterTheReadIn(String method, Runnable hook) {
+            readIn.set(method);
+            afterRead.set(hook);
+        }
+
         void afterValues(int nth, Runnable hook) {
             valuesLeft.set(nth);
             afterValues.set(hook);
@@ -260,7 +306,17 @@ class ReactorStreamCatchupSubscriptionModelAfterShutdownTest {
         public Object get(Object key) {
             Object value = super.get(key);
             runOnNth(getsLeft, afterGet);
+            if (afterRead.get() != null && calledFrom(readIn.get())) {
+                readIn.set(null);
+                requireNonNull(afterRead.getAndSet(null)).run();
+            }
             return value;
+        }
+
+        private static boolean calledFrom(@Nullable String method) {
+            return StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE).walk(frames -> frames.skip(2).findFirst())
+                    .filter(caller -> caller.getDeclaringClass() == NamedCatchupSupport.class && caller.getMethodName().equals(method))
+                    .isPresent();
         }
 
         @Override

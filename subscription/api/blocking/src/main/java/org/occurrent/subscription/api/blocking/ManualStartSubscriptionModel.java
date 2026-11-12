@@ -31,6 +31,7 @@ import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.internal.LostStartHold;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -41,6 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 
@@ -283,7 +285,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             synchronized (stateLock) {
                 if (holdPaused || state != State.RUNNING) {
                     // Replaced rather than put, so a cancelSubscription since the claim stays cancelled
-                    registrations.replace(subscriptionId, Registration.STARTING, new Registration.Deferred(filter, startAt, action));
+                    registrations.replace(subscriptionId, Registration.STARTING, new Registration.Deferred(filter, startAt, action, LostStartHold.isAsked()));
                     return new DeferredSubscription(subscriptionId);
                 }
             }
@@ -339,8 +341,17 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         }
 
         final Subscription subscribed;
+        final boolean heldPaused;
         try {
-            subscribed = delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
+            Supplier<Subscription> subscribe = () -> delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
+            if (deferred.holdALostStart()) {
+                LostStartHold.Answer<Subscription> answer = LostStartHold.askedDuringCall(subscribe);
+                subscribed = answer.result();
+                heldPaused = answer.heldPaused();
+            } else {
+                subscribed = subscribe.get();
+                heldPaused = false;
+            }
         } catch (RuntimeException e) {
             // Put it back so a subscription that failed to start can be started again, unless it was cancelled meanwhile
             registrations.replace(subscriptionId, Registration.STARTING, deferred);
@@ -353,8 +364,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             throw new UnknownSubscriptionException(subscriptionId);
         }
         // Subscribing to a stopped model registers a paused subscription rather than a running one, so this is what
-        // makes starting work after stop(). Without it the caller is handed a subscription that never delivers.
-        Subscription subscription = delegate.isPaused(subscriptionId) ? delegate.resumeSubscription(subscriptionId) : subscribed;
+        // makes starting work after stop(). Without it the caller is handed a subscription that never delivers. A model
+        // that held a lost start paused in the subscribe paused it on purpose, and a resume would only refuse it again
+        Subscription subscription = !heldPaused && delegate.isPaused(subscriptionId) ? delegate.resumeSubscription(subscriptionId) : subscribed;
         reopenAfterStop();
         return subscription;
     }
@@ -408,9 +420,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         if (resumeSubscriptionsAutomatically) {
             // Nothing new can be stored as deferred once the transition above is taken, so this walk sees every
             // deferred registration, and a registration racing this method starts itself when it sees the running
-            // state. Fails on the first subscription that cannot start, leaving the rest registered. A partially
-            // started model is the honest outcome, and swallowing the failure to start the others would hide a
-            // broken subscription.
+            // state. Fails on the first subscription that throws, leaving the rest registered. A subscription that
+            // asked for a lost start to be held and that a wrapped model held paused doesn't throw, so the walk goes
+            // on past it. A partially started model is the honest outcome, and swallowing the failure to start the
+            // others would hide a broken subscription.
             for (String subscriptionId : registrationOrder) {
                 if (registrations.get(subscriptionId) instanceof Registration.Deferred) {
                     resumeSubscription(subscriptionId);
@@ -687,7 +700,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     private sealed interface Registration {
         Registration STARTING = new Starting();
 
-        record Deferred(@Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) implements Registration {
+        // holdALostStart keeps a hold that the deferred subscribe asked for through LostStartHold, for the subscribe
+        // that start(true) or resumeSubscription(..) makes in the wrapped model once that call has returned
+        record Deferred(@Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdALostStart) implements Registration {
         }
 
         record Starting() implements Registration {

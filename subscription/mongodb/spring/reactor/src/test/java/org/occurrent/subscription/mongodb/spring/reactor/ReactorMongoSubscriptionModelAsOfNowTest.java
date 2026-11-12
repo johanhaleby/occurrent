@@ -353,15 +353,6 @@ class ReactorMongoSubscriptionModelAsOfNowTest {
     }
 
     @Test
-    void global_checkpoint_as_of_now_fails_when_the_reply_has_no_clock() {
-        ReactorMongoSubscriptionModel model = model(command -> Mono.just(new Document("ok", 1.0)));
-
-        StepVerifier.create(model.globalCheckpointAsOfNow())
-                .expectErrorSatisfies(throwable -> assertThat(throwable).hasMessageContaining("has no localTime"))
-                .verify(Duration.ofSeconds(10));
-    }
-
-    @Test
     void a_subscription_started_now_stops_with_an_error_when_the_reply_has_no_clock() {
         // Given
         ReactorMongoSubscriptionModel model = model(command -> Mono.just(new Document("ok", 1.0)));

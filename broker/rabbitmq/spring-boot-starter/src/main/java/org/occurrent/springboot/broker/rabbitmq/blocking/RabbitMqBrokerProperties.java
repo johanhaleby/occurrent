@@ -19,6 +19,7 @@ package org.occurrent.springboot.broker.rabbitmq.blocking;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqUnroutablePolicy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
@@ -68,6 +69,13 @@ public class RabbitMqBrokerProperties {
          */
         private Duration acknowledgementTimeout = Duration.ofSeconds(5);
 
+        /**
+         * {@code RabbitMqCloudEventSink.Builder#onUnroutable(RabbitMqUnroutablePolicy)}.
+         * {@link RabbitMqUnroutablePolicy#FAIL} by default, matching that builder's own default. See
+         * {@link RabbitMqUnroutablePolicy#LOG_AND_CONTINUE} for what that policy drops for good.
+         */
+        private RabbitMqUnroutablePolicy onUnroutable = RabbitMqUnroutablePolicy.FAIL;
+
         private final Retry retry = new Retry();
 
         public Duration getAcknowledgementTimeout() {
@@ -76,6 +84,14 @@ public class RabbitMqBrokerProperties {
 
         public void setAcknowledgementTimeout(Duration acknowledgementTimeout) {
             this.acknowledgementTimeout = acknowledgementTimeout;
+        }
+
+        public RabbitMqUnroutablePolicy getOnUnroutable() {
+            return onUnroutable;
+        }
+
+        public void setOnUnroutable(RabbitMqUnroutablePolicy onUnroutable) {
+            this.onUnroutable = onUnroutable;
         }
 
         public Retry getRetry() {
