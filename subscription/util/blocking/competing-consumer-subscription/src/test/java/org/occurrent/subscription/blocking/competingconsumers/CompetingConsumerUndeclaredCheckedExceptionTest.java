@@ -42,6 +42,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -272,6 +273,222 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
                 assertThat(wrapped.started).as("the wrapped model is started once the thread the start(true) was handed to tried again").isTrue());
     }
 
+    @Test
+    void a_cancel_whose_wrapped_model_throws_a_checked_exception_after_it_took_effect_and_whose_lease_strategy_throws_one_on_unregistering_throws_the_first_with_the_second_suppressed() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        });
+        IOException cannotCancel = new IOException("The wrapped model cannot cancel cc right now");
+        IOException cannotUnregister = new IOException("The lease store cannot be reached right now");
+        wrapped.failures.next("cancelled cc", cannotCancel);
+        strategy.failures.next("unregister cc", cannotUnregister);
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.cancelSubscription("cc"));
+
+        // Then
+        assertThat(thrown).as("what cancelSubscription threw").isSameAs(cannotCancel);
+        assertThat(thrown.getSuppressed()).as("what was suppressed in it").containsExactly(cannotUnregister);
+    }
+
+    @Test
+    void a_start_true_for_a_subscription_that_does_not_compete_whose_resume_throws_a_checked_exception_is_not_resumed_again_by_the_thread_an_earlier_start_was_handed_to() throws Exception {
+        // Given
+        Wrapped wrapped = new Wrapped(false);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "nc", null, DOES_NOT_COMPETE, __ -> {
+        });
+        Gate isPausedInTheWrappedModel = new Gate();
+        wrapped.nextIsPaused = isPausedInTheWrappedModel;
+        CompletableFuture<@Nullable Throwable> pausing = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.pauseSubscription("nc")));
+        assertThat(isPausedInTheWrappedModel.awaitEntered()).as("the pause holds the lock of nc").isTrue();
+        Gate handedOverThreadFailed = new Gate();
+        model.runBeforeAHandedOverThreadBacksOff(handedOverThreadFailed::pass);
+        wrapped.failures.next("start", new IOException("The wrapped model cannot start right now"));
+        wrapped.failures.next("start", new IOException("The wrapped model still cannot start"));
+        catchThrowable(() -> model.start(false));
+        isPausedInTheWrappedModel.open();
+        pausing.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+        assertThat(handedOverThreadFailed.awaitEntered()).as("the thread the first start was handed to failed to apply it").isTrue();
+        IOException cannotResume = new IOException("The wrapped model cannot resume nc right now");
+        wrapped.failures.next("resume nc", cannotResume);
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.start(true));
+        handedOverThreadFailed.open();
+        await().atMost(EVENTUALLY).until(() -> !aThreadAppliesWhatWasHandedOverFor("nc"));
+
+        // Then
+        assertThat(thrown).as("what start(true) threw").isSameAs(cannotResume);
+        assertThat(wrapped.running).as("the subscriptions the wrapped model runs once the thread the first start was handed to is done").isEmpty();
+    }
+
+    @Test
+    void a_stop_whose_pause_of_a_subscription_the_wrapped_model_throws_a_checked_exception_for_applied_by_a_later_pause_before_it_stopped_the_wrapped_model_returns_and_gives_the_lease_up() throws Exception {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        });
+        model.subscribe(SUBSCRIBER, "nc", null, DOES_NOT_COMPETE, __ -> {
+        });
+        model.pauseSubscription("nc");
+        Gate resumeInTheWrappedModel = new Gate();
+        wrapped.nextResume = resumeInTheWrappedModel;
+        CompletableFuture<@Nullable Throwable> resuming = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.resumeSubscription("nc")));
+        assertThat(resumeInTheWrappedModel.awaitEntered()).as("the resume of nc is under way in the wrapped model").isTrue();
+        CompletableFuture<@Nullable Throwable> stopping = new CompletableFuture<>();
+        Thread stoppingThread = new Thread(() -> stopping.complete(catchThrowable(model::stop)), "test-stopping-thread");
+        stoppingThread.setDaemon(true);
+        stoppingThread.start();
+        await().atMost(EVENTUALLY).until(() -> stopping.isDone() || waitsOnAMonitor(stoppingThread));
+        assertThat(stopping).as("stop() waits for the resume of nc").isNotDone();
+        wrapped.failures.next("pause cc", new IOException("The wrapped model cannot pause cc right now"));
+
+        // When
+        model.pauseSubscription("cc");
+        resumeInTheWrappedModel.open();
+        resuming.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+        @Nullable Throwable thrown = stopping.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+
+        // Then
+        assertThat(thrown).as("what stop() threw").isNull();
+        assertThat(strategy.holders).as("the leases this node holds once stop() returned").isEmpty();
+    }
+
+    @Test
+    void a_resume_that_a_stop_did_not_wait_for_and_whose_pause_afterwards_throws_a_checked_exception_after_it_took_effect_does_not_give_the_lease_back() throws Exception {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        });
+        model.pauseSubscription("cc");
+        Gate resumeInTheWrappedModel = new Gate();
+        wrapped.nextResume = resumeInTheWrappedModel;
+        wrapped.failures.next("paused cc", new IOException("The wrapped model cannot pause cc right now"));
+        CompletableFuture<@Nullable Throwable> resuming = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.resumeSubscription("cc")));
+        assertThat(resumeInTheWrappedModel.awaitEntered()).as("the resume of cc is under way in the wrapped model").isTrue();
+        model.stop();
+
+        // When
+        resumeInTheWrappedModel.open();
+        @Nullable Throwable thrown = resuming.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+
+        // Then
+        assertThat(thrown).as("what resumeSubscription threw").isNull();
+        assertThat(strategy.calls).as("the calls to the lease strategy").doesNotContain("release cc");
+    }
+
+    @Test
+    void a_resume_of_a_subscription_that_does_not_compete_resumes_it_when_the_wrapped_model_throws_a_checked_exception_on_being_asked_whether_it_runs() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "nc", null, DOES_NOT_COMPETE, __ -> {
+        });
+        model.pauseSubscription("nc");
+        wrapped.failures.next("isRunning", new IOException("The wrapped model cannot say whether it runs right now"));
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.resumeSubscription("nc"));
+
+        // Then
+        assertThat(thrown).as("what resumeSubscription threw").isNull();
+        assertThat(wrapped.running).as("the subscriptions the wrapped model runs").containsExactly("nc");
+    }
+
+    @Test
+    void a_subscribe_whose_wrapped_model_throws_a_checked_exception_after_pausing_the_subscription_gives_the_lease_back() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        wrapped.startsItselfOnSubscribe = true;
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        wrapped.onceMade = () -> {
+            wrapped.failures.next("isPaused cc", new IOException("The wrapped model cannot say whether it holds cc paused right now"));
+            wrapped.failures.next("paused cc", new IOException("The wrapped model cannot pause cc right now"));
+        };
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        }));
+
+        // Then
+        assertThat(thrown).as("what subscribe threw").isNull();
+        assertThat(strategy.calls).as("the calls to the lease strategy").containsExactly("register cc", "release cc");
+        assertThat(wrapped.running).as("the subscriptions the wrapped model runs").isEmpty();
+    }
+
+    @Test
+    void a_start_runs_a_subscription_waiting_for_its_lease_when_the_wrapped_model_throws_a_checked_exception_on_being_asked_whether_it_runs_it_before_the_start() throws Exception {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        wrapped.onceMade = () -> strategy.holders.remove("cc");
+        model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        });
+        wrapped.failures.next("isRunning cc", new IOException("The wrapped model cannot say whether it runs cc right now"));
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        // Then
+        assertThat(thrown).as("what start(true) threw").isNull();
+        assertThat(strategy.calls).as("the calls to the lease strategy").containsExactly("register cc", "register cc");
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(wrapped.running).as("the subscriptions the wrapped model runs").containsExactly("cc"));
+    }
+
+    private static boolean aThreadAppliesWhatWasHandedOverFor(String subscriptionId) {
+        return Thread.getAllStackTraces().keySet().stream()
+                .anyMatch(thread -> thread.isAlive() && thread.getName().equals("occurrent-competing-consumer-lifecycle-" + subscriptionId));
+    }
+
+    private static boolean waitsOnAMonitor(Thread thread) {
+        return thread.getState() == Thread.State.WAITING && Stream.of(thread.getStackTrace())
+                .anyMatch(frame -> frame.getClassName().equals(Object.class.getName()) && frame.getMethodName().startsWith("wait"));
+    }
+
+    @Test
+    void a_stop_applied_by_a_later_cancel_to_a_subscribe_under_way_throws_the_checked_exception_the_wrapped_model_threw_on_being_asked_whether_it_runs_the_subscription() throws Exception {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        wrapped.startsItselfOnSubscribe = true;
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "nc", null, DOES_NOT_COMPETE, __ -> {
+        });
+        model.pauseSubscription("nc");
+        Gate subscribeInTheWrappedModel = new Gate();
+        wrapped.nextSubscribe = subscribeInTheWrappedModel;
+        CompletableFuture<@Nullable Throwable> subscribing = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        })));
+        assertThat(subscribeInTheWrappedModel.awaitEntered()).as("the wrapped model is making cc").isTrue();
+        Gate resumeInTheWrappedModel = new Gate();
+        wrapped.nextResume = resumeInTheWrappedModel;
+        CompletableFuture<@Nullable Throwable> resuming = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.resumeSubscription("nc")));
+        assertThat(resumeInTheWrappedModel.awaitEntered()).as("the resume of nc is under way in the wrapped model").isTrue();
+        CompletableFuture<@Nullable Throwable> stopping = new CompletableFuture<>();
+        Thread stoppingThread = new Thread(() -> stopping.complete(catchThrowable(model::stop)), "test-stopping-thread");
+        stoppingThread.setDaemon(true);
+        stoppingThread.start();
+        await().atMost(EVENTUALLY).until(() -> stopping.isDone() || waitsOnAMonitor(stoppingThread));
+        assertThat(stopping).as("stop() waits for the resume of nc").isNotDone();
+        IOException cannotSay = new IOException("The wrapped model cannot say whether it runs cc right now");
+        wrapped.failures.next("isRunning cc", cannotSay);
+
+        // When
+        model.cancelSubscription("cc");
+        resumeInTheWrappedModel.open();
+        subscribeInTheWrappedModel.open();
+        resuming.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+        subscribing.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+        @Nullable Throwable thrown = stopping.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+
+        // Then
+        assertThat(thrown).as("what stop() threw").isSameAs(cannotSay);
+    }
+
     private CompetingConsumerSubscriptionModel modelOver(Wrapped wrapped) {
         model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
         return model;
@@ -332,6 +549,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
             calls.add("unregister " + subscriptionId);
             holders.remove(subscriptionId);
+            failures.throwIfArmed("unregister " + subscriptionId);
         }
 
         @Override
@@ -358,7 +576,8 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
     // A model of a user's own that keeps what it runs running across its own stop(), and holds a subscription made while
     // it is stopped, or through subscribePaused, paused. One that starts itself on a subscribe refuses subscribePaused.
     // The next subscribe waits at nextSubscribe once it is set, and the next isPaused at nextIsPaused, and onceMade runs
-    // once after each subscribe.
+    // once after each subscribe. The next resume waits at nextResume. A call armed as "cancelled" or "paused" throws
+    // once it has taken effect.
     private static final class Wrapped implements SubscriptionModel {
         private final Failures failures = new Failures();
         private final Set<String> running = ConcurrentHashMap.newKeySet();
@@ -367,6 +586,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         private volatile boolean startsItselfOnSubscribe;
         private volatile @Nullable Gate nextSubscribe;
         private volatile @Nullable Gate nextIsPaused;
+        private volatile @Nullable Gate nextResume;
         private volatile Runnable onceMade = () -> {
         };
 
@@ -412,6 +632,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         public void cancelSubscription(String subscriptionId) {
             running.remove(subscriptionId);
             paused.remove(subscriptionId);
+            failures.throwIfArmed("cancelled " + subscriptionId);
         }
 
         @Override
@@ -451,6 +672,11 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
+            @Nullable Gate gate = nextResume;
+            nextResume = null;
+            if (gate != null) {
+                gate.pass();
+            }
             failures.throwIfArmed("resume " + subscriptionId);
             paused.remove(subscriptionId);
             running.add(subscriptionId);
@@ -463,6 +689,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
             if (running.remove(subscriptionId)) {
                 paused.add(subscriptionId);
             }
+            failures.throwIfArmed("paused " + subscriptionId);
         }
     }
 
