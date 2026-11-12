@@ -830,13 +830,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     // is free and that one must not be forgotten
                     forgetTheDeliveriesOf(subscriptionId);
                     @Nullable StartRefusal startRefusal = startRefusals.remove(cc.subscriptionIdAndSubscriberId);
-                    competingConsumers.remove(cc.subscriptionIdAndSubscriberId);
-                    onceACancelHasFreedTheId.run();
-                    mayRunWhileStopped.remove(cc.subscriptionIdAndSubscriberId);
-                    // Nothing acts on a refusal of a cancelled consumer, so a handle waiting for that throws what the
-                    // wrapped model refused with, once the id is free
-                    if (startRefusal != null) {
-                        startRefusal.actedOn();
+                    try {
+                        competingConsumers.remove(cc.subscriptionIdAndSubscriberId);
+                        onceACancelHasFreedTheId.run();
+                        mayRunWhileStopped.remove(cc.subscriptionIdAndSubscriberId);
+                    } finally {
+                        // Nothing acts on a refusal of a cancelled consumer, and shutdown no longer finds it, so a handle
+                        // waiting for that throws what the wrapped model refused with, once the id is free
+                        if (startRefusal != null) {
+                            startRefusal.actedOn();
+                        }
                     }
                 }));
     }
@@ -1973,19 +1976,21 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                         boolean hasLock = hasLock(subscriptionId, subscriberId);
                         logDebug("Resuming CompetingConsumer (subscriberId={}, subscriptionId={}, state={}, hasLock={})", subscriberId, subscriptionId, competingConsumer.state.getClass().getSimpleName(), hasLock);
                         CompetingConsumer paused = competingConsumer;
+                        // A wrapped model can refuse the start a resume asks for again, so each handle waits for this
+                        // model to act on the refusal as a subscribe's does
                         if (hasLock) {
                             if (competingConsumer.isWaiting()) {
-                                return resumedHandleOf(resumed, startWaitingConsumer(competingConsumer));
+                                return handleOf(resumed, startWaitingConsumer(competingConsumer));
                             }
                             competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
                             // Paused here, or recorded as running here although the wrapped model does not run it,
                             // since the isRunning check above asks the wrapped model
-                            return resumedHandleOf(resumed, giveTheLeaseBackIfItThrows(resumed, paused.state, () -> resumeInTheWrappedModel(resumed)));
+                            return handleOf(resumed, giveTheLeaseBackIfItThrows(resumed, paused.state, () -> resumeInTheWrappedModel(resumed)));
                         } else if (competingConsumer.isWaiting()) {
-                            return resumedHandleOf(resumed, registerWaitingAndStartIfGranted(competingConsumer));
+                            return handleOf(resumed, registerWaitingAndStartIfGranted(competingConsumer));
                         } else if (registerAsRunning(competingConsumer)) {
                             // Paused here, or recorded as running here although the wrapped model does not run it
-                            return resumedHandleOf(resumed, giveTheLeaseBackIfItThrows(resumed, paused.state, () -> resumeInTheWrappedModel(resumed)));
+                            return handleOf(resumed, giveTheLeaseBackIfItThrows(resumed, paused.state, () -> resumeInTheWrappedModel(resumed)));
                         }
                         // Not allowed to resume without the lock
                         return handleOf(resumed, null);
@@ -4642,12 +4647,6 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private CompetingConsumerSubscription handleOf(SubscriptionIdAndSubscriberId key, @Nullable Subscription subscription) {
         @Nullable StartRefusal startRefusal = startRefusals.get(key);
         return new CompetingConsumerSubscription(key.subscriptionId(), key.subscriberId(), startRefusal == null ? new StartRefusal(false) : startRefusal, subscription);
-    }
-
-    // A wrapped model can refuse the start a resume asks for again, so the handle waits for this model to act on the
-    // refusal as a subscribe's does
-    private CompetingConsumerSubscription resumedHandleOf(SubscriptionIdAndSubscriberId key, Subscription resumed) {
-        return resumed instanceof CompetingConsumerSubscription handle ? handle : handleOf(key, resumed);
     }
 
     // Told on the thread that would have read the subscription in the wrapped model, which holds none of its own locks

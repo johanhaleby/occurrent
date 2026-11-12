@@ -79,7 +79,11 @@ public class CompetingConsumerSubscription implements Subscription {
         }
     }
 
-    // Shared by every handle made for one competing consumer, from its subscribe until the model forgets it
+    // Shared by every handle made for one competing consumer, from its subscribe until the model forgets it. Counted down
+    // once, so after a report the model acted on without forgetting the consumer, a handle whose wrapped handle a later
+    // refusal throws from no longer waits, and can throw before the id is free. A count per report could not tell which
+    // report a handle's refusal is, since the wrapped model can throw before it reports, and waiting for the wrong one
+    // would hold the handle for its whole timeout.
     static final class StartRefusal {
         // Reported by the wrapped model, until the competing consumer model has acted on it
         final AtomicReference<@Nullable UnsupportedStartAtException> reported = new AtomicReference<>();
