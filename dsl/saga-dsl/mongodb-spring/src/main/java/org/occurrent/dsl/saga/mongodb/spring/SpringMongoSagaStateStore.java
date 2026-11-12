@@ -107,10 +107,15 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String MARKS_PENDING = "pending";
     private static final String MARKS_VERSIONS = "versions";
     private static final String MARKS_LEGACY_FAILED = "legacyFailed";
+    private static final String MARKS_PENDING_SINCE = "pendingSince";
+    private static final String MARKS_VERSION = "version";
+    private static final String MARKS_SINCE = "since";
     private static final String CREATED_AT = "createdAt";
     private static final String UPDATED_AT = "updatedAt";
     private static final String COMPLETED_AT = "completedAt";
     private static final String STARTED = "started";
+    // The events that arrived before the instance started, each as CloudEvents JSON, in the order they arrived.
+    private static final String EARLY = "early";
     // The failure record is flattened into top-level fields rather than a sub-document, for the same reason currentStep
     // is one, because both enumeration queries project the SagaInstance members and neither may decode the state, and a
     // quarantined instance whose state no longer decodes is exactly the instance somebody is looking for.
@@ -127,7 +132,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // read would report a step the stored state was never in.
     private static final List<String> EVERY_FIELD_EXCEPT_THE_STATE = List.of(STATUS, VERSION, TIMERS,
             NEXT_TIMER_FIRES_AT, STREAM_WATERMARKS, POSITION_WATERMARK, STREAM_MARKS, CREATED_AT, UPDATED_AT,
-            COMPLETED_AT, STARTED, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE,
+            COMPLETED_AT, STARTED, EARLY, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE,
             FAILURE_MESSAGE);
 
     // Field names inside a persisted FlowState document.
@@ -326,7 +331,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // compares the failing input against them to recognise an input the instance has already handled, and the
         // record it writes carries them over untouched, so projecting them away would quarantine the instance and
         // drop them at the same time.
-        query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK).include(STREAM_MARKS);
+        query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK).include(STREAM_MARKS).include(EARLY);
         Supplier<@Nullable Document> read = () -> mongoOperations.findOne(query, Document.class, collectionName);
         return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
@@ -453,6 +458,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // them is.
         if (!envelope.started()) {
             document.append(STARTED, false);
+        }
+        // Written only when the instance keeps an event, so an instance that started first carries no such field.
+        if (!envelope.early().isEmpty()) {
+            document.append(EARLY, envelope.early().stream().map(SpringMongoSagaStateStore::toCloudEventJson).toList());
         }
         SagaFailure failure = envelope.failure();
         if (failure != null) {
@@ -587,7 +596,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // currentStep is only honoured when the state was projected away; with a state present the envelope re-derives it.
         return new SagaEnvelope<>(sagaId, state, status, version, timers, streamWatermarks, positionWatermark,
                 readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT),
-                document.getString(CURRENT_STEP), started, toFailure(document), toStreamMarks(document));
+                document.getString(CURRENT_STEP), started, toFailure(document), toStreamMarks(document),
+                document.getList(EARLY, String.class, List.of()).stream().map(SpringMongoSagaStateStore::fromCloudEventJson).toList());
     }
 
     private static List<Document> toMarksDocuments(Map<String, StreamMarks> streamMarks) {
@@ -600,8 +610,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     .append(MARKS_HORIZON, typeMark.horizon())));
             List<Document> pending = new ArrayList<>();
             marks.pending().forEach((type, versions) -> pending.add(new Document(MARKS_TYPE, type).append(MARKS_VERSIONS, versions)));
+            List<Document> pendingSince = new ArrayList<>();
+            marks.pendingSince().forEach((version, since) -> pendingSince.add(new Document(MARKS_VERSION, version).append(MARKS_SINCE, Date.from(since))));
             streams.add(new Document(MARKS_STREAM_ID, streamId).append(MARKS_FLOOR, marks.floor()).append(MARKS_TYPES, types)
-                    .append(MARKS_PENDING, pending).append(MARKS_LEGACY_FAILED, marks.legacyFailed()));
+                    .append(MARKS_PENDING, pending).append(MARKS_LEGACY_FAILED, marks.legacyFailed()).append(MARKS_PENDING_SINCE, pendingSince));
         });
         return streams;
     }
@@ -635,7 +647,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             for (Object version : stream.getList(MARKS_LEGACY_FAILED, Object.class, List.of())) {
                 legacyFailed.add(((Number) version).longValue());
             }
-            streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType, pending, legacyFailed));
+            // A stream stored before the instant was kept reads as no instant, and the budget then falls back to the
+            // failure record.
+            Map<Long, Instant> pendingSince = new LinkedHashMap<>();
+            for (Document entry : stream.getList(MARKS_PENDING_SINCE, Document.class, List.of())) {
+                pendingSince.put(((Number) entry.get(MARKS_VERSION)).longValue(), entry.getDate(MARKS_SINCE).toInstant());
+            }
+            streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType, pending, legacyFailed, pendingSince));
         }
         return streamMarks;
     }
