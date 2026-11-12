@@ -81,7 +81,8 @@ public final class CompetingConsumerCheckpointWriteVersionSource implements Chec
             } catch (AmbiguousCompetingConsumerStrategyException e) {
                 throw e;
             } catch (Exception e) {
-                // Exception, since a strategy provider written in Kotlin can throw a checked exception
+                // Exception, since a provider of the caller's own written in Kotlin can throw a checked exception. Spring's own
+                // provider wraps what a strategy bean throws in a BeanCreationException.
                 return OptionalLong.empty();
             }
             if (resolved == null) {
