@@ -25,6 +25,7 @@ import org.bson.BsonString;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.service.ExecutorScope;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.TransientDataAccessResourceException;
@@ -414,6 +415,85 @@ class SpringReactiveTransactionExecutorTest {
         // Then
         StepVerifier.create(result).expectNext("done").verifyComplete();
         assertThat(attempts).hasValue(6);
+    }
+
+    @Test
+    void the_action_is_told_that_the_executor_started_the_synchronization_under_propagation_supports_with_no_caller_scope() {
+        // Given
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(supports(new StubReactiveTransactionManager()));
+
+        // When
+        Mono<ExecutorScope> scope = executor.inTransactionTellingIfOpened(Mono::just);
+
+        // Then
+        StepVerifier.create(scope)
+                .expectNext(new ExecutorScope(false, true))
+                .verifyComplete();
+    }
+
+    @Test
+    void the_action_is_told_that_the_executor_started_no_synchronization_under_propagation_supports_in_a_callers_supports_scope() {
+        // Given
+        StubReactiveTransactionManager transactionManager = new StubReactiveTransactionManager();
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(supports(transactionManager));
+
+        // When
+        Mono<ExecutorScope> scope = supports(transactionManager).transactional(executor.inTransactionTellingIfOpened(Mono::just));
+
+        // Then
+        StepVerifier.create(scope)
+                .expectNext(new ExecutorScope(false, false))
+                .verifyComplete();
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_again_after_a_transient_conflict_under_propagation_supports_with_no_caller_scope() {
+        // Given
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(supports(new StubReactiveTransactionManager()));
+        AtomicInteger attempts = new AtomicInteger();
+
+        // When
+        Mono<String> result = executor.inTransaction(() -> Mono.fromCallable(() -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new TransientDataAccessResourceException("conflict");
+            }
+            return "done";
+        }));
+
+        // Then
+        StepVerifier.create(result)
+                .expectNext("done")
+                .verifyComplete();
+        assertThat(attempts).hasValue(2);
+    }
+
+    @Test
+    void the_default_executor_runs_the_action_once_and_gives_a_transient_conflict_to_the_caller_in_a_callers_supports_scope() {
+        // Given
+        StubReactiveTransactionManager transactionManager = new StubReactiveTransactionManager();
+        SpringReactiveTransactionExecutor executor = new SpringReactiveTransactionExecutor(supports(transactionManager));
+        AtomicInteger attempts = new AtomicInteger();
+        TransientDataAccessResourceException conflict = new TransientDataAccessResourceException("conflict");
+
+        // When
+        Mono<String> result = supports(transactionManager).transactional(executor.inTransaction(() -> Mono.fromCallable(() -> {
+            if (attempts.incrementAndGet() > 1) {
+                throw new AssertionError("the action ran again after " + conflict);
+            }
+            throw conflict;
+        })));
+
+        // Then
+        StepVerifier.create(result)
+                .expectErrorSatisfies(error -> assertThat(error).isSameAs(conflict))
+                .verify();
+        assertThat(attempts).hasValue(1);
+    }
+
+    private static TransactionalOperator supports(StubReactiveTransactionManager transactionManager) {
+        DefaultTransactionDefinition definition = new DefaultTransactionDefinition();
+        definition.setPropagationBehavior(TransactionDefinition.PROPAGATION_SUPPORTS);
+        return TransactionalOperator.create(transactionManager, definition);
     }
 
     // The action fails the test if it runs a second time, so a retry that should not happen fails on this

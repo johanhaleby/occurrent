@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
@@ -36,6 +37,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -109,19 +111,53 @@ class GenericApplicationServiceSynchronousSubscriptionsTest {
     }
 
     @Test
-    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_says_so() {
+    void tells_the_dispatcher_there_is_no_transaction_when_the_executor_only_joins_one_and_does_not_say_a_failure_rolls_it_back() {
         RegimeRecordingDispatcher dispatcher = new RegimeRecordingDispatcher();
         var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
                 .synchronousSubscriptions(dispatcher)
-                .transactionExecutor(new TransactionExecutor() {
-                    @Override
-                    public <T> T inTransaction(Supplier<T> action) {
-                        return action.get();
-                    }
+                .transactionExecutor(new JoiningExecutor(false))
+                .build();
 
+        applicationService.execute(UUID.randomUUID().toString(), events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"));
+
+        assertThat(dispatcher.toldTransactional).isFalse();
+    }
+
+    @Test
+    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_only_joins_one_and_says_a_failure_rolls_it_back() {
+        RegimeRecordingDispatcher dispatcher = new RegimeRecordingDispatcher();
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(dispatcher)
+                .transactionExecutor(new JoiningExecutor(true))
+                .build();
+
+        applicationService.execute(UUID.randomUUID().toString(), events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"));
+
+        assertThat(dispatcher.toldTransactional).isTrue();
+    }
+
+    @Test
+    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_opens_one() {
+        RegimeRecordingDispatcher dispatcher = new RegimeRecordingDispatcher();
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(dispatcher)
+                .transactionExecutor(new OpeningExecutor())
+                .build();
+
+        applicationService.execute(UUID.randomUUID().toString(), events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"));
+
+        assertThat(dispatcher.toldTransactional).isTrue();
+    }
+
+    @Test
+    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_tells_the_attempt_that_it_opened_one() {
+        RegimeRecordingDispatcher dispatcher = new RegimeRecordingDispatcher();
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(dispatcher)
+                .transactionExecutor(new JoiningExecutor(false) {
                     @Override
-                    public boolean isTransactional() {
-                        return true;
+                    public <T> T inTransactionTellingIfOpened(Function<ExecutorScope, T> action) {
+                        return inTransaction(() -> action.apply(new ExecutorScope(true, false)));
                     }
                 })
                 .build();
@@ -129,6 +165,50 @@ class GenericApplicationServiceSynchronousSubscriptionsTest {
         applicationService.execute(UUID.randomUUID().toString(), events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"));
 
         assertThat(dispatcher.toldTransactional).isTrue();
+    }
+
+    // Reports a transaction throughout, as an executor does that joins one the caller already opened
+    private static class JoiningExecutor implements TransactionExecutor {
+        private final boolean rollsBackAJoinedTransactionOnFailure;
+
+        JoiningExecutor(boolean rollsBackAJoinedTransactionOnFailure) {
+            this.rollsBackAJoinedTransactionOnFailure = rollsBackAJoinedTransactionOnFailure;
+        }
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            return action.get();
+        }
+
+        @Override
+        public boolean isTransactional() {
+            return true;
+        }
+
+        @Override
+        public boolean rollsBackAJoinedTransactionOnFailure() {
+            return rollsBackAJoinedTransactionOnFailure;
+        }
+    }
+
+    // Reports no transaction until its own inTransaction has opened one
+    private static final class OpeningExecutor implements TransactionExecutor {
+        private boolean open;
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            open = true;
+            try {
+                return action.get();
+            } finally {
+                open = false;
+            }
+        }
+
+        @Override
+        public boolean isTransactional() {
+            return open;
+        }
     }
 
     private static final class RecordingDispatcher implements SynchronousEventDispatcher {

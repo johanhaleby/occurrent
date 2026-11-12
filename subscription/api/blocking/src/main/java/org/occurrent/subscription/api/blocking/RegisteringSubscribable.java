@@ -63,9 +63,8 @@ import java.util.function.Predicate;
  * <strong>One consumer unless a subclass says otherwise.</strong> A subclass declares its {@link Consumers} through
  * the constructor, and the no-argument constructor means {@link Consumers#ONE}. That default is the safe one: an
  * externally driven sink delivers one message under one acknowledgement, so several consumers on it would mean one
- * failing consumer holding up the rest, which the isolation rule in {@code AGENTS.md} forbids. Only a subclass that
- * has an argument for why fan-out is safe for it, as the synchronous write-path dispatcher does, passes
- * {@link Consumers#MANY}. See ADR 90.
+ * failing consumer holding up the rest, which the isolation rule in {@code AGENTS.md} forbids. Only a subclass with
+ * a reason for fan-out, as the synchronous write-path dispatcher has, passes {@link Consumers#MANY}. See ADR 90.
  */
 @NullMarked
 public abstract class RegisteringSubscribable implements SubscriptionModel, IntrospectableSubscriptions {
@@ -81,9 +80,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
          */
         ONE,
         /**
-         * Several consumers, each receiving every matching event. Safe only where a failure cannot strand a sibling.
-         * The synchronous models qualify two ways: inside a transaction a handler failure fails the write, so no handler's
-         * work survives, and outside one {@link #routeIsolated(Iterable)} gives every handler the event anyway.
+         * Several consumers, each offered every matching event, though a failure can strand the ones behind it. The
+         * synchronous models use this. {@link #route(Iterable)} stops at a handler's failure, and
+         * {@link #routeIsolated(Iterable)} offers the event to the other handlers too, unless a handler throws an
+         * {@link Error}.
          */
         MANY
     }
@@ -186,8 +186,8 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     }
 
     /**
-     * @param consumers How many consumers this subclass accepts. Pass {@link Consumers#MANY} only with a reason why
-     *                  one consumer's failure cannot strand another.
+     * @param consumers How many consumers this subclass accepts. Pass {@link Consumers#MANY} only with a reason for
+     *                  fan-out, since one consumer's failure can strand another.
      */
     protected RegisteringSubscribable(Consumers consumers) {
         this(consumers, DataFieldReader.refusing());
@@ -195,7 +195,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
 
     /**
      * @param consumers       How many consumers this subclass accepts. Pass {@link Consumers#MANY} only with a reason
-     *                        why one consumer's failure cannot strand another.
+     *                        for fan-out, since one consumer's failure can strand another.
      * @param dataFieldReader Reads a field out of an event's payload, so a subscription can filter on one. Occurrent
      *                        ships a Jackson-backed reader in {@code occurrent-common-inmemory-filter-matching-jackson}.
      *                        {@link DataFieldReader#refusing()} refuses such a filter, which is the default.

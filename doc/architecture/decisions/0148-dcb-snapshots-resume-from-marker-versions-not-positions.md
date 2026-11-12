@@ -627,9 +627,10 @@ and these are the consequences:
   failed condition goes to the service's retry strategy, which by default reads and decides again.
 - The executor's own conflict retry from [ADR 74](0074-retry-only-where-the-transaction-is-owned.md) re-runs the
   append, the re-read and the dispatch, with that same token, and not the read or the decision. A handler can run again
-  on such a retry, as it could before. When the condition then fails, the service's retry strategy by default reads and decides
-  again. Otherwise the append goes through on the decision it
-  already made.
+  on such a retry when a transaction rolled the earlier attempt back, as it could before.
+  [ADR 165](0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) covers a failure after an
+  append that the attempt's own transaction doesn't undo. When the condition then fails, the service's retry
+  strategy by default reads and decides again. Otherwise the append goes through on the decision it already made.
   The condition doesn't catch every append that happened since the read, for example on a replica set one whose event
   was deleted or changed by the time of the append, or one on `DcbCriteria.all()`, where the append can go through on a
   decision that didn't see a matching event. A conflict that only the condition can see spends an attempt of the
@@ -646,8 +647,8 @@ and these are the consequences:
 - This changes one sentence of ADR 74's context, the one saying the service runs the whole read-decide-append through a
   `TransactionExecutor`. ADR 74's decision still holds.
 
-On the blocking service a command that asks for no marker versions reads and decides in the executor's transaction, as
-in 0.34.0, since it has no versions to lose there. With no caller scope, reading first cost such a command two
+On the blocking service a command that asks for no marker versions reads and decides inside the executor, as in
+0.34.0, since it has no versions to lose there. With no caller scope, reading first cost such a command two
 things. A write its domain function made before it threw stayed stored, and a transient failure of the read failed the
 command where the executor had run it again. I ran these on a Spring MongoDB store with the executor on `PROPAGATION_REQUIRED`. With
 the read in the executor and the failure passed through it, the write rolled back and the command stored its event. The reactive service still reads first for every command.
@@ -688,18 +689,19 @@ service passes it to the synchronous subscriptions as whether the write is in on
 in the executor, so it gets versions only when the executor opens no transaction.
 
 On the blocking service a failure of the read or the decision goes around the executor when `isTransactional()`
-answered `true` before the service entered it, so it can't mark a transaction the caller owns rollback-only. The
-service holds it inside the
-executor's action, returns normally, and throws it after the executor has returned, an `Error` as well. Without that
-hold the caller's commit threw `UnexpectedRollbackException`. When `isTransactional()` answered `false`, the failure
-goes through the executor, which rolls back a transaction it opened. An executor that answered `true` but runs the
-action outside every transaction of the caller's gets the failure held too, and a write the domain function made before
-it threw can then commit. The reactive service lets the failure through the
+answers `true` both before the service enters it and when the failure happens, and `inTransactionTellingIfOpened` says
+the attempt didn't open its transaction. So it can't mark a transaction the caller owns rollback-only. The service holds it inside the executor's action, returns normally, and throws it after the executor has
+returned, an `Error` as well. Without that hold the caller's commit threw `UnexpectedRollbackException`. Otherwise the
+failure goes through the executor. An executor of your own that keeps the
+default of `inTransactionTellingIfOpened` and opens a transaction while `isTransactional()` already answers `true`
+reports joining it, so the failure is held there and the executor can commit a write the domain function made before
+it threw. The reactive service lets the failure through the
 executor. `GenericReactiveTransaction.isRollbackOnly()` in spring-tx 7.0.9 reads only its own flag, so a participant
 can't stop the caller's commit, and with and without a hold the caller's transaction committed on a Spring MongoDB store.
 I ran no other reactive executor.
 
-Whether the command asks for marker versions and the answers of `isTransactional()` and `allowsReadBeforeTransaction()` decide all of this. I ran an executor that
+With synchronous subscriptions, where the read runs follows from whether the command asks for marker versions and from
+the answers of `isTransactional()` and `allowsReadBeforeTransaction()`. I ran an executor that
 answers `true` from `isTransactional()` with no transaction open, against what the interface asks for, on both stacks
 over a Spring MongoDB store. When it opens a transaction, the read runs in that transaction and the decider saves no
 snapshot. When it opens none, the decider saves one. In both the command stored its event, the handler ran once, and an

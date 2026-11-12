@@ -6,6 +6,11 @@ Date: 2026-07-14
 
 Accepted
 
+[ADR 165](0165-a-failure-after-the-write-is-retried-only-in-a-transaction-the-attempt-opened.md) keeps the application
+service's retry from running the command again for a failure after a write unless the attempt opened the transaction,
+so `execute` fails instead. It also stops the dispatch at the first failing handler in a transaction the
+attempt joined only when the executor says a failure rolls that transaction back.
+
 ## Context
 
 Occurrent has two ways to react to newly written events, and neither runs a decoupled, declared-once handler
@@ -150,8 +155,7 @@ during dispatch, which runs inside `inTransaction`, so an implementation can rea
 executors do: the blocking one returns `TransactionSynchronizationManager.isActualTransactionActive()` and the reactive
 one reads the same thing out of the subscriber context. Both accept a caller-configured `TransactionTemplate` or
 `TransactionalOperator`, so a fixed `true` would lie under `PROPAGATION_NOT_SUPPORTED` or `PROPAGATION_NEVER` and bring
-back the stranding this amendment removes. `NativeMongoTransactionExecutor` does answer a fixed `true`, correctly: it
-always opens or joins a session transaction and has no propagation setting that could turn that off.
+back the stranding this amendment removes.
 
 On the reactive stack `isTransactional()` returns `Mono<Boolean>` rather than a `boolean`, because there the transaction
 lives in the subscriber context and only a reactive answer can reach it. The asymmetry with the blocking `boolean` is

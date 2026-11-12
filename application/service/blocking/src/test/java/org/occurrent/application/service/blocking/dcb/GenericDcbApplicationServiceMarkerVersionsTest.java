@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
@@ -346,6 +347,22 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             var failure = new IllegalStateException("refused by the domain function");
 
             Throwable thrown = catchThrowable(() -> transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, events -> {
+                trace.add("decide");
+                throw failure;
+            }));
+
+            assertAll(
+                    () -> assertThat(thrown).as("what reached the caller").isSameAs(failure),
+                    () -> assertThat(trace).containsExactly("begin", "read", "decide", "rollback")
+            );
+        }
+
+        @Test
+        void a_failure_from_the_domain_function_rolls_back_the_transaction_of_an_executor_that_keeps_the_defaults_for_telling_whether_it_opened_it() {
+            var store = new TracingStore(trace);
+            var failure = new IllegalStateException("refused by the domain function");
+
+            Throwable thrown = catchThrowable(() -> transactionalService(store, new TracingExecutor(trace).inferringWhetherItOpenedTheTransaction(), dispatcher).execute(CRITERIA, events -> {
                 trace.add("decide");
                 throw failure;
             }));
@@ -710,6 +727,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         private final List<String> trace;
         private boolean runAgainAfterAConflict;
         private boolean allowsReadBeforeIt = true;
+        private boolean infersWhetherItOpened;
 
         TracingExecutor(List<String> trace) {
             this.trace = trace;
@@ -725,10 +743,25 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             return this;
         }
 
+        // Keeps the default inference and the default isTransactional of false, so it reports not opening the transaction it opens
+        TracingExecutor inferringWhetherItOpenedTheTransaction() {
+            this.infersWhetherItOpened = true;
+            return this;
+        }
+
         // Opens nothing around the caller unless told otherwise, like a Spring executor with no caller scope
         @Override
         public boolean allowsReadBeforeTransaction() {
             return allowsReadBeforeIt;
+        }
+
+        // Opens the transaction it begins
+        @Override
+        public <T> T inTransactionTellingIfOpened(Function<ExecutorScope, T> action) {
+            if (infersWhetherItOpened) {
+                return TransactionExecutor.super.inTransactionTellingIfOpened(action);
+            }
+            return inTransaction(() -> action.apply(new ExecutorScope(true, false)));
         }
 
         @Override

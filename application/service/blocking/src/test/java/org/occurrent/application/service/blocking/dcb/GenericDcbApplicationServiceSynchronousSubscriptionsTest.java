@@ -18,6 +18,7 @@ package org.occurrent.application.service.blocking.dcb;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -109,11 +110,98 @@ class GenericDcbApplicationServiceSynchronousSubscriptionsTest {
         assertThat(eventStore.read(tags(Tag.parse("name:1"))).events()).as("events stored").hasSize(1);
     }
 
+    @Test
+    void tells_the_dispatcher_there_is_no_transaction_when_the_executor_only_joins_one_and_does_not_say_a_failure_rolls_it_back() {
+        assertThat(toldTransactionalWith(new JoiningExecutor(false))).isFalse();
+    }
+
+    @Test
+    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_only_joins_one_and_says_a_failure_rolls_it_back() {
+        assertThat(toldTransactionalWith(new JoiningExecutor(true))).isTrue();
+    }
+
+    @Test
+    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_opens_one() {
+        assertThat(toldTransactionalWith(new OpeningExecutor())).isTrue();
+    }
+
+    @Test
+    void tells_the_dispatcher_there_is_no_transaction_when_the_default_executor_is_used() {
+        RecordingDispatcher dispatcher = new RecordingDispatcher();
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(Tag.parse("name:1")))
+                .synchronousSubscriptions(dispatcher)
+                .build();
+
+        applicationService.execute(tags(Tag.parse("name:1")), events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"));
+
+        assertThat(dispatcher.toldTransactional).isFalse();
+    }
+
+    private Boolean toldTransactionalWith(TransactionExecutor executor) {
+        RecordingDispatcher dispatcher = new RecordingDispatcher();
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(Tag.parse("name:1")))
+                .synchronousSubscriptions(dispatcher)
+                .transactionExecutor(executor)
+                .build();
+
+        applicationService.execute(tags(Tag.parse("name:1")), events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"));
+
+        return dispatcher.toldTransactional;
+    }
+
+    // Reports a transaction throughout, as an executor does that joins one the caller already opened
+    private static final class JoiningExecutor implements TransactionExecutor {
+        private final boolean rollsBackAJoinedTransactionOnFailure;
+
+        JoiningExecutor(boolean rollsBackAJoinedTransactionOnFailure) {
+            this.rollsBackAJoinedTransactionOnFailure = rollsBackAJoinedTransactionOnFailure;
+        }
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            return action.get();
+        }
+
+        @Override
+        public boolean isTransactional() {
+            return true;
+        }
+
+        @Override
+        public boolean rollsBackAJoinedTransactionOnFailure() {
+            return rollsBackAJoinedTransactionOnFailure;
+        }
+    }
+
+    // Reports no transaction until its own inTransaction has opened one
+    private static final class OpeningExecutor implements TransactionExecutor {
+        private boolean open;
+
+        @Override
+        public <T> T inTransaction(Supplier<T> action) {
+            open = true;
+            try {
+                return action.get();
+            } finally {
+                open = false;
+            }
+        }
+
+        @Override
+        public boolean isTransactional() {
+            return open;
+        }
+    }
+
     private static final class RecordingDispatcher implements SynchronousEventDispatcher {
         private final List<CloudEvent> dispatched = new ArrayList<>();
+        private @Nullable Boolean toldTransactional;
 
         @Override
         public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+            toldTransactional = transactional;
             dispatched.addAll(writtenCloudEvents);
         }
 

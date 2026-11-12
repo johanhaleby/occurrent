@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
@@ -74,11 +75,10 @@ import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
- * A DCB command that asks for no marker versions reads and decides inside the transaction a {@code SpringTransactionExecutor}
- * opens for synchronous subscriptions, as it did in 0.34.0. A write the domain function makes then rolls back with that
- * transaction, and the executor can run the command again after a transient read failure.
+ * A DCB command that asks for no marker versions reads and decides inside a {@code SpringTransactionExecutor} with
+ * synchronous subscriptions, as in 0.34.0.
  */
-@DisplayName("A DCB command in a Spring transaction executor's transaction")
+@DisplayName("A DCB command inside a Spring transaction executor")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Testcontainers
 @Timeout(120)
@@ -168,6 +168,67 @@ class DcbCommandInSpringTransactionExecutorMongoTest {
     }
 
     @Test
+    void a_write_the_domain_function_makes_before_it_throws_rolls_back_with_a_transaction_the_executor_opens_on_propagation_requires_new_in_the_callers_transaction() {
+        String domainWrite = UUID.randomUUID().toString();
+        var failure = new IllegalStateException("domain failure");
+        var service = service(eventStore, TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        Throwable thrown = catchThrowable(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> service.execute(DcbCriteria.tags(tag), events -> {
+            mongoTemplate.insert(new Document("_id", domainWrite), "domain-writes");
+            throw failure;
+        })));
+
+        assertAll(
+                () -> assertThat(thrown).as("what reached the caller").isSameAs(failure),
+                () -> assertThat(mongoTemplate.count(Query.query(Criteria.where("_id").is(domainWrite)), "domain-writes"))
+                        .as("domain writes stored").isZero()
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {TransactionDefinition.PROPAGATION_SUPPORTS, TransactionDefinition.PROPAGATION_NOT_SUPPORTED, TransactionDefinition.PROPAGATION_NEVER})
+    void a_write_the_domain_function_makes_before_it_throws_rolls_back_with_the_session_an_executor_that_opens_no_transaction_binds(int executorsPropagation) {
+        String domainWrite = UUID.randomUUID().toString();
+        var failure = new IllegalStateException("domain failure");
+        var service = service(eventStore, executorsPropagation);
+
+        Throwable thrown = catchThrowable(() -> service.execute(DcbCriteria.tags(tag), events -> {
+            mongoTemplate.insert(new Document("_id", domainWrite), "domain-writes");
+            throw failure;
+        }));
+
+        assertAll(
+                () -> assertThat(thrown).as("what reached the caller").isSameAs(failure),
+                () -> assertThat(mongoTemplate.count(Query.query(Criteria.where("_id").is(domainWrite)), "domain-writes"))
+                        .as("domain writes stored").isZero()
+        );
+    }
+
+    @Test
+    void a_write_the_domain_function_makes_before_it_throws_rolls_back_on_propagation_not_supported_in_the_callers_transaction_and_the_caller_still_commits() {
+        String domainWrite = UUID.randomUUID().toString();
+        String callersWrite = UUID.randomUUID().toString();
+        var failure = new IllegalStateException("domain failure");
+        var service = service(eventStore, TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
+
+        Throwable thrown = new TransactionTemplate(transactionManager).execute(status -> {
+            mongoTemplate.insert(new Document("_id", callersWrite), "domain-writes");
+            return catchThrowable(() -> service.execute(DcbCriteria.tags(tag), events -> {
+                mongoTemplate.insert(new Document("_id", domainWrite), "domain-writes");
+                throw failure;
+            }));
+        });
+
+        assertAll(
+                () -> assertThat(thrown).as("what reached the caller").isSameAs(failure),
+                () -> assertThat(mongoTemplate.count(Query.query(Criteria.where("_id").is(domainWrite)), "domain-writes"))
+                        .as("domain writes stored").isZero(),
+                () -> assertThat(mongoTemplate.count(Query.query(Criteria.where("_id").is(callersWrite)), "domain-writes"))
+                        .as("caller's writes stored").isOne()
+        );
+    }
+
+    @Test
     void the_executor_runs_the_command_again_after_a_transient_read_failure() {
         var reads = new AtomicInteger();
         DcbEventStore failingOnTheFirstRead = (DcbEventStore) Proxy.newProxyInstance(getClass().getClassLoader(),
@@ -191,12 +252,18 @@ class DcbCommandInSpringTransactionExecutorMongoTest {
         );
     }
 
-    // No retry in the service, so a command that runs again was run again by the executor
     private GenericDcbApplicationService<DomainEvent> service(DcbEventStore store) {
+        return service(store, TransactionDefinition.PROPAGATION_REQUIRED);
+    }
+
+    // No retry in the service, so a command that runs again was run again by the executor
+    private GenericDcbApplicationService<DomainEvent> service(DcbEventStore store, int propagationBehavior) {
+        TransactionTemplate executorsTemplate = new TransactionTemplate(transactionManager);
+        executorsTemplate.setPropagationBehavior(propagationBehavior);
         return GenericDcbApplicationService.builder(store, cloudEventConverter)
                 .tagGenerator(event -> Set.of(tag))
                 .synchronousSubscriptions(DISPATCHER)
-                .transactionExecutor(new SpringTransactionExecutor(new TransactionTemplate(transactionManager)))
+                .transactionExecutor(new SpringTransactionExecutor(executorsTemplate))
                 .retryStrategy(RetryStrategy.none())
                 .build();
     }

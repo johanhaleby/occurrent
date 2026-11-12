@@ -19,11 +19,16 @@ package org.occurrent.application.service.spring;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.ClassUtils;
@@ -33,8 +38,10 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -61,8 +68,10 @@ import java.util.function.Supplier;
 public class SpringTransactionExecutor implements TransactionExecutor {
 
     /**
-     * Retries a conflict between concurrent appends, but only when this executor opened the transaction: the store
-     * joins that transaction and so cannot retry one itself, and only its owner can start a fresh one. See ADR 0074.
+     * Retries a conflict between concurrent appends, but only when no transaction was open on entry and the attempt
+     * joined no transaction, other than through a savepoint of its own, and ran outside a transaction synchronization the
+     * caller started. A store that joins an open transaction can't retry one itself, and only its owner can start a fresh
+     * one. See ADR 0074.
      * <p>
      * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
      * stands in for exactly that retry once the store has to give it up. Appends of the same type increment the same
@@ -102,6 +111,9 @@ public class SpringTransactionExecutor implements TransactionExecutor {
 
     private static final int MAX_FAILED_COMMITS = 3;
 
+    private static final TransactionSynchronization CALLERS_SYNCHRONIZATION_MARKER = new TransactionSynchronization() {
+    };
+
     private final TransactionTemplate transactionTemplate;
     private final RetryStrategy conflictRetry;
     private final boolean stopAfterDefaultDeadline;
@@ -135,7 +147,7 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * once for one command.
      *
      * @param transactionManager The Spring transaction manager to use (for MongoDB, a {@code MongoTransactionManager}).
-     * @param conflictRetry      The retry policy to apply when this executor opens the transaction.
+     * @param conflictRetry      The retry policy to apply where this executor retries, see {@link #inTransactionTellingIfOpened(Function)}.
      */
     public SpringTransactionExecutor(PlatformTransactionManager transactionManager, RetryStrategy conflictRetry) {
         this(new TransactionTemplate(Objects.requireNonNull(transactionManager, "transactionManager cannot be null")), conflictRetry);
@@ -147,7 +159,7 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * covers.
      *
      * @param transactionTemplate The transaction template to run work through.
-     * @param conflictRetry       The retry policy to apply when this executor opens the transaction.
+     * @param conflictRetry       The retry policy to apply where this executor retries, see {@link #inTransactionTellingIfOpened(Function)}.
      */
     public SpringTransactionExecutor(TransactionTemplate transactionTemplate, RetryStrategy conflictRetry) {
         this(transactionTemplate, conflictRetry, false);
@@ -160,8 +172,8 @@ public class SpringTransactionExecutor implements TransactionExecutor {
     }
 
     /**
-     * The conflict-retry policy applied when this executor opens the transaction: 240 attempts in total with
-     * exponential backoff from 10ms to 500ms, about two minutes of waiting, matching the event store's own
+     * The conflict-retry policy applied where this executor retries: 240 attempts in total with exponential backoff
+     * from 10ms to 500ms, about two minutes of waiting, matching the event store's own
      * transient-conflict retry. It counts attempts only. An executor built without a retry of its own adds a
      * 120 second deadline per call and a cap of three failed commits on top, which this policy does not include when
      * you pass it to a constructor.
@@ -175,22 +187,68 @@ public class SpringTransactionExecutor implements TransactionExecutor {
     @Override
     public <T> T inTransaction(Supplier<T> action) {
         Objects.requireNonNull(action, "action cannot be null");
+        return inTransactionTellingIfOpened(scope -> action.get());
+    }
+
+    /**
+     * Asks the transaction status rather than inferring it from {@link #isTransactional()}, since a caller-supplied
+     * {@link TransactionTemplate} on {@code PROPAGATION_REQUIRES_NEW} opens a transaction with one already open. The
+     * action is told this executor started the synchronization only when its {@link TransactionTemplate} started the
+     * synchronization the attempt runs in, so Spring clears it when the attempt ends.
+     * <p>
+     * The conflict retry doesn't run when a transaction is open on entry, or after an attempt that Spring's
+     * {@link DefaultTransactionStatus} reports as joining a transaction without a savepoint of its own, or that ran in a
+     * transaction synchronization the caller started, such as a caller's scope on {@code PROPAGATION_SUPPORTS}.
+     * A MongoDB session that a read binds to that synchronization stays bound until the caller's scope ends, so running
+     * the action again would run it in the session the conflict aborted. An attempt that starts a synchronization of its
+     * own and joins no transaction is retried. A retry policy that isn't a {@link RetryStrategy.Retry} can't be told to
+     * stop, so with one the action runs once when a synchronization is active on entry.
+     */
+    @Override
+    public <T> T inTransactionTellingIfOpened(Function<ExecutorScope, T> action) {
+        Objects.requireNonNull(action, "action cannot be null");
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            // A transaction is already open, so the template joins it and this executor is not its owner. A conflict
-            // aborts the whole transaction, which only its owner can start again, so run the action once and let the
-            // error reach that owner. See ADR 0074.
-            return transactionTemplate.execute(status -> action.get());
+            // A transaction is already open, so this executor takes it as the caller's and runs the action once, also on a
+            // propagation that opens a new one. A conflict aborts a joined transaction, which only its owner can start
+            // again, so the error goes to that owner. See ADR 0074.
+            markCallersSynchronization();
+            return transactionTemplate.execute(status -> action.apply(scopeOf(status)));
         }
+        // A session a read binds to a caller's synchronization stays bound until the caller's scope ends, and a joined
+        // transaction is started again only by whoever opened it, so an attempt that ran in either isn't run again
+        AtomicBoolean inCallersScope = new AtomicBoolean();
+        Function<TransactionStatus, T> attempt = status -> {
+            ExecutorScope scope = scopeOf(status);
+            inCallersScope.set(joinedTransaction(status) || TransactionSynchronizationManager.isSynchronizationActive() && !scope.startedSynchronization());
+            return action.apply(scope);
+        };
+        // An attempt whose transaction failed to start ran nothing in the caller's scope, so it can run again
+        BooleanSupplier beforeAttempt = () -> {
+            inCallersScope.set(false);
+            return markCallersSynchronization();
+        };
+        Function<Predicate<Throwable>, Predicate<Throwable>> outsideCallersScope = retryable -> throwable -> !inCallersScope.get() && retryable.test(throwable);
         if (!stopAfterDefaultDeadline) {
-            return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.get()));
+            if (!(conflictRetry instanceof RetryStrategy.Retry conflictRetryWithPredicate)) {
+                // A policy with no retry predicate can't be stopped after an attempt in the caller's scope
+                return beforeAttempt.getAsBoolean() ? transactionTemplate.execute(attempt::apply) : conflictRetry.execute(() -> {
+                    beforeAttempt.getAsBoolean();
+                    return transactionTemplate.execute(attempt::apply);
+                });
+            }
+            return conflictRetryWithPredicate.mapRetryPredicate(outsideCallersScope).execute(() -> {
+                beforeAttempt.getAsBoolean();
+                return transactionTemplate.execute(attempt::apply);
+            });
         }
         AtomicInteger failedCommits = new AtomicInteger();
-        return DEFAULT_CONFLICT_RETRY.mapRetryPredicate(withinDeadline()).execute(() -> {
+        return DEFAULT_CONFLICT_RETRY.mapRetryPredicate(withinDeadline()).mapRetryPredicate(outsideCallersScope).execute(() -> {
             AtomicReference<Throwable> actionFailure = new AtomicReference<>();
+            beforeAttempt.getAsBoolean();
             try {
                 return transactionTemplate.execute(status -> {
                     try {
-                        return action.get();
+                        return attempt.apply(status);
                     } catch (RuntimeException e) {
                         actionFailure.set(e);
                         throw e;
@@ -200,6 +258,29 @@ public class SpringTransactionExecutor implements TransactionExecutor {
                 throw e == actionFailure.get() ? e : commitFailed(e, failedCommits);
             }
         });
+    }
+
+    // Registers the marker in the caller's synchronization, if one is active, so an attempt that still finds it runs in
+    // the caller's synchronization whatever status its transaction manager returns
+    private static boolean markCallersSynchronization() {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return false;
+        }
+        TransactionSynchronizationManager.registerSynchronization(CALLERS_SYNCHRONIZATION_MARKER);
+        return true;
+    }
+
+    private static ExecutorScope scopeOf(TransactionStatus status) {
+        boolean startedSynchronization = TransactionSynchronizationManager.isSynchronizationActive()
+                && !TransactionSynchronizationManager.getSynchronizations().contains(CALLERS_SYNCHRONIZATION_MARKER);
+        return new ExecutorScope(status.isNewTransaction(), startedSynchronization);
+    }
+
+    // Only Spring's own status says reliably whether the attempt joined a transaction, since the default hasTransaction()
+    // answers true, as ChainedTransactionManager's status does. A savepoint of the attempt's own is rolled back alone
+    private static boolean joinedTransaction(TransactionStatus status) {
+        return status instanceof DefaultTransactionStatus defaultStatus
+                && defaultStatus.hasTransaction() && !defaultStatus.isNewTransaction() && !defaultStatus.hasSavepoint();
     }
 
     private static TransactionSystemException commitFailed(TransactionSystemException failure, AtomicInteger failedCommits) {
@@ -283,12 +364,24 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * Reads the live transaction state rather than answering {@code true} unconditionally, because a caller-supplied
      * {@link TransactionTemplate} can be configured not to open one at all, for example with
      * {@code PROPAGATION_NOT_SUPPORTED} or {@code PROPAGATION_NEVER}. Claiming a transaction that does not exist would
-     * make a synchronous dispatch stop at the first handler failure with nothing rolling back, stranding the handlers
-     * behind it.
+     * make a synchronous dispatch stop at the first handler failure, stranding the handlers behind it, since
+     * {@link #rollsBackAJoinedTransactionOnFailure()} answers {@code true} for Spring's default manager settings.
      */
     @Override
     public boolean isTransactional() {
         return TransactionSynchronizationManager.isActualTransactionActive();
+    }
+
+    /**
+     * {@code true} when the transaction manager is an {@code AbstractPlatformTransactionManager} that marks the transaction
+     * rollback-only after a failure in a part of it this executor joined, which it does unless it's set with
+     * {@code setGlobalRollbackOnParticipationFailure(false)}. Any other manager gets the default {@code false}, since this
+     * executor can't tell what that manager does with the caller's transaction.
+     */
+    @Override
+    public boolean rollsBackAJoinedTransactionOnFailure() {
+        return transactionTemplate.getTransactionManager() instanceof AbstractPlatformTransactionManager manager
+                && manager.isGlobalRollbackOnParticipationFailure();
     }
 
     /**

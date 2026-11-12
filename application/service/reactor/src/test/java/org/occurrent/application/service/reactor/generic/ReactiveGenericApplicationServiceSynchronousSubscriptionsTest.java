@@ -28,6 +28,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.reactor.ApplicationService;
@@ -57,6 +58,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
@@ -155,28 +157,86 @@ class ReactiveGenericApplicationServiceSynchronousSubscriptionsTest {
     }
 
     @Test
-    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_says_so() {
+    void tells_the_dispatcher_there_is_no_transaction_when_the_executor_only_joins_one_and_does_not_say_a_failure_rolls_it_back() {
+        assertThat(toldTransactionalWith(new JoiningExecutor(false))).isFalse();
+    }
+
+    @Test
+    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_only_joins_one_and_says_a_failure_rolls_it_back() {
+        assertThat(toldTransactionalWith(new JoiningExecutor(true))).isTrue();
+    }
+
+    @Test
+    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_opens_one() {
+        assertThat(toldTransactionalWith(new OpeningExecutor())).isTrue();
+    }
+
+    @Test
+    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_tells_the_attempt_that_it_opened_one() {
+        ReactiveTransactionExecutor executor = new JoiningExecutor(false) {
+            @Override
+            public <T> Mono<T> inTransactionTellingIfOpened(Function<ExecutorScope, Mono<T>> action) {
+                return inTransaction(() -> action.apply(new ExecutorScope(true, false)));
+            }
+        };
+
+        assertThat(toldTransactionalWith(executor)).isTrue();
+    }
+
+    private @Nullable Boolean toldTransactionalWith(ReactiveTransactionExecutor executor) {
         RegimeRecordingDispatcher dispatcher = new RegimeRecordingDispatcher();
         ApplicationService<DomainEvent> applicationService = GenericApplicationService.builder(eventStore, converter)
                 .synchronousSubscriptions(dispatcher)
-                .transactionExecutor(new ReactiveTransactionExecutor() {
-                    @Override
-                    public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
-                        return Mono.defer(action);
-                    }
-
-                    @Override
-                    public Mono<Boolean> isTransactional() {
-                        return Mono.just(true);
-                    }
-                })
+                .transactionExecutor(executor)
                 .build();
 
         StepVerifier.create(applicationService.execute(UUID.randomUUID().toString(), events -> List.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"))))
                 .expectNextCount(1)
                 .verifyComplete();
 
-        assertThat(dispatcher.toldTransactional).isTrue();
+        return dispatcher.toldTransactional;
+    }
+
+    // Reports a transaction throughout, as an executor does that joins one the caller already opened
+    private static class JoiningExecutor implements ReactiveTransactionExecutor {
+        private final boolean rollsBackAJoinedTransactionOnFailure;
+
+        JoiningExecutor(boolean rollsBackAJoinedTransactionOnFailure) {
+            this.rollsBackAJoinedTransactionOnFailure = rollsBackAJoinedTransactionOnFailure;
+        }
+
+        @Override
+        public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
+            return Mono.defer(action);
+        }
+
+        @Override
+        public Mono<Boolean> isTransactional() {
+            return Mono.just(true);
+        }
+
+        @Override
+        public boolean rollsBackAJoinedTransactionOnFailure() {
+            return rollsBackAJoinedTransactionOnFailure;
+        }
+    }
+
+    // Emits no transaction until its own inTransaction has opened one
+    private static final class OpeningExecutor implements ReactiveTransactionExecutor {
+        private boolean open;
+
+        @Override
+        public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
+            return Mono.defer(() -> {
+                open = true;
+                return action.get();
+            }).doFinally(__ -> open = false);
+        }
+
+        @Override
+        public Mono<Boolean> isTransactional() {
+            return Mono.fromSupplier(() -> open);
+        }
     }
 
     private static CloudEventConverter<DomainEvent> customCloudEventConverter() {
