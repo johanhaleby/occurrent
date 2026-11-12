@@ -2074,6 +2074,8 @@ public class NativeMongoSubscriptionModelTest {
             // Given
             List<Map.Entry<String, UnsupportedStartAtException>> told = new CopyOnWriteArrayList<>();
             subscriptionModel.addStartRefusalListener((id, refusal) -> told.add(Map.entry(id, refusal)));
+            List<UnsupportedStartAtException> toldTheOtherListener = new CopyOnWriteArrayList<>();
+            subscriptionModel.addStartRefusalListener((id, refusal) -> toldTheOtherListener.add(refusal));
             String subscriptionId = UUID.randomUUID().toString();
             StartAt answered = StartAt.checkpoint(GlobalCheckpoint.of(0));
 
@@ -2084,11 +2086,13 @@ public class NativeMongoSubscriptionModelTest {
             // Then
             Throwable thrown = catchThrowable(() -> refused.waitUntilStarted(Duration.ofSeconds(10)));
             awaitEveryRunEnded();
+            assertThat(thrown).as("thrown by the handle").isExactlyInstanceOf(UnsupportedStartAtException.class);
             assertThat(told).as("refusals told to the listener").singleElement().satisfies(entry -> {
                 assertThat(entry.getKey()).isEqualTo(subscriptionId);
                 assertThat(entry.getValue()).isExactlyInstanceOf(UnsupportedStartAtException.class).isNotSameAs(thrown);
                 assertThat(entry.getValue().startAt()).isSameAs(answered);
             });
+            assertThat(toldTheOtherListener).as("refusals told to the other listener").singleElement().isNotSameAs(told.get(0).getValue());
         }
 
         @Test
