@@ -731,21 +731,25 @@ class SagaQuarantineTest {
          * and what stopped it.
          */
         @Test
-        void says_so_once_per_budget_rather_than_every_time_the_event_is_offered() throws Exception {
+        void says_so_once_per_budget_rather_than_every_time_the_event_is_offered() {
             uncorrelatableEventId = "3";
             ListAppender<ILoggingEvent> appender = new ListAppender<>();
             appender.start();
             Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
             executionLog.addAppender(appender);
             try {
-                ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-                run(model, CONFIG);
-                pushTheHealthyEventBehindTheUncorrelatableOne(model);
+                AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
+                SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
+                        "orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                        CONFIG, event -> true, now::get);
+                CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
 
-                // About sixty offers at one every twenty milliseconds, and four budgets.
-                TimeUnit.MILLISECONDS.sleep(BUDGET.toMillis() * 4);
+                // Sixty offers at one every twenty milliseconds, and four budgets.
+                for (int offer = 0; offer < 60; offer++) {
+                    assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+                    now.set(now.get().plusMillis(20));
+                }
 
-                // Copied under the appender's lock, because the delivery thread is still refusing the event and logging.
                 List<ILoggingEvent> logged;
                 synchronized (appender) {
                     logged = new ArrayList<>(appender.list);
@@ -880,6 +884,254 @@ class SagaQuarantineTest {
         }
 
         @Test
+        void warns_again_rather_than_errors_when_a_refused_event_comes_back_after_more_than_twice_the_interval() {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
+                SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
+                        "orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                        CONFIG.disableQuarantine(), event -> true, now::get);
+                CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
+                Duration interval = execution.unroutableErrorInterval();
+
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                now.set(now.get().plus(interval.multipliedBy(2)).plusSeconds(1));
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                assertThat(refusalLevels(appender, POISON + "@2")).containsExactly(Level.WARN, Level.WARN);
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        @Test
+        void remembers_only_the_latest_refused_event_once_an_earlier_one_has_not_been_offered_for_more_than_twice_the_interval() {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
+                SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
+                        "orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                        CONFIG.disableQuarantine(), event -> true, now::get);
+                CloudEvent earlier = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
+                CloudEvent later = cloudEvent(POISON, 3, new PaymentReserved("3", POISON));
+                Duration interval = execution.unroutableErrorInterval();
+
+                assertThatThrownBy(() -> execution.onCloudEvent(earlier)).isInstanceOf(IllegalStateException.class);
+                assertThat(execution.rememberedUnroutableDeliveries()).isEqualTo(1);
+
+                now.set(now.get().plus(interval.multipliedBy(2)).plusSeconds(1));
+                assertThatThrownBy(() -> execution.onCloudEvent(later)).isInstanceOf(IllegalStateException.class);
+                assertThat(execution.rememberedUnroutableDeliveries()).isEqualTo(1);
+
+                assertThatThrownBy(() -> execution.onCloudEvent(earlier)).isInstanceOf(IllegalStateException.class);
+
+                now.set(now.get().plus(interval));
+                assertThatThrownBy(() -> execution.onCloudEvent(later)).isInstanceOf(IllegalStateException.class);
+
+                assertAll(
+                        () -> assertThat(refusalLevels(appender, POISON + "@2")).containsExactly(Level.WARN, Level.WARN),
+                        () -> assertThat(refusalLevels(appender, POISON + "@3")).containsExactly(Level.WARN, Level.ERROR)
+                );
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        @Test
+        void does_not_forget_a_refused_event_that_is_offered_again_after_exactly_twice_the_interval() {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
+                SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
+                        "orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                        CONFIG.disableQuarantine(), event -> true, now::get);
+                CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
+
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                now.set(now.get().plus(execution.unroutableErrorInterval().multipliedBy(2)));
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                assertThat(refusalLevels(appender, POISON + "@2")).containsExactly(Level.WARN, Level.ERROR);
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        @Test
+        void errors_on_every_offer_of_a_refused_event_that_a_model_re_offers_a_little_slower_than_the_interval() {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
+                SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
+                        "orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                        CONFIG.disableQuarantine(), event -> true, now::get);
+                CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
+                Duration slightlySlowerThanTheInterval = execution.unroutableErrorInterval().plusSeconds(1);
+
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                now.set(now.get().plus(slightlySlowerThanTheInterval));
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                now.set(now.get().plus(slightlySlowerThanTheInterval));
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                assertThat(refusalLevels(appender, POISON + "@2")).containsExactly(Level.WARN, Level.ERROR, Level.ERROR);
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        @Test
+        void measures_how_long_a_refused_event_has_been_forgotten_from_its_last_offer_rather_than_its_last_log() {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                Instant start = Instant.parse("2026-01-01T00:00:00Z");
+                AtomicReference<Instant> now = new AtomicReference<>(start);
+                SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
+                        "orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                        CONFIG.disableQuarantine(), event -> true, now::get);
+                CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
+                Duration interval = execution.unroutableErrorInterval();
+
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                now.set(start.plus(interval.multipliedBy(9).dividedBy(10)));
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                now.set(start.plus(interval.multipliedBy(25).dividedBy(10)));
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                assertThat(refusalLevels(appender, POISON + "@2")).containsExactly(Level.WARN, Level.ERROR);
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        @Test
+        void drops_the_forgotten_deliveries_at_most_once_per_interval() {
+            uncorrelatableEventId = "3";
+            Instant start = Instant.parse("2026-01-01T00:00:00Z");
+            AtomicReference<Instant> now = new AtomicReference<>(start);
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
+                    "orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                    CONFIG.disableQuarantine(), event -> true, now::get);
+            CloudEvent a = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
+            CloudEvent c = cloudEvent(POISON, 3, new PaymentReserved("3", POISON));
+            CloudEvent d = cloudEvent(POISON, 4, new PaymentReserved("3", POISON));
+            CloudEvent e = cloudEvent(POISON, 5, new PaymentReserved("3", POISON));
+            Duration interval = execution.unroutableErrorInterval();
+
+            assertThatThrownBy(() -> execution.onCloudEvent(a)).isInstanceOf(IllegalStateException.class);
+
+            // Drops at 1.5 intervals, a is not forgotten yet
+            now.set(start.plus(interval.multipliedBy(15).dividedBy(10)));
+            assertThatThrownBy(() -> execution.onCloudEvent(c)).isInstanceOf(IllegalStateException.class);
+
+            // a is forgotten here, but less than an interval since the last drop, so it stays until the next one
+            now.set(start.plus(interval.multipliedBy(22).dividedBy(10)));
+            assertThatThrownBy(() -> execution.onCloudEvent(d)).isInstanceOf(IllegalStateException.class);
+            assertThat(execution.rememberedUnroutableDeliveries()).isEqualTo(3);
+
+            now.set(start.plus(interval.multipliedBy(26).dividedBy(10)));
+            assertThatThrownBy(() -> execution.onCloudEvent(e)).isInstanceOf(IllegalStateException.class);
+            assertThat(execution.rememberedUnroutableDeliveries()).isEqualTo(3);
+        }
+
+        @Test
+        void warns_again_when_a_refused_event_is_offered_after_its_own_forgotten_entry_was_left_by_the_once_per_interval_drop() {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                Instant start = Instant.parse("2026-01-01T00:00:00Z");
+                AtomicReference<Instant> now = new AtomicReference<>(start);
+                SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
+                        "orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                        CONFIG.disableQuarantine(), event -> true, now::get);
+                CloudEvent b = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
+                CloudEvent other = cloudEvent(POISON, 3, new PaymentReserved("3", POISON));
+                Duration interval = execution.unroutableErrorInterval();
+
+                assertThatThrownBy(() -> execution.onCloudEvent(b)).isInstanceOf(IllegalStateException.class);
+
+                // Drops at 1.5 intervals, b is not forgotten yet
+                now.set(start.plus(interval.multipliedBy(15).dividedBy(10)));
+                assertThatThrownBy(() -> execution.onCloudEvent(other)).isInstanceOf(IllegalStateException.class);
+
+                // b is forgotten here but no drop is due, so its entry is still in the map
+                now.set(start.plus(interval.multipliedBy(22).dividedBy(10)));
+                assertThatThrownBy(() -> execution.onCloudEvent(b)).isInstanceOf(IllegalStateException.class);
+
+                assertThat(refusalLevels(appender, POISON + "@2")).containsExactly(Level.WARN, Level.WARN);
+                assertThat(execution.rememberedUnroutableDeliveries()).isEqualTo(2);
+
+                // One interval after the second WARN, so the failure has lasted exactly one interval from there
+                now.set(start.plus(interval.multipliedBy(32).dividedBy(10)));
+                assertThatThrownBy(() -> execution.onCloudEvent(b)).isInstanceOf(IllegalStateException.class);
+
+                assertThat(refusalLevels(appender, POISON + "@2")).containsExactly(Level.WARN, Level.WARN, Level.ERROR);
+                assertThat(refusalMessages(appender, POISON + "@2", Level.ERROR)).singleElement()
+                        .satisfies(message -> assertThat(message).contains("belongs to for " + interval + "."));
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        private static List<String> refusalMessages(ListAppender<ILoggingEvent> appender, String redeliveryKey, Level level) {
+            List<ILoggingEvent> logged;
+            synchronized (appender) {
+                logged = new ArrayList<>(appender.list);
+            }
+            return logged.stream()
+                    .filter(event -> event.getLevel() == level)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .filter(message -> message.contains("which instance the event '" + redeliveryKey + "'"))
+                    .toList();
+        }
+
+        private static List<Level> refusalLevels(ListAppender<ILoggingEvent> appender, String redeliveryKey) {
+            List<ILoggingEvent> logged;
+            synchronized (appender) {
+                logged = new ArrayList<>(appender.list);
+            }
+            return logged.stream()
+                    .filter(event -> event.getFormattedMessage().contains("which instance the event '" + redeliveryKey + "'"))
+                    .map(ILoggingEvent::getLevel)
+                    .toList();
+        }
+
+        @Test
         void blocks_them_exactly_as_before_on_a_feed_that_retains_nothing() throws Exception {
             uncorrelatableEventId = "3";
             ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
@@ -914,19 +1166,24 @@ class SagaQuarantineTest {
          * CloudEvent id and source, which stay the same from one delivery to the next.
          */
         @Test
-        void says_so_once_too_when_the_event_carries_no_redelivery_key() throws Exception {
+        void says_so_once_too_when_the_event_carries_no_redelivery_key() {
             uncorrelatableEventId = "3";
             ListAppender<ILoggingEvent> appender = new ListAppender<>();
             appender.start();
             Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
             executionLog.addAppender(appender);
             try {
-                ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-                run(model, CONFIG.withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT));
-                model.push(converter.toCloudEvent(new OrderPlaced("1", HEALTHY)));
-                model.push(converter.toCloudEvent(new PaymentReserved("3", POISON)));
+                AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
+                SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
+                        "orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                        CONFIG.withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT), event -> true, now::get);
+                CloudEvent poisonEvent = converter.toCloudEvent(new PaymentReserved("3", POISON));
 
-                TimeUnit.MILLISECONDS.sleep(BUDGET.toMillis() * 2);
+                // Thirty offers at one every twenty milliseconds, and two budgets.
+                for (int offer = 0; offer < 30; offer++) {
+                    assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+                    now.set(now.get().plusMillis(20));
+                }
 
                 List<ILoggingEvent> logged;
                 synchronized (appender) {

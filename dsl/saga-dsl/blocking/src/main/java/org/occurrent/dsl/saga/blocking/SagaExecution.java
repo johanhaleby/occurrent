@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Drives one saga against one subscription and its own timer poller: it loads the instance, runs the pure
@@ -92,6 +93,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class SagaExecution<E, S extends @Nullable Object, C> {
     private static final Logger log = LoggerFactory.getLogger(SagaExecution.class);
     static final Duration UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE = Duration.ofMinutes(5);
+    static final int UNROUTABLE_FORGOTTEN_AFTER_INTERVALS = 2;
 
     private final String subscriptionId;
     private final Saga<E, S, C> saga;
@@ -118,10 +120,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // anything, so a recovery is announced again if it stops a second time.
     private final Set<String> refusalAnnounced = ConcurrentHashMap.newKeySet();
     // The deliveries the saga could not work out an instance for, keyed by redelivery key, or by CloudEvent id and source
-    // for an event carrying none, holding when the routing
-    // started failing and when that was last logged. Only the logging reads it, so a delivery the source re-offers every
-    // few milliseconds is logged once per interval rather than at that cadence. Dropped as soon as the event routes.
+    // for an event carrying none. The logging reads it, so a delivery the source re-offers every few milliseconds is
+    // logged once per interval rather than at that cadence. Dropped when the event routes. One not offered for
+    // UNROUTABLE_FORGOTTEN_AFTER_INTERVALS intervals is dropped by a later refusal instead, since one repaired on another
+    // node never routes here. So what stays after the last refusal is what was refused in the three intervals before it.
     private final ConcurrentHashMap<String, UnroutableDelivery> unroutableDeliveries = new ConcurrentHashMap<>();
+    // When a refusal last dropped the forgotten deliveries, so the map is scanned at most once per interval. A source
+    // that parks every event it cannot deliver gives a broken converter one entry per event, and scanning all of them
+    // on every refusal costs the square of that.
+    private final AtomicReference<@Nullable Instant> unroutableSweptAt = new AtomicReference<>();
     // The extension names already reported as unreadable, so the warning is said once per name rather than per event.
     private final Set<String> unreadableExtensionsWarned = ConcurrentHashMap.newKeySet();
     // The streams already warned about, so a stream replaying thousands of old events says it once. Capped, because a
@@ -280,13 +287,20 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * decided by whatever feeds the subscription, and {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what
      * that can be.
      * <p>
-     * The first failure is a warning, and after that it is logged at ERROR once per {@link #unroutableErrorInterval()}
-     * for as long as the event keeps being offered, rather than every time the source offers it. That interval is the
-     * quarantine budget when one is configured, and a fixed five-minute default otherwise, so an operator alerting on
-     * ERROR is paged on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
-     * offering the event. A model that does not offer a refused delivery again gets only the first WARN.
-     * See {@link #unroutableErrorInterval()} for why. An event carrying no redelivery key is named by its CloudEvent
-     * id and source instead.
+     * The first failure is a warning, and after that it is logged at ERROR at most once per
+     * {@link #unroutableErrorInterval()} rather than every time the source offers it, as long as each offer comes within
+     * twice that interval of the one before. That interval is the quarantine budget when one is configured, and a fixed
+     * five-minute default otherwise, so an operator alerting on ERROR is paged on a subscription model this saga cannot
+     * quarantine anything on, for as long as that model keeps offering the event that often. A model that offers it more
+     * than twice the interval apart gets a WARN on every offer, and one that does not offer a refused delivery again
+     * gets only the first WARN. See {@link #unroutableErrorInterval()} for why. An event with no redelivery key is named
+     * by its CloudEvent id and source instead.
+     * <p>
+     * An event that is not offered again for more than twice that interval is forgotten, because one repaired on another
+     * node after a competing consumer's lease moved, or given up on by a retry strategy, never routes here to be
+     * dropped. If it does come back after that, it is warned about as a new failure, with its time measured from then. A
+     * model that offers the event a little less often than the interval still gets an ERROR on every offer. The other
+     * forgotten events are dropped at most once per interval, by whichever refusal comes first after it.
      */
     private void refuseUnroutableDelivery(EventMeta meta, CloudEvent cloudEvent, Throwable failure) {
         if (!SagaExecutionSupport.isAttributableToTheInstance(failure)) {
@@ -294,15 +308,30 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
         String redeliveryKey = unroutableKey(meta, cloudEvent);
         Instant now = clock.get();
-        UnroutableDelivery existing = unroutableDeliveries.putIfAbsent(redeliveryKey, new UnroutableDelivery(now, now));
+        Duration interval = unroutableErrorInterval();
+        Instant sweptAt = unroutableSweptAt.get();
+        if ((sweptAt == null || Duration.between(sweptAt, now).compareTo(interval) >= 0) && unroutableSweptAt.compareAndSet(sweptAt, now)) {
+            unroutableDeliveries.values().removeIf(delivery -> forgotten(delivery, now, interval));
+        }
+        // Atomic per key, so two concurrent refusals of one event log one WARN and at most one ERROR per interval
+        UnroutableDelivery[] before = new UnroutableDelivery[1];
+        boolean[] errorDue = new boolean[1];
+        unroutableDeliveries.compute(redeliveryKey, (key, existing) -> {
+            // Checked here as well, because the forgotten entries are dropped at most once per interval, so the refused event's own entry can still be here
+            if (existing == null || forgotten(existing, now, interval)) {
+                return new UnroutableDelivery(now, now, now);
+            }
+            before[0] = existing;
+            errorDue[0] = Duration.between(existing.lastLoggedAt(), now).compareTo(interval) >= 0;
+            return new UnroutableDelivery(existing.firstFailedAt(), errorDue[0] ? now : existing.lastLoggedAt(), now);
+        });
+        UnroutableDelivery existing = before[0];
         if (existing == null) {
             log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so it refused the event rather than acknowledging it, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it. Where the subscription offers the event again, it is applied in the order it was written once the converter or the id extractor can read it. What it holds up until then is decided by whatever feeds this subscription. Whether it is offered again is up to the subscription model, and DeliveryFailurePolicy is where a broker source's choice is configured.",
                     subscriptionId, redeliveryKey, failure);
             return;
         }
-        Duration interval = unroutableErrorInterval();
-        if (Duration.between(existing.lastLoggedAt(), now).compareTo(interval) < 0
-            || !unroutableDeliveries.replace(redeliveryKey, existing, new UnroutableDelivery(existing.firstFailedAt(), now))) {
+        if (!errorDue[0]) {
             return;
         }
         log.error("Saga '{}' has been unable to work out which instance the event '{}' belongs to for {}. What it holds up is decided by whatever feeds this subscription. The event is refused rather than skipped, because acknowledging it would lose it, and no instance is quarantined, because the event reached none. Where the event is offered again, repair the converter or the id extractor and it is applied in the order it was written, with nothing to feed to the saga again.",
@@ -323,6 +352,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      */
     Duration unroutableErrorInterval() {
         return config.quarantineAfter().orElse(UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE);
+    }
+
+    // Halves the elapsed time rather than doubling the interval, which overflows for a very long budget
+    private static boolean forgotten(UnroutableDelivery delivery, Instant now, Duration interval) {
+        return Duration.between(delivery.lastOfferedAt(), now).dividedBy(UNROUTABLE_FORGOTTEN_AFTER_INTERVALS).compareTo(interval) > 0;
+    }
+
+    int rememberedUnroutableDeliveries() {
+        return unroutableDeliveries.size();
     }
 
     /**
@@ -589,8 +627,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
     }
 
-    // When one delivery started failing to reach an instance, and when that was last logged.
-    private record UnroutableDelivery(Instant firstFailedAt, Instant lastLoggedAt) {
+    // When one delivery started failing to reach an instance, when that was last logged, and when it was last offered.
+    private record UnroutableDelivery(Instant firstFailedAt, Instant lastLoggedAt, Instant lastOfferedAt) {
     }
 
     // Internal signal that a compare-and-set save was lost, so casRetry retries the transition. Never escapes process:

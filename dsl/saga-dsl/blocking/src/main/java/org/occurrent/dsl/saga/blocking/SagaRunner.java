@@ -116,8 +116,10 @@ import static java.util.Objects.requireNonNull;
  *       {@code DeliveryFailurePolicy} is where a broker source's choice is configured. The first
  *       failure is logged at WARN and, after that, at ERROR once per {@code quarantineAfter} when it is set or a
  *       fixed five-minute default when it is not, naming the event and the exception that stopped it, so that ERROR
- *       fires for as long as the event keeps being offered, never on a
- *       subscription model that does not offer a refused delivery again, which gets only the first WARN.
+ *       fires for as long as each offer of the event comes within twice that interval of the one before. A
+ *       subscription model that offers it further apart gets a WARN on every offer, because the saga forgets an event
+ *       it hasn't been offered for that long, and one that does not offer a refused delivery again gets only the first
+ *       WARN.
  *       <p>
  *       Without quarantine, which is the default and what {@link SagaRunnerConfig#disableQuarantine()} gives, the
  *       saga keeps the pre-0.34.0 behaviour and keeps refusing the event for as long as the model offers it again.
