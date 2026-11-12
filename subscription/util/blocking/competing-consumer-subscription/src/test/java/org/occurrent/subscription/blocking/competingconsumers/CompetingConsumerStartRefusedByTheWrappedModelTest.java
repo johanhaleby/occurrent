@@ -45,6 +45,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -378,6 +379,116 @@ class CompetingConsumerStartRefusedByTheWrappedModelTest {
         );
     }
 
+    @Test
+    void a_refusal_reported_after_the_wrapped_model_runs_the_consumer_again_leaves_it_running_and_holding_the_lease() {
+        // Given a consumer that holds the lease and that the wrapped model runs
+        strategy.grantOnRegister = true;
+        Subscription subscription = subscribe();
+
+        // When the report of a refusal from before the wrapped model made it again arrives
+        wrapped.report(ID);
+
+        // Then
+        await().during(Duration.ofMillis(300)).atMost(EVENTUALLY).untilAsserted(() -> assertAll(
+                () -> assertThatCode(() -> subscription.waitUntilStarted(Duration.ofMillis(100))).as("handle of the consumer").doesNotThrowAnyException(),
+                () -> assertThat(model.subscriptionIds()).as("subscription ids").contains(ID),
+                () -> assertThat(model.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(wrapped.isRunning(ID)).as("running in the wrapped model").isTrue(),
+                () -> assertThat(strategy.registrations).as("registered with the strategy").containsExactly(ID),
+                () -> assertThat(strategy.holders).as("holding the lease").containsExactly(ID),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        ));
+    }
+
+    @Test
+    void a_refusal_reported_after_the_wrapped_model_holds_the_consumer_paused_again_leaves_it_paused_and_registered() {
+        // Given a consumer that holds the lease and that the wrapped model holds paused
+        strategy.grantOnRegister = true;
+        Subscription subscription = subscribe();
+        wrapped.pauseSubscription(ID);
+        assertThat(wrapped.isPaused(ID)).as("held paused by the wrapped model").isTrue();
+
+        // When the report of a refusal from before the wrapped model made it again arrives
+        wrapped.report(ID);
+
+        // Then
+        await().during(Duration.ofMillis(300)).atMost(EVENTUALLY).untilAsserted(() -> assertAll(
+                () -> assertThatCode(() -> subscription.waitUntilStarted(Duration.ofMillis(100))).as("handle of the consumer").doesNotThrowAnyException(),
+                () -> assertThat(model.subscriptionIds()).as("subscription ids").contains(ID),
+                () -> assertThat(wrapped.isPaused(ID)).as("held paused by the wrapped model").isTrue(),
+                () -> assertThat(strategy.registrations).as("registered with the strategy").containsExactly(ID),
+                () -> assertThat(strategy.holders).as("holding the lease").containsExactly(ID),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        ));
+    }
+
+    @Test
+    void a_handle_of_a_refused_consumer_whose_lease_could_not_be_given_up_throws_the_refusal_and_a_later_try_unregisters_it() throws Exception {
+        // Given a lease strategy that fails the first unregister, and a handle waiting for the refusal to be acted on
+        strategy.grantOnRegister = true;
+        Subscription subscription = subscribe();
+        wrapped.dropAndThrowFromTheHandle(ID);
+        strategy.unregisterFailuresLeft.set(1);
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        Thread caller = startThread(() -> {
+            try {
+                subscription.waitUntilStarted(Duration.ofSeconds(30));
+            } catch (Throwable e) {
+                thrown.set(e);
+            }
+        });
+        awaitWaitingOrDone(caller);
+
+        // When the report is delivered from another thread
+        wrapped.report(ID);
+
+        // Then the handle throws the refusal well before its timeout, with the failure to unregister added to it
+        caller.join(EVENTUALLY.toMillis());
+        assertAll(
+                () -> assertThat(caller.isAlive()).as("handle still waiting").isFalse(),
+                () -> assertThat(thrown.get()).as("thrown by the handle").isInstanceOf(UnsupportedStartAtException.class).hasCauseInstanceOf(UnsupportedStartAtException.class),
+                () -> assertThat(thrown.get()).as("failure to unregister").hasStackTraceContaining("The lease strategy is down"),
+                () -> assertThat(model.subscriptionIds()).as("subscription ids").doesNotContain(ID),
+                () -> assertThat(strategy.holders).as("holding the lease").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").singleElement().asString().contains("a later try unregisters this node from its lease").contains("subscriptionId=" + ID)
+        );
+
+        // And a later try unregisters it, after which the id can be subscribed again
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(strategy.registrations).as("registered with the strategy").isEmpty());
+        wrapped.handlesThatThrow.remove(ID);
+        Subscription again = subscribe();
+        assertAll(
+                () -> assertThatCode(() -> again.waitUntilStarted(Duration.ofMillis(100))).as("new handle").doesNotThrowAnyException(),
+                () -> assertThat(wrapped.isRunning(ID)).as("running in the wrapped model").isTrue(),
+                () -> assertThat(strategy.holders).as("holding the lease").containsExactly(ID)
+        );
+    }
+
+    @Test
+    void a_handle_waiting_for_a_refusal_that_nothing_reports_gives_up_when_its_timeout_has_passed() throws Exception {
+        // Given the wrapped handle has thrown and no report is delivered
+        strategy.grantOnRegister = true;
+        Subscription subscription = subscribe();
+        wrapped.dropAndThrowFromTheHandle(ID);
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        Thread caller = startThread(() -> {
+            try {
+                subscription.waitUntilStarted(Duration.ofMillis(200));
+            } catch (Throwable e) {
+                thrown.set(e);
+            }
+        });
+
+        // When
+        caller.join(Duration.ofSeconds(3));
+
+        // Then
+        assertAll(
+                () -> assertThat(caller.isAlive()).as("handle still waiting after the bound").isFalse(),
+                () -> assertThat(thrown.get()).as("thrown by the handle").isInstanceOf(UnsupportedStartAtException.class).isSameAs(wrapped.thrownByAHandle.get())
+        );
+    }
+
     private record Snapshot(Set<String> subscriptionIds, Set<String> registrations, Set<String> holders, @Nullable Throwable subscribeAgain) {
     }
 
@@ -442,6 +553,7 @@ class CompetingConsumerStartRefusedByTheWrappedModelTest {
         private final Set<String> holders = ConcurrentHashMap.newKeySet();
         private final Set<String> registrations = ConcurrentHashMap.newKeySet();
         private volatile boolean grantOnRegister;
+        private final AtomicInteger unregisterFailuresLeft = new AtomicInteger();
 
         @Override
         public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
@@ -455,6 +567,9 @@ class CompetingConsumerStartRefusedByTheWrappedModelTest {
 
         @Override
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+            if (unregisterFailuresLeft.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
+                throw new IllegalStateException("The lease strategy is down");
+            }
             registrations.remove(subscriptionId);
             holders.remove(subscriptionId);
         }
