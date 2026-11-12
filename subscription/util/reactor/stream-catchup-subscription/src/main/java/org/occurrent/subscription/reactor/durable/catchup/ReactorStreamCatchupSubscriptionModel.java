@@ -340,7 +340,9 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
      * no event after that. A {@code ReactorMongoSubscriptionModel} or {@code ReactorDurableSubscriptionModel} of that
      * exact class, not a subclass or a proxy of one, registers nothing for that subscribe when this cancel reaches it
      * before it took the id, which only a cancel from another thread can do. The subscribe then returns a
-     * {@link Subscription} whose {@code waitUntilStarted()} fails with an {@link IllegalStateException}. Both models take
+     * {@link Subscription} whose {@code waitUntilStarted()} fails with an {@link IllegalStateException}. On a wrapped
+     * model shut down by the time it asks whether the subscribe was cancelled, the subscribe throws
+     * {@code SubscriptionModelShutdownException} instead and returns nothing. Both models take
      * the id before they call a {@code StartAt.dynamic} function, so a cancel from that function fails
      * {@code waitUntilStarted()} with an {@link IllegalStateException} over {@code ReactorMongoSubscriptionModel}, and
      * with {@code CancellationException} over {@code ReactorDurableSubscriptionModel}. Another wrapped model, a subclass or a proxy of either included, can

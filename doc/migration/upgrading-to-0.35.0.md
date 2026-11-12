@@ -1468,7 +1468,8 @@ that thread or another, goes to the wrapped model at once, and the action gets n
 When that cancel reaches `ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel` before the cancelled
 `subscribe(..)` took the id there, the model registers nothing for it, and `waitUntilStarted()` on the
 `Subscription` that `subscribe(..)` returned fails with `IllegalStateException`. In 0.34.0 that subscription
-ran and `waitUntilStarted()` completed. Both models take the id before they call the function, so only a cancel from
+ran and `waitUntilStarted()` completed. When the model was shut down by the time it asks whether the `subscribe(..)` was
+cancelled, `subscribe(..)` throws `SubscriptionModelShutdownException` instead and returns no `Subscription`. Both models take the id before they call the function, so only a cancel from
 another thread can get there first. Only an instance of either exact class takes this path. A subclass or a proxy of
 either model, a Spring AOP proxy for example, registers the cancelled `subscribe(..)` as 0.34.0 did, and the catch-up
 then cancels the id there again, as described below. The catch-up can't tell whether a subclass overrides
