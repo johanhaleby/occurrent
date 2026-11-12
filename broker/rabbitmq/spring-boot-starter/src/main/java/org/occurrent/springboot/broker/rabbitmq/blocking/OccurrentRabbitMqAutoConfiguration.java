@@ -202,9 +202,10 @@ public class OccurrentRabbitMqAutoConfiguration {
      * created, when {@code spring-boot-health} is on the classpath. A sink is down once it is closed or its
      * connection is, and a source is down when it has stopped, been closed or lost its connection. Turned off by
      * {@code management.health.rabbitmqbroker.enabled=false}, or by {@code management.health.defaults.enabled=false}
-     * unless {@code management.health.rabbitmqbroker.enabled} is {@code true}. The id is lowercase like Spring Boot's
-     * own, such as {@code diskspace}, so the key also works written {@code rabbitMqBroker} or {@code rabbit-mq-broker},
-     * or as the environment variable {@code MANAGEMENT_HEALTH_RABBITMQBROKER_ENABLED}.
+     * unless {@code management.health.rabbitmqbroker.enabled} is {@code true}. The key is lowercase like Spring Boot's
+     * own, such as {@code diskspace}, so it also works written {@code rabbitMqBroker} or {@code rabbit-mq-broker}, or
+     * as the environment variable {@code MANAGEMENT_HEALTH_RABBITMQBROKER_ENABLED}. A health group and the health
+     * response use the name {@code rabbitMqBroker}.
      */
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(CompositeHealthContributor.class)
@@ -212,10 +213,12 @@ public class OccurrentRabbitMqAutoConfiguration {
 
         // On the method, since Spring loads every condition class on the configuration class before evaluating any,
         // which fails without spring-boot-health before @ConditionalOnClass can skip it. Spring Boot names the
-        // contributor after the bean without its HealthContributor suffix, which gives rabbitMqBroker
+        // contributor after the bean without its HealthContributor suffix, which gives rabbitMqBroker. An application
+        // bean under any of the three names that give rabbitMqBroker replaces the starter's, since two fail startup
         @Bean
         @ConditionalOnEnabledHealthIndicator("rabbitmqbroker")
-        @ConditionalOnMissingBean(name = {"rabbitMqBrokerHealthIndicator", "rabbitMqBrokerHealthContributor"})
+        @ConditionalOnMissingBean(name = {"rabbitMqBroker", "rabbitMqBrokerHealthIndicator",
+                "rabbitMqBrokerHealthContributor"})
         CompositeHealthContributor rabbitMqBrokerHealthContributor(ConfigurableListableBeanFactory beanFactory) {
             return new RabbitMqBrokerHealthContributor(beanFactory);
         }

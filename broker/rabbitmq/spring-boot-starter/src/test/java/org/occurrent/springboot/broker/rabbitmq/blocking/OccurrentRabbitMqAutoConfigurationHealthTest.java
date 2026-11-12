@@ -82,13 +82,37 @@ class OccurrentRabbitMqAutoConfigurationHealthTest {
 
     @Test
     void the_contributor_is_registered_as_rabbitMqBroker_and_lists_nothing_before_any_sink_or_source_exists() {
-        AutoConfigurations registry = AutoConfigurations.of(HealthContributorRegistryAutoConfiguration.class);
-        contextRunner.withConfiguration(registry).run(context -> {
+        withRegistry().run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context.getBean(HealthContributorRegistry.class).getContributor("rabbitMqBroker"))
                     .isSameAs(context.getBean("rabbitMqBrokerHealthContributor"));
             assertThat(contributor(context).stream()).isEmpty();
         });
+    }
+
+    @Test
+    void an_application_health_indicator_bean_named_rabbitMqBroker_replaces_the_contributor() {
+        HealthIndicator applicationIndicator = () -> Health.up().build();
+
+        withRegistry().withBean("rabbitMqBroker", HealthIndicator.class, () -> applicationIndicator).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).doesNotHaveBean(CONTRIBUTOR_BEAN);
+            assertThat(context.getBean(HealthContributorRegistry.class).getContributor("rabbitMqBroker"))
+                    .isSameAs(applicationIndicator);
+        });
+    }
+
+    @Test
+    void an_application_health_indicator_bean_named_rabbitMqBrokerHealthIndicator_replaces_the_contributor() {
+        HealthIndicator applicationIndicator = () -> Health.up().build();
+
+        withRegistry().withBean("rabbitMqBrokerHealthIndicator", HealthIndicator.class, () -> applicationIndicator)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).doesNotHaveBean(CONTRIBUTOR_BEAN);
+                    assertThat(context.getBean(HealthContributorRegistry.class).getContributor("rabbitMqBroker"))
+                            .isSameAs(applicationIndicator);
+                });
     }
 
     @Test
@@ -216,6 +240,11 @@ class OccurrentRabbitMqAutoConfigurationHealthTest {
             assertThat(context).doesNotHaveBean(CONTRIBUTOR_BEAN);
             assertThat(context).hasSingleBean(RabbitMqCloudEventSink.class);
         });
+    }
+
+    // Boot's registry, which names each contributor and refuses two with one name
+    private ApplicationContextRunner withRegistry() {
+        return contextRunner.withConfiguration(AutoConfigurations.of(HealthContributorRegistryAutoConfiguration.class));
     }
 
     private static CompositeHealthContributor contributor(AssertableApplicationContext context) {

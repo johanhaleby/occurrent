@@ -73,9 +73,11 @@ is registered, since a source has none while what it delivers to is paused or no
 - With `spring-boot-health` on the classpath, a health contributor named `rabbitMqBroker` has one indicator per sink
   and source bean that exists. A sink is down when `isOpen()` is `false`. A source is down when its status is not
   `OPEN` or its connection is closed. The contributor never creates a bean, so a `@Lazy` sink nothing has asked for
-  yet is not listed. The contributor's id is `rabbitmqbroker`, lowercase like Spring Boot's own, so
-  `management.health.rabbitmqbroker.enabled=false` turns it off, and so does the same key written `rabbitMqBroker` or
-  `rabbit-mq-broker`.
+  yet is not listed. `management.health.rabbitmqbroker.enabled=false`, lowercase like Spring Boot's own keys, turns
+  it off, and so does the same key written `rabbitMqBroker` or `rabbit-mq-broker`. A health group and the health
+  response use the name `rabbitMqBroker`. An application bean named `rabbitMqBroker`, `rabbitMqBrokerHealthIndicator`
+  or `rabbitMqBrokerHealthContributor` replaces the starter's, since Spring Boot gives all three the name
+  `rabbitMqBroker` and two contributors of one name fail startup.
 
 An application listener bean replaces the Micrometer one, and an application that builds its sink or source by hand
 sets a listener on the builder.
