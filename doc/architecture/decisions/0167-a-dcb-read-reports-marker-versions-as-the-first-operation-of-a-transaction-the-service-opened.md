@@ -91,7 +91,7 @@ which the store records against the bound session. A read on a session of its ow
 could fail its condition on them. A read without the mark in a bound session the store hasn't written in reads in a
 transaction of its own, as ADR 148 describes. An append that then joins the session checks its condition at the
 session's snapshot, which is older than the read's when another writer committed in between. The condition then fails,
-where a read in the session would have led to a write conflict instead, and the service reads and decides again. That rests on nothing else writing event or marker documents through the
+where a read in the session would have led to a write conflict instead. That rests on nothing else writing event or marker documents through the
 template in that session.
 
 With no session bound yet, or one the store hasn't written in, a read without `confirmsAppendBeforeSaving` takes ADR 148's path in that scope. That covers the `@Snapshot` view and a

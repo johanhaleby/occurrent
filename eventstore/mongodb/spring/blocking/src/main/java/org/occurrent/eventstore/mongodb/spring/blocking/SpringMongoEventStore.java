@@ -377,8 +377,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return runsOnReplicaSet ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
         }
         Object boundSession = TransactionSynchronizationManager.isSynchronizationActive() ? TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) : null;
-        if (boundSession != null && (options.confirmsAppendBeforeSaving() || BOUND_SESSIONS_WRITTEN_IN.contains(boundSession))) {
-            // Through the template the read would join the bound session, which may hold the store's writes
+        if (boundSession != null && BOUND_SESSIONS_WRITTEN_IN.contains(boundSession)) {
+            // Through the template the read would join the bound session, which holds the store's writes
+            return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization that the event store wrote in, whose writes may still abort", null);
+        }
+        if (boundSession != null && options.confirmsAppendBeforeSaving()) {
             return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
         }
         if (options.confirmsAppendBeforeSaving() && TransactionSynchronizationManager.isSynchronizationActive()) {

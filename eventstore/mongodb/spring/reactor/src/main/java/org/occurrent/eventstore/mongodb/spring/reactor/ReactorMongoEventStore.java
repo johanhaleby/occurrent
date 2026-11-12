@@ -481,7 +481,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // A session still bound after a write held it, since a transaction of the store's own unbinds its session when it ends.
     // The record runs after completion, error and cancellation alike, in the subscriber's context.
     private <T> Mono<T> recordingAWriteInABoundSession(Mono<T> write) {
-        return Mono.usingWhen(Mono.just(write), __ -> write,
+        return Mono.usingWhen(Mono.just(write), Function.identity(),
                 __ -> recordBoundSession(),
                 (__, error) -> recordBoundSession(),
                 __ -> recordBoundSession());
