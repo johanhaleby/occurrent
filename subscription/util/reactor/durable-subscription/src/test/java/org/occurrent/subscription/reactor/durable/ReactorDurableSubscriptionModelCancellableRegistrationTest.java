@@ -538,7 +538,7 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).as("what the cancelled subscribe threw").isNull(),
-                    () -> assertThat(startFailure).as("what waiting for the cancelled subscribe threw").isExactlyInstanceOf(IllegalStateException.class),
+                    () -> assertThat(startFailure).as("what waiting for the cancelled subscribe threw").isExactlyInstanceOf(IllegalStateException.class).hasMessage("Subscription x was cancelled before it started."),
                     () -> assertThat(catchup.isRunning("x")).as("whether the later subscribe of x runs").isTrue());
         }
     }

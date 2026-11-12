@@ -1104,7 +1104,7 @@ class ReactorCatchupSubscribeUnderWayTest {
             assertAll(
                     () -> assertThat(cancel).as("what the cancel threw").isInstanceOf(IllegalStateException.class),
                     () -> assertThat(heldOnceItReturned).as("the ids the wrapped model holds once the cancelled subscribe returned").isEmpty(),
-                    () -> assertThat(startFailure).as("what waiting for the start of the cancelled subscribe threw").isExactlyInstanceOf(IllegalStateException.class),
+                    () -> assertThat(startFailure).as("what waiting for the start of the cancelled subscribe threw").isExactlyInstanceOf(IllegalStateException.class).hasMessage("Subscription x was cancelled before it started."),
                     () -> assertThat(later).as("what a subscribe of x once the cancelled subscribe returned threw").isNull(),
                     () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("skipped:x", "subscribed:x"));
         }
