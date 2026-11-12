@@ -63,6 +63,7 @@ import reactor.core.publisher.Mono;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
@@ -79,8 +80,10 @@ import static org.occurrent.springboot.mongo.reactor.ApplicationRestart.FirstBoo
  * <p>
  * A DCB snapshot folds every matching event it reads from the event store, so its saved state is the same whichever
  * events its subscription is delivered. The tests therefore check two things per boot. One is how many times the
- * registrar read the stored snapshot, which it does once per delivered event. The other is the versions it saved, which
- * are the positions of the delivered events that were not already folded. A redelivery is read but not saved.
+ * registrar read the stored snapshot, which it does once per delivered event. The other is the highest folded positions
+ * it saved. A delivery reads every event after the saved marker versions and saves the highest position it read, so a
+ * redelivery that finds nothing new saves nothing. When a delivery can read events written after the one it was
+ * delivered, the saved list depends on timing and only its last position is asserted.
  * <p>
  * A snapshot's checkpoint is stored after its handler returned, so a first boot that stores one is closed once the
  * stored checkpoint is the one a {@link DeliveryWitness} beside the snapshot was delivered {@code live-1} with.
@@ -103,26 +106,28 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
     private static final Tag TAG = Tag.parse("test:reactive-dcb-snapshot-resume-behavior");
     private static final List<String> EVERYTHING_WRITTEN = List.of("historic-1", "historic-2", "live-1", "while-down-1", "live-2");
 
-    // Positions run historic-1=1, historic-2=2, live-1=3, while-down-1=4, live-2=5. Reads count every delivery and saved
-    // versions show which of them were new, so a redelivered live-1 cannot pass for while-down-1.
+    // Positions run historic-1=1, historic-2=2, live-1=3, while-down-1=4, live-2=5. Reads count every delivery and the saved
+    // positions show how far each save folded, so a redelivered live-1 cannot pass for while-down-1.
+    // The second boot of the DEFAULT scenario can read live-2 already when while-down-1 is delivered, which leaves one save
+    // or two, so only the last saved position is asserted there.
     @Test
     void a_dcb_snapshot_with_now_and_default_resume_behavior_is_not_delivered_history_on_first_boot_and_is_delivered_events_written_while_down_after_restart() {
-        restart("reactive-dcb-snapshot-now-default", DcbSnapshotNowDefault.class, true, 1, List.of(3L), 2, List.of(4L, 5L));
+        restart("reactive-dcb-snapshot-now-default", DcbSnapshotNowDefault.class, true, 1, exactly(3L), 2, endingAt(5L));
     }
 
     @Test
     void a_dcb_snapshot_with_now_and_same_as_start_at_is_delivered_only_the_present_again_after_restart_but_still_folds_events_written_while_down() {
-        restart("reactive-dcb-snapshot-now-same", DcbSnapshotNowSameAsStartAt.class, false, 1, List.of(3L), 1, List.of(5L));
+        restart("reactive-dcb-snapshot-now-same", DcbSnapshotNowSameAsStartAt.class, false, 1, exactly(3L), 1, exactly(5L));
     }
 
     @Test
     void a_dcb_snapshot_with_beginning_and_same_as_start_at_is_delivered_the_whole_history_again_after_restart() {
-        restart("reactive-dcb-snapshot-beginning-same", DcbSnapshotBeginningSameAsStartAt.class, false, 3, List.of(1L, 2L, 3L), 5, List.of(4L, 5L));
+        restart("reactive-dcb-snapshot-beginning-same", DcbSnapshotBeginningSameAsStartAt.class, false, 3, exactly(2L, 3L), 5, exactly(4L, 5L));
     }
 
     private static void restart(String snapshotId, Class<? extends SnapshotRecorder> recorderType,
-                                boolean storesCheckpoint, int expectedReadsFirstBoot, List<Long> expectedSavedFirstBoot,
-                                int expectedReadsSecondBoot, List<Long> expectedSavedSecondBoot) {
+                                boolean storesCheckpoint, int expectedReadsFirstBoot, Consumer<List<Long>> expectedSavedFirstBoot,
+                                int expectedReadsSecondBoot, Consumer<List<Long>> expectedSavedSecondBoot) {
         APPLICATION.run(snapshotId, recorderType, storesCheckpoint ? WHEN_THE_MARKER_IS_CHECKPOINTED : WHEN_THE_MARKER_IS_DELIVERED,
                 List.of("historic-1", "historic-2", "live-1"),
                 EVERYTHING_WRITTEN,
@@ -132,9 +137,17 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
                     // Held for a second so a delivery that arrives after the marker would fail the assertion.
                     await().during(ofSeconds(1)).atMost(ofSeconds(5)).untilAsserted(() -> {
                         assertThat(store.reads()).isEqualTo(firstBoot ? expectedReadsFirstBoot : expectedReadsSecondBoot);
-                        assertThat(store.savedVersions()).containsExactlyElementsOf(firstBoot ? expectedSavedFirstBoot : expectedSavedSecondBoot);
+                        (firstBoot ? expectedSavedFirstBoot : expectedSavedSecondBoot).accept(store.savedPositions());
                     });
                 });
+    }
+
+    private static Consumer<List<Long>> exactly(Long... positions) {
+        return saved -> assertThat(saved).containsExactly(positions);
+    }
+
+    private static Consumer<List<Long>> endingAt(long position) {
+        return saved -> assertThat(saved).isNotEmpty().last().isEqualTo(position);
     }
 
     @SpringBootApplication
@@ -282,7 +295,7 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
 
         private final ReactiveSnapshotStore<Folded> delegate;
         private final AtomicInteger reads = new AtomicInteger();
-        private final CopyOnWriteArrayList<Long> savedVersions = new CopyOnWriteArrayList<>();
+        private final CopyOnWriteArrayList<Long> savedPositions = new CopyOnWriteArrayList<>();
 
         CountingSnapshotStore(ReactiveMongoOperations mongoOperations, String snapshotId) {
             this.delegate = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, Folded.class, "occurrent-snapshot-" + snapshotId);
@@ -296,15 +309,15 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
 
         @Override
         public Mono<Void> save(String key, org.occurrent.dsl.snapshot.Snapshot<Folded> snapshot) {
-            return delegate.save(key, snapshot).doOnSuccess(ignored -> savedVersions.add(snapshot.version()));
+            return delegate.save(key, snapshot).doOnSuccess(ignored -> savedPositions.add(snapshot.highestFoldedPosition()));
         }
 
         int reads() {
             return reads.get();
         }
 
-        List<Long> savedVersions() {
-            return List.copyOf(savedVersions);
+        List<Long> savedPositions() {
+            return List.copyOf(savedPositions);
         }
 
         // Read from the delegate so that looking at the state is not counted as a read.
