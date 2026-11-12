@@ -360,7 +360,8 @@ public final class SagaExecutionSupport {
             return null;
         }
         if (current != null && (current.isCompleted() || current.isQuarantined())) {
-            // Neither reaches the saga at all, so neither can be what threw. Defensive rather than reachable.
+            // Neither reaches the saga, so neither is what threw on the first read. A retry of a lost failure write reads
+            // the instance again, and another writer may have completed or quarantined it in between
             return null;
         }
         if (current != null && classify(current, meta, reorderWindow) != Delivery.NEW) {

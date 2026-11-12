@@ -64,10 +64,8 @@ import static java.util.Objects.requireNonNull;
  *                       none
  * @param firstFailedAt  when {@code input} first failed, which is when its quarantine budget started running.
  *                       Strictly it is when its first failure was recorded, on this record or on its pending entry, and
- *                       it may have been failing for longer, because several ways of failing record nothing, a lost
- *                       compare-and-set on that write among them.
- *                       <a href="https://github.com/johanhaleby/occurrent/issues/977">#977</a> covers the case where
- *                       those writes keep losing
+ *                       it may have been failing for longer, because several ways of failing record nothing, a write
+ *                       that loses its compare-and-set on every attempt among them
  * @param failureType    the class name of the exception the saga or its dispatcher threw
  * @param failureMessage that exception's message, or {@code null} when it had none
  */

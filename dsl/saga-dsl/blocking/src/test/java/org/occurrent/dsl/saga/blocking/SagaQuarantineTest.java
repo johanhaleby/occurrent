@@ -50,6 +50,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -63,6 +64,7 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
@@ -1281,6 +1283,194 @@ class SagaQuarantineTest {
     }
 
     @Nested
+    class WhenAnotherWriteLandsBetweenItsReadAndItsWrite {
+
+        private final Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        private final AtomicReference<Instant> now = new AtomicReference<>(start);
+        private final LosesItsFirstFailureWriteToAnotherWrite store = new LosesItsFirstFailureWriteToAnotherWrite();
+
+        @Test
+        void quarantines_the_instance_once_the_budget_is_used_up_even_when_every_failure_write_first_loses_to_another_write() {
+            stateStore = store;
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
+                    dispatched::add, converter, CONFIG, event -> true, now::get);
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
+
+            for (Duration elapsed : List.of(Duration.ZERO, BUDGET.plusMillis(1), BUDGET.multipliedBy(2), BUDGET.multipliedBy(3))) {
+                now.set(start.plus(elapsed));
+                store.nextFailureWriteLosesToAnotherWrite();
+                try {
+                    execution.onCloudEvent(poisonEvent);
+                } catch (IllegalStateException expectedWhileTheInstanceIsNotQuarantined) {
+                    // The delivery that quarantines returns normally, the ones before it rethrow
+                }
+            }
+
+            assertThat(store.competingWritesThatLanded()).isNotEmpty().doesNotContain(false);
+            assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED);
+        }
+
+        @Test
+        void keeps_the_clock_of_an_event_whose_failure_could_not_be_recorded_so_a_later_delivery_past_the_budget_quarantines() {
+            stateStore = store;
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
+                    dispatched::add, converter, CONFIG, event -> true, now::get);
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            Throwable rethrown;
+            try {
+                now.set(start);
+                store.everyFailureWriteLosesToAnotherWrite();
+                rethrown = catchThrowable(() -> execution.onCloudEvent(poisonEvent));
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+            SagaEnvelope<OrderState> afterTheLostWrites = stateStore.find(POISON).orElseThrow();
+            SagaEnvelope.StreamMarks marks = afterTheLostWrites.streamMarks().get(POISON);
+            List<Long> pendingVersions = marks == null ? List.of() : marks.pending().values().stream().flatMap(List::stream).toList();
+            Map<Long, Instant> pendingSince = marks == null ? Map.of() : marks.pendingSince();
+
+            store.stopLosingFailureWrites();
+            now.set(start.plus(BUDGET).plusMillis(1));
+            // Rethrows when the clock was lost, which the status assertion below reports
+            catchThrowable(() -> execution.onCloudEvent(poisonEvent));
+
+            assertAll(
+                    () -> assertThat(store.competingWritesThatLanded()).isNotEmpty().doesNotContain(false),
+                    () -> assertThat(rethrown).isInstanceOf(IllegalStateException.class).hasMessage("this instance can never handle its payment"),
+                    () -> assertThat(afterTheLostWrites.status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(afterTheLostWrites.failure()).isNull(),
+                    () -> assertThat(pendingVersions).containsExactly(2L),
+                    () -> assertThat(pendingSince).containsEntry(2L, start),
+                    () -> assertThat(appender.list).anySatisfy(logged -> {
+                        assertThat(logged.getLevel()).isEqualTo(Level.WARN);
+                        assertThat(logged.getFormattedMessage()).contains("could not record the failure");
+                    }),
+                    () -> assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED)
+            );
+        }
+
+        @Test
+        void leaves_an_instance_another_write_completed_completed_instead_of_recording_a_failure_on_it() {
+            stateStore = store;
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
+                    dispatched::add, converter, CONFIG, event -> true, now::get);
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            now.set(start.plus(BUDGET).plusMillis(1));
+            store.nextFailureWriteLosesToAWriteThatCompletesTheInstance();
+
+            Throwable rethrown = catchThrowable(() -> execution.onCloudEvent(cloudEvent(POISON, 2, new PaymentReserved("2", POISON))));
+
+            SagaEnvelope<OrderState> after = stateStore.find(POISON).orElseThrow();
+            assertAll(
+                    () -> assertThat(store.competingWritesThatLanded()).containsExactly(true),
+                    () -> assertThat(rethrown).isInstanceOf(IllegalStateException.class).hasMessage("this instance can never handle its payment"),
+                    () -> assertThat(store.failureWriteAttempts()).isEqualTo(1),
+                    () -> assertThat(after.status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(after.failure()).isNull()
+            );
+        }
+
+        @Test
+        void leaves_an_instance_another_write_quarantined_with_the_record_that_write_left() {
+            stateStore = store;
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
+                    dispatched::add, converter, CONFIG, event -> true, now::get);
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            now.set(start.plus(BUDGET).plusMillis(1));
+            store.nextFailureWriteLosesToAWriteThatQuarantinesTheInstance();
+
+            Throwable rethrown = catchThrowable(() -> execution.onCloudEvent(cloudEvent(POISON, 2, new PaymentReserved("2", POISON))));
+
+            SagaEnvelope<OrderState> after = stateStore.find(POISON).orElseThrow();
+            assertAll(
+                    () -> assertThat(store.competingWritesThatLanded()).containsExactly(true),
+                    () -> assertThat(rethrown).isInstanceOf(IllegalStateException.class).hasMessage("this instance can never handle its payment"),
+                    () -> assertThat(store.failureWriteAttempts()).isEqualTo(1),
+                    () -> assertThat(after.status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(after.failure()).isEqualTo(LosesItsFirstFailureWriteToAnotherWrite.COMPETING_FAILURE)
+            );
+        }
+
+        @Test
+        void still_quarantines_on_the_delivery_where_all_but_the_last_of_maxCasAttempts_failure_writes_lose() {
+            stateStore = store;
+            AtomicInteger asked = new AtomicInteger();
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = executionAllowingThreeAttempts(asked);
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
+            catchThrowable(() -> execution.onCloudEvent(poisonEvent));
+            now.set(start.plus(BUDGET).plusMillis(1));
+            store.startCountingFailureWritesAgain();
+            asked.set(0);
+            store.nextFailureWritesLoseToAnotherWrite(2);
+
+            Throwable rethrown = catchThrowable(() -> execution.onCloudEvent(poisonEvent));
+
+            assertAll(
+                    () -> assertThat(store.competingWritesThatLanded()).isNotEmpty().doesNotContain(false),
+                    () -> assertThat(rethrown).isNull(),
+                    () -> assertThat(store.failureWriteAttempts()).isEqualTo(3),
+                    () -> assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED)
+            );
+        }
+
+        @Test
+        void makes_exactly_maxCasAttempts_failure_writes_when_every_one_loses_and_then_rethrows() {
+            stateStore = store;
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = executionAllowingThreeAttempts(new AtomicInteger());
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            now.set(start.plus(BUDGET).plusMillis(1));
+            store.everyFailureWriteLosesToAnotherWrite();
+
+            Throwable rethrown = catchThrowable(() -> execution.onCloudEvent(cloudEvent(POISON, 2, new PaymentReserved("2", POISON))));
+
+            assertAll(
+                    () -> assertThat(store.competingWritesThatLanded()).isNotEmpty().doesNotContain(false),
+                    () -> assertThat(rethrown).isInstanceOf(IllegalStateException.class).hasMessage("this instance can never handle its payment"),
+                    () -> assertThat(store.failureWriteAttempts()).isEqualTo(3),
+                    () -> assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE)
+            );
+        }
+
+        @Test
+        void asks_whether_the_event_is_still_obtainable_once_per_delivery_however_many_failure_writes_it_takes_to_quarantine() {
+            stateStore = store;
+            AtomicInteger asked = new AtomicInteger();
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = executionAllowingThreeAttempts(asked);
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
+            catchThrowable(() -> execution.onCloudEvent(poisonEvent));
+            now.set(start.plus(BUDGET).plusMillis(1));
+            asked.set(0);
+            store.nextFailureWritesLoseToAnotherWrite(2);
+
+            execution.onCloudEvent(poisonEvent);
+
+            assertAll(
+                    () -> assertThat(store.competingWritesThatLanded()).isNotEmpty().doesNotContain(false),
+                    () -> assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(asked).hasValue(1)
+            );
+        }
+
+        private SagaExecution<OrderEvent, OrderState, OrderCommand> executionAllowingThreeAttempts(AtomicInteger asked) {
+            SagaRunnerConfig threeAttempts = new SagaRunnerConfig(Duration.ofMillis(50), 100, 3).withQuarantineAfter(BUDGET);
+            return new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter, threeAttempts,
+                    event -> {
+                        asked.incrementAndGet();
+                        return true;
+                    }, now::get);
+        }
+    }
+
+    @Nested
     class WhenItIsQuarantined {
 
         @Test
@@ -1529,6 +1719,105 @@ class SagaQuarantineTest {
                     () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
             ));
+        }
+    }
+
+    /**
+     * Makes the first failure write of a delivery lose by really changing the instance first, which is what a timer
+     * firing between the read and the write does, so a retry has to read the instance again to get anywhere.
+     */
+    private static final class LosesItsFirstFailureWriteToAnotherWrite implements SagaStateStore<OrderState> {
+
+        private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
+        private final AtomicInteger writesStillToLose = new AtomicInteger();
+        private final AtomicBoolean losesEveryFailureWrite = new AtomicBoolean();
+        private final AtomicInteger failureWriteAttempts = new AtomicInteger();
+        private final List<Boolean> competingWritesThatLanded = new CopyOnWriteArrayList<>();
+        private final AtomicReference<SagaStatus> statusTheCompetingWriteLeaves = new AtomicReference<>(SagaStatus.ACTIVE);
+
+        /** The record a competing write leaves on an instance it quarantines. */
+        static final SagaFailure COMPETING_FAILURE = new SagaFailure("another-input", 7L, Instant.parse("2026-01-01T00:00:00Z"),
+                IllegalArgumentException.class.getName(), "stopped by another writer");
+
+        void nextFailureWriteLosesToAnotherWrite() {
+            writesStillToLose.set(1);
+        }
+
+        void nextFailureWritesLoseToAnotherWrite(int writes) {
+            writesStillToLose.set(writes);
+        }
+
+        /** The next lost write is lost to one that completes the instance. */
+        void nextFailureWriteLosesToAWriteThatCompletesTheInstance() {
+            statusTheCompetingWriteLeaves.set(SagaStatus.COMPLETED);
+            nextFailureWriteLosesToAnotherWrite();
+        }
+
+        /** The next lost write is lost to one that quarantines the instance with {@link #COMPETING_FAILURE}. */
+        void nextFailureWriteLosesToAWriteThatQuarantinesTheInstance() {
+            statusTheCompetingWriteLeaves.set(SagaStatus.QUARANTINED);
+            nextFailureWriteLosesToAnotherWrite();
+        }
+
+        /** Writes that carried a failure record, whether they lost or not. */
+        int failureWriteAttempts() {
+            return failureWriteAttempts.get();
+        }
+
+        void startCountingFailureWritesAgain() {
+            failureWriteAttempts.set(0);
+        }
+
+        /** The result of each competing write, which is not asserted where it happens because the caller swallows what is thrown there. */
+        List<Boolean> competingWritesThatLanded() {
+            return competingWritesThatLanded;
+        }
+
+        /** Until stopped, every write that carries a failure record loses, and a pending-only write passes through. */
+        void everyFailureWriteLosesToAnotherWrite() {
+            losesEveryFailureWrite.set(true);
+        }
+
+        void stopLosingFailureWrites() {
+            losesEveryFailureWrite.set(false);
+        }
+
+        @Override
+        public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
+            return delegate.find(sagaId);
+        }
+
+        @Override
+        public boolean compareAndSave(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
+            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
+            if (envelope.failure() != null) {
+                failureWriteAttempts.incrementAndGet();
+            }
+            if (writesStillToLose.getAndUpdate(left -> Math.max(0, left - 1)) > 0 || (losesEveryFailureWrite.get() && envelope.failure() != null)) {
+                SagaEnvelope<OrderState> current = delegate.find(sagaId).orElseThrow();
+                SagaStatus status = statusTheCompetingWriteLeaves.get();
+                SagaFailure failure = status == SagaStatus.QUARANTINED ? COMPETING_FAILURE : current.failure();
+                Instant completedAt = status == SagaStatus.COMPLETED ? current.updatedAt() : current.completedAt();
+                SagaEnvelope<OrderState> bumped = new SagaEnvelope<>(current.sagaId(), current.state(), status, current.version() + 1,
+                        current.timers(), current.streamWatermarks(), current.positionWatermark(), current.createdAt(), current.updatedAt(),
+                        completedAt, current.currentStep(), current.started(), failure, current.streamMarks());
+                competingWritesThatLanded.add(delegate.compareAndSave(sagaId, bumped, current.version()));
+            }
+            return delegate.compareAndSaveWithoutState(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public List<SagaEnvelope<OrderState>> findWithDueTimers(Instant now, int limit) {
+            return delegate.findWithDueTimers(now, limit);
+        }
+
+        @Override
+        public void delete(String sagaId) {
+            delegate.delete(sagaId);
         }
     }
 

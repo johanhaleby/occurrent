@@ -27,7 +27,8 @@ longer promise a release. No release is scheduled.
 
 [ADR 157](0157-a-sagas-quarantine-budget-runs-per-input.md) changes how the budget in Decision point 3 is measured, for
 [#1318](https://github.com/johanhaleby/occurrent/issues/1318). Each failing input keeps its own clock instead of the
-instance keeping one, and that ADR has the rule.
+instance keeping one, and that ADR has the rule. It also replaces the discard of a lost failure write in Decision point
+3 with a retry against the instance as it is now, for [#977](https://github.com/johanhaleby/occurrent/issues/977).
 
 The three questions this decision could not settle on its own were ruled at that gate and are recorded in
 **Rulings at the design gate** near the end of this file. One of them, the non-replayable source, ships as a
