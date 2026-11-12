@@ -1074,8 +1074,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     firstFailure = withSuppressed(firstFailure, failure);
                 }
             } catch (CompletionException e) {
-                if (e.getCause() instanceof RuntimeException failure) {
-                    firstFailure = withSuppressed(firstFailure, failure);
+                // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
+                if (e.getCause() instanceof Exception failure) {
+                    firstFailure = withSuppressed(firstFailure, unchecked(failure));
                 } else if (e.getCause() instanceof Error failure && error == null) {
                     error = failure;
                 }
@@ -1435,8 +1436,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     } catch (StoppedMeanwhile e) {
                         logDebug("Not starting the wrapped model, since this model was stopped meanwhile (subscriptionId={})", subscriptionId);
                         return firstFailure;
-                    } catch (RuntimeException e) {
-                        firstFailure = withSuppressed(firstFailure, e);
+                    } catch (Exception e) {
+                        // Exception, since a wrapped model written in Kotlin can throw a checked exception
+                        firstFailure = withSuppressed(firstFailure, unchecked(e));
                     }
                     if (!resumes(applied, subscriptionId)) {
                         // Kept paused, whether the user or stop() paused it, as a competing one is
@@ -1470,10 +1472,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         if (cc != null && !mayRunWhileStopped.contains(cc.subscriptionIdAndSubscriberId)) {
             try {
                 stopConsumer(cc, paused, failedToPause, applied);
-            } catch (RuntimeException e) {
+            } catch (Exception e) {
+                // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
                 recordAsPausedUnlessItRuns(cc.subscriptionIdAndSubscriberId, true, e);
                 reconcileLater(cc.subscriptionIdAndSubscriberId);
-                firstFailure = withSuppressed(firstFailure, e);
+                firstFailure = withSuppressed(firstFailure, unchecked(e));
             } catch (Error e) {
                 recordAsPausedUnlessItRuns(cc.subscriptionIdAndSubscriberId, true, e);
                 reconcileLater(cc.subscriptionIdAndSubscriberId);
@@ -1625,7 +1628,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         try {
             onceAStartOrStopHasBegun.run();
             wrappedModelFailure = startTheWrappedModelFor(start, pausedByAStop);
-            firstFailure = applyToEverySubscription(start, subscriptionIds, new ArrayList<>(), wrappedModelFailure instanceof RuntimeException failure ? failure : null);
+            firstFailure = applyToEverySubscription(start, subscriptionIds, new ArrayList<>(), wrappedModelFailure instanceof Exception failure ? unchecked(failure) : null);
         } catch (Error e) {
             throw wrappedModelFailure instanceof Error first ? first : e;
         } finally {
@@ -1660,7 +1663,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } catch (StoppedMeanwhile | ShutDownMeanwhile e) {
             logDebug("Not starting the wrapped subscription model, since this model was stopped or shut down meanwhile");
             return null;
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
+            // Throwable, since a wrapped model written in Kotlin can throw a checked exception
             return e;
         } finally {
             lifecycleAppliedOnThisThread.remove();
@@ -3352,7 +3356,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             } catch (StoppedMeanwhile e) {
                 // A stop() overtook this step, so the step is decided again from there
                 return nextStep(beingMade);
-            } catch (RuntimeException e) {
+            } catch (Exception e) {
+                // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
                 // Nothing is made yet, so giving up the registration frees the id
                 takeBack(beingMade, e);
                 throw e;
@@ -3385,7 +3390,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } catch (StoppedMeanwhile e) {
             // A stop() overtook this step, and the subscription waits for start(), as one made while stopped does
             waits = true;
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
             log.warn("Could not run CompetingConsumer in the wrapped subscription model, so it waits for a grant of its lease, which tries it again (subscriberId={}, subscriptionId={})",
                     key.subscriberId(), subscriptionId, e);
             waits = true;
@@ -3425,7 +3431,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             if (wrappedModelIsRunning()) {
                 stopTheWrappedModel();
             }
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model written in Kotlin can throw a checked exception
             log.warn("Could not stop the wrapped subscription model again after it started itself to make a subscription while this model was stopped", e);
         } finally {
             synchronized (wrappedModelStart) {
@@ -3490,7 +3497,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 beingMade.triedAgainOnceMade = true;
             }
             return Step.DONE;
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
             return recordAfterAFailure(beingMade, e);
         }
     }
@@ -3503,7 +3511,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         boolean runs = false;
         try {
             runs = isRunningInTheWrappedModel(key.subscriptionId());
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model written in Kotlin can throw a checked exception
             addSuppressed(failure, e);
         }
         beingMade.triedAgainOnceMade = true;
@@ -4155,6 +4164,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             throw e;
         }
         throw new IllegalStateException(failure);
+    }
+
+    // The failures collected here are unchecked, so a checked one is wrapped in an IllegalStateException as thrownAsItIs
+    // does
+    private static RuntimeException unchecked(Exception failure) {
+        return failure instanceof RuntimeException e ? e : new IllegalStateException(failure);
     }
 
     // Throws a checked failure too, unwrapped, so a caller can catch it by its own type
