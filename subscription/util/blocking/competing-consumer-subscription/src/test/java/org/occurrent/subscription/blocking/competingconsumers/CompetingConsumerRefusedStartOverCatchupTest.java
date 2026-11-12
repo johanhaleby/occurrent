@@ -63,6 +63,7 @@ import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -71,7 +72,7 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 /**
  * A competing consumer model over a catch-up model over the native MongoDB model. The native model refuses a dynamic
  * start that answers a catch-up's position, after subscribe(..) returned. The catch-up model answers running for an id
- * while it replays, so a refusal that landed during a replay could be mistaken for a start that went on. The start
+ * while it replays, so a refusal that came during a replay could be mistaken for a start that went on. The start
  * function is asked per model, and the catch-up model hands the native model a position of its own to go live from after
  * a replay, never what the function answers for the native model. So only a start that skips the replay can be refused.
  */
@@ -123,7 +124,7 @@ class CompetingConsumerRefusedStartOverCatchupTest {
     @Timeout(value = 60, unit = SECONDS)
     @Test
     void a_start_that_skips_the_replay_and_that_the_native_model_refuses_is_reported_by_the_handle_and_frees_the_lease_and_the_subscription_id() {
-        // Given a start that the catch-up model leaves to the native model, which answers a catch-up position for it
+        // Given a start that the catch-up model passes straight to the native model, which answers a catch-up position for it
         StartAt skipsTheReplayAndIsRefusedByTheNativeModel = StartAt.dynamic(context -> {
             if (context.subscriptionModelType() == CatchupSubscriptionModel.class) {
                 return null;
