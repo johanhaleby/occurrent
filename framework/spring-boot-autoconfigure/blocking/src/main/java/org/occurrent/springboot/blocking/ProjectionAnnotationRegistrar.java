@@ -443,8 +443,8 @@ class ProjectionAnnotationRegistrar {
     // catch-up stored. An application-supplied model of another type that keeps a position is not told to opt out, and
     // this check cannot see one. DEFAULT starts at the model default and NOW with the default resumeBehavior resumes
     // from a stored position, so a restart of either that finds a catch-up's checkpoint in storage resumes from it and
-    // replays (issue 1418, ADR 166 on the reactor stack). A SubscriptionResumePoints bean can replace the start with a checkpoint, so the case does not hold
-    // while one is declared.
+    // replays (issue 1418, ADR 166 on the reactor stack). A SubscriptionResumePoints bean can replace the start with a
+    // checkpoint, so the case does not hold while one is declared.
     private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation) {
         if (applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable() != null) {
             return false;

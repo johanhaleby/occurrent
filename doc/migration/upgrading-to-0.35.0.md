@@ -1731,7 +1731,8 @@ The reactive starter, a `@DcbSubscription`, and a projection or snapshot over DC
 
 - With a catch-up's checkpoint stored, the subscription replays from it and then goes live, so it's delivered the
   events written since. It resumes the way a `BEGINNING` start that restarts from that checkpoint does, and the
-  catch-up refuses it in the same cases.
+  catch-up refuses it in the same cases. A `resumeSubscription(id)` of such a subscription after a pause replays from
+  that checkpoint too, where it ran no replay before.
 - With nothing stored, it starts at the present without a replay, as before.
 - With a live checkpoint stored, it resumes from it, as before. When MongoDB no longer has the history back to that
   checkpoint, the start throws `CatchupCannotResumeException` and the application doesn't start, the same as a
