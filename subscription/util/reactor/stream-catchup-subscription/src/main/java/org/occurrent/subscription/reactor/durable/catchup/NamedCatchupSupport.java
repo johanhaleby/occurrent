@@ -101,14 +101,14 @@ import static java.util.Objects.requireNonNull;
  * code can subscribe, cancel, stop or shut down any subscription. A subscribe that goes straight to live runs the
  * wrapped {@code subscribe(..)} with no lock held, since {@code ReactorMongoSubscriptionModel} can evaluate a dynamic
  * {@link StartAt} that answered {@code null} here again on the calling thread. A cancel of the id meanwhile goes to the
- * wrapped model at once. A wrapped model that implements {@code CancellableRegistration}, as
- * {@code ReactorMongoSubscriptionModel} and {@code ReactorDurableSubscriptionModel} do, registers nothing for the
- * subscribe when the cancel reaches it first, and the subscribe then returns a {@link Subscription} whose
- * {@code waitUntilStarted()} fails with {@link SubscriptionNotRunningException}. A wrapped model that doesn't implement it
- * can register the subscribe after the cancel, so the id is cancelled there again once the wrapped {@code subscribe(..)}
+ * wrapped model at once. A wrapped model whose {@code CancellableRegistration.standsInForSubscribe()} answers
+ * {@code true}, as {@code ReactorMongoSubscriptionModel} and {@code ReactorDurableSubscriptionModel} do, registers
+ * nothing for the subscribe when the cancel reaches it first, and the subscribe then returns a {@link Subscription} whose
+ * {@code waitUntilStarted()} fails with {@link SubscriptionNotRunningException}. Any other wrapped model can register
+ * the subscribe after the cancel, so the id is cancelled there again once the wrapped {@code subscribe(..)}
  * returned holding it, unless a later subscribe took the id there. A subclass of either model, a proxy that subclasses
- * it included, has its {@code subscribe(String, SubscriptionFilter, StartAt, Function)} called, and gets the same second
- * cancel as a model that doesn't implement {@code CancellableRegistration}. These calls still run with a lock held.
+ * it included, has its {@code subscribe(String, SubscriptionFilter, StartAt, Function)} called, and gets that second
+ * cancel too. These calls still run with a lock held.
  * <ul>
  * <li>The handover runs the wrapped {@code subscribe(..)}, or {@code resumeSubscription(id, startAt)} for a takeover,
  * and {@code isRunning(id)} and {@code pauseSubscription(id)} under the monitor of the subscription's state. So the

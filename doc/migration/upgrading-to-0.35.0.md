@@ -1477,7 +1477,7 @@ If another thread can cancel a subscribe whose start you wait for, `waitUntilSta
 because of that cancel:
 
 - `SubscriptionNotRunningException`, when the cancel reached `ReactorMongoSubscriptionModel` or
-  `ReactorDurableSubscriptionModel` before it took the id
+  `ReactorDurableSubscriptionModel` before it took the id, and the model isn't a subclass of either
 - `CancellationException`, when the cancel reached `ReactorDurableSubscriptionModel` after it took the id and before it
   started the subscription or handed it to the model it wraps
 - `IllegalStateException`, when the subscribe replays history first and the cancel came before the replay handed over
