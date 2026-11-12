@@ -656,7 +656,7 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
         }
     }
 
-    // Spring AOP over a real model, as a proxy built by a Spring container would be
+    // A Spring AOP proxy of the shipped model, as a Spring container builds one
     @SuppressWarnings("unchecked")
     private static <T> T proxyOf(ReactorDurableSubscriptionModel model, boolean proxyTargetClass, MethodInterceptor advice) {
         ProxyFactory factory = new ProxyFactory(model);
