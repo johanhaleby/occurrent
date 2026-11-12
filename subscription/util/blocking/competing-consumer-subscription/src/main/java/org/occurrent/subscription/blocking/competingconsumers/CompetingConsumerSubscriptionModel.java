@@ -469,6 +469,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // refused its start
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, StartRefusal> startRefusals = new ConcurrentHashMap<>();
     private final StartRefusalListener startRefusalListener = this::startRefused;
+    // A handle waits for a refusal to be acted on only when the wrapped model reports it
+    private final boolean wrappedModelReportsStartRefusals;
     // Waited for after a call failed, and doubled after each failure that follows, up to the most. A lease callback
     // handed to a try is acted on without waiting, since nothing failed.
     private static final Duration RECONCILE_FIRST_BACKOFF = Duration.ofMillis(100);
@@ -632,7 +634,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             noStartReturnedSinceBuilt = true;
         }
         this.competingConsumerStrategy.addListener(this);
-        StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.addStartRefusalListener(startRefusalListener));
+        this.wrappedModelReportsStartRefusals = StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(model -> {
+            model.addStartRefusalListener(startRefusalListener);
+            return true;
+        }).orElse(false);
     }
 
     /**
@@ -824,8 +829,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     // First, while the id is in use, since a subscribe of the same id puts its own delivery once it
                     // is free and that one must not be forgotten
                     forgetTheDeliveriesOf(subscriptionId);
-                    competingConsumers.remove(cc.subscriptionIdAndSubscriberId);
                     startRefusals.remove(cc.subscriptionIdAndSubscriberId);
+                    competingConsumers.remove(cc.subscriptionIdAndSubscriberId);
                     onceACancelHasFreedTheId.run();
                     mayRunWhileStopped.remove(cc.subscriptionIdAndSubscriberId);
                 }));
@@ -3185,7 +3190,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         Consumer<CloudEvent> delivered = deliveredUnderTheLease(key, delivery, action);
         beingMade.delivery = delivery;
         deliveries.put(subscriptionId, delivery);
-        StartRefusal startRefusal = new StartRefusal();
+        StartRefusal startRefusal = new StartRefusal(wrappedModelReportsStartRefusals);
         startRefusals.put(key, startRefusal);
         AtomicBoolean madeInTheWrappedModel = beingMade.madeInTheWrappedModel;
         beingMade.waiting = new CompetingConsumerState.Waiting(() -> {
@@ -3803,6 +3808,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } catch (Throwable e) {
             addOnce(failures, e);
         }
+        // Nothing acts on a refusal from here, so a handle waiting for that throws what the wrapped model refused with
+        startRefusals.values().forEach(StartRefusal::actedOn);
+        startRefusals.clear();
         Set<SubscriptionIdAndSubscriberId> leased = new HashSet<>(registrations.keySet());
         leased.addAll(competingConsumers.keySet());
         nonCompetingConsumersSubscriptions.clear();
@@ -4624,10 +4632,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
-    // A handle that throws once the wrapped model refused the start of the consumer, see forgetTheRefusedStart
+    // A handle that throws once the wrapped model refused the start of the consumer, see forgetTheRefusedStart. One made
+    // for a consumer already forgotten, or after shutdown, has nothing that would act on a refusal, so it doesn't wait
     private CompetingConsumerSubscription handleOf(SubscriptionIdAndSubscriberId key, @Nullable Subscription subscription) {
         @Nullable StartRefusal startRefusal = startRefusals.get(key);
-        return new CompetingConsumerSubscription(key.subscriptionId(), key.subscriberId(), startRefusal == null ? new StartRefusal() : startRefusal, subscription);
+        return new CompetingConsumerSubscription(key.subscriptionId(), key.subscriberId(), startRefusal == null ? new StartRefusal(false) : startRefusal, subscription);
     }
 
     // Told on the thread that would have read the subscription in the wrapped model, which holds none of its own locks
@@ -4699,6 +4708,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         startRefusal.reported.compareAndSet(refused, null);
         if (forget) {
             forgetTheRefusedStart(key, startRefusal, refused);
+        } else {
+            startRefusal.actedOn();
         }
     }
 
@@ -4716,17 +4727,19 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         pausedByAStopOfTheWrappedModel.remove(key);
         mayRunWhileStopped.remove(key);
         forgetTheDeliveriesOf(subscriptionId);
-        competingConsumers.remove(key);
         startRefusals.remove(key, startRefusal);
+        competingConsumers.remove(key);
+        boolean unregistered = true;
         try {
             unregisterOrAtLeastGiveUpTheLease(key);
         } catch (Throwable unregisterFailure) {
-            // Logged with the refusal below. The failed unregister left the consumer to a try, which gives the lease up.
+            // Logged with the refusal below. unregisterCompetingConsumer left a try that unregisters the consumer.
+            unregistered = false;
             addSuppressed(refused, unregisterFailure);
         }
         startRefusal.refused(refused);
-        log.error("The wrapped subscription model refused the start position of a subscription this node held the lease for, so the lease is given back and the subscription id is free. No node runs the subscription from a start the wrapped model refuses. Subscribe it again with the same id and a start position the wrapped model accepts (subscriberId={}, subscriptionId={})",
-                key.subscriberId(), subscriptionId, refused);
+        log.error("The wrapped subscription model refused the start position of a subscription this node started, so the subscription id is free and {}. No node runs the subscription from a start the wrapped model refuses. Subscribe it again with the same id and a start position the wrapped model accepts (subscriberId={}, subscriptionId={})",
+                unregistered ? "this node no longer competes for its lease" : "a later try unregisters this node from its lease", key.subscriberId(), subscriptionId, refused);
     }
 
     private Subscription startWaitingConsumer(CompetingConsumer cc) {

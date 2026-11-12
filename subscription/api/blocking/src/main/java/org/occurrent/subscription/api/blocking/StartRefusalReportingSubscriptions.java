@@ -68,10 +68,11 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
     @FunctionalInterface
     interface StartRefusalListener {
         /**
-         * Called once the model has refused the start position of {@code subscriptionId}. The subscription is gone from
-         * the model by then, and its id is free, so a {@code subscribe} with the same id and a start position the model
-         * accepts makes a new subscription. The model doesn't try the refused start again, and a handle of the
-         * refused subscription that waits for it to start throws the refusal.
+         * Called once the model has refused the start position of {@code subscriptionId}. The model removed the
+         * subscription and freed its id before calling, so a {@code subscribe} with the same id and a start position the
+         * model accepts makes a new subscription, and one may already have done so by the time the listener runs. The
+         * model doesn't try the refused start again, and a handle of the refused subscription that waits for it to start
+         * throws the refusal.
          * <p>
          * Called on the thread that would have read the subscription, without any lock of the model. The model calls
          * each listener in the order they were added. A listener that throws a {@link RuntimeException} is logged, and

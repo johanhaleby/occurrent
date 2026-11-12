@@ -9,6 +9,8 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.StringJoiner;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
@@ -65,7 +67,16 @@ public class CompetingConsumerSubscription implements Subscription {
     @Override
     public boolean waitUntilStarted(Duration timeout) {
         startRefusal.throwIfRefused();
-        return getSubscription().map(s -> s.waitUntilStarted(timeout)).orElse(true);
+        long started = System.nanoTime();
+        try {
+            return getSubscription().map(s -> s.waitUntilStarted(timeout)).orElse(true);
+        } catch (UnsupportedStartAtException refusedInTheWrappedModel) {
+            // The wrapped handle throws as soon as the wrapped model refused, before the model here has given the lease
+            // back and freed the id, so a subscribe of the id right after the throw could find it still in use
+            startRefusal.awaitActedOn(timeout, started);
+            startRefusal.throwIfRefused();
+            throw refusedInTheWrappedModel;
+        }
     }
 
     // Shared by every handle made for one competing consumer, from its subscribe until the model forgets it
@@ -73,9 +84,36 @@ public class CompetingConsumerSubscription implements Subscription {
         // Reported by the wrapped model, until the competing consumer model has acted on it
         final AtomicReference<@Nullable UnsupportedStartAtException> reported = new AtomicReference<>();
         private volatile @Nullable UnsupportedStartAtException refused;
+        // Only waited for when the wrapped model reports its refusals, since nothing would act on one otherwise
+        private final boolean reportedByTheWrappedModel;
+        private final CountDownLatch actedOn = new CountDownLatch(1);
+
+        StartRefusal(boolean reportedByTheWrappedModel) {
+            this.reportedByTheWrappedModel = reportedByTheWrappedModel;
+        }
 
         void refused(UnsupportedStartAtException refusal) {
             refused = refusal;
+            actedOn.countDown();
+        }
+
+        // Once a report was acted on without forgetting the consumer, and once the model shuts down
+        void actedOn() {
+            actedOn.countDown();
+        }
+
+        private void awaitActedOn(Duration timeout, long started) {
+            if (!reportedByTheWrappedModel) {
+                return;
+            }
+            long timeoutNanos = timeout.compareTo(Duration.ofNanos(Long.MAX_VALUE)) >= 0 ? Long.MAX_VALUE : timeout.toNanos();
+            long left = timeoutNanos - (System.nanoTime() - started);
+            try {
+                //noinspection ResultOfMethodCallIgnored
+                actedOn.await(Math.max(0, left), TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         // A copy for every handle that throws it, so a caller adding to what it caught changes nothing another caller gets
