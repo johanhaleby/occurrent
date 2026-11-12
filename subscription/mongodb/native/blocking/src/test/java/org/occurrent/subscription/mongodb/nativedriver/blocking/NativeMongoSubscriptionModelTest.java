@@ -64,6 +64,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
@@ -2066,6 +2067,101 @@ public class NativeMongoSubscriptionModelTest {
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                     assertThat(later).extracting(CloudEvent::getId).contains(sentinel.eventId()));
             assertThat(refused).isEmpty();
+        }
+
+        @Test
+        void a_start_refusal_listener_is_told_once_with_the_id_and_a_copy_of_the_refusal_when_a_dynamic_position_answers_a_global_checkpoint() {
+            // Given
+            List<Map.Entry<String, UnsupportedStartAtException>> told = new CopyOnWriteArrayList<>();
+            subscriptionModel.addStartRefusalListener((id, refusal) -> told.add(Map.entry(id, refusal)));
+            String subscriptionId = UUID.randomUUID().toString();
+            StartAt answered = StartAt.checkpoint(GlobalCheckpoint.of(0));
+
+            // When
+            Subscription refused = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> answered), __ -> {
+            });
+
+            // Then
+            Throwable thrown = catchThrowable(() -> refused.waitUntilStarted(Duration.ofSeconds(10)));
+            awaitEveryRunEnded();
+            assertThat(told).as("refusals told to the listener").singleElement().satisfies(entry -> {
+                assertThat(entry.getKey()).isEqualTo(subscriptionId);
+                assertThat(entry.getValue()).isExactlyInstanceOf(UnsupportedStartAtException.class).isNotSameAs(thrown);
+                assertThat(entry.getValue().startAt()).isSameAs(answered);
+            });
+        }
+
+        @Test
+        void a_start_refusal_listener_that_throws_does_not_keep_the_next_listener_from_being_told() {
+            // Given
+            List<String> told = new CopyOnWriteArrayList<>();
+            subscriptionModel.addStartRefusalListener((id, refusal) -> {
+                throw new IllegalStateException("listener failed");
+            });
+            subscriptionModel.addStartRefusalListener((id, refusal) -> told.add(id));
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(0))), __ -> {
+            });
+
+            // Then
+            awaitEveryRunEnded();
+            assertThat(told).as("refusals told to the listener after the one that throws").containsExactly(subscriptionId);
+        }
+
+        @Test
+        void a_removed_start_refusal_listener_is_not_told() {
+            // Given
+            List<String> toldTheRemoved = new CopyOnWriteArrayList<>();
+            List<String> toldTheKept = new CopyOnWriteArrayList<>();
+            StartRefusalListener removed = (id, refusal) -> toldTheRemoved.add(id);
+            subscriptionModel.addStartRefusalListener(removed);
+            subscriptionModel.addStartRefusalListener((id, refusal) -> toldTheKept.add(id));
+            subscriptionModel.removeStartRefusalListener(removed);
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(0))), __ -> {
+            });
+
+            // Then
+            awaitEveryRunEnded();
+            assertThat(toldTheKept).as("refusals told to the listener kept").containsExactly(subscriptionId);
+            assertThat(toldTheRemoved).as("refusals told to the listener removed").isEmpty();
+        }
+
+        @Test
+        void a_start_refusal_listener_is_not_told_of_a_refusal_of_a_run_a_cancel_has_closed() throws Exception {
+            // Given
+            List<String> told = new CopyOnWriteArrayList<>();
+            subscriptionModel.addStartRefusalListener((id, refusal) -> told.add(id));
+            String subscriptionId = UUID.randomUUID().toString();
+            HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
+            ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
+            modelLogger.addAppender(holdsTheRefusal);
+            try {
+                subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), __ -> {
+                });
+                assertThat(holdsTheRefusal.held.await(10, SECONDS)).isTrue();
+
+                // When the run is cancelled while its refusal is held, and the refusal is then released
+                subscriptionModel.cancelSubscription(subscriptionId);
+                holdsTheRefusal.release.countDown();
+
+                // Then
+                awaitEveryRunEnded();
+                assertThat(told).as("refusals told to the listener").isEmpty();
+            } finally {
+                holdsTheRefusal.release.countDown();
+                modelLogger.detachAppender(holdsTheRefusal);
+            }
+        }
+
+        // The listeners are told on the thread of the run, so every refusal has been told once no run is left
+        private void awaitEveryRunEnded() {
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(activeSubscriptionThreads()).isZero());
         }
 
         private void assertSubscriptionIsKnownAfterTheActionThrows(RuntimeException thrownByTheAction) throws Exception {

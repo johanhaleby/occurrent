@@ -1197,6 +1197,26 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void a_start_refusal_listener_is_told_with_the_id_and_the_refusal_when_a_dynamic_position_answers_a_global_checkpoint() {
+            // Given
+            List<Map.Entry<String, UnsupportedStartAtException>> told = new CopyOnWriteArrayList<>();
+            subscriptionModel.addStartRefusalListener((id, refusal) -> told.add(Map.entry(id, refusal)));
+            String subscriptionId = UUID.randomUUID().toString();
+            StartAt answered = StartAt.checkpoint(GlobalCheckpoint.of(0));
+
+            // When
+            subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> answered), __ -> {
+            });
+
+            // Then
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(told).as("refusals told to the listener").singleElement().satisfies(entry -> {
+                        assertThat(entry.getKey()).isEqualTo(subscriptionId);
+                        assertThat(entry.getValue().startAt()).isSameAs(answered);
+                    }));
+        }
+
+        @Test
         void subscribing_at_a_dynamic_position_answering_a_live_checkpoint_delivers_the_events_after_it() {
             // Given
             LocalDateTime now = LocalDateTime.now();
