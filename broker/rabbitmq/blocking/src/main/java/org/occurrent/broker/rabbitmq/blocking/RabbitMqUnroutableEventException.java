@@ -22,7 +22,8 @@ package org.occurrent.broker.rabbitmq.blocking;
  * matching the routing key and then discards the message, so a sink that only read the confirm would report success
  * for an event nobody will ever receive. Every {@link RabbitMqCloudEventSink} publish sets {@code mandatory} and
  * treats a return this way instead, so a typo in a routing key fails loudly rather than looking like a working
- * deployment.
+ * deployment. A sink built with {@link RabbitMqUnroutablePolicy#LOG_AND_CONTINUE} logs a warning for a return
+ * instead of throwing this.
  */
 public class RabbitMqUnroutableEventException extends RabbitMqPublishException {
 

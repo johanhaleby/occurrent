@@ -40,6 +40,7 @@ import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
@@ -55,6 +56,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -71,7 +73,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -251,8 +253,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         }
 
         @Override
-        public Subscription subscription(String subscriptionId, CountDownLatch started) {
-            return new NativeMongoSubscription(subscriptionId, started);
+        public Subscription subscription(String subscriptionId, CountDownLatch started, Supplier<@Nullable RuntimeException> startFailure) {
+            return new NativeMongoSubscription(subscriptionId, started, startFailure);
         }
 
         @Override
@@ -298,6 +300,16 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public void removeHistoryLossListener(HistoryLossListener listener) {
         subscriptions.removeHistoryLossListener(listener);
+    }
+
+    @Override
+    public void addStartRefusalListener(StartRefusalListener listener) {
+        subscriptions.addStartRefusalListener(listener);
+    }
+
+    @Override
+    public void removeStartRefusalListener(StartRefusalListener listener) {
+        subscriptions.removeStartRefusalListener(listener);
     }
 
     @Override
@@ -406,8 +418,9 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * isn't waited for. A subscription that an override already resumed or cancelled while resuming an earlier one is
      * left out.
      * <p>
-     * When a resume or a wait throws, every other subscription is still resumed and waited for, and then this method
-     * throws the first exception with the others added as suppressed.
+     * A wait throws for a start position the model refuses. When a resume or a wait throws, every other subscription
+     * is still resumed and waited for, and then this method throws the first exception with the others added as
+     * suppressed.
      * <p>
      * A subscription made while the model is stopped is paused until this call or a resume starts it. For one given
      * {@link StartAt#now()}, no position, or a {@code StartAt.dynamic(..)} position that resolves to one of those,
@@ -500,7 +513,9 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     /**
      * {@code false} for a checkpoint the change stream can't open at, such as a catch-up's position
-     * ({@code GlobalCheckpoint}) or a time, since a subscription subscribed at one starts at the present.
+     * ({@code GlobalCheckpoint}, {@code CatchupTimeCheckpoint}) or a {@code TimeBasedCheckpoint}. A subscribe at a
+     * catch-up's position is refused, a subscribe at a {@code TimeBasedCheckpoint} starts at the present, and a resume at
+     * any of them goes on from the position the subscription has read to.
      */
     @Override
     public boolean restartsAt(Checkpoint checkpoint) {

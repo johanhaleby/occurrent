@@ -184,19 +184,20 @@ class ReactorStreamCatchupDynamicStartCancelMongoTest {
         CountDownLatch hookDone = new CountDownLatch(1);
         AtomicReference<Throwable> hookFailure = new AtomicReference<>();
         AtomicReference<String> hookRanOn = new AtomicReference<>();
-        catchup.subscribe("b", FILTER, StartAt.now(), cloudEvent -> {
-            bInAction.countDown();
-            return Mono.<Void>never().doOnCancel(() -> {
-                hookRanOn.set(Thread.currentThread().getName());
-                try {
-                    catchup.cancelSubscription("a").block(BLOCKED);
-                } catch (Throwable t) {
-                    hookFailure.set(t);
-                } finally {
-                    hookDone.countDown();
-                }
-            });
-        }).waitUntilStarted().block(STARTUP);
+        // Counted on the request, which the retryWhen in ReactorMongoSubscriptionModel makes once it has stored the subscription.
+        // A cancel of b before that has nothing to cancel yet, and the cancel hook then runs later on the thread that delivers the event
+        catchup.subscribe("b", FILTER, StartAt.now(), cloudEvent -> Mono.<Void>never()
+                .doOnRequest(__ -> bInAction.countDown())
+                .doOnCancel(() -> {
+                    hookRanOn.set(Thread.currentThread().getName());
+                    try {
+                        catchup.cancelSubscription("a").block(BLOCKED);
+                    } catch (Throwable t) {
+                        hookFailure.set(t);
+                    } finally {
+                        hookDone.countDown();
+                    }
+                })).waitUntilStarted().block(STARTUP);
         writeAnEvent();
         awaitLatch(bInAction, STARTUP, "The action of b never got the event");
         AtomicBoolean cancelled = new AtomicBoolean();

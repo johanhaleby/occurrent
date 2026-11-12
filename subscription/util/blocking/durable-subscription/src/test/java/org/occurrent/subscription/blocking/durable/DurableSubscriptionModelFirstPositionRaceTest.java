@@ -33,6 +33,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.WinnerHiddenFromTheConfirmReadStorage.ConfirmRead;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -43,6 +44,8 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * {@code recordFirstPositionOrRefuse} reads storage, finds nothing, then writes what the wrapped model answers for
@@ -110,6 +113,34 @@ class DurableSubscriptionModelFirstPositionRaceTest {
     @Test
     void a_lost_first_position_write_whose_confirm_read_finds_nothing_never_starts_from_this_nodes_later_position() {
         aLostFirstPositionWriteWhoseConfirmReadCannotNameTheWinnerNeverStartsFromThisNodesLaterPosition(ConfirmRead.FINDS_NOTHING);
+    }
+
+    @Test
+    void a_lost_first_position_write_whose_confirm_read_throws_a_checked_exception_without_declaring_it_is_refused_with_that_exception_as_cause() {
+        IOException unreachable = new IOException("Checkpoint storage cannot be reached");
+        WinnerHiddenFromTheConfirmReadStorage storage = WinnerHiddenFromTheConfirmReadStorage.failingWithAnUndeclaredCheckedException(
+                new StringBasedCheckpoint("earlier-position-the-other-node-stored"), unreachable);
+        InMemoryFeed feed = new InMemoryFeed();
+        feed.answersCurrentPosition = true;
+        feed.currentPosition = "later-position-this-node-read";
+        feed.answersNullOnFirstCallOnly = true;
+        feed.keepsGoingWhenTheStartPositionThrows = true;
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(
+                feed, storage, new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
+
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the subscribe").isNull(),
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").doesNotContain("later-position-this-node-read"),
+                () -> assertThat(feed.startPositionFailures).as("start position failures").singleElement()
+                        .isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class, refusal -> {
+                            assertThat(refusal.positionRead.asString()).as("position read").isEqualTo("later-position-this-node-read");
+                            assertThat(refusal.positionStored).as("position stored").isEmpty();
+                            assertThat(refusal.getCause()).as("cause").isSameAs(unreachable);
+                        })
+        );
     }
 
     private static void aLostFirstPositionWriteWhoseConfirmReadCannotNameTheWinnerNeverStartsFromThisNodesLaterPosition(ConfirmRead confirmRead) {

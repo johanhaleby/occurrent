@@ -234,7 +234,8 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         composedCatchupModel.suppliedBy(durableSubscriptionModel, catchupLayer);
         // A default StartAt resolves to StartAt.subscriptionModelDefault() (see StartPositionSupport), which both
         // the stream and DCB catch-up layers composeCatchupLayer can build classify as live, the same as a
-        // checkpoint that is neither global nor time-based, so a wiped checkpoint changes nothing for it either.
+        // checkpoint that is neither global nor time-based, so a start with no checkpoint stored doesn't replay. One
+        // that finds a catch-up checkpoint in storage replays from it (ADR 166, tested on the stream layer).
         composedCatchupModel.defaultBypassesCatchup();
         if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
             // Stopped here rather than after the annotations are scanned, so every subscription is registered on a

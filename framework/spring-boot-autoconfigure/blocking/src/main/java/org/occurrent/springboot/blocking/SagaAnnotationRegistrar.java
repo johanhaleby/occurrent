@@ -61,6 +61,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Queue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.BooleanSupplier;
 
@@ -199,7 +200,9 @@ class SagaAnnotationRegistrar {
         }
 
         refuseIfSagaSubscriptionBeanNameIsTaken(id);
-        SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
+        AtomicReference<SagaSubscription> ran = new AtomicReference<>();
+        BackgroundStartup.subscribe(annotation.startupMode(), () -> ran.set(runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted)));
+        SagaSubscription sagaSubscription = ran.get();
         sagaSubscriptions.add(sagaSubscription);
         // Reached on the refresh thread at startup, and from postProcessAfterInitialization for a saga on a bean
         // Spring Boot builds later, which is the path that can overlap close().
