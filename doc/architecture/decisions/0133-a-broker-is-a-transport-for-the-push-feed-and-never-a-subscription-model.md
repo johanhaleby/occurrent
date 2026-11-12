@@ -30,6 +30,10 @@ Amended by [ADR 169](0169-a-rabbitmq-sink-can-log-an-unroutable-event-and-contin
 as a failed publish as decision 7 says. `FAIL` is still the default, and a parked delivery still fails on a
 return.
 
+Amended by [ADR 170](0170-a-rabbitmq-source-and-sink-take-a-mapper-for-the-wire-format.md). Decision 4 holds for the
+default mappers only. A sink built with a custom `RabbitMqOutboundMapper`, or a source built with a custom
+`RabbitMqInboundMapper`, uses the wire format of that mapper, which decides whether the extensions are headers at all.
+
 ## Context
 
 A production deployment often forwards Occurrent cloud events to RabbitMQ or Kafka and consumes them there instead of

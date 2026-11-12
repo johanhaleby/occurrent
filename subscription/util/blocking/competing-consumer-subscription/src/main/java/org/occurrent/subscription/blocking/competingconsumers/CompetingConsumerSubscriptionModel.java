@@ -572,6 +572,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // The consumer a try is working on, set on the thread of that try. A lease callback out of the try's own call to
     // the strategy is left to the try, which decides again once that call returns.
     private final ThreadLocal<@Nullable SubscriptionIdAndSubscriberId> triedOnThisThread = new ThreadLocal<>();
+    // True on a thread this model started, see interruptAgainIfInterrupted
+    private final ThreadLocal<Boolean> onAThreadOfItsOwn = ThreadLocal.withInitial(() -> false);
     // Counts every start(..) and stop(), read and written under the monitor only
     private long lifecycleCalls;
     // Numbers each pause, resume or cancel that waits for the lock of its subscription, in the order they began, read
@@ -790,7 +792,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             } else {
                 try {
                     forgetCancelled(subscriptionId, beingMade);
-                } catch (RuntimeException forgetFailure) {
+                } catch (Exception forgetFailure) {
+                    // Exception, since a lease strategy written in Kotlin can throw a checked exception
+                    interruptAgainIfInterrupted(forgetFailure);
                     addSuppressed(e, forgetFailure);
                 }
             }
@@ -906,7 +910,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             // The consumers are stopped also when stopping the wrapped model throws, or this node would keep leases
             // for subscriptions it no longer means to serve
             List<String> paused = new ArrayList<>();
-            RuntimeException consumerFailure = applyToEverySubscription(stop, subscriptionIds, paused, null);
+            Exception consumerFailure = applyToEverySubscription(stop, subscriptionIds, paused, null);
             String outcome = paused.isEmpty()
                     ? "it had no running subscription to pause."
                     : "subscriptions " + paused + " are paused in the wrapped model and gave up their lease. start(true) resumes them, while start(false) keeps them paused until each one is resumed.";
@@ -917,16 +921,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             throw failure;
         } catch (Throwable e) {
             notTakenBack();
-            RuntimeException consumerFailure = applyToEverySubscription(stop, subscriptionIds, new ArrayList<>(), null);
+            Exception consumerFailure = applyToEverySubscription(stop, subscriptionIds, new ArrayList<>(), null);
             if (consumerFailure != null) {
                 addSuppressed(e, consumerFailure);
             }
             throw e;
         }
         notTakenBack();
-        RuntimeException consumerFailure = applyToEverySubscription(stop, subscriptionIds, new ArrayList<>(), null);
+        Exception consumerFailure = applyToEverySubscription(stop, subscriptionIds, new ArrayList<>(), null);
         if (consumerFailure != null) {
-            throw consumerFailure;
+            throw sneakyThrow(consumerFailure);
         }
         return true;
     }
@@ -1084,24 +1088,25 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * models already ask for a thread for each subscription they run, so this adds as many threads again, for as long
      * as the {@code start(..)} or {@code stop()} runs.
      */
-    private @Nullable RuntimeException applyToEverySubscription(Lifecycle applied, Set<String> subscriptionIds, List<String> paused, @Nullable RuntimeException firstFailure) {
+    private @Nullable Exception applyToEverySubscription(Lifecycle applied, Set<String> subscriptionIds, List<String> paused, @Nullable Exception firstFailure) {
         List<String> pausedMeanwhile = Collections.synchronizedList(new ArrayList<>());
-        List<CompletableFuture<@Nullable RuntimeException>> applications = new ArrayList<>();
+        List<CompletableFuture<@Nullable Exception>> applications = new ArrayList<>();
         for (String subscriptionId : subscriptionIds) {
-            CompletableFuture<@Nullable RuntimeException> application = new CompletableFuture<>();
-            Thread.ofPlatform().daemon().name("occurrent-competing-consumer-lifecycle-" + subscriptionId)
-                    .start(() -> applyIfTheLockIsFree(subscriptionId, applied, pausedMeanwhile, application));
+            CompletableFuture<@Nullable Exception> application = new CompletableFuture<>();
+            startAThreadOfItsOwn("occurrent-competing-consumer-lifecycle-" + subscriptionId,
+                    () -> applyIfTheLockIsFree(subscriptionId, applied, pausedMeanwhile, application));
             applications.add(application);
         }
         @Nullable Error error = null;
-        for (CompletableFuture<@Nullable RuntimeException> application : applications) {
+        for (CompletableFuture<@Nullable Exception> application : applications) {
             try {
-                RuntimeException failure = application.join();
+                Exception failure = application.join();
                 if (failure != null) {
                     firstFailure = withSuppressed(firstFailure, failure);
                 }
             } catch (CompletionException e) {
-                if (e.getCause() instanceof RuntimeException failure) {
+                // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
+                if (e.getCause() instanceof Exception failure) {
                     firstFailure = withSuppressed(firstFailure, failure);
                 } else if (e.getCause() instanceof Error failure && error == null) {
                     error = failure;
@@ -1115,7 +1120,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         return firstFailure;
     }
 
-    private void applyIfTheLockIsFree(String subscriptionId, Lifecycle applied, List<String> paused, CompletableFuture<@Nullable RuntimeException> application) {
+    private void applyIfTheLockIsFree(String subscriptionId, Lifecycle applied, List<String> paused, CompletableFuture<@Nullable Exception> application) {
         try {
             @Nullable SubscriptionLock lock = tryLockSubscription(subscriptionId);
             if (lock != null && comesAfterACallWaiting(lock, applied)) {
@@ -1129,7 +1134,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 application.complete(failedWhenAppliedFirst(subscriptionId, applied));
                 return;
             }
-            @Nullable RuntimeException failure;
+            @Nullable Exception failure;
             aLifecycleCallWaitsForThisThread.set(true);
             try {
                 failure = applyInTurn(subscriptionId, applied, paused);
@@ -1154,7 +1159,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // the given one already. One of those that fails for a subscription no try covers is left to the thread it was
     // handed to, together with the given call, and neither is reported here, since that thread tries it again until it
     // is applied.
-    private @Nullable RuntimeException applyInTurn(String subscriptionId, Lifecycle applied, List<String> paused) {
+    private @Nullable Exception applyInTurn(String subscriptionId, Lifecycle applied, List<String> paused) {
         @Nullable FailedWhenAppliedFirst failedFirst;
         while (true) {
             @Nullable HandedOver handed;
@@ -1174,7 +1179,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 return null;
             }
             if (next.id() == applied.id()) {
-                @Nullable RuntimeException failure = applyLifecycle(subscriptionId, applied, paused, new ArrayList<>(), null);
+                @Nullable Exception failure = applyLifecycle(subscriptionId, applied, paused, new ArrayList<>(), null);
                 if (handed != null) {
                     synchronized (this) {
                         handed.applied(applied);
@@ -1184,13 +1189,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             }
             try {
                 applyHandedOver(subscriptionId, handed, next);
-            } catch (RuntimeException e) {
+            } catch (Exception e) {
+                // Exception, since applyHandedOver throws a checked failure of the wrapped model as it was thrown
                 logDebug("A start(..) or stop() handed over for subscription {} failed, so the thread it was handed to tries it again, and applies this call after it", subscriptionId);
                 return null;
             }
         }
         // Outside the monitor, since it can ask the wrapped model
-        @Nullable RuntimeException failure = asMetByItsOwnThread(failedFirst);
+        @Nullable Exception failure = asMetByItsOwnThread(failedFirst);
         if (failure == null && failedFirst != null && failedFirst.beforeTheWrappedModelWasStopped() != null) {
             // The call that applied this stop() first failed to pause the consumer in the wrapped model, and so left it
             // registered. This thread holds the lock, so it stops the consumer as it stops any other.
@@ -1236,38 +1242,47 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     private void startApplyingWhatWasHandedOver(String subscriptionId, HandedOver handed) {
-        Thread.ofPlatform().daemon().name("occurrent-competing-consumer-lifecycle-" + subscriptionId).start(() -> {
+        startAThreadOfItsOwn("occurrent-competing-consumer-lifecycle-" + subscriptionId, () -> {
             Duration backoff = RECONCILE_FIRST_BACKOFF;
             int failures = 0;
             while (true) {
+                @Nullable SubscriptionLock lock;
                 try {
-                    if (applyEverythingHandedOver(subscriptionId, handed)) {
-                        return;
-                    }
-                    // Nothing failed, so this thread waits only for that call to take the lock
-                    Thread.sleep(LEFT_TO_A_CALL_WAITING);
-                    continue;
+                    lock = lockSubscriptionUnlessShutDown(subscriptionId);
                 } catch (InterruptedException e) {
+                    lock = null;
+                }
+                if (lock == null) {
                     synchronized (this) {
                         handedOver.remove(subscriptionId, handed);
                     }
                     return;
+                }
+                // Nothing failed, so this thread waits only for that call to take the lock
+                Duration wait = LEFT_TO_A_CALL_WAITING;
+                try {
+                    if (applyEverythingHandedOver(subscriptionId, handed, lock)) {
+                        return;
+                    }
                 } catch (Throwable e) {
+                    // Also an InterruptedException that the wrapped model threw without declaring it, which is tried again
+                    // as any other failure. An interrupt of this thread ends it once it waits.
                     if (failures++ % RECONCILE_TRIES_BETWEEN_WARNINGS == 0) {
                         log.warn("Could not start or stop subscription {} once the call that held it had returned, so it is tried again", subscriptionId, e);
                     }
+                    beforeAHandedOverThreadBacksOff.run();
+                    wait = backoff;
+                    Duration doubled = backoff.multipliedBy(2);
+                    backoff = doubled.compareTo(RECONCILE_MAX_BACKOFF) > 0 ? RECONCILE_MAX_BACKOFF : doubled;
                 }
-                beforeAHandedOverThreadBacksOff.run();
                 try {
-                    Thread.sleep(backoff);
+                    Thread.sleep(wait);
                 } catch (InterruptedException e) {
                     synchronized (this) {
                         handedOver.remove(subscriptionId, handed);
                     }
                     return;
                 }
-                Duration doubled = backoff.multipliedBy(2);
-                backoff = doubled.compareTo(RECONCILE_MAX_BACKOFF) > 0 ? RECONCILE_MAX_BACKOFF : doubled;
             }
         });
     }
@@ -1302,19 +1317,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         this.onceACancelHasFreedTheId = requireNonNull(hook, "hook cannot be null");
     }
 
-    // Applies every start(..) and stop() handed over for the subscription, oldest first, under one hold of its lock, so
-    // no other call for it comes in between. That includes one handed over while this runs. Returns true once none is
-    // left, or this model is shut down, and false when the next one began after a pause, resume or cancel waiting for
-    // the lock, which comes first. Throws what failed for a subscription no try covers, and keeps that call and every
-    // one after it to be applied again.
-    private boolean applyEverythingHandedOver(String subscriptionId, HandedOver handed) throws InterruptedException {
-        @Nullable SubscriptionLock lock = lockSubscriptionUnlessShutDown(subscriptionId);
-        if (lock == null) {
-            synchronized (this) {
-                handedOver.remove(subscriptionId, handed);
-            }
-            return true;
-        }
+    // Applies every start(..) and stop() handed over for the subscription, oldest first, under the hold of its lock that
+    // this takes over and releases, so no other call for it comes in between. That includes one handed over while this
+    // runs. Returns true once none is left, or this model is shut down, and false when the next one began after a pause,
+    // resume or cancel waiting for the lock, which comes first. Throws what failed for a subscription no try covers, and
+    // keeps that call and every one after it to be applied again.
+    private boolean applyEverythingHandedOver(String subscriptionId, HandedOver handed, SubscriptionLock lock) {
         try {
             while (true) {
                 @Nullable Lifecycle next;
@@ -1354,10 +1362,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // was handed to tries it again.
     private void applyHandedOver(String subscriptionId, HandedOver handed, Lifecycle next) {
         @Nullable CompetingConsumer cc = findFirstCompetingConsumerMatching(c -> c.hasSubscriptionId(subscriptionId)).orElse(null);
-        List<RuntimeException> failedToPause = new ArrayList<>();
-        RuntimeException failure = applyLifecycle(subscriptionId, next, new ArrayList<>(), failedToPause, null);
+        List<Exception> failedToPause = new ArrayList<>();
+        Exception failure = applyLifecycle(subscriptionId, next, new ArrayList<>(), failedToPause, null);
         if (failure != null && cc == null && nonCompetingConsumersSubscriptions.contains(subscriptionId)) {
-            throw failure;
+            throw sneakyThrow(failure);
         }
         if (failure != null && cc != null) {
             // Mostly handed to the try already, which this only asks to decide once more
@@ -1385,7 +1393,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     // What failed when another call applied the start(..) or stop() to the subscription before its own thread got there,
     // or null, see asMetByItsOwnThread. Read once, by that thread.
-    private @Nullable RuntimeException failedWhenAppliedFirst(String subscriptionId, Lifecycle applied) {
+    private @Nullable Exception failedWhenAppliedFirst(String subscriptionId, Lifecycle applied) {
         @Nullable FailedWhenAppliedFirst failedFirst;
         synchronized (this) {
             @Nullable HandedOver handed = handedOver.get(subscriptionId);
@@ -1411,7 +1419,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * held, see unregisterOrAtLeastGiveUpTheLease.
      * Any other failure is thrown as it is. Called outside the monitor.
      */
-    private @Nullable RuntimeException asMetByItsOwnThread(@Nullable FailedWhenAppliedFirst failedFirst) {
+    private @Nullable Exception asMetByItsOwnThread(@Nullable FailedWhenAppliedFirst failedFirst) {
         if (failedFirst == null) {
             return null;
         }
@@ -1427,7 +1435,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     // What failed for a competing consumer when another call than its own thread applied a start(..) or stop(). The
     // consumer is set when a stop() failed to pause it in the wrapped model before it had stopped the wrapped model.
-    private record FailedWhenAppliedFirst(RuntimeException failure, @Nullable SubscriptionIdAndSubscriberId beforeTheWrappedModelWasStopped) {
+    private record FailedWhenAppliedFirst(Exception failure, @Nullable SubscriptionIdAndSubscriberId beforeTheWrappedModelWasStopped) {
     }
 
     // The start(..) and stop() calls handed over for one subscription id, read and written under the monitor only
@@ -1449,7 +1457,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     // Applies a start(..) or stop() to one subscription, under that subscription's lock. A stop() that fails to pause the
     // consumer in the wrapped model adds that failure to failedToPause too.
-    private @Nullable RuntimeException applyLifecycle(String subscriptionId, Lifecycle applied, List<String> paused, List<RuntimeException> failedToPause, @Nullable RuntimeException firstFailure) {
+    private @Nullable Exception applyLifecycle(String subscriptionId, Lifecycle applied, List<String> paused, List<Exception> failedToPause, @Nullable Exception firstFailure) {
         @Nullable CompetingConsumer cc = findFirstCompetingConsumerMatching(c -> c.hasSubscriptionId(subscriptionId)).orElse(null);
         if (applied.started()) {
             lifecycleAppliedOnThisThread.set(applied);
@@ -1462,7 +1470,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     } catch (StoppedMeanwhile e) {
                         logDebug("Not starting the wrapped model, since this model was stopped meanwhile (subscriptionId={})", subscriptionId);
                         return firstFailure;
-                    } catch (RuntimeException e) {
+                    } catch (Exception e) {
+                        // Exception, since a wrapped model written in Kotlin can throw a checked exception
                         firstFailure = withSuppressed(firstFailure, e);
                     }
                     if (!resumes(applied, subscriptionId)) {
@@ -1483,7 +1492,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                         }
                     } catch (StoppedMeanwhile e) {
                         logDebug("Not resuming subscription, since this model was stopped meanwhile (subscriptionId={})", subscriptionId);
-                    } catch (RuntimeException e) {
+                    } catch (Exception e) {
+                        // Exception, since a wrapped model written in Kotlin can throw a checked exception
                         return withSuppressed(firstFailure, e);
                     }
                 } else if (cc != null) {
@@ -1497,7 +1507,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         if (cc != null && !mayRunWhileStopped.contains(cc.subscriptionIdAndSubscriberId)) {
             try {
                 stopConsumer(cc, paused, failedToPause, applied);
-            } catch (RuntimeException e) {
+            } catch (Exception e) {
+                // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
                 recordAsPausedUnlessItRuns(cc.subscriptionIdAndSubscriberId, true, e);
                 reconcileLater(cc.subscriptionIdAndSubscriberId);
                 firstFailure = withSuppressed(firstFailure, e);
@@ -1520,7 +1531,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     // Forgotten too, so its next step registers again once this model has been started
                     giveUpTheRegistration(beingMade);
                 }
-            } catch (RuntimeException e) {
+            } catch (Exception e) {
+                // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
                 firstFailure = withSuppressed(firstFailure, e);
             }
         }
@@ -1530,7 +1542,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // A consumer that a call coming before this stop() meant to run, and did not, because this stop() refused it or the
     // call failed, is paused as by the user too, as it would have been had that call run it and this stop() paused it
     // after
-    private void stopConsumer(CompetingConsumer cc, List<String> paused, List<RuntimeException> failedToPause, Lifecycle stop) {
+    private void stopConsumer(CompetingConsumer cc, List<String> paused, List<Exception> failedToPause, Lifecycle stop) {
         String subscriptionId = cc.getSubscriptionId();
         try {
             if (cc.isRunning() && isRunningInTheWrappedModel(subscriptionId)) {
@@ -1539,7 +1551,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     throw new IllegalStateException("Subscription " + subscriptionId + " still runs in the wrapped subscription model after it was paused there, so this node keeps its lease");
                 }
             }
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model written in Kotlin can throw a checked exception
             failedToPause.add(e);
             throw e;
         }
@@ -1646,13 +1659,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         // tried again on a thread of its own instead. It has tried to give its lease back by then, unless the wrapped
         // model runs it anyway or shutdown() has begun, and a lease it could not give back is tried again on that same
         // thread.
-        @Nullable RuntimeException firstFailure;
+        @Nullable Exception firstFailure;
         @Nullable Throwable wrappedModelFailure = null;
         Set<SubscriptionIdAndSubscriberId> pausedByAStop = new HashSet<>();
         try {
             onceAStartOrStopHasBegun.run();
             wrappedModelFailure = startTheWrappedModelFor(start, pausedByAStop);
-            firstFailure = applyToEverySubscription(start, subscriptionIds, new ArrayList<>(), wrappedModelFailure instanceof RuntimeException failure ? failure : null);
+            firstFailure = applyToEverySubscription(start, subscriptionIds, new ArrayList<>(), wrappedModelFailure instanceof Exception failure ? failure : null);
         } catch (Error e) {
             throw wrappedModelFailure instanceof Error first ? first : e;
         } finally {
@@ -1668,7 +1681,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             throw error;
         }
         if (firstFailure != null) {
-            throw firstFailure;
+            throw sneakyThrow(firstFailure);
         }
     }
 
@@ -1687,7 +1700,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } catch (StoppedMeanwhile | ShutDownMeanwhile e) {
             logDebug("Not starting the wrapped subscription model, since this model was stopped or shut down meanwhile");
             return null;
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
+            // Throwable, since a wrapped model written in Kotlin can throw a checked exception
             return e;
         } finally {
             lifecycleAppliedOnThisThread.remove();
@@ -2240,7 +2254,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     private void startStartingTheWrappedModel() {
-        Thread.ofPlatform().daemon().name(WRAPPED_MODEL_START_THREAD).start(() -> {
+        startAThreadOfItsOwn(WRAPPED_MODEL_START_THREAD, () -> {
             Duration backoff = RECONCILE_FIRST_BACKOFF;
             int failures = 0;
             while (true) {
@@ -2596,7 +2610,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     pauseInTheWrappedModel(subscriptionId);
                 }
             }
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             log.warn("Could not pause a subscription resumed in the wrapped subscription model after a stop() or shutdown() that did not wait for the resume. Unless this model is shut down, its events wait for the lease or for the next call this model makes to the wrapped model for the subscription (subscriptionId={})", subscriptionId, e);
         }
     }
@@ -2651,7 +2667,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private boolean wrappedModelSaysItRuns() {
         try {
             return callingTheWrappedModel(delegate::isRunning);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             return false;
         }
     }
@@ -3384,7 +3402,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             } catch (StoppedMeanwhile e) {
                 // A stop() overtook this step, so the step is decided again from there
                 return nextStep(beingMade);
-            } catch (RuntimeException e) {
+            } catch (Exception e) {
+                // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
                 // Nothing is made yet, so giving up the registration frees the id
                 takeBack(beingMade, e);
                 throw e;
@@ -3417,7 +3436,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } catch (StoppedMeanwhile e) {
             // A stop() overtook this step, and the subscription waits for start(), as one made while stopped does
             waits = true;
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             log.warn("Could not run CompetingConsumer in the wrapped subscription model, so it waits for a grant of its lease, which tries it again (subscriberId={}, subscriptionId={})",
                     key.subscriberId(), subscriptionId, e);
             waits = true;
@@ -3457,7 +3478,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             if (wrappedModelIsRunning()) {
                 stopTheWrappedModel();
             }
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             log.warn("Could not stop the wrapped subscription model again after it started itself to make a subscription while this model was stopped", e);
         } finally {
             synchronized (wrappedModelStart) {
@@ -3495,7 +3518,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 boolean pauseFailed = false;
                 try {
                     pauseInTheWrappedModel(subscriptionId);
-                } catch (RuntimeException e) {
+                } catch (Exception e) {
+                    // Exception, since a wrapped model written in Kotlin can throw a checked exception
+                    interruptAgainIfInterrupted(e);
                     log.warn("Could not pause CompetingConsumer in the wrapped subscription model, so the pause is tried again (subscriberId={}, subscriptionId={})", key.subscriberId(), subscriptionId, e);
                     pauseFailed = true;
                 }
@@ -3517,12 +3542,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 } else if (beingMade.registered && hasLock(subscriptionId, key.subscriberId())) {
                     competingConsumerStrategy.releaseCompetingConsumer(subscriptionId, key.subscriberId());
                 }
-            } catch (RuntimeException e) {
+            } catch (Exception e) {
+                // Exception, since a lease strategy written in Kotlin can throw a checked exception
+                interruptAgainIfInterrupted(e);
                 log.warn("Could not give up the lease or the registration of CompetingConsumer, so it is tried again (subscriberId={}, subscriptionId={})", key.subscriberId(), subscriptionId, e);
                 beingMade.triedAgainOnceMade = true;
             }
             return Step.DONE;
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             return recordAfterAFailure(beingMade, e);
         }
     }
@@ -3535,7 +3564,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         boolean runs = false;
         try {
             runs = isRunningInTheWrappedModel(key.subscriptionId());
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a wrapped model written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             addSuppressed(failure, e);
         }
         beingMade.triedAgainOnceMade = true;
@@ -3888,7 +3919,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private void giveUpEveryLeaseOnce(Set<SubscriptionIdAndSubscriberId> leased) {
         List<Thread> releases = new ArrayList<>();
         for (SubscriptionIdAndSubscriberId key : leased) {
-            releases.add(Thread.ofPlatform().daemon().name("occurrent-lease-release-on-shutdown-" + key.subscriptionId()).start(() -> {
+            releases.add(startAThreadOfItsOwn("occurrent-lease-release-on-shutdown-" + key.subscriptionId(), () -> {
                 try {
                     competingConsumerStrategy.unregisterCompetingConsumer(key.subscriptionId(), key.subscriberId());
                 } catch (Throwable e) {
@@ -4167,12 +4198,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
-    // False when the wrapped model cannot answer with a RuntimeException, so a call that throws afterwards is judged by
-    // what it runs then. An Error is thrown.
+    // False when the wrapped model cannot answer with an Exception, also a checked one that a wrapped model written in
+    // Kotlin can throw, so a call that throws afterwards is judged by what it runs then. An Error is thrown.
     private boolean runsInTheWrappedModelBefore(SubscriptionIdAndSubscriberId key) {
         try {
             return isRunningInTheWrappedModel(key.subscriptionId());
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            interruptAgainIfInterrupted(e);
             return false;
         }
     }
@@ -4187,6 +4219,22 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
+    // A blocking call that throws an InterruptedException clears the interrupt flag, so a catch that doesn't throw it on
+    // sets the flag again for the caller of this model. A thread this model started gets no flag, since this model never
+    // interrupts it, and on the threads that try a failure again the flag would end that loop.
+    private void interruptAgainIfInterrupted(Exception failure) {
+        if (failure instanceof InterruptedException && !onAThreadOfItsOwn.get()) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private Thread startAThreadOfItsOwn(String name, Runnable task) {
+        return Thread.ofPlatform().daemon().name(name).start(() -> {
+            onAThreadOfItsOwn.set(true);
+            task.run();
+        });
+    }
+
     // A failure of the wrapped model or the lease strategy, thrown as it is
     private static RuntimeException thrownAsItIs(Throwable failure) {
         if (failure instanceof Error error) {
@@ -4197,9 +4245,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         throw new IllegalStateException(failure);
     }
 
-    // Throws a checked failure too, unwrapped, so a caller can catch it by its own type
+    // Throws a checked failure too, unwrapped, so a caller can catch it by its own type. It never returns, and has a
+    // return type only so a caller can write throw sneakyThrow(failure)
     @SuppressWarnings("unchecked")
-    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+    private static <T extends Throwable> RuntimeException sneakyThrow(Throwable failure) throws T {
         throw (T) failure;
     }
 
@@ -4297,7 +4346,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         Try tried = new Try(atOnce, callsWaitedBefore);
         tries.put(key, tried);
         try {
-            Thread.ofPlatform().daemon().name("occurrent-competing-consumer-reconcile-" + key.subscriptionId()).start(() -> keepTrying(key, tried));
+            startAThreadOfItsOwn("occurrent-competing-consumer-reconcile-" + key.subscriptionId(), () -> keepTrying(key, tried));
         } catch (Throwable e) {
             // No thread tries it then, so the next failure for the consumer starts a try anew
             tries.remove(key, tried);
