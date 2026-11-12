@@ -673,8 +673,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // before the start position is recorded, see startAtTheCall.
         if (heldByTheWrappedModel(delegate, subscriptionId)) {
             // Asked again, since the cancel and a subscribe of the id made after it can both come after
-            // subscribe(..) asked
-            if (cancelled.getAsBoolean()) {
+            // subscribe(..) asked. A model shut down meanwhile refuses the call as it refuses one that wasn't cancelled.
+            if (cancelled.getAsBoolean() && !shutdown) {
                 return null;
             }
             throw new DuplicateSubscriptionIdException(subscriptionId);
@@ -2381,7 +2381,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private @Nullable PositionWriter startingPositionWriter(String subscriptionId, BooleanSupplier cancelled) {
         PositionWriter writer = new PositionWriter();
         synchronized (positionLock) {
-            if (cancelled.getAsBoolean()) {
+            // A model shut down meanwhile goes on as it does for a call that wasn't cancelled
+            if (cancelled.getAsBoolean() && !shutdown) {
                 return null;
             }
             if (refusesSubscribeOf(subscriptionId) || keepsForAnotherWriter(subscriptionId, writer)) {
