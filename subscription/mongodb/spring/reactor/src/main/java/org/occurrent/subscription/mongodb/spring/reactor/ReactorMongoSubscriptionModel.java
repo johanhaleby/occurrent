@@ -317,13 +317,18 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return requireNonNull(subscribe(subscriptionId, filter, startAt, action, () -> false));
     }
 
-    // Internal, see CancellableRegistration. Only for this class, since a subclass can override the named subscribe(..)
+    /**
+     * Internal, not part of the public API, see {@link CancellableRegistration#standsInForSubscribe(Object)}. Answers
+     * {@code true} only for this instance of this exact class, not for a subclass or a proxy.
+     */
     @Override
-    public boolean standsInForSubscribe() {
-        return getClass() == ReactorMongoSubscriptionModel.class;
+    public boolean standsInForSubscribe(Object asSeenByCaller) {
+        return asSeenByCaller == this && getClass() == ReactorMongoSubscriptionModel.class;
     }
 
-    // Internal, see CancellableRegistration
+    /**
+     * Internal, not part of the public API, see {@link CancellableRegistration#subscribe(String, SubscriptionFilter, StartAt, Function, BooleanSupplier)}.
+     */
     @Override
     public @Nullable Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action,
                                             BooleanSupplier cancelled) {
@@ -1071,8 +1076,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     /**
      * {@inheritDoc}
      * <p>
-     * The {@code waitUntilStarted()} of a subscription cancelled while it was starting fails with a
-     * {@link SubscriptionNotRunningException}, since nothing can start it any more. One that was paused before it started,
+     * The {@code waitUntilStarted()} of a subscription cancelled while it was starting fails with an
+     * {@link IllegalStateException}, since nothing can start it any more. One that was paused before it started,
      * or subscribed to while the model was stopped, never completes.
      */
     @Override
@@ -1087,7 +1092,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             pausedSubscriptions.remove(subscriptionId);
         }
         if (run != null && run.close()) {
-            run.failedToStart(new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " was cancelled before it started."));
+            run.failedToStart(new IllegalStateException("Subscription " + subscriptionId + " was cancelled before it started."));
         }
         return Mono.empty();
     }

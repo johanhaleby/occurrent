@@ -1467,27 +1467,31 @@ that thread or another, goes to the wrapped model at once, and the action gets n
 
 When that cancel reaches `ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel` before the cancelled
 `subscribe(..)` took the id there, the model registers nothing for it, and `waitUntilStarted()` on the
-`Subscription` that `subscribe(..)` returned fails with `SubscriptionNotRunningException`. In 0.34.0 that subscription
+`Subscription` that `subscribe(..)` returned fails with `IllegalStateException`. In 0.34.0 that subscription
 ran and `waitUntilStarted()` completed. Both models take the id before they call the function, so only a cancel from
-another thread can get there first. A subclass of either model, a Spring proxy that subclasses it included, keeps
-0.34.0's behaviour here. The catch-up can't tell whether the subclass overrides
-`subscribe(String, SubscriptionFilter, StartAt, Function)`, so it calls that method as before.
+another thread can get there first. Only an instance of either exact class takes this path. A subclass or a proxy of
+either model, a Spring AOP proxy for example, registers the cancelled `subscribe(..)` as 0.34.0 did, and the catch-up
+then cancels the id there again, as described below. The catch-up can't tell whether a subclass overrides
+`subscribe(String, SubscriptionFilter, StartAt, Function)` or whether a proxy advises it, so it calls that method on a
+subclass or a proxy.
 
-If another thread can cancel a subscribe whose start you wait for, `waitUntilStarted()` can fail with one of these
-because of that cancel:
+If another thread can cancel a subscribe whose start you wait for, `waitUntilStarted()` can fail with an
+`IllegalStateException` because of that cancel. That happens when:
 
-- `SubscriptionNotRunningException`, when the cancel reached `ReactorMongoSubscriptionModel` or
-  `ReactorDurableSubscriptionModel` before it took the id, and the model isn't a subclass of either
-- `CancellationException`, when the cancel reached `ReactorDurableSubscriptionModel` after it took the id and before it
-  started the subscription or handed it to the model it wraps
-- `IllegalStateException`, when the subscribe replays history first and the cancel came before the replay handed over
-  to the wrapped model
+- the cancel reached a `ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel` of that exact class before
+  it took the id
+- the cancel, or the catch-up's second cancel of a subclass or a proxy, reached `ReactorMongoSubscriptionModel` while
+  the subscription was starting there
+- the subscribe replays history first and the cancel came before the replay handed over to the wrapped model
+
+When the cancel reached `ReactorDurableSubscriptionModel` after it took the id and before it started the subscription
+or handed it to the model it wraps, the exception is `CancellationException`, which extends `IllegalStateException`.
 
 `IllegalStateException` also comes from failures that have nothing to do with a cancel, so treat it as the cancel only
 when your application cancelled the id.
 
-Another wrapped model can still register the cancelled `subscribe(..)` after the cancel. So can a subclass of
-`ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel`, whether or not it overrides
+Another wrapped model can still register the cancelled `subscribe(..)` after the cancel. So can a subclass or a proxy
+of `ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel`, whether or not it overrides or advises
 `subscribe(String, SubscriptionFilter, StartAt, Function)`. When the
 wrapped `subscribe(..)` returns holding the id, the catch-up cancels the id there again, unless a subscribe of the id
 made after the cancel took it there. That cancel waits until no other subscribe of the id is under way. Until that

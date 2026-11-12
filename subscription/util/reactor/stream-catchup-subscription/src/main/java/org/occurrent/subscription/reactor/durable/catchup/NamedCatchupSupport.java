@@ -101,14 +101,15 @@ import static java.util.Objects.requireNonNull;
  * code can subscribe, cancel, stop or shut down any subscription. A subscribe that goes straight to live runs the
  * wrapped {@code subscribe(..)} with no lock held, since {@code ReactorMongoSubscriptionModel} can evaluate a dynamic
  * {@link StartAt} that answered {@code null} here again on the calling thread. A cancel of the id meanwhile goes to the
- * wrapped model at once. A wrapped model whose {@code CancellableRegistration.standsInForSubscribe()} answers
- * {@code true}, as {@code ReactorMongoSubscriptionModel} and {@code ReactorDurableSubscriptionModel} do, registers
- * nothing for the subscribe when the cancel reaches it first, and the subscribe then returns a {@link Subscription} whose
- * {@code waitUntilStarted()} fails with {@link SubscriptionNotRunningException}. Any other wrapped model can register
- * the subscribe after the cancel, so the id is cancelled there again once the wrapped {@code subscribe(..)}
- * returned holding it, unless a later subscribe took the id there. A subclass of either model, a proxy that subclasses
- * it included, has its {@code subscribe(String, SubscriptionFilter, StartAt, Function)} called, and gets that second
- * cancel too. These calls still run with a lock held.
+ * wrapped model at once. A wrapped model whose {@code CancellableRegistration.standsInForSubscribe(Object)} answers
+ * {@code true} for the reference this class holds registers nothing for the subscribe when the cancel reaches it before
+ * it took the id. Only a {@code ReactorMongoSubscriptionModel} or {@code ReactorDurableSubscriptionModel} of that exact
+ * class answers {@code true}. The subscribe then returns a {@link Subscription} whose {@code waitUntilStarted()} fails
+ * with an {@link IllegalStateException}. A cancel that reaches {@code ReactorDurableSubscriptionModel} after it took the
+ * id fails {@code waitUntilStarted()} with that model's {@code CancellationException}. Any other wrapped model can
+ * register the subscribe after the cancel, so the id is cancelled there again once the wrapped {@code subscribe(..)}
+ * returned holding it, unless a later subscribe took the id there. A subclass or a proxy of either model has its
+ * {@code subscribe(String, SubscriptionFilter, StartAt, Function)} called, and gets that second cancel too. These calls still run with a lock held.
  * <ul>
  * <li>The handover runs the wrapped {@code subscribe(..)}, or {@code resumeSubscription(id, startAt)} for a takeover,
  * and {@code isRunning(id)} and {@code pauseSubscription(id)} under the monitor of the subscription's state. So the
@@ -135,7 +136,7 @@ final class NamedCatchupSupport {
 
     private final CheckpointAwareSubscriptionModel wrapped;
     private final @Nullable SubscriptionModel named;
-    // The wrapped model when it answers true to standsInForSubscribe(), so not a subclass of either shipped model
+    // The wrapped model when it answers true to standsInForSubscribe(..) for this reference, so neither a subclass nor a proxy
     private final @Nullable CancellableRegistration cancellable;
     private final Class<?> modelClass;
     private final ConcurrentMap<String, CatchupState> catchingUp = new ConcurrentHashMap<>();
@@ -182,7 +183,7 @@ final class NamedCatchupSupport {
         this.wrapped = requireNonNull(wrapped);
         this.modelClass = requireNonNull(modelClass);
         this.named = wrapped instanceof SubscriptionModel subscriptionModel ? subscriptionModel : null;
-        this.cancellable = named instanceof CancellableRegistration registration && registration.standsInForSubscribe() ? registration : null;
+        this.cancellable = named instanceof CancellableRegistration registration && registration.standsInForSubscribe(registration) ? registration : null;
         HistoryLossReportingSubscriptions reporting = wrapped instanceof SubscriptionModelCapability capabilities ? HistoryLossReportingSubscriptions.findIn(capabilities).orElse(null) : null;
         RepositionableSubscriptions resumesAtPosition = wrapped instanceof SubscriptionModelCapability capabilities ? RepositionableSubscriptions.findIn(capabilities).orElse(null) : null;
         boolean takesOver = named != null && reporting != null && resumesAtPosition != null;
@@ -563,7 +564,7 @@ final class NamedCatchupSupport {
         }
         subscribeReturned(subscriptionId, record, subscription != null, null);
         if (subscription == null) {
-            return new NamedCatchupSubscription(subscriptionId, Mono.error(new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " was cancelled before it started.")));
+            return new NamedCatchupSubscription(subscriptionId, Mono.error(new IllegalStateException("Subscription " + subscriptionId + " was cancelled before it started.")));
         }
         return subscription;
     }

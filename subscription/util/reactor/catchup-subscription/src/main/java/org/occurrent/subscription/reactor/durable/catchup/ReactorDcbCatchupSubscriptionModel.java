@@ -269,10 +269,14 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
      * A subscribe of the id that goes straight to live can still be inside the wrapped model's {@code subscribe(..)},
      * for example when a {@code StartAt.dynamic} function that model calls there cancels the id. This method then sends
      * the wrapped model the cancel at once, without waiting for that subscribe, and the action of that subscribe gets
-     * no event after that. {@code ReactorMongoSubscriptionModel} and {@code ReactorDurableSubscriptionModel} register
-     * nothing for that subscribe when this cancel reaches them before they registered it. The subscribe then returns a
-     * {@link Subscription} whose {@code waitUntilStarted()} fails with {@link SubscriptionNotRunningException}. Another
-     * wrapped model can register it after this cancel. When the wrapped {@code subscribe(..)} returns holding the id,
+     * no event after that. A {@code ReactorMongoSubscriptionModel} or {@code ReactorDurableSubscriptionModel} of that
+     * exact class, not a subclass or a proxy of one, registers nothing for that subscribe when this cancel reaches it
+     * before it took the id, which only a cancel from another thread can do. The subscribe then returns a
+     * {@link Subscription} whose {@code waitUntilStarted()} fails with an {@link IllegalStateException}. Both models take
+     * the id before they call a {@code StartAt.dynamic} function, so a cancel from that function fails
+     * {@code waitUntilStarted()} with an {@link IllegalStateException} over {@code ReactorMongoSubscriptionModel}, and
+     * with {@code CancellationException} over {@code ReactorDurableSubscriptionModel}. Another wrapped model, a subclass or a proxy of either included, can
+     * register it after this cancel. When the wrapped {@code subscribe(..)} returns holding the id,
      * the id is cancelled there again, unless a subscribe of the id made after this cancel took it there. That cancel
      * waits until no other subscribe of the id is under way. The action gets no event, and the id is cancelled there
      * again, also when the wrapped model refuses this cancel by throwing or with a failed {@code Mono}. A subscribe of

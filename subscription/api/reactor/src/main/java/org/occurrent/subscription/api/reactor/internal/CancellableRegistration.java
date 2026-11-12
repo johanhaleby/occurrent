@@ -35,7 +35,7 @@ import java.util.function.Function;
  * <p>
  * A catch-up over a model that doesn't implement this interface lets the cancelled subscribe register, and cancels the
  * id in that model again once the subscribe has returned. So does a catch-up over a subclass of a model that
- * implements this interface, see {@link #standsInForSubscribe()}.
+ * implements this interface, or over a proxy of one, see {@link #standsInForSubscribe(Object)}.
  */
 @NullMarked
 public interface CancellableRegistration {
@@ -57,18 +57,22 @@ public interface CancellableRegistration {
 
     /**
      * Whether a caller can call the {@code subscribe(..)} of this interface in place of
-     * {@code subscribe(String, SubscriptionFilter, StartAt, Function)}. The model answers {@code true} only for its own
-     * class. A subclass can override {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, and calling the
-     * {@code subscribe(..)} of this interface would skip that override. Reflection over the class hierarchy can't show
-     * whether the subclass's {@code subscribe(..)} of this interface runs that override, so a subclass of the model, a
-     * proxy that subclasses it included, answers {@code false}. A caller
-     * then calls {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, and the model gets the cleanup a model
-     * that doesn't implement this interface gets.
+     * {@code subscribe(String, SubscriptionFilter, StartAt, Function)} on the reference it holds. The caller passes that
+     * reference as {@code asSeenByCaller}. The model answers {@code true} only when {@code asSeenByCaller} is this
+     * instance and this instance is of the model's own class.
+     * <p>
+     * A subclass can override {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, and a proxy can advise
+     * it. Calling the {@code subscribe(..)} of this interface would skip that override or that advice. So a subclass
+     * answers {@code false}, since its class isn't the model's own class. A proxy that forwards this call to the model
+     * it proxies gets {@code false} from that model, since {@code asSeenByCaller} is the proxy. A caller that gets
+     * {@code false} calls {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, and the model gets the
+     * cleanup a model that doesn't implement this interface gets.
      *
-     * @return {@code true} when the {@code subscribe(..)} of this interface can be called in place of the one of
-     * {@code SubscriptionModel}, {@code false} unless the model overrides this method.
+     * @param asSeenByCaller The reference the caller calls this model's {@code subscribe(..)} through.
+     * @return {@code true} when the {@code subscribe(..)} of this interface can be called on {@code asSeenByCaller} in
+     * place of the one of {@code SubscriptionModel}, {@code false} unless the model overrides this method.
      */
-    default boolean standsInForSubscribe() {
+    default boolean standsInForSubscribe(Object asSeenByCaller) {
         return false;
     }
 }
