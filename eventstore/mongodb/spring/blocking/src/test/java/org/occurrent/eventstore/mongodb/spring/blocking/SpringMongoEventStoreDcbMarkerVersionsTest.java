@@ -594,7 +594,8 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
             thrown.set(catchThrowable(() -> eventStore.read(BOUNDARY_A, DcbReadOptions.afterVersions(saved))));
         });
 
-        assertThat(thrown.get()).as("what the read after versions threw in the session the store wrote in").isInstanceOf(DcbSnapshotInvalidException.class);
+        assertThat(thrown.get()).as("what the read after versions threw in the session the store wrote in").isInstanceOf(DcbSnapshotInvalidException.class)
+                .hasMessageContaining("that the event store wrote in");
         assertThat(eventStore.read(BOUNDARY_A, DcbReadOptions.afterVersions(saved)).events())
                 .as("the same read outside the scope is accepted, or the refusal proves nothing")
                 .extracting(CloudEvent::getId).containsExactly("in scope");

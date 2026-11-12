@@ -63,6 +63,7 @@ import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
@@ -72,6 +73,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -584,7 +586,8 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
                 .doOnNext(refusal::set))
                 .block();
 
-        assertThat(refusal.get()).as("what the read after versions failed with in the session the store wrote in").isInstanceOf(DcbSnapshotInvalidException.class);
+        assertThat(refusal.get()).as("what the read after versions failed with in the session the store wrote in").isInstanceOf(DcbSnapshotInvalidException.class)
+                .hasMessageContaining("that the event store wrote in");
         assertThat(eventStore.read(BOUNDARY_A, DcbReadOptions.afterVersions(saved)).block().events())
                 .as("the same read outside the scope is accepted, or the refusal proves nothing")
                 .extracting(CloudEvent::getId).containsExactly("in scope");
@@ -733,6 +736,35 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
+    void reports_no_marker_versions_for_a_read_without_the_confirmation_mark_in_a_session_bound_to_the_synchronization_after_a_dcb_append_was_cancelled() {
+        // The insert has run in the session the template bound when the signal fires, and the cancel then ends the append before it completes
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A))).block();
+        Sinks.Empty<Void> inserted = Sinks.empty();
+        ReactiveMongoTemplate signalling = new ReactiveMongoTemplate(databaseFactory) {
+            @Override
+            public <T> Flux<T> insert(Collection<? extends T> batchToSave, String collectionName) {
+                return super.insert(batchToSave, collectionName).collectList().flatMapMany(result -> {
+                    inserted.tryEmitEmpty();
+                    return Flux.<T>never();
+                });
+            }
+        };
+        ReactorMongoEventStore store = storeOver(signalling, config -> {
+        });
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+
+        inScopeWithoutTransaction(store.read(BOUNDARY_A)
+                .then(store.append(List.of(taggedEvent("cancelled", DEPOSITED, ACCOUNT_A))).takeUntilOther(inserted.asMono()))
+                .then(store.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .doOnNext(withoutMark::set))
+                .block(Duration.ofSeconds(30));
+
+        assertThat(withoutMark.get().markerVersions()).as("versions of a read in a session the store cancelled an append in").isEmpty();
+        assertThat(withoutMark.get().events()).as("the read sees the insert, so it ran in the session the read uses, or this proves nothing about a write")
+                .extracting(CloudEvent::getId).containsExactly("before", "cancelled");
+    }
+
+    @Test
     void reads_the_events_of_a_versioned_read_without_the_confirmation_mark_but_no_marker_versions_when_the_session_bound_template_is_not_a_reactive_mongo_template() {
         // The wrapper hides the ReactiveMongoTemplate type, so the store can't keep the read out of the synchronization and reads through its template
         // That read may bind a session but still returns every event, which beats failing the read
@@ -757,6 +789,8 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
                 .doOnNext(withoutMark::set)));
 
         assertThat(thrown).as("what the read failed with").isNull();
+        // Checks that the fallback through the template reports no versions
+        assertThat(withoutMark.get().markerVersions()).isEmpty();
         assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
     }
 
