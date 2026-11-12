@@ -46,18 +46,18 @@ to it.
   questions about subscriptions.
 * `QuietPositionReportingSubscriptions`, which adds and removes a listener that is told positions. Another listener
   changes no wrapper's state.
+* `StartRefusalReportingSubscriptions`, added in #1430, which adds and removes a listener that is told about a start
+  the MongoDB model has already refused. The listener can't change what the MongoDB model did. The
+  `CompetingConsumerSubscriptionModel` gives back its own lease when it is told, so the state that changes belongs to
+  the model that added the listener. It has to hear the refusal from the MongoDB model under a
+  `DurableSubscriptionModel` or a `CatchupSubscriptionModel`.
 * `Pushable`, which takes events in at the bottom of the stack. They reach every wrapper's action on the way up as
   usual.
 * `HistoryLossReportingSubscriptions`. Its listener can answer `TakeOver` and so act on a subscription, which makes it
-  an exception to the rule. It stays unwrapped because it is the SPI a catch-up model uses to hear about lost history
+  the exception to the rule. It stays unwrapped because it is the SPI a catch-up model uses to hear about lost history
   from the MongoDB model under a `DurableSubscriptionModel`, and the `DurableSubscriptionModel` keeps its own state
   through its own listener in the same list. Making it answer only for itself would mean every wrapper forwarding it,
   and would change how a catch-up model takes over a subscription.
-* `StartRefusalReportingSubscriptions`, added in #1430, is the other exception. Its listener is told that the MongoDB
-  model refused a dynamic start and removed the subscription, and the `CompetingConsumerSubscriptionModel` acts on that
-  by giving back the lease and freeing the id. The wrapper whose state changes is the one that added the listener, and
-  it has to hear the refusal from the MongoDB model under a `DurableSubscriptionModel` or a `CatchupSubscriptionModel`,
-  so it stays unwrapped for the same reason as `HistoryLossReportingSubscriptions`.
 
 Every other capability acts on a subscription and is answered only by a model that implements it:
 `Subscribable`, `CancellableSubscriptions` and every type built on it (`SubscriptionModelLifeCycle`,
