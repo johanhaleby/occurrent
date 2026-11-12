@@ -50,9 +50,9 @@ import static org.awaitility.Awaitility.await;
 /**
  * A wrapped model or a lease strategy written in Kotlin can throw a checked exception without declaring it. What this
  * model does after such a failure is the same as after a {@link RuntimeException}. A start(..) still gives every
- * subscription its turn and then throws the failure wrapped in an {@link IllegalStateException}, a stop() still has a
- * consumer it could not pause tried again, and a subscribe still gives up its registration before the wrapped model has
- * made the subscription, and records it once it has.
+ * subscription its turn and then throws the failure as it was thrown, a stop() still has a consumer it could not pause
+ * tried again, and a subscribe still gives up its registration before the wrapped model has made the subscription, and
+ * records it once it has.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(60)
@@ -74,7 +74,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
     }
 
     @Test
-    void a_start_whose_wrapped_model_throws_a_checked_exception_on_starting_still_resumes_a_subscription_that_does_not_compete_and_throws_it_wrapped_in_an_IllegalStateException() {
+    void a_start_whose_wrapped_model_throws_a_checked_exception_on_starting_still_resumes_a_subscription_that_does_not_compete_and_throws_it() {
         // Given
         Wrapped wrapped = new Wrapped(false);
         CompetingConsumerSubscriptionModel model = modelOver(wrapped);
@@ -88,7 +88,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
 
         // Then
         assertThat(wrapped.running).as("the subscriptions the wrapped model runs once start(true) threw").containsExactly("nc");
-        assertThat(thrown).as("what start(true) threw").isInstanceOf(IllegalStateException.class).hasCause(cannotStart);
+        assertThat(thrown).as("what start(true) threw").isSameAs(cannotStart);
     }
 
     @Test
@@ -108,11 +108,11 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
 
         // Then
         assertThat(wrapped.running).as("the subscriptions the wrapped model runs once start(true) threw").containsExactly("nc");
-        assertThat(thrown).as("what start(true) threw").isInstanceOf(IllegalStateException.class).hasCause(cannotStart);
+        assertThat(thrown).as("what start(true) threw").isSameAs(cannotStart);
     }
 
     @Test
-    void a_start_whose_wrapped_model_throws_a_checked_exception_on_resuming_a_subscription_that_does_not_compete_throws_it_wrapped_in_an_IllegalStateException_and_leaves_the_model_not_running() {
+    void a_start_whose_wrapped_model_throws_a_checked_exception_on_resuming_a_subscription_that_does_not_compete_throws_it_and_leaves_the_model_not_running() {
         // Given
         Wrapped wrapped = new Wrapped(true);
         CompetingConsumerSubscriptionModel model = modelOver(wrapped);
@@ -126,7 +126,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         Throwable thrown = catchThrowable(() -> model.start(true));
 
         // Then
-        assertThat(thrown).as("what start(true) threw").isInstanceOf(IllegalStateException.class).hasCause(cannotResume);
+        assertThat(thrown).as("what start(true) threw").isSameAs(cannotResume);
         assertThat(model.isRunning()).as("the model is running once start(true) threw").isFalse();
     }
 
@@ -149,7 +149,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
             assertThat(wrapped.running).as("the subscriptions the wrapped model runs after stop() threw").isEmpty();
             assertThat(strategy.holders).as("the leases this node holds after stop() threw").isEmpty();
         });
-        assertThat(thrown).as("what stop() threw").isInstanceOf(IllegalStateException.class).hasCause(cannotPause);
+        assertThat(thrown).as("what stop() threw").isSameAs(cannotPause);
     }
 
     @Test
