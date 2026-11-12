@@ -1310,6 +1310,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return;
             } catch (Exception e) {
                 // Exception, since a storage or wrapped model written in Kotlin can throw a checked exception
+                if (e instanceof InterruptedException) {
+                    // Ends the takeover as an interrupt during the wait below does
+                    Thread.currentThread().interrupt();
+                    log.error("The catch-up was interrupted while it started replaying again for subscription {}, so it replays again once the subscription is resumed. {}", subscriptionId, whileTakenOver(subscriptionId), e);
+                    return;
+                }
                 log.error("The catch-up couldn't start replaying again for subscription {} after the subscription model lost the history from its live start, so it tries again in {} ms. {}",
                         subscriptionId, MAX_BACKOFF.toMillis(), whileTakenOver(subscriptionId), e);
             }

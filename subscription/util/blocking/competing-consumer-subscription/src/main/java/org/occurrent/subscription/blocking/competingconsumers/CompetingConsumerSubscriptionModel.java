@@ -2580,6 +2580,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             }
         } catch (Exception e) {
             // Exception, since a wrapped model written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             log.warn("Could not pause a subscription resumed in the wrapped subscription model after a stop() or shutdown() that did not wait for the resume. Unless this model is shut down, its events wait for the lease or for the next call this model makes to the wrapped model for the subscription (subscriptionId={})", subscriptionId, e);
         }
     }
@@ -2636,6 +2637,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             return callingTheWrappedModel(delegate::isRunning);
         } catch (Exception e) {
             // Exception, since a wrapped model written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             return false;
         }
     }
@@ -3401,6 +3403,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             waits = true;
         } catch (Exception e) {
             // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             log.warn("Could not run CompetingConsumer in the wrapped subscription model, so it waits for a grant of its lease, which tries it again (subscriberId={}, subscriptionId={})",
                     key.subscriberId(), subscriptionId, e);
             waits = true;
@@ -3442,6 +3445,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             }
         } catch (Exception e) {
             // Exception, since a wrapped model written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             log.warn("Could not stop the wrapped subscription model again after it started itself to make a subscription while this model was stopped", e);
         } finally {
             synchronized (wrappedModelStart) {
@@ -3481,6 +3485,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     pauseInTheWrappedModel(subscriptionId);
                 } catch (Exception e) {
                     // Exception, since a wrapped model written in Kotlin can throw a checked exception
+                    interruptAgainIfInterrupted(e);
                     log.warn("Could not pause CompetingConsumer in the wrapped subscription model, so the pause is tried again (subscriberId={}, subscriptionId={})", key.subscriberId(), subscriptionId, e);
                     pauseFailed = true;
                 }
@@ -3504,12 +3509,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 }
             } catch (Exception e) {
                 // Exception, since a lease strategy written in Kotlin can throw a checked exception
+                interruptAgainIfInterrupted(e);
                 log.warn("Could not give up the lease or the registration of CompetingConsumer, so it is tried again (subscriberId={}, subscriptionId={})", key.subscriberId(), subscriptionId, e);
                 beingMade.triedAgainOnceMade = true;
             }
             return Step.DONE;
         } catch (Exception e) {
             // Exception, since a wrapped model or lease strategy written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             return recordAfterAFailure(beingMade, e);
         }
     }
@@ -3524,6 +3531,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             runs = isRunningInTheWrappedModel(key.subscriptionId());
         } catch (Exception e) {
             // Exception, since a wrapped model written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
             addSuppressed(failure, e);
         }
         beingMade.triedAgainOnceMade = true;
@@ -4153,6 +4161,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         try {
             return isRunningInTheWrappedModel(key.subscriptionId());
         } catch (Exception e) {
+            interruptAgainIfInterrupted(e);
             return false;
         }
     }
@@ -4164,6 +4173,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } catch (Throwable e) {
             addSuppressed(failure, e);
             return true;
+        }
+    }
+
+    // A blocking call that throws an InterruptedException clears the interrupt flag, so a catch that doesn't throw it on
+    // sets the flag again for what runs on this thread next
+    private static void interruptAgainIfInterrupted(Exception failure) {
+        if (failure instanceof InterruptedException) {
+            Thread.currentThread().interrupt();
         }
     }
 
