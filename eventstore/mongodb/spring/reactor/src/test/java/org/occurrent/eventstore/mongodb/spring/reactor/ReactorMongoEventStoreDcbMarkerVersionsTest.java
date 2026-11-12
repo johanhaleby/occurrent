@@ -522,7 +522,7 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
-    void reads_a_versioned_read_without_the_confirmation_mark_outside_a_session_already_bound() {
+    void reads_a_versioned_read_without_the_confirmation_mark_through_a_session_already_bound_and_reports_no_marker_versions() {
         append("before", DEPOSITED, ACCOUNT_A);
         AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
 
@@ -532,8 +532,21 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
                 .doOnNext(withoutMark::set))
                 .block();
 
-        assertThat(withoutMark.get().markerVersions()).as("versions of a read outside the bound session").isNotEmpty();
-        assertThat(withoutMark.get().events()).as("a read outside the bound session misses its append").extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(withoutMark.get().markerVersions()).as("versions of a read in a session whose writes may still abort").isEmpty();
+        assertThat(withoutMark.get().events()).as("a read through the bound session sees its append").extracting(CloudEvent::getId).containsExactly("before", "in scope");
+    }
+
+    @Test
+    void appends_conditioned_on_a_versioned_read_without_the_confirmation_mark_in_a_session_already_bound_after_an_append_in_that_session() {
+        append("before", DEPOSITED, ACCOUNT_A);
+
+        inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving())
+                .then(eventStore.append(List.of(taggedEvent("in scope", DEPOSITED, ACCOUNT_A))))
+                .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .flatMap(read -> eventStore.append(List.of(taggedEvent("after read", DEPOSITED, ACCOUNT_A)), failIfEventsMatch(BOUNDARY_A, read.consistencyToken()))))
+                .block();
+
+        assertThat(eventStore.read(BOUNDARY_A).block().events()).extracting(CloudEvent::getId).containsExactly("before", "in scope", "after read");
     }
 
     @Test

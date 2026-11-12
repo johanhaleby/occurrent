@@ -984,12 +984,12 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   transaction of its own and then binds a session transaction. The decider's append joins the bound transaction, so a
   failing handler undoes the append.
 - In a Spring scope of yours with no transaction, on an executor that opens none, the service doesn't mark the read,
-  so a decider there reads in a transaction of the store's own. With no session bound for the store's database factory
-  yet, its append runs in a transaction of the store's own too, which the store retries on a conflict and which doesn't
+  so with no session bound for the store's database factory yet, a decider there reads in a transaction of the
+  store's own, and its append runs in one too, which the store retries on a conflict and which doesn't
   join your scope, so a failing handler doesn't undo it.
-- A versioned read without `confirmingAppendBeforeSaving()`, such as a snapshot decider's, can read on a transaction of
-  the store's own in a Spring scope of yours with no transaction. It then doesn't see the writes of a session already bound there, and an append in that session checked
-  against its token can fail its condition.
+- In a Spring scope of yours with no transaction and a session already bound there, a read that asks for marker
+  versions, such as a snapshot decider's, reads in that session and gets no versions, marked or not. A read after
+  marker versions is refused there.
 - A Spring MongoDB store no longer retries a DCB append or a stream write in a session bound to the synchronization. A
   conflict fails it at once, as in your transaction, instead of a retry in the transaction the conflict aborted.
 - `DcbReadOptions.confirmingAppendBeforeSaving()` and `asFirstOperationOfTransaction()` say something about the caller

@@ -84,22 +84,21 @@ read is then the first operation of the session transaction it binds, and it rep
 a replica set the store reads in a transaction of its own, as ADR 148 describes, and then binds the session transaction
 through `MongoDatabaseUtils` or `ReactiveMongoDatabaseUtils`. An append in the scope joins it there too, so a failing
 handler undoes the append. When a session
-is already bound, for example by an earlier read in the same scope, such a read reports no versions, or is refused
-after saved versions, as inside a transaction. A read on a session of its own wouldn't see that session's writes, and
+is already bound, for example by an earlier read in the same scope, a read that asks for versions reads through the
+template in that session, marked or not, and reports no versions, or is refused after saved versions, as inside a
+transaction. A read on a session of its own wouldn't see that session's writes, and
 an append checked against its token could fail its condition on them.
 
-A read without `confirmsAppendBeforeSaving` takes ADR 148's path in that scope. That covers the `@Snapshot` view and a
+With no session bound yet, a read without `confirmsAppendBeforeSaving` takes ADR 148's path in that scope. That covers the `@Snapshot` view and a
 read of the caller's in a method on `PROPAGATION_SUPPORTS`. Their versions come from a read-only transaction committed
-at majority, and they may save at them. With a session already bound, such a read doesn't see that session's writes,
-and an append in the session checked against its token can fail its condition, as it could before this change.
+at majority, and they may save at them.
 Versions from the session transaction come from a transaction that hasn't
 committed when the read returns, at the session's default read concern.
 
 In a scope of the caller's with no transaction, an executor that opens none takes part in that scope's
 synchronization and doesn't start it, so the service doesn't mark the read. A session the read bound there would
-stay bound until the caller's scope ends, after `execute` has returned. A decider there reads in a transaction of the
-store's own, as ADR 148 describes. With no session bound for the store's database factory, its append runs in a
-transaction of the store's own too, which the store retries on a conflict, and doesn't join the caller's scope.
+stay bound until the caller's scope ends, after `execute` has returned. With no session bound for the store's database factory, a decider there reads in a
+transaction of the store's own, as ADR 148 describes, and its append runs in a transaction of the store's own too, which the store retries on a conflict, and doesn't join the caller's scope.
 
 The Spring stores retry a write only in a transaction they own. A session bound for their database factory counts as
 one they don't, so a write in it that conflicts fails at once instead of being retried in the transaction the
@@ -183,8 +182,9 @@ transaction the executor joined.
 - A snapshot decider on a service with synchronous subscriptions reads and decides in the executor's transaction, as a
   plain command does. It still saves snapshots when the executor opened that transaction, and on a Spring executor that
   opens none outside a scope of the caller's.
-- In a scope of the caller's with no transaction, on an executor that opens none, a snapshot decider reads in a
-  transaction of the store's own, and with no session bound its append doesn't join the caller's scope.
+- In a scope of the caller's with no transaction, on an executor that opens none, with no session bound, a snapshot
+  decider reads in a transaction of the store's own and its append doesn't join the caller's scope. With a session
+  bound there, it reads in that session and gets no versions.
 - On a sharded cluster such a read runs in a read-only transaction of the store's own beside the executor's
   transaction, so a command whose read the service marks uses a second session there.
 - On a replica set the versions of such a read come from the executor's transaction, not from a read-only transaction committed at
