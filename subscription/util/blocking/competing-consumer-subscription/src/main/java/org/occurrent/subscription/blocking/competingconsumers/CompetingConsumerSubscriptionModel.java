@@ -558,6 +558,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // The consumer a try is working on, set on the thread of that try. A lease callback out of the try's own call to
     // the strategy is left to the try, which decides again once that call returns.
     private final ThreadLocal<@Nullable SubscriptionIdAndSubscriberId> triedOnThisThread = new ThreadLocal<>();
+    // True on a thread this model started, see interruptAgainIfInterrupted
+    private final ThreadLocal<Boolean> onAThreadOfItsOwn = ThreadLocal.withInitial(() -> false);
     // Counts every start(..) and stop(), read and written under the monitor only
     private long lifecycleCalls;
     // Numbers each pause, resume or cancel that waits for the lock of its subscription, in the order they began, read
@@ -774,6 +776,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     forgetCancelled(subscriptionId, beingMade);
                 } catch (Exception forgetFailure) {
                     // Exception, since a lease strategy written in Kotlin can throw a checked exception
+                    interruptAgainIfInterrupted(forgetFailure);
                     addSuppressed(e, forgetFailure);
                 }
             }
@@ -1063,8 +1066,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         List<CompletableFuture<@Nullable Exception>> applications = new ArrayList<>();
         for (String subscriptionId : subscriptionIds) {
             CompletableFuture<@Nullable Exception> application = new CompletableFuture<>();
-            Thread.ofPlatform().daemon().name("occurrent-competing-consumer-lifecycle-" + subscriptionId)
-                    .start(() -> applyIfTheLockIsFree(subscriptionId, applied, pausedMeanwhile, application));
+            startAThreadOfItsOwn("occurrent-competing-consumer-lifecycle-" + subscriptionId,
+                    () -> applyIfTheLockIsFree(subscriptionId, applied, pausedMeanwhile, application));
             applications.add(application);
         }
         @Nullable Error error = null;
@@ -1212,7 +1215,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     private void startApplyingWhatWasHandedOver(String subscriptionId, HandedOver handed) {
-        Thread.ofPlatform().daemon().name("occurrent-competing-consumer-lifecycle-" + subscriptionId).start(() -> {
+        startAThreadOfItsOwn("occurrent-competing-consumer-lifecycle-" + subscriptionId, () -> {
             Duration backoff = RECONCILE_FIRST_BACKOFF;
             int failures = 0;
             while (true) {
@@ -2222,7 +2225,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     private void startStartingTheWrappedModel() {
-        Thread.ofPlatform().daemon().name(WRAPPED_MODEL_START_THREAD).start(() -> {
+        startAThreadOfItsOwn(WRAPPED_MODEL_START_THREAD, () -> {
             Duration backoff = RECONCILE_FIRST_BACKOFF;
             int failures = 0;
             while (true) {
@@ -3876,7 +3879,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private void giveUpEveryLeaseOnce(Set<SubscriptionIdAndSubscriberId> leased) {
         List<Thread> releases = new ArrayList<>();
         for (SubscriptionIdAndSubscriberId key : leased) {
-            releases.add(Thread.ofPlatform().daemon().name("occurrent-lease-release-on-shutdown-" + key.subscriptionId()).start(() -> {
+            releases.add(startAThreadOfItsOwn("occurrent-lease-release-on-shutdown-" + key.subscriptionId(), () -> {
                 try {
                     competingConsumerStrategy.unregisterCompetingConsumer(key.subscriptionId(), key.subscriberId());
                 } catch (Throwable e) {
@@ -4177,11 +4180,19 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     // A blocking call that throws an InterruptedException clears the interrupt flag, so a catch that doesn't throw it on
-    // sets the flag again for what runs on this thread next
-    private static void interruptAgainIfInterrupted(Exception failure) {
-        if (failure instanceof InterruptedException) {
+    // sets the flag again for the caller of this model. A thread this model started is left as it is, since this model
+    // never interrupts it, and the flag would only end the loop that tries the failure again there.
+    private void interruptAgainIfInterrupted(Exception failure) {
+        if (failure instanceof InterruptedException && !onAThreadOfItsOwn.get()) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private Thread startAThreadOfItsOwn(String name, Runnable task) {
+        return Thread.ofPlatform().daemon().name(name).start(() -> {
+            onAThreadOfItsOwn.set(true);
+            task.run();
+        });
     }
 
     // A failure of the wrapped model or the lease strategy, thrown as it is
@@ -4295,7 +4306,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         Try tried = new Try(atOnce, callsWaitedBefore);
         tries.put(key, tried);
         try {
-            Thread.ofPlatform().daemon().name("occurrent-competing-consumer-reconcile-" + key.subscriptionId()).start(() -> keepTrying(key, tried));
+            startAThreadOfItsOwn("occurrent-competing-consumer-reconcile-" + key.subscriptionId(), () -> keepTrying(key, tried));
         } catch (Throwable e) {
             // No thread tries it then, so the next failure for the consumer starts a try anew
             tries.remove(key, tried);

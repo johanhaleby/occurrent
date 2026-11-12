@@ -83,6 +83,9 @@ public final class CompetingConsumerCheckpointWriteVersionSource implements Chec
             } catch (Exception e) {
                 // Exception, since a provider of the caller's own written in Kotlin can throw a checked exception. Spring's own
                 // provider wraps what a strategy bean throws in a BeanCreationException.
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
                 return OptionalLong.empty();
             }
             if (resolved == null) {
