@@ -116,9 +116,10 @@ import static org.awaitility.Awaitility.await;
  * <p>
  * A DCB snapshot folds every matching event it reads from the event store, so its saved state is the same whichever
  * events its subscription is delivered. The {@link Snapshot} scenarios therefore check two things per boot. One is how
- * many times the registrar read the stored snapshot, which it does once per delivered event. The other is the versions
- * it saved, which are the positions of the delivered events that were not already folded. A redelivery is read but not
- * saved.
+ * many times the registrar read the stored snapshot, which it does once per delivered event. The other is the highest
+ * folded positions it saved. A delivery reads every event after the saved marker versions and saves the highest position
+ * it read, so a redelivery that finds nothing new saves nothing. When a delivery can read events written after the one
+ * it was delivered, the saved list depends on timing and only its last position is asserted.
  */
 @DisplayName("DcbSubscription resumeBehavior across an application restart")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -300,31 +301,33 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         }
     }
 
-    // Positions run historic-1=1, historic-2=2, live-1=3, while-down-1=4, live-2=5. Reads count every delivery and saved
-    // versions show which of them were new, so a redelivered live-1 cannot pass for while-down-1.
+    // Positions run historic-1=1, historic-2=2, live-1=3, while-down-1=4, live-2=5. Reads count every delivery and the saved
+    // positions show how far each save folded, so a redelivered live-1 cannot pass for while-down-1.
+    // The second boot of the DEFAULT scenario can read live-2 already when while-down-1 is delivered, which leaves one save
+    // or two, so only the last saved position is asserted there.
     @Test
     void a_dcb_snapshot_with_now_and_default_resume_behavior_is_not_delivered_history_on_first_boot_and_is_delivered_events_written_while_down_after_restart() {
-        restartSnapshot("dcb-now-default-snapshot", DcbSnapshotNowDefault.class, "dcb-now-snapshot-default", 1, List.of(3L), 2, List.of(4L, 5L));
+        restartSnapshot("dcb-now-default-snapshot", DcbSnapshotNowDefault.class, "dcb-now-snapshot-default", 1, exactly(3L), 2, endingAt(5L));
     }
 
     @Test
     void a_dcb_snapshot_with_now_and_same_as_start_at_is_delivered_only_the_present_again_after_restart_but_still_folds_events_written_while_down() {
-        restartSnapshot("dcb-now-same-as-start-at-snapshot", DcbSnapshotNowSameAsStartAt.class, null, 1, List.of(3L), 1, List.of(5L));
+        restartSnapshot("dcb-now-same-as-start-at-snapshot", DcbSnapshotNowSameAsStartAt.class, null, 1, exactly(3L), 1, exactly(5L));
     }
 
     @Test
     void a_dcb_snapshot_with_beginning_and_default_resume_behavior_is_delivered_history_once_and_only_what_is_new_after_restart() {
-        restartSnapshot("dcb-beginning-default-snapshot", DcbSnapshotBeginningDefault.class, "dcb-beginning-snapshot-default", 3, List.of(1L, 2L, 3L), 2, List.of(4L, 5L));
+        restartSnapshot("dcb-beginning-default-snapshot", DcbSnapshotBeginningDefault.class, "dcb-beginning-snapshot-default", 3, exactly(2L, 3L), 2, exactly(4L, 5L));
     }
 
     @Test
     void a_dcb_snapshot_with_beginning_and_same_as_start_at_is_delivered_the_whole_history_again_after_restart() {
-        restartSnapshot("dcb-beginning-same-as-start-at-snapshot", DcbSnapshotBeginningSameAsStartAt.class, null, 3, List.of(1L, 2L, 3L), 5, List.of(4L, 5L));
+        restartSnapshot("dcb-beginning-same-as-start-at-snapshot", DcbSnapshotBeginningSameAsStartAt.class, null, 3, exactly(2L, 3L), 5, exactly(4L, 5L));
     }
 
     private static void restartSnapshot(String databaseName, Class<? extends DcbSnapshotHandled> handlerType,
-                                        @Nullable String subscriptionIdThatStoresCheckpoint, int expectedReadsFirstBoot, List<Long> expectedSavedFirstBoot,
-                                        int expectedReadsSecondBoot, List<Long> expectedSavedSecondBoot) {
+                                        @Nullable String subscriptionIdThatStoresCheckpoint, int expectedReadsFirstBoot, Consumer<List<Long>> expectedSavedFirstBoot,
+                                        int expectedReadsSecondBoot, Consumer<List<Long>> expectedSavedSecondBoot) {
         ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
                 nowBootArgs(databaseName, "historic-1,historic-2", "live-1"));
         try {
@@ -365,10 +368,18 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     }
 
     // Held for a second so a delivery that arrives after the marker would fail the assertion.
-    private static void assertDelivered(DcbSnapshotHandled handler, int expectedReads, List<Long> expectedSaved) {
+    private static Consumer<List<Long>> exactly(Long... positions) {
+        return saved -> assertThat(saved).containsExactly(positions);
+    }
+
+    private static Consumer<List<Long>> endingAt(long position) {
+        return saved -> assertThat(saved).isNotEmpty().last().isEqualTo(position);
+    }
+
+    private static void assertDelivered(DcbSnapshotHandled handler, int expectedReads, Consumer<List<Long>> expectedSaved) {
         await().during(ofSeconds(1)).atMost(ofSeconds(5)).untilAsserted(() -> {
             assertThat(handler.reads()).isEqualTo(expectedReads);
-            assertThat(handler.savedVersions()).containsExactlyElementsOf(expectedSaved);
+            expectedSaved.accept(handler.savedPositions());
         });
     }
 
@@ -837,8 +848,8 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
             return store.reads();
         }
 
-        List<Long> savedVersions() {
-            return store.savedVersions();
+        List<Long> savedPositions() {
+            return store.savedPositions();
         }
 
         List<String> folded() {
@@ -847,13 +858,13 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     }
 
     // The snapshot is stored in MongoDB, so what the first boot folded is still there on the second. The reads and the
-    // saved versions are per boot, since each boot has its own store bean.
+    // saved positions are per boot, since each boot has its own store bean.
     static class RecordingSnapshotStore implements SnapshotStore<Folded> {
         private static final String KEY = DcbSnapshotKeys.canonicalKey(DcbCriteria.tags(Tag.parse("test:resume-behavior")));
 
         private final SnapshotStore<Folded> delegate;
         private final AtomicInteger reads = new AtomicInteger();
-        private final CopyOnWriteArrayList<Long> savedVersions = new CopyOnWriteArrayList<>();
+        private final CopyOnWriteArrayList<Long> savedPositions = new CopyOnWriteArrayList<>();
 
         RecordingSnapshotStore(MongoOperations mongoOperations, String snapshotId) {
             this.delegate = new SpringMongoSnapshotStore<>(mongoOperations, Folded.class, "occurrent-snapshot-" + snapshotId);
@@ -868,15 +879,15 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         @Override
         public void save(String key, org.occurrent.dsl.snapshot.Snapshot<Folded> snapshot) {
             delegate.save(key, snapshot);
-            savedVersions.add(snapshot.version());
+            savedPositions.add(snapshot.highestFoldedPosition());
         }
 
         int reads() {
             return reads.get();
         }
 
-        List<Long> savedVersions() {
-            return List.copyOf(savedVersions);
+        List<Long> savedPositions() {
+            return List.copyOf(savedPositions);
         }
 
         // Read from the delegate so that looking at the state is not counted as a read.
