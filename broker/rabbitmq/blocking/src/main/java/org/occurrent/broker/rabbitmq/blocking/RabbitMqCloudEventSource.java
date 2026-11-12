@@ -56,7 +56,8 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Feeds a RabbitMQ queue into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
- * describes. Rebuilds each message as a {@link CloudEvent} through {@link RabbitMqCloudEventMapper}, hands it to
+ * describes. Rebuilds each message as a {@link CloudEvent} through its {@link RabbitMqInboundMapper}, by default
+ * the one that reads the headers {@link RabbitMqCloudEventMapper} writes, hands it to
  * {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)}, and acknowledges only once the {@link RoutingOutcome}
  * that call returns says the event was actually consumed.
  * <p>
@@ -218,6 +219,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     private final ScheduledExecutorService scheduler;
     private final RabbitMqDeliveryWorker worker;
     private final Duration closeTimeout;
+    private final RabbitMqInboundMapper inboundMapper;
 
     private final Lock consumeLock = new ReentrantLock();
     private final AtomicReference<@Nullable String> consumerTag = new AtomicReference<>();
@@ -269,6 +271,14 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     RabbitMqCloudEventSource(PushSubscriptionModel model, Channel consumeChannel,
                                       String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
                                       Predicate<String> readinessSource, Duration closeTimeout) {
+        this(model, consumeChannel, queue, prefetchCount, pollInterval, failureAction, readinessSource, closeTimeout,
+                RabbitMqInboundMapper.cloudEventHeaders());
+    }
+
+    RabbitMqCloudEventSource(PushSubscriptionModel model, Channel consumeChannel,
+                                      String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
+                                      Predicate<String> readinessSource, Duration closeTimeout, RabbitMqInboundMapper inboundMapper) {
+        this.inboundMapper = inboundMapper;
         this.model = model;
         this.consumeChannel = consumeChannel;
         this.queue = queue;
@@ -621,8 +631,15 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         long deliveryTag = delivery.getEnvelope().getDeliveryTag();
         CloudEvent cloudEvent;
         try {
-            cloudEvent = RabbitMqCloudEventMapper.toCloudEvent(delivery.getProperties(), delivery.getBody());
-        } catch (RuntimeException e) {
+            cloudEvent = inboundMapper.toCloudEvent(delivery.getProperties(), delivery.getBody());
+            if (cloudEvent == null) {
+                throw new IllegalStateException("The " + RabbitMqInboundMapper.class.getSimpleName() + " returned null");
+            }
+        } catch (Exception | AssertionError e) {
+            if (e instanceof InterruptedException) {
+                // A sneaky throw, since the mapper declares no checked exception. Only close() interrupts this thread
+                Thread.currentThread().interrupt();
+            }
             log.debug("Failed to rebuild a CloudEvent from a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
@@ -925,6 +942,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         private Predicate<String> readinessSource = subscriptionId -> true;
         private Duration closeTimeout = Duration.ofSeconds(30);
         private RetryStrategy retryStrategy;
+        private RabbitMqInboundMapper inboundMapper = RabbitMqInboundMapper.cloudEventHeaders();
 
         private Builder(Connection connection, PushSubscriptionModel model, String queue) {
             this.connection = requireNonNull(connection, "connection cannot be null");
@@ -1101,6 +1119,16 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             return this;
         }
 
+        /**
+         * How the source turns a delivered message into a {@link CloudEvent}.
+         * {@link RabbitMqInboundMapper#cloudEventHeaders()} by default. An exception from the mapper, or a
+         * {@code null} result, is handled as a failed delivery by {@link #onDeliveryFailure(DeliveryFailurePolicy)}.
+         */
+        public Builder inboundMapper(RabbitMqInboundMapper inboundMapper) {
+            this.inboundMapper = requireNonNull(inboundMapper, RabbitMqInboundMapper.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
         public RabbitMqCloudEventSource build() {
             if (declareTopology && bindings == null && resolver == null) {
                 throw new IllegalStateException("A resolver(...), or explicit bindings(...), is required unless declareTopology(false) is set");
@@ -1131,7 +1159,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             try {
                 failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
                 source = new RabbitMqCloudEventSource(model, channel, queue, prefetchCount,
-                        pollInterval, failureAction, readinessSource, closeTimeout);
+                        pollInterval, failureAction, readinessSource, closeTimeout, inboundMapper);
                 source.start(this, destinations);
                 return source;
             } catch (RuntimeException e) {

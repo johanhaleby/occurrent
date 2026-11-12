@@ -16,6 +16,7 @@
 
 package org.occurrent.springboot.broker.rabbitmq.blocking.domain;
 
+import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
@@ -28,10 +29,14 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DomainEventSink;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqInboundMapper;
 import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSource;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.filter.Filter;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.springboot.broker.rabbitmq.blocking.EnableOccurrentRabbitMqBroker;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -42,6 +47,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -127,6 +136,62 @@ class RabbitMqDomainBrokerAutoConfigurationIntegrationTest {
 
                         await().atMost(15, TimeUnit.SECONDS).untilAsserted(() ->
                                 assertThat(orderStatusViews.get(orderId)).isEqualTo("PLACED"));
+                    } finally {
+                        source.close();
+                    }
+                });
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void an_inbound_mapper_bean_is_used_by_a_domain_source_the_factory_builds() {
+        CloudEventConverter<TestOrderPlaced> converter = new TestOrderPlacedConverter();
+
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        org.occurrent.springboot.broker.rabbitmq.blocking.OccurrentRabbitMqAutoConfiguration.class))
+                .withUserConfiguration(EnabledConfiguration.class)
+                .withBean(Connection.class, () -> connection, bd -> bd.setDestroyMethodName(""))
+                .withBean(CloudEventTypeMapper.class, ReflectionCloudEventTypeMapper::qualified)
+                .withBean(CloudEventConverter.class, () -> converter)
+                .withBean(RabbitMqInboundMapper.class, () -> (properties, body) -> CloudEventBuilder.v1()
+                        .withId(properties.getMessageId())
+                        .withSource(URI.create("urn:plain-publisher"))
+                        .withType(TestOrderPlaced.class.getName())
+                        .withData(body)
+                        .withExtension("streamid", String.valueOf(properties.getHeaders().get("streamId")))
+                        .withExtension("streamversion", ((Number) properties.getHeaders().get("streamVersion")).longValue())
+                        .build())
+                .withPropertyValues(
+                        "occurrent.broker.rabbitmq.exchange=" + exchange,
+                        "occurrent.broker.rabbitmq.source.poll-interval=100ms"
+                )
+                .run(context -> {
+                    RabbitMqDomainEventSourceFactory sourceFactory = context.getBean(RabbitMqDomainEventSourceFactory.class);
+                    List<String> handled = new CopyOnWriteArrayList<>();
+                    DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), converter, TestOrderPlaced::orderId);
+                    feed.register("test-domain-projection", new MaterializedView<TestOrderPlaced>() {
+                        @Override
+                        public void update(TestOrderPlaced event) {
+                            update(EventMetadata.empty(), event);
+                        }
+
+                        @Override
+                        public void update(EventMetadata metadata, TestOrderPlaced event) {
+                            handled.add(event.orderId() + "@" + metadata.getStreamId() + "/" + metadata.getStreamVersion());
+                        }
+                    }, Filter.type(TestOrderPlaced.class.getName()));
+                    feed.goLive("test-domain-projection");
+
+                    RabbitMqDomainEventSource<TestOrderPlaced> source = sourceFactory.forQueue("test-domain-queue-" + UUID.randomUUID(), feed).build();
+                    try (Channel channel = connection.createChannel()) {
+                        Map<String, Object> headers = new HashMap<>();
+                        headers.put("streamId", "stream-7");
+                        headers.put("streamVersion", 3);
+                        channel.basicPublish(exchange, "orders.placed", new BasicProperties.Builder().messageId("m-1").headers(headers).build(),
+                                "order-7".getBytes(StandardCharsets.UTF_8));
+
+                        await().atMost(15, TimeUnit.SECONDS).untilAsserted(() -> assertThat(handled).containsExactly("order-7@stream-7/3"));
                     } finally {
                         source.close();
                     }
