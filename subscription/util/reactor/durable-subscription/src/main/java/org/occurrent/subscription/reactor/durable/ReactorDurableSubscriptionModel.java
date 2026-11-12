@@ -548,8 +548,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             if (shutdown) {
                 throw new SubscriptionModelShutdownException();
             }
-            // Before the other refusals, so a cancelled call returns null also where the id is taken
-            if (cancelled.getAsBoolean()) {
+            // Before the other refusals, so a cancelled call returns null also where the id is taken. Through the helper,
+            // since a shutdown can come after the shutdown check above and before cancelled answers.
+            if (returnsNullAsCancelled(cancelled)) {
                 return null;
             }
             // Deliberately outside this model's monitor, which no step of subscribeByDelegating takes. Reading the start
@@ -645,7 +646,6 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         giveBackPositionDelete(subscriptionId, takenOver, null);
     }
 
-    // Called under the monitor, when this model drives the feed itself
     // Whether a cancelled call returns null. On a model shut down by then it throws SubscriptionModelShutdownException
     // instead, see CancellableRegistration.
     private boolean returnsNullAsCancelled(BooleanSupplier cancelled) {
@@ -658,6 +658,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return true;
     }
 
+    // Called under the monitor, when this model drives the feed itself
     private void requireIdFreeAndNotShutDown(String subscriptionId) {
         if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
